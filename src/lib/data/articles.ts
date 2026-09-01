@@ -3,9 +3,9 @@ import type { NewsArticle } from './types';
 export const mockArticles: NewsArticle[] = [
   {
     id: '1',
-    title: '哈萨克斯坦宣布2025年石油出口新政策：外资企业税率下调15%',
+    title: '哈萨克斯坦宣布石油出口新政策：外资企业税率下调15%',
     summary:
-      '哈萨克斯坦总统签署新法令，对符合条件的能源领域外资企业实施税收优惠政策，旨在吸引更多国际资本参与油气开发。新政策将于2025年1月1日起生效。',
+      '哈萨克斯坦总统签署新法令，对符合条件的能源领域外资企业实施税收优惠政策，旨在吸引更多国际资本参与油气开发。新政策将于下月起生效。',
     content: `哈萨克斯坦总统托卡耶夫于本周正式签署了关于调整石油出口税收政策的新法令。根据该法令，凡在哈萨克斯坦注册并满足本地化要求的外资能源企业，其石油出口税率将在现有基础上下调15个百分点。
 
 这一政策调整被视为哈萨克斯坦政府吸引外资、推动能源产业现代化的重要举措。据哈萨克斯坦能源部估计，新政策有望在未来三年内吸引超过50亿美元的新增投资。
@@ -17,7 +17,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'energy',
     source: 'kazinform',
     sourceUrl: 'https://kazinform.example.kz/news/12345',
-    publishedAt: '2025-01-15T08:30:00Z',
+    publishedAt: '2026-09-01T08:30:00Z',
     tags: ['石油', '税收优惠', '外资政策', '能源合作'],
     isFeatured: true,
   },
@@ -43,7 +43,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'policy',
     source: 'uzdaily',
     sourceUrl: 'https://uzdaily.example.uz/news/67890',
-    publishedAt: '2025-01-14T10:00:00Z',
+    publishedAt: '2026-08-31T10:00:00Z',
     tags: ['外商投资法', '营商环境', '审批改革', '国民待遇'],
     isFeatured: true,
   },
@@ -60,12 +60,12 @@ export const mockArticles: NewsArticle[] = [
 
 吉国总统在签字仪式上表示，此次招标严格遵循国际通行规则，中方企业在技术方案和环保承诺方面均表现优异。他强调，新矿区的开发将为当地创造超过3000个就业岗位。
 
-中国矿业集团发言人表示，将在开发过程中严格执行国际环保标准，并承诺将年利润的3%投入当地社区发展基金。项目预计2026年底投产，届时将使吉尔吉斯斯坦成为中亚第二大铜生产国。`,
+中国矿业集团发言人表示，将在开发过程中严格执行国际环保标准，并承诺将年利润的3%投入当地社区发展基金。项目预计2028年底投产，届时将使吉尔吉斯斯坦成为中亚第二大铜生产国。`,
     country: 'kg',
     category: 'minerals',
     source: 'akipress',
     sourceUrl: 'https://akipress.example.kg/news/11223',
-    publishedAt: '2025-01-13T14:20:00Z',
+    publishedAt: '2026-08-31T14:20:00Z',
     tags: ['铜矿', '矿业投资', '招标', '中吉合作'],
     isFeatured: true,
   },
@@ -88,7 +88,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'energy',
     source: 'turkmenistan_golden_age',
     sourceUrl: 'https://tdh.example.tm/news/33445',
-    publishedAt: '2025-01-12T09:15:00Z',
+    publishedAt: '2026-08-30T09:15:00Z',
     tags: ['天然气', '能源合作', '中土关系', '管道建设'],
     isFeatured: true,
   },
@@ -115,7 +115,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'manufacturing',
     source: 'khovar_tj',
     sourceUrl: 'https://khovar.example.tj/news/55667',
-    publishedAt: '2025-01-11T11:45:00Z',
+    publishedAt: '2026-08-30T11:45:00Z',
     tags: ['经济特区', '制造业', '税收优惠', '投资环境'],
     isFeatured: true,
   },
@@ -142,7 +142,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'real_estate',
     source: 'dawn_kz',
     sourceUrl: 'https://dawnkz.example.kz/news/77889',
-    publishedAt: '2025-01-10T16:00:00Z',
+    publishedAt: '2026-08-29T16:00:00Z',
     tags: ['房地产', '阿斯塔纳', '海外投资', '居留许可'],
   },
   {
@@ -164,21 +164,21 @@ export const mockArticles: NewsArticle[] = [
     category: 'chemicals',
     source: 'kun_uz',
     sourceUrl: 'https://kunuz.example.uz/news/99001',
-    publishedAt: '2025-01-09T13:30:00Z',
+    publishedAt: '2026-08-29T13:30:00Z',
     tags: ['化工园区', '招商引资', '中乌合作', '工业化'],
   },
   {
     id: '8',
-    title: '中亚-中国铁路货运量创新高：2024年突破3000万吨',
+    title: '中亚-中国铁路货运量创新高：2026年前三季度突破2500万吨',
     summary:
-      '据最新统计数据，2024年中国经中亚至欧洲的铁路货运量首次突破3000万吨大关，同比增长28%，其中哈萨克斯坦段占比超过60%。',
-    content: `中国铁路总公司与哈萨克斯坦国家铁路公司联合发布数据显示，2024年经中亚方向的中欧班列货运量首次突破3000万吨，同比增长28%。这一数据标志着中亚作为亚欧大陆物流枢纽的地位进一步巩固。
+      '据最新统计数据，2026年前三季度中国经中亚至欧洲的铁路货运量已突破2500万吨，同比增长22%，其中哈萨克斯坦段占比超过60%。',
+    content: `中国铁路总公司与哈萨克斯坦国家铁路公司联合发布数据显示，2026年前三季度经中亚方向的中欧班列货运量已突破2500万吨，同比增长22%。按此增速，全年有望突破3500万吨大关。这一数据标志着中亚作为亚欧大陆物流枢纽的地位进一步巩固。
 
 分国别数据：
-- 哈萨克斯坦段：约1850万吨（占比62%）
-- 乌兹别克斯坦段：约520万吨（占比17%）
-- 吉尔吉斯斯坦-中国段：约380万吨（占比13%）
-- 其他：约250万吨
+- 哈萨克斯坦段：约1550万吨（占比62%）
+- 乌兹别克斯坦段：约400万吨（占比16%）
+- 吉尔吉斯斯坦-中国段：约350万吨（占比14%）
+- 其他：约200万吨
 
 货运品类方面，机械设备、电子产品、汽车零部件出口占比最高；回程货物以矿产、农产品、化工产品为主。
 
@@ -187,7 +187,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'infrastructure',
     source: 'reuters',
     sourceUrl: 'https://reuters.example.com/news/22334',
-    publishedAt: '2025-01-08T07:00:00Z',
+    publishedAt: '2026-08-28T07:00:00Z',
     tags: ['中欧班列', '铁路货运', '基建投资', '物流'],
   },
   {
@@ -210,7 +210,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'politics',
     source: 'akipress',
     sourceUrl: 'https://akipress.example.kg/news/44556',
-    publishedAt: '2025-01-07T18:00:00Z',
+    publishedAt: '2026-08-27T18:00:00Z',
     tags: ['议会选举', '政治改革', '亲商政策', '投资环境'],
   },
   {
@@ -235,7 +235,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'infrastructure',
     source: 'khovar_tj',
     sourceUrl: 'https://khovar.example.tj/news/66778',
-    publishedAt: '2025-01-06T10:30:00Z',
+    publishedAt: '2026-08-26T10:30:00Z',
     tags: ['水电', '罗贡水电站', 'PPP模式', '能源基建'],
   },
   {
@@ -258,15 +258,15 @@ export const mockArticles: NewsArticle[] = [
     category: 'business_law',
     source: 'kazinform',
     sourceUrl: 'https://kazinform.example.kz/news/88990',
-    publishedAt: '2025-01-05T15:20:00Z',
+    publishedAt: '2026-08-25T15:20:00Z',
     tags: ['劳动法', '外籍员工', '工作许可', '人才引进'],
   },
   {
     id: '12',
     title: '乌兹别克斯坦数字经济快速增长：IT外包和数据中心成为投资新热点',
     summary:
-      '乌兹别克斯坦数字经济发展部数据显示，2024年该国IT服务出口增长65%，数据中心需求激增。塔什干IT园区向中国科技企业开放入驻申请。',
-    content: `乌兹别克斯坦数字经济发展部发布年度报告显示，2024年该国IT服务出口额达到12亿美元，同比增长65%。数据中心和云计算基础设施需求尤为旺盛，年增长率超过80%。
+      '乌兹别克斯坦数字经济发展部数据显示，2026年上半年该国IT服务出口增长58%，数据中心需求激增。塔什干IT园区向中国科技企业开放入驻申请。',
+    content: `乌兹别克斯坦数字经济发展部发布半年度报告显示，2026年上半年该国IT服务出口额达到7.5亿美元，同比增长58%。数据中心和云计算基础设施需求尤为旺盛，年增长率超过75%。
 
 为抓住数字经济发展机遇，塔什干IT园区（IT Park Uzbekistan）正式向中国科技企业开放入驻申请。入驻企业可享受：
 - 前3年免征企业所得税
@@ -275,14 +275,14 @@ export const mockArticles: NewsArticle[] = [
 - 外籍IT专家免签证入境
 - 高速国际互联网接入保障
 
-目前，已有超过500家IT企业在园区注册，其中中国企业约30家，主要从事软件开发、系统集成和数据分析业务。
+目前，已有超过600家IT企业在园区注册，其中中国企业约45家，主要从事软件开发、系统集成和数据分析业务。
 
-乌兹别克斯坦拥有中亚最大的人口市场（超过3500万），且年轻人比例高、数字化接受度强。对于中国科技企业而言，这里既是服务外包的成本洼地，也是辐射中亚市场的战略支点。`,
+乌兹别克斯坦拥有中亚最大的人口市场（超过3700万），且年轻人比例高、数字化接受度强。对于中国科技企业而言，这里既是服务外包的成本洼地，也是辐射中亚市场的战略支点。`,
     country: 'uz',
     category: 'economy',
     source: 'uzdaily',
     sourceUrl: 'https://uzdaily.example.uz/news/11224',
-    publishedAt: '2025-01-04T09:00:00Z',
+    publishedAt: '2026-08-24T09:00:00Z',
     tags: ['数字经济', 'IT外包', '数据中心', '科技投资'],
   },
   {
@@ -305,7 +305,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'economy',
     source: 'instagram',
     sourceUrl: 'https://instagram.example.com/trending/tm',
-    publishedAt: '2025-01-03T20:00:00Z',
+    publishedAt: '2026-08-23T20:00:00Z',
     tags: ['社交媒体', '就业', '中文学习', '民间交流'],
   },
   {
@@ -327,18 +327,18 @@ export const mockArticles: NewsArticle[] = [
 增值税率：均为12%-15%区间
 
 劳动力月均成本（制造业）：
-- 哈萨克斯坦：$600-800
-- 乌兹别克斯坦：$300-500
-- 吉尔吉斯斯坦：$250-400
-- 土库曼斯坦：$400-600
-- 塔吉克斯坦：$200-350
+- 哈萨克斯坦：$700-900
+- 乌兹别克斯坦：$350-550
+- 吉尔吉斯斯坦：$300-450
+- 土库曼斯坦：$450-650
+- 塔吉克斯坦：$250-400
 
 报告建议：劳动密集型制造业优先考虑乌兹别克斯坦和塔吉克斯坦；技术密集型制造业优先考虑哈萨克斯坦；资源加工型制造业优先考虑吉尔吉斯斯坦。`,
     country: 'uz',
     category: 'business_law',
     source: 'reuters',
     sourceUrl: 'https://reuters.example.com/news/55668',
-    publishedAt: '2025-01-02T08:00:00Z',
+    publishedAt: '2026-08-22T08:00:00Z',
     tags: ['营商环境', '税法对比', '制造业', '投资决策'],
   },
   {
@@ -365,7 +365,7 @@ export const mockArticles: NewsArticle[] = [
     category: 'policy',
     source: 'akipress',
     sourceUrl: 'https://akipress.example.kg/news/77890',
-    publishedAt: '2025-01-01T12:00:00Z',
+    publishedAt: '2026-08-21T12:00:00Z',
     tags: ['农业投资', '外资控股', '土地使用', '农业现代化'],
   },
 ];
