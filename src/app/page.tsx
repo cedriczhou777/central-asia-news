@@ -1,22 +1,51 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { countryList } from '@/lib/data/countries';
 import { categoryList } from '@/lib/data/categories';
-import { getArticles, getFeaturedArticles } from '@/lib/data/articles';
 import type { Category, CountryCode } from '@/lib/data/types';
 import { CountryCard } from '@/components/country-card';
 import { NewsCard, FeaturedCard } from '@/components/news-card';
+import type { DisplayArticle } from '@/lib/article-service';
 
 export default function HomePage() {
   const [selectedCountry, setSelectedCountry] = useState<CountryCode | ''>('');
   const [selectedCategory, setSelectedCategory] = useState<Category | ''>('');
+  const [articles, setArticles] = useState<DisplayArticle[]>([]);
+  const [featured, setFeatured] = useState<DisplayArticle[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const featured = getFeaturedArticles().slice(0, 5);
-  const articles = getArticles({
-    country: selectedCountry || undefined,
-    category: selectedCategory || undefined,
-  });
+  useEffect(() => {
+    async function loadArticles() {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (selectedCountry) params.set('country', selectedCountry);
+        if (selectedCategory) params.set('category', selectedCategory);
+        const res = await fetch(`/api/articles?${params.toString()}`);
+        const data = await res.json();
+        setArticles(data.articles || []);
+      } catch {
+        // API unavailable, keep current state
+      }
+      setLoading(false);
+    }
+    loadArticles();
+  }, [selectedCountry, selectedCategory]);
+
+  useEffect(() => {
+    async function loadFeatured() {
+      try {
+        const res = await fetch('/api/articles?limit=5');
+        const data = await res.json();
+        const all = data.articles || [];
+        setFeatured(all.filter((a: DisplayArticle) => a.isFeatured).slice(0, 3));
+      } catch {
+        // fallback
+      }
+    }
+    loadFeatured();
+  }, []);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -34,7 +63,7 @@ export default function HomePage() {
             </div>
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center rounded-md bg-gold/20 px-3 py-1.5 text-xs font-medium text-gold">
-                今日更新 {articles.length} 篇
+                {loading ? '加载中...' : `共 ${articles.length} 篇资讯`}
               </span>
             </div>
           </div>
@@ -55,17 +84,19 @@ export default function HomePage() {
       </section>
 
       {/* Featured News */}
-      <section className="mb-8">
-        <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
-          <span className="inline-block h-4 w-1 rounded-full bg-gold" />
-          重点关注
-        </h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {featured.slice(0, 3).map((article) => (
-            <FeaturedCard key={article.id} article={article} />
-          ))}
-        </div>
-      </section>
+      {featured.length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <span className="inline-block h-4 w-1 rounded-full bg-gold" />
+            重点关注
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {featured.map((article) => (
+              <FeaturedCard key={article.id} article={article} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Filters */}
       <section className="mb-6">
@@ -149,10 +180,17 @@ export default function HomePage() {
 
       {/* News Grid */}
       <section>
-        {articles.length === 0 ? (
+        {loading ? (
+          <div className="rounded-lg border border-dashed border-border p-12 text-center">
+            <p className="text-sm text-muted-foreground">加载中...</p>
+          </div>
+        ) : articles.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-12 text-center">
             <p className="text-sm text-muted-foreground">
               暂无符合条件的资讯
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground/60">
+              可通过 POST /api/pipeline 触发新闻采集
             </p>
           </div>
         ) : (

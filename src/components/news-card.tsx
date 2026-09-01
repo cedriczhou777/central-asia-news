@@ -1,8 +1,8 @@
 import Link from 'next/link';
-import type { NewsArticle } from '@/lib/data/types';
+import type { DisplayArticle } from '@/lib/article-service';
 import { CountryBadge, CategoryBadge, SourceLabel, formatDate } from './news-badges';
 
-export function NewsCard({ article }: { article: NewsArticle }) {
+export function NewsCard({ article }: { article: DisplayArticle }) {
   return (
     <Link
       href={`/article/${article.id}`}
@@ -28,7 +28,7 @@ export function NewsCard({ article }: { article: NewsArticle }) {
   );
 }
 
-export function FeaturedCard({ article }: { article: NewsArticle }) {
+export function FeaturedCard({ article }: { article: DisplayArticle }) {
   return (
     <Link
       href={`/article/${article.id}`}

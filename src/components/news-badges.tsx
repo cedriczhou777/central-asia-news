@@ -5,6 +5,7 @@ import type { CountryCode, Category, NewsSource } from '@/lib/data/types';
 
 export function CountryBadge({ code }: { code: CountryCode }) {
   const country = countries[code];
+  if (!country) return <span className="text-xs text-muted-foreground">{code}</span>;
   return (
     <span
       className="inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-xs font-medium"
@@ -20,7 +21,8 @@ export function CountryBadge({ code }: { code: CountryCode }) {
 }
 
 export function CategoryBadge({ category }: { category: Category }) {
-  const cat = categories[category];
+  const cat = categories[category as Category];
+  if (!cat) return <span className="text-xs text-muted-foreground">{category}</span>;
   return (
     <span
       className="inline-flex items-center rounded-sm px-2 py-0.5 text-xs font-medium"
@@ -34,19 +36,27 @@ export function CategoryBadge({ category }: { category: Category }) {
   );
 }
 
-export function SourceLabel({ source }: { source: NewsSource }) {
-  const src = sources[source];
-  const typeLabel =
-    src.type === 'official'
-      ? '官方媒体'
-      : src.type === 'social'
-        ? '社交媒体'
-        : '新闻媒体';
+export function SourceLabel({ source }: { source: string }) {
+  const knownSource = sources[source as NewsSource];
+  if (knownSource) {
+    const typeLabel =
+      knownSource.type === 'official'
+        ? '官方媒体'
+        : knownSource.type === 'social'
+          ? '社交媒体'
+          : '新闻媒体';
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-gold/60" />
+        {knownSource.name}
+        <span className="text-muted-foreground/50">· {typeLabel}</span>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-gold/60" />
-      {src.name}
-      <span className="text-muted-foreground/50">· {typeLabel}</span>
+      {source}
     </span>
   );
 }

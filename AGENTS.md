@@ -83,10 +83,24 @@
 - `/countries/[code]` - 国家详情页（kz/uz/kg/tm/tj）
 - `/article/[id]` - 文章详情页
 
+### API 路由
+- `GET /api/articles` - 获取文章列表（支持 country/category/limit 筛选）
+- `POST /api/articles` - 手动添加文章
+- `POST /api/fetch-news` - 从 RSS 源抓取新闻并用 LLM 翻译摘要
+- `POST /api/daily-digest` - 生成今日摘要（按国别汇总）
+- `POST /api/wechat/push` - 推送文章到微信公众号草稿箱
+- `POST /api/pipeline` - 一键执行完整流程（抓取 → 翻译 → 入库 → 生成摘要 → 推送草稿）
+
 ### 数据层
+- **数据库**: Supabase PostgreSQL，表 `articles`
+- `src/lib/db-articles.ts` - 数据库 CRUD 操作
+- `src/lib/article-service.ts` - 文章服务（优先数据库，fallback mock）
+- `src/storage/database/shared/schema.ts` - Drizzle ORM schema
 - `src/lib/data/types.ts` - 类型定义
 - `src/lib/data/countries.ts` - 国家数据
 - `src/lib/data/categories.ts` - 分类数据
+- `src/lib/data/sources.ts` - 新闻来源
+- `src/lib/data/articles.ts` - Mock 数据（数据库为空时 fallback）
 - `src/lib/data/sources.ts` - 新闻来源
 - `src/lib/data/articles.ts` - 新闻数据（当前为 mock）
 

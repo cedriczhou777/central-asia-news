@@ -13,7 +13,12 @@ const countryDescriptions: Record<CountryCode, string> = {
 
 export function CountryCard({ code }: { code: CountryCode }) {
   const country = countries[code];
-  const articleCount = getArticlesByCountry(code).length;
+  let articleCount = 0;
+  try {
+    articleCount = getArticlesByCountry(code).length;
+  } catch {
+    // mock data fallback
+  }
 
   return (
     <Link
@@ -30,7 +35,7 @@ export function CountryCard({ code }: { code: CountryCode }) {
             color: country.color,
           }}
         >
-          {articleCount} 篇
+          {articleCount > 0 ? `${articleCount} 篇` : '—'}
         </span>
       </div>
       <h3 className="mb-1 text-sm font-semibold text-foreground">

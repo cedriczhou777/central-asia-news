@@ -1,4 +1,5 @@
 import type { NewsArticle } from './types';
+export type { NewsArticle } from './types';
 
 export const mockArticles: NewsArticle[] = [
   {
