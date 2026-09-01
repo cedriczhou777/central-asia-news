@@ -18,7 +18,7 @@ interface RSSSource {
 const RSS_SOURCES: RSSSource[] = [
   { name: 'Kazinform', url: 'https://www.kazinform.kz/en/rss', country: 'kz', language: 'en' },
   { name: 'UzDaily', url: 'https://uzdaily.com/en/rss', country: 'uz', language: 'en' },
-  { name: 'AKIpress', url: 'https://.akipress.org/rss/', country: 'kg', language: 'en' },
+  { name: 'AKIpress', url: 'https://akipress.org/rss/', country: 'kg', language: 'en' },
   { name: 'Times Central Asia', url: 'https://timesca.com/feed', country: 'kz', language: 'en' },
   { name: 'Astana Times', url: 'https://astanatimes.com/feed/', country: 'kz', language: 'en' },
 ];
@@ -118,8 +118,9 @@ ${content.substring(0, 3000)}
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => ({}));
-    const targetDate = (body as Record<string, string>).date || new Date().toISOString().split('T')[0];
+    const body = await request.json().catch(() => ({})) as Record<string, string | number>;
+    const targetDate = (body.date as string) || new Date().toISOString().split('T')[0];
+    const limit = typeof body.limit === 'number' ? body.limit : undefined;
     const results: { source: string; fetched: number; saved: number; errors: string[] }[] = [];
 
     for (const source of RSS_SOURCES) {
@@ -128,11 +129,13 @@ export async function POST(request: NextRequest) {
         const feed = await parser.parseURL(source.url);
         result.fetched = feed.items.length;
 
-        const targetItems = feed.items.filter((item) => {
-          if (!item.pubDate) return true;
-          const itemDate = new Date(item.pubDate).toISOString().split('T')[0];
-          return itemDate === targetDate;
-        });
+        const targetItems = limit
+          ? feed.items.slice(0, limit)
+          : feed.items.filter((item) => {
+              if (!item.pubDate) return true;
+              const itemDate = new Date(item.pubDate).toISOString().split('T')[0];
+              return itemDate === targetDate;
+            });
 
         if (targetItems.length === 0) {
           results.push(result);
@@ -169,9 +172,9 @@ export async function POST(request: NextRequest) {
             );
 
             articlesToInsert.push({
-              title: translated.titleZh,
-              summary: translated.summaryZh,
-              content: translated.contentZh,
+              title: translated.titleZh || originalTitle || '无标题',
+              summary: translated.summaryZh || originalContent.substring(0, 100),
+              content: translated.contentZh || originalContent,
               country_code: source.country,
               category,
               source_name: source.name,
