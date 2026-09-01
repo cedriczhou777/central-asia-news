@@ -48,6 +48,9 @@ Thumbs.db
 ehthumbs.db
 
 # Logs
+
+# Preview
+.preview
 output.log
 *.log
 *.log.*

@@ -1,0 +1,58 @@
+import Link from 'next/link';
+import type { NewsArticle } from '@/lib/data/types';
+import { CountryBadge, CategoryBadge, SourceLabel, formatDate } from './news-badges';
+
+export function NewsCard({ article }: { article: NewsArticle }) {
+  return (
+    <Link
+      href={`/article/${article.id}`}
+      className="group block rounded-lg border border-border bg-card p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-gold/30"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <CountryBadge code={article.country} />
+        <CategoryBadge category={article.category} />
+      </div>
+      <h3 className="mb-2 text-base font-semibold leading-snug text-foreground group-hover:text-lapis transition-colors line-clamp-2">
+        {article.title}
+      </h3>
+      <p className="mb-3 text-sm leading-relaxed text-muted-foreground line-clamp-2">
+        {article.summary}
+      </p>
+      <div className="flex items-center justify-between">
+        <SourceLabel source={article.source} />
+        <time className="text-xs text-muted-foreground/60">
+          {formatDate(article.publishedAt)}
+        </time>
+      </div>
+    </Link>
+  );
+}
+
+export function FeaturedCard({ article }: { article: NewsArticle }) {
+  return (
+    <Link
+      href={`/article/${article.id}`}
+      className="group block rounded-lg border border-gold/20 bg-card p-6 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:border-gold/40"
+    >
+      <div className="mb-1 flex items-center gap-2">
+        <span className="inline-flex items-center rounded-sm bg-gold/10 px-1.5 py-0.5 text-xs font-medium text-gold">
+          重点
+        </span>
+        <CountryBadge code={article.country} />
+        <CategoryBadge category={article.category} />
+      </div>
+      <h3 className="mb-3 text-lg font-serif font-semibold leading-snug text-foreground group-hover:text-lapis transition-colors line-clamp-2">
+        {article.title}
+      </h3>
+      <p className="mb-4 text-sm leading-relaxed text-muted-foreground line-clamp-3">
+        {article.summary}
+      </p>
+      <div className="flex items-center justify-between border-t border-border pt-3">
+        <SourceLabel source={article.source} />
+        <time className="text-xs text-muted-foreground/60">
+          {formatDate(article.publishedAt)}
+        </time>
+      </div>
+    </Link>
+  );
+}

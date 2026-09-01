@@ -1,9 +1,14 @@
 [project]
+sub_id = "084f0c51"
+name = "central-asia-news"
 requires = [ "nodejs-24" ]
 project_type = "web"
 template = "nextjs"
 version = "0.0.35"
 appliedPatches = [ ]
+
+[preview]
+preview_enable = "enabled"
 
 [dev]
 build = [ "bash", "./scripts/prepare.sh" ]

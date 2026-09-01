@@ -63,3 +63,40 @@
 
 - 模板默认预装核心组件库 `shadcn/ui`，位于`src/components/ui/`目录下
 - Next.js 项目**必须默认**采用 shadcn/ui 组件、风格和规范，**除非用户指定用其他的组件和规范。**
+
+## 项目概述
+
+中亚投资资讯 - 面向中国投资者的中亚五国商业新闻聚合平台。
+
+### 目标用户
+有意在中亚五国（哈萨克斯坦、乌兹别克斯坦、吉尔吉斯斯坦、土库曼斯坦、塔吉克斯坦）投资的中国投资商。
+
+### 内容覆盖
+- 政治、经济、政策、工商税法
+- 投资领域：能源、化工、矿产、基建、房地产、制造业
+- 新闻来源：各国主流媒体、社交媒体
+
+## 关键入口
+
+### 页面路由
+- `/` - 首页仪表盘（国家概览、重点新闻、分类筛选）
+- `/countries/[code]` - 国家详情页（kz/uz/kg/tm/tj）
+- `/article/[id]` - 文章详情页
+
+### 数据层
+- `src/lib/data/types.ts` - 类型定义
+- `src/lib/data/countries.ts` - 国家数据
+- `src/lib/data/categories.ts` - 分类数据
+- `src/lib/data/sources.ts` - 新闻来源
+- `src/lib/data/articles.ts` - 新闻数据（当前为 mock）
+
+### 组件
+- `src/components/news-card.tsx` - 新闻卡片
+- `src/components/news-badges.tsx` - 国家/分类/来源标签
+- `src/components/country-card.tsx` - 国家卡片
+
+### 设计风格
+- 主色：深藏青 #0F1B2D（权威、信任）
+- 辅助色：丝路金 #C8A45C（财富、机遇）
+- 背景色：羊皮白 #F8F6F1
+- 详见 `DESIGN.md`
