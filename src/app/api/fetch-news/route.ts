@@ -103,7 +103,12 @@ ${content.substring(0, 3000)}
   try {
     const jsonMatch = response.content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        titleZh: parsed.title || title,
+        summaryZh: parsed.summary || content.substring(0, 100),
+        contentZh: parsed.content || content,
+      };
     }
   } catch {
     // fallback
