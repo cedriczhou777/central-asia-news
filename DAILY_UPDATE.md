@@ -3,6 +3,15 @@
 ## 概述
 本系统支持每日自动采集中亚五国新闻，翻译为中文，生成各国日报，并推送到微信公众号草稿箱。
 
+## 定时任务时间表（北京时间 UTC+8）
+
+| 时间 | 说明 |
+|------|------|
+| 08:00 | 早间新闻采集 |
+| 12:30 | 午间新闻采集 |
+| 15:00 | 下午新闻采集 |
+| 21:00 | 晚间新闻采集 |
+
 ## 手动执行
 
 ### 1. 仅采集新闻（不推送）
@@ -24,30 +33,37 @@ curl -X POST http://localhost:5000/api/pipeline \
 
 ## 自动执行方案
 
-### 方案 A：Linux Cron Job（推荐）
+### 方案 A：Node.js 调度器（推荐）
+
+启动定时任务调度器：
+```bash
+pnpm scheduler
+```
+
+或使用 pm2 保持后台运行：
+```bash
+pm2 start scripts/scheduler.js --name daily-news-scheduler
+pm2 save
+pm2 startup
+```
+
+调度器会在以下北京时间自动执行：
+- 08:00, 12:30, 15:00, 21:00
+
+### 方案 B：Linux Cron Job
 
 编辑 crontab：
 ```bash
 crontab -e
 ```
 
-添加每日执行任务（例如每天早上 8 点）：
+添加每日执行任务（北京时间）：
 ```cron
-0 8 * * * cd /workspace/projects && ./scripts/daily-fetch.sh 10 true >> /tmp/daily-fetch.log 2>&1
+0 0 * * * cd /workspace/projects && ./scripts/daily-fetch.sh 10 true >> /tmp/daily-fetch.log 2>&1
+30 4 * * * cd /workspace/projects && ./scripts/daily-fetch.sh 10 true >> /tmp/daily-fetch.log 2>&1
+0 7 * * * cd /workspace/projects && ./scripts/daily-fetch.sh 10 true >> /tmp/daily-fetch.log 2>&1
+0 13 * * * cd /workspace/projects && ./scripts/daily-fetch.sh 10 true >> /tmp/daily-fetch.log 2>&1
 ```
-
-### 方案 B：Systemd Timer（更可靠）
-
-创建 service 文件 `/etc/systemd/system/daily-fetch.service`：
-```ini
-[Unit]
-Description=Daily News Fetch
-After=network.target
-
-[Service]
-Type=oneshot
-User=www-data
-WorkingDirectory=/workspace/projects
 ExecStart=/workspace/projects/scripts/daily-fetch.sh 10 true
 ```
 
