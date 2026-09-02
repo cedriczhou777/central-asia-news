@@ -64,6 +64,17 @@ export async function getArticleById(id: number): Promise<ArticleRow | null> {
   return data as ArticleRow | null;
 }
 
+export async function getExistingSourceUrls(urls: string[]): Promise<Set<string>> {
+  if (urls.length === 0) return new Set();
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('articles')
+    .select('source_url')
+    .in('source_url', urls);
+  if (error) throw new Error(`查询来源URL失败: ${error.message}`);
+  return new Set((data || []).map((d: { source_url: string }) => d.source_url).filter(Boolean));
+}
+
 export async function insertArticle(article: {
   title: string;
   summary: string;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
 import { LLMClient, Config } from 'coze-coding-dev-sdk';
-import { insertArticles } from '@/lib/db-articles';
+import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 
 const parser = new Parser({
   timeout: 15000,
@@ -196,9 +196,24 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // Deduplicate: check existing source_urls
+        let existingUrls = new Set<string>();
         if (articlesToInsert.length > 0) {
-          await insertArticles(articlesToInsert);
-          result.saved = articlesToInsert.length;
+          const urls = articlesToInsert.map(a => a.source_url).filter(Boolean) as string[];
+          if (urls.length > 0) {
+            try {
+              existingUrls = await getExistingSourceUrls(urls);
+            } catch {
+              // Database not available, skip deduplication
+            }
+          }
+        }
+
+        const newArticles = articlesToInsert.filter(a => !existingUrls.has(a.source_url));
+
+        if (newArticles.length > 0) {
+          await insertArticles(newArticles);
+          result.saved = newArticles.length;
         }
       } catch (err) {
         result.errors.push(`RSS解析失败: ${err instanceof Error ? err.message : '未知错误'}`);
