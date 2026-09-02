@@ -62,8 +62,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const targetDate = (body as Record<string, string>).date || new Date().toISOString().split('T')[0];
 
-    const startDate = `${targetDate}T00:00:00Z`;
-    const endDate = `${targetDate}T23:59:59Z`;
+    // 使用 +08:00 时区（北京时间）
+    const startDate = `${targetDate}T00:00:00+08:00`;
+    const endDate = `${targetDate}T23:59:59+08:00`;
 
     const digests: CountryDigest[] = [];
 
