@@ -22,7 +22,10 @@ export default function HomePage() {
         const params = new URLSearchParams();
         if (selectedCountry) params.set('country', selectedCountry);
         if (selectedCategory) params.set('category', selectedCategory);
-        const res = await fetch(`/api/articles?${params.toString()}`);
+        params.set('_t', Date.now().toString());
+        const res = await fetch(`/api/articles?${params.toString()}`, {
+          cache: 'no-store',
+        });
         const data = await res.json();
         setArticles(data.articles || []);
       } catch {

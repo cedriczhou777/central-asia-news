@@ -31,7 +31,16 @@ export async function GET(request: NextRequest) {
       if (!article) {
         return NextResponse.json({ error: '文章不存在' }, { status: 404 });
       }
-      return NextResponse.json({ article: rowToApi(article) });
+      return NextResponse.json(
+        { article: rowToApi(article) },
+        {
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+          },
+        },
+      );
     }
 
     const articles = await getArticles({
@@ -40,7 +49,16 @@ export async function GET(request: NextRequest) {
       date,
       limit,
     });
-    return NextResponse.json({ articles: articles.map(rowToApi), count: articles.length });
+    return NextResponse.json(
+      { articles: articles.map(rowToApi), count: articles.length },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
     return NextResponse.json({ error: message }, { status: 500 });
