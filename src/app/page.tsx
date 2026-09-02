@@ -27,6 +27,7 @@ export default function HomePage() {
           cache: 'no-store',
         });
         const data = await res.json();
+        console.log('[DEBUG] API response:', data.articles?.map((a: any) => ({ id: a.id, title: a.title?.substring(0, 30) })));
         setArticles(data.articles || []);
       } catch {
         // API unavailable, keep current state
