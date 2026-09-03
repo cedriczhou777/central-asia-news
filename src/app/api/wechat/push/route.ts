@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 
 const WECHAT_API_BASE = 'https://api.weixin.qq.com/cgi-bin';
+const USE_CLOUD_CALL = process.env.USE_WECHAT_CLOUD_CALL === 'true';
 
 interface WeChatConfig {
   appId: string;
@@ -17,14 +18,39 @@ function getWechatConfig(): WeChatConfig {
   return { appId, appSecret };
 }
 
+// 云调用模式：使用云托管的免 access_token 调用
+async function cloudCallApi(apiPath: string, data: any): Promise<any> {
+  const url = `${WECHAT_API_BASE}${apiPath}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Wechat-Key': process.env.WECHAT_CLOUD_KEY || '',
+    },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// 传统模式：需要 access_token
 async function getAccessToken(appId: string, appSecret: string): Promise<string> {
   const url = `${WECHAT_API_BASE}/token?grant_type=client_credential&appid=${appId}&secret=${appSecret}`;
   const res = await fetch(url);
   const data = await res.json();
   if (data.errcode) {
-    throw new Error(`获取access_token失败: ${data.errmsg}`);
+    throw new Error(`获取 access_token 失败：${data.errmsg}`);
   }
   return data.access_token;
+}
+
+async function callWechatApi(apiPath: string, accessToken: string, data: any): Promise<any> {
+  const url = `${WECHAT_API_BASE}${apiPath}?access_token=${accessToken}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
 }
 
 async function uploadThumb(accessToken: string): Promise<string> {
@@ -38,7 +64,7 @@ async function uploadThumb(accessToken: string): Promise<string> {
   });
   const data = await res.json();
   if (data.errcode) {
-    throw new Error(`上传缩略图失败: ${data.errmsg}`);
+    throw new Error(`上传缩略图失败：${data.errmsg}`);
   }
   return data.url;
 }
@@ -48,8 +74,9 @@ interface DraftArticle {
   author: string;
   content: string;
   digest: string;
-  thumb_media_id?: string;
-  need_open_comment?: number;
+  thumbMediaId: string;
+  needOpenComment: number;
+  onlyFansCanComment: number;
 }
 
 async function addDraft(accessToken: string, articles: DraftArticle[]): Promise<string> {
@@ -57,108 +84,115 @@ async function addDraft(accessToken: string, articles: DraftArticle[]): Promise<
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ articles }),
+    body: JSON.stringify({
+      articles: articles.map(a => ({
+        title: a.title,
+        author: a.author,
+        content: a.content,
+        digest: a.digest,
+        thumb_media_id: a.thumbMediaId,
+        need_open_comment: a.needOpenComment,
+        only_fans_can_comment: a.onlyFansCanComment,
+      })),
+    }),
   });
   const data = await res.json();
   if (data.errcode) {
-    throw new Error(`创建草稿失败: ${data.errmsg}`);
+    throw new Error(`创建草稿失败：${data.errmsg}`);
   }
   return data.media_id;
 }
 
-function formatDigestAsHtml(countryName: string, digest: string, articleCount: number): string {
-  const paragraphs = digest.split('\n').filter((p) => p.trim());
-  const htmlContent = paragraphs
-    .map((p) => {
-      const trimmed = p.trim();
-      if (trimmed.startsWith('# ')) {
-        return `<h2 style="font-size:18px;font-weight:bold;color:#0F1B2D;margin:20px 0 10px;">${trimmed.substring(2)}</h2>`;
-      }
-      if (trimmed.startsWith('## ')) {
-        return `<h3 style="font-size:16px;font-weight:bold;color:#0F1B2D;margin:16px 0 8px;">${trimmed.substring(3)}</h3>`;
-      }
-      if (trimmed.startsWith('📌') || trimmed.startsWith('📊') || trimmed.startsWith('⚡') || trimmed.startsWith('💡')) {
-        return `<p style="font-size:15px;line-height:1.8;color:#333;margin:12px 0;padding:8px 12px;background:#F8F6F1;border-radius:4px;">${trimmed}</p>`;
-      }
-      if (/^\d+[.、]/.test(trimmed)) {
-        return `<p style="font-size:15px;line-height:1.8;color:#333;margin:8px 0 8px 16px;">${trimmed}</p>`;
-      }
-      return `<p style="font-size:15px;line-height:1.8;color:#333;margin:8px 0;">${trimmed}</p>`;
-    })
-    .join('\n');
-
-  return `
-<section style="max-width:100%;box-sizing:border-box;padding:16px;">
-  <div style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #C8A45C;">
-    <h1 style="font-size:20px;font-weight:bold;color:#0F1B2D;margin:0;">🌏 ${countryName} · 每日投资资讯</h1>
-    <p style="font-size:13px;color:#6B7280;margin:8px 0 0;">${new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} | 共 ${articleCount} 条资讯</p>
-  </div>
-  ${htmlContent}
-  <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #E5E2DB;">
-    <p style="font-size:12px;color:#6B7280;">中亚投资资讯 | 面向中国投资者的中亚五国商业新闻平台</p>
-  </div>
-</section>`;
-}
-
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => ({}));
-    const { digests, date } = body as { digests?: Array<{ country_code: string; country_name: string; digest: string; article_count: number }>; date?: string };
+    const body = await request.json();
+    const { digests, date } = body;
 
-    if (!digests || !Array.isArray(digests)) {
-      return NextResponse.json(
-        { error: '请提供 digests 数组，可通过 POST /api/daily-digest 获取' },
-        { status: 400 }
-      );
+    if (!digests || !Array.isArray(digests) || digests.length === 0) {
+      return NextResponse.json({ error: '请提供 digests 数组' }, { status: 400 });
     }
 
     const config = getWechatConfig();
-    const accessToken = await getAccessToken(config.appId, config.appSecret);
+    let accessToken = '';
 
-    const results: Array<{ country: string; media_id: string; status: string }> = [];
+    if (!USE_CLOUD_CALL) {
+      accessToken = await getAccessToken(config.appId, config.appSecret);
+    }
 
-    for (const digestItem of digests) {
-      const country = countryList.find((c) => c.code === digestItem.country_code);
+    const results = [];
+
+    for (const digest of digests) {
+      if (!digest.digest || !digest.article_count) continue;
+
+      const country = countryList.find(c => c.code === digest.country_code);
       if (!country) continue;
 
-      const htmlContent = formatDigestAsHtml(
-        country.name,
-        digestItem.digest,
-        digestItem.article_count
-      );
+      const htmlContent = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px;">
+          <h1 style="color: #0F1B2D; border-bottom: 2px solid #C8A45C; padding-bottom: 10px;">
+            ${country.flag} ${digest.country_name} - 每日投资资讯
+          </h1>
+          <p style="color: #666; font-size: 14px;">${date || new Date().toLocaleDateString('zh-CN')}</p>
+          <div style="margin-top: 20px; line-height: 1.8;">
+            ${digest.digest.split('\n').map((line: string) => `<p>${line}</p>`).join('')}
+          </div>
+          <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #999; font-size: 12px;">
+            <p>中亚投资资讯 | Central Asia Investment Daily</p>
+            <p>数据来源：各国主流媒体 | 由 AI 自动翻译整理</p>
+          </div>
+        </div>
+      `;
 
-      const mediaId = await addDraft(accessToken, [
-        {
-          title: `${country.name} · 每日投资资讯 (${date || new Date().toISOString().split('T')[0]})`,
+      let mediaId: string;
+
+      if (USE_CLOUD_CALL) {
+        const thumbResult = await cloudCallApi('/media/uploadimg', { url: 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif' });
+        if (thumbResult.errcode) throw new Error(`上传缩略图失败：${thumbResult.errmsg}`);
+
+        const draftResult = await cloudCallApi('/draft/add', {
+          articles: [{
+            title: `${country.flag} ${digest.country_name} - ${date || '今日'} 投资资讯`,
+            author: '中亚投资资讯',
+            content: htmlContent,
+            digest: digest.digest.substring(0, 120),
+            thumb_media_id: thumbResult.url,
+            need_open_comment: 0,
+            only_fans_can_comment: 0,
+          }],
+        });
+
+        if (draftResult.errcode) throw new Error(`创建草稿失败：${draftResult.errmsg}`);
+        mediaId = draftResult.media_id;
+      } else {
+        const thumbUrl = await uploadThumb(accessToken);
+        mediaId = await addDraft(accessToken, [{
+          title: `${country.flag} ${digest.country_name} - ${date || '今日'} 投资资讯`,
           author: '中亚投资资讯',
           content: htmlContent,
-          digest: digestItem.digest.substring(0, 120),
-        },
-      ]);
+          digest: digest.digest.substring(0, 120),
+          thumbMediaId: thumbUrl,
+          needOpenComment: 0,
+          onlyFansCanComment: 0,
+        }]);
+      }
 
       results.push({
-        country: country.name,
+        country_code: digest.country_code,
+        country_name: digest.country_name,
         media_id: mediaId,
-        status: 'success',
+        article_count: digest.article_count,
       });
     }
 
     return NextResponse.json({
       success: true,
-      date: date || new Date().toISOString().split('T')[0],
-      results,
+      message: `成功创建 ${results.length} 个草稿`,
+      drafts: results,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : '未知错误';
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('微信推送失败:', error);
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : '推送失败',
+    }, { status: 500 });
   }
-}
-
-export async function GET() {
-  return NextResponse.json({
-    message: '微信公众号草稿推送接口',
-    usage: 'POST /api/wechat/push with { digests: [...], date: "YYYY-MM-DD" }',
-    required_env: ['WECHAT_APP_ID', 'WECHAT_APP_SECRET'],
-    flow: '1. POST /api/fetch-news → 采集新闻入库\n2. POST /api/daily-digest → 生成各国日报\n3. POST /api/wechat/push → 推送草稿到公众号',
-  });
 }

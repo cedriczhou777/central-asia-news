@@ -1,0 +1,43 @@
+# 微信云托管配置
+# 文档：https://developers.weixin.qq.com/miniprogram/dev/wxcloudrun/src/basic/guide.html
+
+version: "1.0"
+container:
+  port: 3000
+  minNum: 0
+  maxNum: 5
+  cpu: 0.5
+  mem: 1
+  policyType: cpu
+  policyThreshold: 60
+  envParams:
+    SUPABASE_URL: ""
+    SUPABASE_ANON_KEY: ""
+    WECHAT_APP_ID: ""
+    WECHAT_APP_SECRET: ""
+  customLogs: "stdout"
+  initialDelaySeconds: 5
+  dataBaseName: "central_asia_news"
+  executeSQLs:
+    - "CREATE TABLE IF NOT EXISTS articles (id SERIAL PRIMARY KEY, title TEXT, summary TEXT, content TEXT, country_code VARCHAR(2), category VARCHAR(20), source_name VARCHAR(50), source_url TEXT, original_title TEXT, original_content TEXT, original_language VARCHAR(5), published_at TIMESTAMP WITH TIME ZONE, tags JSONB, is_featured BOOLEAN DEFAULT false, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());"
+
+triggers:
+  - name: morning-fetch
+    type: timer
+    config: "0 0 * * *"  # 北京时间 08:00 (UTC 00:00)
+    payload: '{"action": "fetch-and-push", "limit": 10}'
+  
+  - name: noon-fetch
+    type: timer
+    config: "30 4 * * *"  # 北京时间 12:30 (UTC 04:30)
+    payload: '{"action": "fetch-and-push", "limit": 10}'
+  
+  - name: afternoon-fetch
+    type: timer
+    config: "0 7 * * *"  # 北京时间 15:00 (UTC 07:00)
+    payload: '{"action": "fetch-and-push", "limit": 10}'
+  
+  - name: evening-fetch
+    type: timer
+    config: "0 13 * * *"  # 北京时间 21:00 (UTC 13:00)
+    payload: '{"action": "fetch-and-push", "limit": 10}'
