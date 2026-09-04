@@ -271,20 +271,30 @@ async function processFetchNews(targetDate: string, limit: number, skipTranslati
       let existingUrls = new Set<string>();
       if (articlesToInsert.length > 0) {
         const urls = articlesToInsert.map(a => a.source_url).filter(Boolean) as string[];
+        console.log(`准备插入 ${articlesToInsert.length} 篇，去重检查 ${urls.length} 个 URL`);
         if (urls.length > 0) {
           try {
             existingUrls = await getExistingSourceUrls(urls);
-          } catch {
-            // Database not available, skip deduplication
+            console.log(`数据库中已存在 ${existingUrls.size} 个 URL`);
+          } catch (dbErr) {
+            console.error('去重查询失败:', dbErr instanceof Error ? dbErr.message : dbErr);
+            existingUrls = new Set(); // 数据库不可用时跳过
           }
         }
       }
 
       const newArticles = articlesToInsert.filter(a => !existingUrls.has(a.source_url));
+      console.log(`去重后剩余 ${newArticles.length} 篇新文章`);
 
       if (newArticles.length > 0) {
-        await insertArticles(newArticles);
-        result.saved = newArticles.length;
+        try {
+          await insertArticles(newArticles);
+          result.saved = newArticles.length;
+          console.log(`成功保存 ${result.saved} 篇到数据库`);
+        } catch (insertErr) {
+          console.error('插入数据库失败:', insertErr instanceof Error ? insertErr.message : insertErr);
+          result.errors.push(`数据库插入失败：${insertErr instanceof Error ? insertErr.message : '未知错误'}`);
+        }
       }
     } catch (err) {
       result.errors.push(`RSS 解析失败：${err instanceof Error ? err.message : '未知错误'}`);
