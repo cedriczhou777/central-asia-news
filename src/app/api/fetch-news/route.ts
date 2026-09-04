@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
-import { LLMClient, Config } from 'coze-coding-dev-sdk';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 
 const parser = new Parser({
@@ -77,8 +76,15 @@ async function translateAndSummarize(
   sourceLanguage: string
 ): Promise<{ titleZh: string; summaryZh: string; contentZh: string }> {
   try {
-    const config = new Config();
-    const client = new LLMClient(config);
+    const apiKey = process.env.ZHIPU_API_KEY;
+    if (!apiKey) {
+      console.error('ZHIPU_API_KEY 未配置');
+      return {
+        titleZh: title,
+        summaryZh: content.substring(0, 100),
+        contentZh: content,
+      };
+    }
 
     const prompt = `你是一位专业的中亚地区新闻翻译编辑，服务于面向中国投资者的中亚资讯平台。
 
@@ -96,16 +102,40 @@ ${content.substring(0, 3000)}
   "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅"
 }`;
 
-    console.log('开始调用 LLM 翻译...');
-    const response = await client.invoke(
-      [{ role: 'user', content: prompt }],
-      { model: 'doubao-seed-2-0-mini-260215', temperature: 0.3 }
-    );
+    console.log('开始调用智谱 AI 翻译...');
+    
+    const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'glm-4',
+        messages: [
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.3,
+      }),
+    });
 
-    console.log('LLM 响应:', response.content.substring(0, 200));
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('智谱 AI 请求失败:', response.status, errorText);
+      return {
+        titleZh: title,
+        summaryZh: content.substring(0, 100),
+        contentZh: content,
+      };
+    }
+
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const llmContent = data.choices?.[0]?.message?.content || '';
+    
+    console.log('智谱 AI 响应:', llmContent.substring(0, 200));
 
     try {
-      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+      const jsonMatch = llmContent.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         return {

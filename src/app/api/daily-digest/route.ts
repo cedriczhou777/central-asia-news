@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { LLMClient, Config } from 'coze-coding-dev-sdk';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { countries, countryList } from '@/lib/data/countries';
 import { categories } from '@/lib/data/categories';
@@ -21,8 +20,11 @@ async function generateCountryDigest(
     return `今日${countryName}暂无重要资讯。`;
   }
 
-  const config = new Config();
-  const client = new LLMClient(config);
+  const apiKey = process.env.ZHIPU_API_KEY;
+  if (!apiKey) {
+    console.error('ZHIPU_API_KEY 未配置');
+    return `今日${countryName}暂无重要资讯。`;
+  }
 
   const articlesText = articles
     .map(
@@ -36,25 +38,52 @@ async function generateCountryDigest(
 请根据以下${countryName}今日新闻，撰写一篇结构清晰、重点突出的资讯汇总文章。
 
 要求：
-1. 开头用2-3句话概括${countryName}今日整体态势
-2. 按重要性排列，每条新闻用1-2句话精炼概括
+1. 开头用 2-3 句话概括${countryName}今日整体态势
+2. 按重要性排列，每条新闻用 1-2 句话精炼概括
 3. 对投资者关心的政策变化、商业机会要特别标注
 4. 语言风格：专业、简洁、有洞察力，适合商务人士快速阅读
 5. 结尾可附一句简短的投资提示或关注点
-6. 总字数控制在500-800字
-7. 使用适当的emoji分隔段落（如📌、📊、⚡等），但不要过多
+6. 总字数控制在 500-800 字
+7. 使用适当的 emoji 分隔段落（如📌、📊、⚡等），但不要过多
 
 今日${countryName}新闻列表：
 ${articlesText}
 
 请直接输出汇总文章内容，不要输出其他说明。`;
 
-  const response = await client.invoke(
-    [{ role: 'user', content: prompt }],
-    { model: 'doubao-seed-2-0-mini-260215', temperature: 0.5 }
-  );
+  try {
+    console.log(`开始生成${countryName}日报...`);
+    
+    const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'glm-4',
+        messages: [
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.5,
+      }),
+    });
 
-  return response.content;
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`智谱 AI 请求失败 (${countryName}):`, response.status, errorText);
+      return `今日${countryName}暂无重要资讯。`;
+    }
+
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const digest = data.choices?.[0]?.message?.content || `今日${countryName}暂无重要资讯。`;
+    
+    console.log(`${countryName}日报生成完成，长度：${digest.length}字`);
+    return digest;
+  } catch (err) {
+    console.error(`生成${countryName}日报失败:`, err instanceof Error ? err.message : err);
+    return `今日${countryName}暂无重要资讯。`;
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -103,8 +132,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json({
-    message: '每日资讯汇总接口',
+    message: '每日摘要生成接口',
     usage: 'POST /api/daily-digest with optional { date: "YYYY-MM-DD" }',
-    countries: countryList.map((c) => ({ code: c.code, name: c.name })),
   });
 }
