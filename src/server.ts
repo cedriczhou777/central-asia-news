@@ -2,6 +2,9 @@ import { createServer } from 'http';
 import { parse } from 'url';
 import next from 'next';
 
+// 修复微信 API 调用的 SSL 证书问题
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 const dev = process.env.COZE_PROJECT_ENV !== 'PROD';
 const hostname = process.env.HOSTNAME || 'localhost';
 const port = parseInt(process.env.PORT || '5000', 10);
