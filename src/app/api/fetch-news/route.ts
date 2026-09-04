@@ -88,10 +88,10 @@ async function translateAndSummarize(
 原始内容：
 ${content.substring(0, 3000)}
 
-请严格按以下JSON格式输出（不要输出其他内容）：
+请严格按以下 JSON 格式输出（不要输出其他内容）：
 {
   "title": "翻译后的中文标题，简洁有力，适合投资资讯平台",
-  "summary": "100字以内的中文摘要，突出对投资者的关键信息",
+  "summary": "100 字以内的中文摘要，突出对投资者的关键信息",
   "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅"
 }`;
 
@@ -123,9 +123,10 @@ ${content.substring(0, 3000)}
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => ({})) as Record<string, string | number>;
+    const body = await request.json().catch(() => ({})) as Record<string, string | number | boolean>;
     const targetDate = (body.date as string) || new Date().toISOString().split('T')[0];
-    const limit = typeof body.limit === 'number' ? body.limit : undefined;
+    const limit = typeof body.limit === 'number' ? body.limit : 5;
+    const skipTranslation = body.skipTranslation === true;
     const results: { source: string; fetched: number; saved: number; errors: string[] }[] = [];
 
     for (const source of RSS_SOURCES) {
@@ -163,23 +164,36 @@ export async function POST(request: NextRequest) {
           is_featured: boolean;
         }> = [];
 
-        for (const item of targetItems.slice(0, 10)) {
+        for (const item of targetItems.slice(0, limit)) {
           try {
             const originalTitle = item.title || '';
             const originalContent = item.contentSnippet || item.content || '';
             const category = classifyCategory(originalTitle, originalContent);
             const tags = extractTags(originalTitle, originalContent);
 
-            const translated = await translateAndSummarize(
-              originalTitle,
-              originalContent,
-              source.language
-            );
+            let titleZh = originalTitle;
+            let summaryZh = originalContent.substring(0, 200);
+            let contentZh = originalContent;
+
+            if (!skipTranslation) {
+              try {
+                const translated = await translateAndSummarize(
+                  originalTitle,
+                  originalContent,
+                  source.language
+                );
+                titleZh = translated.titleZh || originalTitle;
+                summaryZh = translated.summaryZh || originalContent.substring(0, 200);
+                contentZh = translated.contentZh || originalContent;
+              } catch (err) {
+                result.errors.push(`翻译失败：${originalTitle.substring(0, 30)}`);
+              }
+            }
 
             articlesToInsert.push({
-              title: translated.titleZh || originalTitle || '无标题',
-              summary: translated.summaryZh || originalContent.substring(0, 100),
-              content: translated.contentZh || originalContent,
+              title: titleZh || '无标题',
+              summary: summaryZh,
+              content: contentZh,
               country_code: source.country,
               category,
               source_name: source.name,
@@ -192,7 +206,7 @@ export async function POST(request: NextRequest) {
               is_featured: category === 'energy' || category === 'policy' || category === 'minerals',
             });
           } catch (err) {
-            result.errors.push(`翻译失败: ${item.title?.substring(0, 30)}`);
+            result.errors.push(`处理失败：${item.title?.substring(0, 30)}`);
           }
         }
 
@@ -216,7 +230,7 @@ export async function POST(request: NextRequest) {
           result.saved = newArticles.length;
         }
       } catch (err) {
-        result.errors.push(`RSS解析失败: ${err instanceof Error ? err.message : '未知错误'}`);
+        result.errors.push(`RSS 解析失败：${err instanceof Error ? err.message : '未知错误'}`);
       }
       results.push(result);
     }
@@ -237,7 +251,7 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   return NextResponse.json({
     message: '新闻采集接口',
-    usage: 'POST /api/fetch-news with optional { date: "YYYY-MM-DD" }',
+    usage: 'POST /api/fetch-news with optional { date: "YYYY-MM-DD", limit: 5, skipTranslation: true }',
     sources: RSS_SOURCES.map((s) => ({ name: s.name, country: s.country })),
   });
 }
