@@ -1,0 +1,23 @@
+name: Daily News Pipeline
+
+on:
+  schedule:
+    # 北京时间 08:00 (UTC 00:00)
+    - cron: '0 0 * * *'
+    # 北京时间 12:30 (UTC 04:30)
+    - cron: '30 4 * * *'
+    # 北京时间 15:00 (UTC 07:00)
+    - cron: '0 7 * * *'
+    # 北京时间 22:00 (UTC 14:00)
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call News Pipeline API
+        run: |
+          curl -X POST 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/pipeline' \
+            -H 'Content-Type: application/json' \
+            -d '{"push": true}'
