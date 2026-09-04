@@ -76,10 +76,11 @@ async function translateAndSummarize(
   content: string,
   sourceLanguage: string
 ): Promise<{ titleZh: string; summaryZh: string; contentZh: string }> {
-  const config = new Config();
-  const client = new LLMClient(config);
+  try {
+    const config = new Config();
+    const client = new LLMClient(config);
 
-  const prompt = `你是一位专业的中亚地区新闻翻译编辑，服务于面向中国投资者的中亚资讯平台。
+    const prompt = `你是一位专业的中亚地区新闻翻译编辑，服务于面向中国投资者的中亚资讯平台。
 
 请将以下${sourceLanguage === 'en' ? '英文' : '俄文'}新闻翻译为中文，并按要求输出。
 
@@ -95,30 +96,41 @@ ${content.substring(0, 3000)}
   "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅"
 }`;
 
-  const response = await client.invoke(
-    [{ role: 'user', content: prompt }],
-    { model: 'doubao-seed-2-0-mini-260215', temperature: 0.3 }
-  );
+    console.log('开始调用 LLM 翻译...');
+    const response = await client.invoke(
+      [{ role: 'user', content: prompt }],
+      { model: 'doubao-seed-2-0-mini-260215', temperature: 0.3 }
+    );
 
-  try {
-    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      return {
-        titleZh: parsed.title || title,
-        summaryZh: parsed.summary || content.substring(0, 100),
-        contentZh: parsed.content || content,
-      };
+    console.log('LLM 响应:', response.content.substring(0, 200));
+
+    try {
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          titleZh: parsed.title || title,
+          summaryZh: parsed.summary || content.substring(0, 100),
+          contentZh: parsed.content || content,
+        };
+      }
+    } catch (parseErr) {
+      console.error('JSON 解析失败:', parseErr);
     }
-  } catch {
-    // fallback
-  }
 
-  return {
-    titleZh: title,
-    summaryZh: content.substring(0, 100),
-    contentZh: content,
-  };
+    return {
+      titleZh: title,
+      summaryZh: content.substring(0, 100),
+      contentZh: content,
+    };
+  } catch (err) {
+    console.error('LLM 调用失败:', err instanceof Error ? err.message : err);
+    return {
+      titleZh: title,
+      summaryZh: content.substring(0, 100),
+      contentZh: content,
+    };
+  }
 }
 
 export async function POST(request: NextRequest) {
