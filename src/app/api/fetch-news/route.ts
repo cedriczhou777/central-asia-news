@@ -122,130 +122,136 @@ ${content.substring(0, 3000)}
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json().catch(() => ({})) as Record<string, string | number | boolean>;
-    const targetDate = (body.date as string) || new Date().toISOString().split('T')[0];
-    const limit = typeof body.limit === 'number' ? body.limit : 5;
-    const skipTranslation = body.skipTranslation === true;
-    const results: { source: string; fetched: number; saved: number; errors: string[] }[] = [];
+  const body = await request.json().catch(() => ({})) as Record<string, string | number | boolean>;
+  const targetDate = (body.date as string) || new Date().toISOString().split('T')[0];
+  const limit = typeof body.limit === 'number' ? body.limit : 5;
+  const skipTranslation = body.skipTranslation === true;
 
-    for (const source of RSS_SOURCES) {
-      const result = { source: source.name, fetched: 0, saved: 0, errors: [] as string[] };
-      try {
-        const feed = await parser.parseURL(source.url);
-        result.fetched = feed.items.length;
+  // 立即返回，后台异步处理
+  processFetchNews(targetDate, limit, skipTranslation).catch(err => {
+    console.error('后台新闻抓取失败:', err);
+  });
 
-        const targetItems = limit
-          ? feed.items.slice(0, limit)
-          : feed.items.filter((item) => {
-              if (!item.pubDate) return true;
-              const itemDate = new Date(item.pubDate).toISOString().split('T')[0];
-              return itemDate === targetDate;
-            });
+  return NextResponse.json({
+    success: true,
+    message: '新闻抓取任务已启动，后台处理中',
+    date: targetDate,
+    limit,
+    skipTranslation,
+  });
+}
 
-        if (targetItems.length === 0) {
-          results.push(result);
-          continue;
-        }
+async function processFetchNews(targetDate: string, limit: number, skipTranslation: boolean) {
+  const results: { source: string; fetched: number; saved: number; errors: string[] }[] = [];
 
-        const articlesToInsert: Array<{
-          title: string;
-          summary: string;
-          content: string;
-          country_code: string;
-          category: string;
-          source_name: string;
-          source_url: string;
-          original_title: string;
-          original_content: string;
-          original_language: string;
-          published_at: string;
-          tags: string[];
-          is_featured: boolean;
-        }> = [];
+  for (const source of RSS_SOURCES) {
+    const result = { source: source.name, fetched: 0, saved: 0, errors: [] as string[] };
+    try {
+      const feed = await parser.parseURL(source.url);
+      result.fetched = feed.items.length;
 
-        for (const item of targetItems.slice(0, limit)) {
-          try {
-            const originalTitle = item.title || '';
-            const originalContent = item.contentSnippet || item.content || '';
-            const category = classifyCategory(originalTitle, originalContent);
-            const tags = extractTags(originalTitle, originalContent);
+      const targetItems = limit
+        ? feed.items.slice(0, limit)
+        : feed.items.filter((item) => {
+            if (!item.pubDate) return true;
+            const itemDate = new Date(item.pubDate).toISOString().split('T')[0];
+            return itemDate === targetDate;
+          });
 
-            let titleZh = originalTitle;
-            let summaryZh = originalContent.substring(0, 200);
-            let contentZh = originalContent;
-
-            if (!skipTranslation) {
-              try {
-                const translated = await translateAndSummarize(
-                  originalTitle,
-                  originalContent,
-                  source.language
-                );
-                titleZh = translated.titleZh || originalTitle;
-                summaryZh = translated.summaryZh || originalContent.substring(0, 200);
-                contentZh = translated.contentZh || originalContent;
-              } catch (err) {
-                result.errors.push(`翻译失败：${originalTitle.substring(0, 30)}`);
-              }
-            }
-
-            articlesToInsert.push({
-              title: titleZh || '无标题',
-              summary: summaryZh,
-              content: contentZh,
-              country_code: source.country,
-              category,
-              source_name: source.name,
-              source_url: item.link || '',
-              original_title: originalTitle,
-              original_content: originalContent,
-              original_language: source.language,
-              published_at: item.pubDate || new Date().toISOString(),
-              tags,
-              is_featured: category === 'energy' || category === 'policy' || category === 'minerals',
-            });
-          } catch (err) {
-            result.errors.push(`处理失败：${item.title?.substring(0, 30)}`);
-          }
-        }
-
-        // Deduplicate: check existing source_urls
-        let existingUrls = new Set<string>();
-        if (articlesToInsert.length > 0) {
-          const urls = articlesToInsert.map(a => a.source_url).filter(Boolean) as string[];
-          if (urls.length > 0) {
-            try {
-              existingUrls = await getExistingSourceUrls(urls);
-            } catch {
-              // Database not available, skip deduplication
-            }
-          }
-        }
-
-        const newArticles = articlesToInsert.filter(a => !existingUrls.has(a.source_url));
-
-        if (newArticles.length > 0) {
-          await insertArticles(newArticles);
-          result.saved = newArticles.length;
-        }
-      } catch (err) {
-        result.errors.push(`RSS 解析失败：${err instanceof Error ? err.message : '未知错误'}`);
+      if (targetItems.length === 0) {
+        results.push(result);
+        continue;
       }
-      results.push(result);
-    }
 
-    const totalSaved = results.reduce((sum, r) => sum + r.saved, 0);
-    return NextResponse.json({
-      success: true,
-      date: targetDate,
-      total_saved: totalSaved,
-      sources: results,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '未知错误';
-    return NextResponse.json({ error: message }, { status: 500 });
+      const articlesToInsert: Array<{
+        title: string;
+        summary: string;
+        content: string;
+        country_code: string;
+        category: string;
+        source_name: string;
+        source_url: string;
+        original_title: string;
+        original_content: string;
+        original_language: string;
+        published_at: string;
+        tags: string[];
+        is_featured: boolean;
+      }> = [];
+
+      for (const item of targetItems.slice(0, limit)) {
+        try {
+          const originalTitle = item.title || '';
+          const originalContent = item.contentSnippet || item.content || '';
+          const category = classifyCategory(originalTitle, originalContent);
+          const tags = extractTags(originalTitle, originalContent);
+
+          let titleZh = originalTitle;
+          let summaryZh = originalContent.substring(0, 200);
+          let contentZh = originalContent;
+
+          if (!skipTranslation) {
+            try {
+              const translated = await translateAndSummarize(
+                originalTitle,
+                originalContent,
+                source.language
+              );
+              titleZh = translated.titleZh || originalTitle;
+              summaryZh = translated.summaryZh || originalContent.substring(0, 200);
+              contentZh = translated.contentZh || originalContent;
+            } catch (err) {
+              result.errors.push(`翻译失败：${originalTitle.substring(0, 30)}`);
+            }
+          }
+
+          articlesToInsert.push({
+            title: titleZh || '无标题',
+            summary: summaryZh,
+            content: contentZh,
+            country_code: source.country,
+            category,
+            source_name: source.name,
+            source_url: item.link || '',
+            original_title: originalTitle,
+            original_content: originalContent,
+            original_language: source.language,
+            published_at: item.pubDate || new Date().toISOString(),
+            tags,
+            is_featured: category === 'energy' || category === 'policy' || category === 'minerals',
+          });
+        } catch (err) {
+          result.errors.push(`处理失败：${item.title?.substring(0, 30)}`);
+        }
+      }
+
+      // Deduplicate: check existing source_urls
+      let existingUrls = new Set<string>();
+      if (articlesToInsert.length > 0) {
+        const urls = articlesToInsert.map(a => a.source_url).filter(Boolean) as string[];
+        if (urls.length > 0) {
+          try {
+            existingUrls = await getExistingSourceUrls(urls);
+          } catch {
+            // Database not available, skip deduplication
+          }
+        }
+      }
+
+      const newArticles = articlesToInsert.filter(a => !existingUrls.has(a.source_url));
+
+      if (newArticles.length > 0) {
+        await insertArticles(newArticles);
+        result.saved = newArticles.length;
+      }
+    } catch (err) {
+      result.errors.push(`RSS 解析失败：${err instanceof Error ? err.message : '未知错误'}`);
+    }
+    results.push(result);
   }
+
+  const totalSaved = results.reduce((sum, r) => sum + r.saved, 0);
+  console.log(`新闻抓取完成：日期=${targetDate}, 共保存${totalSaved}篇`, results);
 }
 
 export async function GET() {
