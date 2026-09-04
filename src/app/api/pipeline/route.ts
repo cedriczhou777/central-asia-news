@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
-  const baseUrl = request.nextUrl.origin;
+  // 使用 localhost 进行内部调用，避免 SSL 错误
+  const baseUrl = 'http://localhost:5000';
   const body = await request.json().catch(() => ({}));
   const date = (body as Record<string, string>).date || new Date().toISOString().split('T')[0];
   const pushToWechat = (body as Record<string, boolean>).push || false;
