@@ -9,6 +9,15 @@ const dev = process.env.COZE_PROJECT_ENV !== 'PROD';
 const hostname = process.env.HOSTNAME || 'localhost';
 const port = parseInt(process.env.PORT || '5000', 10);
 
+// 全局错误处理，防止未捕获异常导致进程崩溃
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 // Create Next.js app
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -24,9 +33,8 @@ app.prepare().then(() => {
       res.end('Internal server error');
     }
   });
-  server.once('error', err => {
-    console.error(err);
-    process.exit(1);
+  server.on('error', err => {
+    console.error('Server error:', err);
   });
   server.listen(port, () => {
     console.log(
