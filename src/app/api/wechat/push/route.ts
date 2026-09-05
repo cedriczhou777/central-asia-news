@@ -161,6 +161,8 @@ export async function POST(request: NextRequest) {
           }],
         });
 
+        console.log('微信草稿创建返回:', JSON.stringify(draftResult));
+
         if (draftResult.errcode) throw new Error(`创建草稿失败：${draftResult.errmsg}`);
         mediaId = draftResult.media_id;
       } else {
