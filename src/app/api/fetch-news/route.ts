@@ -70,6 +70,20 @@ function extractTags(title: string, description: string): string[] {
   return tags.length > 0 ? tags : ['综合'];
 }
 
+// 从 HTML 内容中提取图片 URL
+function extractImagesFromHtml(html: string): string[] {
+  const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+  const images: string[] = [];
+  let match;
+  while ((match = imgRegex.exec(html)) !== null) {
+    const url = match[1];
+    if (url && !url.startsWith('data:') && !url.includes('pixel') && !url.includes('tracking')) {
+      images.push(url);
+    }
+  }
+  return images;
+}
+
 async function translateAndSummarize(
   title: string,
   content: string,
@@ -93,13 +107,13 @@ async function translateAndSummarize(
 原始标题：${title}
 
 原始内容：
-${content.substring(0, 3000)}
+${content}
 
 请严格按以下 JSON 格式输出（不要输出其他内容）：
 {
   "title": "翻译后的中文标题，简洁有力，适合投资资讯平台",
   "summary": "100 字以内的中文摘要，突出对投资者的关键信息",
-  "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅"
+  "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅，保留所有图片标记为 [IMAGE:图片URL]"
 }`;
 
     console.log('开始调用智谱 AI 翻译...');
@@ -219,6 +233,8 @@ async function processFetchNews(targetDate: string, limit: number, skipTranslati
         published_at: string;
         tags: string[];
         is_featured: boolean;
+        cover_image: string;
+        image_urls: string[];
       }> = [];
 
       for (const item of targetItems.slice(0, limit)) {
@@ -231,6 +247,10 @@ async function processFetchNews(targetDate: string, limit: number, skipTranslati
           let titleZh = originalTitle;
           let summaryZh = originalContent.substring(0, 200);
           let contentZh = originalContent;
+
+          // 提取图片
+          const imageUrls = extractImagesFromHtml(originalContent);
+          const coverImage = imageUrls[0] || '';
 
           if (!skipTranslation) {
             try {
@@ -261,6 +281,8 @@ async function processFetchNews(targetDate: string, limit: number, skipTranslati
             published_at: item.pubDate || new Date().toISOString(),
             tags,
             is_featured: category === 'energy' || category === 'policy' || category === 'minerals',
+            cover_image: coverImage,
+            image_urls: imageUrls,
           });
         } catch (err) {
           result.errors.push(`处理失败：${item.title?.substring(0, 30)}`);

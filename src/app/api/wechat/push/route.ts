@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
+import { getArticlesByDateRange } from '@/lib/db-articles';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
-
-
 
 // 开放接口服务：免 access_token，直接调用
 async function callWechatApi(apiPath: string, data: any): Promise<any> {
@@ -17,9 +16,9 @@ async function callWechatApi(apiPath: string, data: any): Promise<any> {
   return res.json();
 }
 
-async function uploadThumb(): Promise<string> {
-  // 使用默认缩略图 URL
-  const defaultThumbUrl = 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif';
+async function uploadThumb(imageUrl?: string): Promise<string> {
+  // 使用默认缩略图或指定图片
+  const defaultThumbUrl = imageUrl || 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif';
 
   // 先下载图片
   const imageRes = await fetch(defaultThumbUrl);
@@ -30,7 +29,7 @@ async function uploadThumb(): Promise<string> {
   
   // 使用 FormData 上传
   const formData = new FormData();
-  formData.append('media', new Blob([imageBuffer], { type: 'image/gif' }), 'thumb.gif');
+  formData.append('media', new Blob([imageBuffer], { type: 'image/jpeg' }), 'thumb.jpg');
 
   const res = await fetch(url, {
     method: 'POST',
@@ -80,56 +79,148 @@ async function addDraft(articles: DraftArticle[]): Promise<string> {
   return data.media_id;
 }
 
+// 生成微信公众号排版 HTML
+function generateWechatHtml(
+  countryName: string,
+  countryFlag: string,
+  date: string,
+  articles: Array<{
+    title: string;
+    summary: string;
+    content: string;
+    category: string;
+    source_name: string;
+    cover_image?: string;
+  }>
+): string {
+  const categoryLabels: Record<string, string> = {
+    politics: '政治',
+    economy: '经济',
+    policy: '政策',
+    business_law: '工商法律',
+    energy: '能源',
+    chemicals: '化工',
+    minerals: '矿产',
+    infrastructure: '基建',
+    real_estate: '房地产',
+    manufacturing: '制造业',
+  };
+
+  const articlesHtml = articles.map((article, index) => {
+    const categoryLabel = categoryLabels[article.category] || article.category;
+    const coverImageHtml = article.cover_image 
+      ? `<div style="margin: 15px 0;"><img src="${article.cover_image}" style="width: 100%; border-radius: 8px;" /></div>`
+      : '';
+    
+    return `
+      <div style="margin-bottom: 40px; padding-bottom: 30px; border-bottom: 1px solid #E8E8E8;">
+        <div style="display: flex; align-items: center; margin-bottom: 15px;">
+          <div style="background: #C8A45C; color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px;">${index + 1}</div>
+          <div style="flex: 1;">
+            <div style="font-size: 12px; color: #C8A45C; margin-bottom: 4px;">${categoryLabel}</div>
+            <h3 style="font-size: 18px; color: #0F1B2D; margin: 0; line-height: 1.4;">${article.title}</h3>
+          </div>
+        </div>
+        
+        <div style="font-size: 14px; color: #666; line-height: 1.8; margin-bottom: 10px;">
+          <strong>摘要：</strong>${article.summary}
+        </div>
+        
+        ${coverImageHtml}
+        
+        <div style="font-size: 15px; color: #333; line-height: 1.8;">
+          ${article.content.replace(/\[IMAGE:([^\]]+)\]/g, '<div style="margin: 15px 0;"><img src="$1" style="width: 100%; border-radius: 8px;" /></div>')}
+        </div>
+        
+        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #E8E8E8; font-size: 12px; color: #999;">
+          来源：${article.source_name}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; padding: 20px; background: #F8F6F1;">
+      <!-- 头部 -->
+      <div style="text-align: center; padding: 30px 20px; background: linear-gradient(135deg, #0F1B2D 0%, #1a2d4a 100%); border-radius: 12px; margin-bottom: 30px;">
+        <div style="font-size: 48px; margin-bottom: 10px;">${countryFlag}</div>
+        <h1 style="color: #C8A45C; font-size: 28px; margin: 0 0 10px 0; font-weight: bold;">${countryName}</h1>
+        <h2 style="color: white; font-size: 20px; margin: 0 0 15px 0; font-weight: normal;">每日投资资讯</h2>
+        <div style="color: rgba(255,255,255,0.7); font-size: 14px;">${date}</div>
+      </div>
+      
+      <!-- 新闻列表 -->
+      <div style="background: white; border-radius: 12px; padding: 25px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
+        ${articlesHtml}
+      </div>
+      
+      <!-- 底部 -->
+      <div style="text-align: center; margin-top: 30px; padding: 20px; color: #999; font-size: 12px;">
+        <div style="margin-bottom: 8px;">中亚投资资讯 | Central Asia Investment Daily</div>
+        <div>数据来源：各国主流媒体 | 由 AI 自动翻译整理</div>
+      </div>
+    </div>
+  `;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { digests, date } = body;
+    const { date, pushByCountry } = body;
 
-    if (!digests || !Array.isArray(digests) || digests.length === 0) {
-      return NextResponse.json({ error: '请提供 digests 数组' }, { status: 400 });
-    }
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    const startDate = `${targetDate}T00:00:00+08:00`;
+    const endDate = `${targetDate}T23:59:59+08:00`;
 
     const results = [];
 
-    for (const digest of digests) {
-      if (!digest.digest || !digest.article_count) continue;
+    // 按国别分组推送
+    for (const country of countryList) {
+      // 获取该国家当天的文章
+      const articles = await getArticlesByDateRange(startDate, endDate, country.code);
+      
+      if (articles.length === 0) {
+        console.log(`${country.name}今日无文章，跳过`);
+        continue;
+      }
 
-      const country = countryList.find(c => c.code === digest.country_code);
-      if (!country) continue;
+      console.log(`为${country.name}创建草稿，共${articles.length}篇文章`);
 
-      const htmlContent = `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px;">
-          <h1 style="color: #0F1B2D; border-bottom: 2px solid #C8A45C; padding-bottom: 10px;">
-            ${country.flag} ${digest.country_name} - 每日投资资讯
-          </h1>
-          <p style="color: #666; font-size: 14px;">${date || new Date().toLocaleDateString('zh-CN')}</p>
-          <div style="margin-top: 20px; line-height: 1.8;">
-            ${digest.digest.split('\n').map((line: string) => `<p>${line}</p>`).join('')}
-          </div>
-          <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #999; font-size: 12px;">
-            <p>中亚投资资讯 | Central Asia Investment Daily</p>
-            <p>数据来源：各国主流媒体 | 由 AI 自动翻译整理</p>
-          </div>
-        </div>
-      `;
+      // 生成微信公众号排版 HTML
+      const htmlContent = generateWechatHtml(
+        country.name,
+        country.flag,
+        targetDate,
+        articles.map(a => ({
+          title: a.title,
+          summary: a.summary,
+          content: a.content,
+          category: a.category,
+          source_name: a.source_name,
+          cover_image: a.cover_image || undefined,
+        }))
+      );
 
-      // 使用开放接口服务（免 access_token）
-      const thumbUrl = await uploadThumb();
+      // 上传缩略图（使用第一篇文章的封面图或默认图）
+      const thumbUrl = articles[0].cover_image || undefined;
+      const thumbMediaId = await uploadThumb(thumbUrl);
+
+      // 创建草稿（每个国家一个草稿）
       const mediaId = await addDraft([{
-        title: `${country.flag} ${digest.country_name} - ${date || '今日'} 投资资讯`,
+        title: `${country.flag} ${country.name} - ${targetDate} 投资资讯`,
         author: '中亚投资资讯',
         content: htmlContent,
-        digest: digest.digest.substring(0, 120),
-        thumbMediaId: thumbUrl,
+        digest: `${country.name}今日${articles.length}条投资资讯`,
+        thumbMediaId: thumbMediaId,
         needOpenComment: 0,
         onlyFansCanComment: 0,
       }]);
 
       results.push({
-        country_code: digest.country_code,
-        country_name: digest.country_name,
+        country_code: country.code,
+        country_name: country.name,
         media_id: mediaId,
-        article_count: digest.article_count,
+        article_count: articles.length,
       });
     }
 

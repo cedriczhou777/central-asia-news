@@ -25,6 +25,8 @@ export const articles = pgTable(
     published_at: timestamp("published_at", { withTimezone: true }).notNull(),
     tags: jsonb("tags").$type<string[]>(),
     is_featured: boolean("is_featured").default(false).notNull(),
+    cover_image: text("cover_image"),
+    image_urls: jsonb("image_urls").$type<string[]>(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }),
   },

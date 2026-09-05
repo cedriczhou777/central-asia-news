@@ -30,15 +30,15 @@ export async function POST(request: NextRequest) {
   const digests = (digestResult as Record<string, unknown>).digests as Array<{ country_name: string; article_count: number }>;
   log.push(`[${new Date().toISOString()}] 日报生成完成: ${digests?.length || 0} 个国家`);
 
-  // Step 3: Push to WeChat (optional)
+  // Step 3: Push to WeChat (optional) - 按国别分组推送
   let wechatResult: Record<string, unknown> | null = null;
-  if (pushToWechat && digests) {
-    log.push(`[${new Date().toISOString()}] 开始推送微信公众号草稿...`);
+  if (pushToWechat) {
+    log.push(`[${new Date().toISOString()}] 开始推送微信公众号草稿（按国别分组）...`);
     try {
       const wechatRes = await fetch(`${baseUrl}/api/wechat/push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ digests, date }),
+        body: JSON.stringify({ date }),
       });
       wechatResult = await wechatRes.json() as Record<string, unknown>;
       log.push(`[${new Date().toISOString()}] 公众号推送完成`);

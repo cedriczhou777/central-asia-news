@@ -15,6 +15,8 @@ export interface ArticleRow {
   published_at: string;
   tags: string[] | null;
   is_featured: boolean;
+  cover_image: string | null;
+  image_urls: string[] | null;
   created_at: string;
   updated_at: string | null;
 }
@@ -89,6 +91,8 @@ export async function insertArticle(article: {
   published_at: string;
   tags?: string[];
   is_featured?: boolean;
+  cover_image?: string;
+  image_urls?: string[];
 }): Promise<ArticleRow> {
   const client = getSupabaseClient();
   const { data, error } = await client
@@ -115,6 +119,8 @@ export async function insertArticles(
     published_at: string;
     tags?: string[];
     is_featured?: boolean;
+    cover_image?: string;
+    image_urls?: string[];
   }>
 ): Promise<void> {
   if (articles.length === 0) return;
