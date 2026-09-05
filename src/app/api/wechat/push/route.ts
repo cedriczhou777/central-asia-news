@@ -54,19 +54,32 @@ async function callWechatApi(apiPath: string, accessToken: string, data: any): P
 }
 
 async function uploadThumb(accessToken: string): Promise<string> {
+  // 使用默认缩略图 URL
   const defaultThumbUrl = 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif';
 
-  const url = `${WECHAT_API_BASE}/media/uploadimg?access_token=${accessToken}`;
+  // 先下载图片
+  const imageRes = await fetch(defaultThumbUrl);
+  const imageBuffer = await imageRes.arrayBuffer();
+
+  // 上传到微信永久素材
+  const url = `${WECHAT_API_BASE}/material/add_material?access_token=${accessToken}&type=image`;
+  
+  // 使用 FormData 上传
+  const formData = new FormData();
+  formData.append('media', new Blob([imageBuffer], { type: 'image/gif' }), 'thumb.gif');
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: defaultThumbUrl }),
+    body: formData,
   });
-  const data = await res.json();
+  const data = await res.json() as { media_id?: string; errcode?: number; errmsg?: string };
+  
+  console.log('上传缩略图返回:', JSON.stringify(data));
+  
   if (data.errcode) {
     throw new Error(`上传缩略图失败：${data.errmsg}`);
   }
-  return data.url;
+  return data.media_id || '';
 }
 
 interface DraftArticle {
