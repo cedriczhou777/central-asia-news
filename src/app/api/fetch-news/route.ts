@@ -15,11 +15,10 @@ interface RSSSource {
 }
 
 const RSS_SOURCES: RSSSource[] = [
-  { name: 'Kazinform', url: 'https://www.kazinform.kz/en/rss', country: 'kz', language: 'en' },
-  { name: 'UzDaily', url: 'https://uzdaily.com/en/rss', country: 'uz', language: 'en' },
-  { name: 'AKIpress', url: 'https://akipress.org/rss/', country: 'kg', language: 'en' },
   { name: 'Times Central Asia', url: 'https://timesca.com/feed', country: 'kz', language: 'en' },
   { name: 'Astana Times', url: 'https://astanatimes.com/feed/', country: 'kz', language: 'en' },
+  { name: 'UzDaily', url: 'https://uzdaily.uz/en/rss', country: 'uz', language: 'en' },
+  { name: 'AKIpress', url: 'https://kg.akipress.org/rss/', country: 'kg', language: 'en' },
 ];
 
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
@@ -113,7 +112,7 @@ ${content}
 {
   "title": "翻译后的中文标题，简洁有力，适合投资资讯平台",
   "summary": "100 字以内的中文摘要，突出对投资者的关键信息",
-  "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅，保留所有图片标记为 [IMAGE:图片URL]"
+  "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅。如果原文中有图片 URL，直接保留为 HTML img 标签格式：<img src='图片 URL' style='width:100%; border-radius:8px; margin:15px 0;' />"
 }`;
 
     console.log('开始调用智谱 AI 翻译...');
