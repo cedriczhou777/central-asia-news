@@ -1,50 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 
-const WECHAT_API_BASE = 'https://api.weixin.qq.com/cgi-bin';
-const USE_CLOUD_CALL = process.env.USE_WECHAT_CLOUD_CALL === 'true';
+// 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
+const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
 
-interface WeChatConfig {
-  appId: string;
-  appSecret: string;
-}
 
-function getWechatConfig(): WeChatConfig {
-  const appId = process.env.WECHAT_APP_ID;
-  const appSecret = process.env.WECHAT_APP_SECRET;
-  if (!appId || !appSecret) {
-    throw new Error('未配置微信公众号信息，请设置环境变量 WECHAT_APP_ID 和 WECHAT_APP_SECRET');
-  }
-  return { appId, appSecret };
-}
 
-// 云调用模式：使用云托管的免 access_token 调用
-async function cloudCallApi(apiPath: string, data: any): Promise<any> {
+// 开放接口服务：免 access_token，直接调用
+async function callWechatApi(apiPath: string, data: any): Promise<any> {
   const url = `${WECHAT_API_BASE}${apiPath}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Wechat-Key': process.env.WECHAT_CLOUD_KEY || '',
-    },
-    body: JSON.stringify(data),
-  });
-  return res.json();
-}
-
-// 传统模式：需要 access_token
-async function getAccessToken(appId: string, appSecret: string): Promise<string> {
-  const url = `${WECHAT_API_BASE}/token?grant_type=client_credential&appid=${appId}&secret=${appSecret}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if (data.errcode) {
-    throw new Error(`获取 access_token 失败：${data.errmsg}`);
-  }
-  return data.access_token;
-}
-
-async function callWechatApi(apiPath: string, accessToken: string, data: any): Promise<any> {
-  const url = `${WECHAT_API_BASE}${apiPath}?access_token=${accessToken}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -53,7 +17,7 @@ async function callWechatApi(apiPath: string, accessToken: string, data: any): P
   return res.json();
 }
 
-async function uploadThumb(accessToken: string): Promise<string> {
+async function uploadThumb(): Promise<string> {
   // 使用默认缩略图 URL
   const defaultThumbUrl = 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif';
 
@@ -61,8 +25,8 @@ async function uploadThumb(accessToken: string): Promise<string> {
   const imageRes = await fetch(defaultThumbUrl);
   const imageBuffer = await imageRes.arrayBuffer();
 
-  // 上传到微信永久素材
-  const url = `${WECHAT_API_BASE}/material/add_material?access_token=${accessToken}&type=image`;
+  // 上传到微信永久素材（开放接口服务免 access_token）
+  const url = `${WECHAT_API_BASE}/material/add_material?type=image`;
   
   // 使用 FormData 上传
   const formData = new FormData();
@@ -92,8 +56,8 @@ interface DraftArticle {
   onlyFansCanComment: number;
 }
 
-async function addDraft(accessToken: string, articles: DraftArticle[]): Promise<string> {
-  const url = `${WECHAT_API_BASE}/draft/add?access_token=${accessToken}`;
+async function addDraft(articles: DraftArticle[]): Promise<string> {
+  const url = `${WECHAT_API_BASE}/draft/add`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -125,13 +89,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '请提供 digests 数组' }, { status: 400 });
     }
 
-    const config = getWechatConfig();
-    let accessToken = '';
-
-    if (!USE_CLOUD_CALL) {
-      accessToken = await getAccessToken(config.appId, config.appSecret);
-    }
-
     const results = [];
 
     for (const digest of digests) {
@@ -156,40 +113,17 @@ export async function POST(request: NextRequest) {
         </div>
       `;
 
-      let mediaId: string;
-
-      if (USE_CLOUD_CALL) {
-        const thumbResult = await cloudCallApi('/media/uploadimg', { url: 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif' });
-        if (thumbResult.errcode) throw new Error(`上传缩略图失败：${thumbResult.errmsg}`);
-
-        const draftResult = await cloudCallApi('/draft/add', {
-          articles: [{
-            title: `${country.flag} ${digest.country_name} - ${date || '今日'} 投资资讯`,
-            author: '中亚投资资讯',
-            content: htmlContent,
-            digest: digest.digest.substring(0, 120),
-            thumb_media_id: thumbResult.url,
-            need_open_comment: 0,
-            only_fans_can_comment: 0,
-          }],
-        });
-
-        console.log('微信草稿创建返回:', JSON.stringify(draftResult));
-
-        if (draftResult.errcode) throw new Error(`创建草稿失败：${draftResult.errmsg}`);
-        mediaId = draftResult.media_id;
-      } else {
-        const thumbUrl = await uploadThumb(accessToken);
-        mediaId = await addDraft(accessToken, [{
-          title: `${country.flag} ${digest.country_name} - ${date || '今日'} 投资资讯`,
-          author: '中亚投资资讯',
-          content: htmlContent,
-          digest: digest.digest.substring(0, 120),
-          thumbMediaId: thumbUrl,
-          needOpenComment: 0,
-          onlyFansCanComment: 0,
-        }]);
-      }
+      // 使用开放接口服务（免 access_token）
+      const thumbUrl = await uploadThumb();
+      const mediaId = await addDraft([{
+        title: `${country.flag} ${digest.country_name} - ${date || '今日'} 投资资讯`,
+        author: '中亚投资资讯',
+        content: htmlContent,
+        digest: digest.digest.substring(0, 120),
+        thumbMediaId: thumbUrl,
+        needOpenComment: 0,
+        onlyFansCanComment: 0,
+      }]);
 
       results.push({
         country_code: digest.country_code,
