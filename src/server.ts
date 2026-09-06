@@ -1,6 +1,7 @@
 import { createServer } from 'http';
 import { parse } from 'url';
 import next from 'next';
+import { startScheduler } from './lib/scheduler';
 
 // 修复微信 API 调用的 SSL 证书问题
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -23,6 +24,11 @@ const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
+  // 启动定时任务（仅在生产环境）
+  if (!dev) {
+    startScheduler();
+  }
+  
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true);
