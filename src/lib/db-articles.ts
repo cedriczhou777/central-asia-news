@@ -137,7 +137,7 @@ export async function getArticlesByDateRange(
   const client = getSupabaseClient();
   let query = client
     .from('articles')
-    .select('id, title, summary, content, country_code, category, source_name, published_at, tags')
+    .select('id, title, summary, content, country_code, category, source_name, published_at, tags, cover_image, image_urls')
     .gte('published_at', startDate)
     .lte('published_at', endDate)
     .order('published_at', { ascending: false });

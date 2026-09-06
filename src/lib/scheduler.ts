@@ -1,48 +1,105 @@
 import cron from 'node-cron';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
 
 // 北京时间定时任务
-// 08:00, 12:30, 15:00, 22:00
-const SCHEDULES = [
+// 网页端抓取：08:00, 12:30, 15:00, 22:00
+// 微信公众号推送：08:30（在网页端抓取完成后）
+const WEB_FETCH_SCHEDULES = [
   '0 8 * * *',    // 北京时间 08:00
   '30 12 * * *',  // 北京时间 12:30
   '0 15 * * *',   // 北京时间 15:00
   '0 22 * * *',   // 北京时间 22:00
 ];
 
-async function runPipeline() {
-  console.log(`[${new Date().toISOString()}] 开始执行定时新闻抓取任务...`);
+const WECHAT_PUSH_SCHEDULE = '30 8 * * *';  // 北京时间 08:30
+
+// 网页端新闻抓取
+async function runWebFetch() {
+  console.log(`[${new Date().toISOString()}] 开始执行网页端新闻抓取任务...`);
   
   try {
-    // 调用本地 pipeline API
-    const response = await fetch('http://localhost:5000/api/pipeline', {
+    // 调用 fetch-news API，每个国家至少 3 篇
+    const response = await fetch('http://localhost:5000/api/fetch-news', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ push: true }),
+      body: JSON.stringify({ 
+        minPerCountry: 3,
+        skipTranslation: false 
+      }),
     });
     
     const result = await response.json();
-    console.log(`[${new Date().toISOString()}] 任务执行完成:`, JSON.stringify(result));
+    console.log(`[${new Date().toISOString()}] 网页端抓取任务完成:`, JSON.stringify(result));
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] 任务执行失败:`, error);
+    console.error(`[${new Date().toISOString()}] 网页端抓取任务失败:`, error);
+  }
+}
+
+// 微信公众号推送（汇总过去 24h 新闻，每个国家精选 5 篇）
+async function runWechatPush() {
+  console.log(`[${new Date().toISOString()}] 开始执行微信公众号推送任务...`);
+  
+  try {
+    // 调用 wechat/push API，按国别分组推送
+    const response = await fetch('http://localhost:5000/api/wechat/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        hours: 24,  // 汇总过去 24 小时
+        minPerCountry: 5  // 每个国家精选 5 篇
+      }),
+    });
+    
+    const result = await response.json();
+    console.log(`[${new Date().toISOString()}] 微信公众号推送任务完成:`, JSON.stringify(result));
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] 微信公众号推送任务失败:`, error);
+  }
+}
+
+// 完整 Pipeline（抓取 + 翻译 + 入库 + 推送）
+async function runFullPipeline() {
+  console.log(`[${new Date().toISOString()}] 开始执行完整 Pipeline 任务...`);
+  
+  try {
+    // 调用 pipeline API
+    const response = await fetch('http://localhost:5000/api/pipeline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        push: true,
+        minPerCountry: 3
+      }),
+    });
+    
+    const result = await response.json();
+    console.log(`[${new Date().toISOString()}] 完整 Pipeline 任务完成:`, JSON.stringify(result));
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] 完整 Pipeline 任务失败:`, error);
   }
 }
 
 export function startScheduler() {
   console.log('启动定时任务调度器...');
   
-  SCHEDULES.forEach((schedule, index) => {
+  // 注册网页端抓取任务（4 个时间段）
+  WEB_FETCH_SCHEDULES.forEach((schedule, index) => {
     cron.schedule(schedule, () => {
-      console.log(`[${new Date().toISOString()}] 触发定时任务 #${index + 1} (${schedule})`);
-      runPipeline();
+      console.log(`[${new Date().toISOString()}] 触发网页端抓取任务 #${index + 1} (${schedule})`);
+      runWebFetch();
     }, {
       timezone: 'Asia/Shanghai',
     });
-    console.log(`已注册定时任务 #${index + 1}: ${schedule} (北京时间)`);
+    console.log(`已注册网页端抓取任务 #${index + 1}: ${schedule} (北京时间)`);
   });
   
-  console.log(`共注册 ${SCHEDULES.length} 个定时任务`);
+  // 注册微信公众号推送任务（每天 08:30）
+  cron.schedule(WECHAT_PUSH_SCHEDULE, () => {
+    console.log(`[${new Date().toISOString()}] 触发微信公众号推送任务 (${WECHAT_PUSH_SCHEDULE})`);
+    runWechatPush();
+  }, {
+    timezone: 'Asia/Shanghai',
+  });
+  console.log(`已注册微信公众号推送任务：${WECHAT_PUSH_SCHEDULE} (北京时间)`);
+  
+  console.log(`共注册 ${WEB_FETCH_SCHEDULES.length + 1} 个定时任务`);
 }

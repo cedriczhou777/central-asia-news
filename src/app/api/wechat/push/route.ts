@@ -5,6 +5,35 @@ import { getArticlesByDateRange } from '@/lib/db-articles';
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
 
+// 投资相关关键词（用于精选评分）
+const INVESTMENT_KEYWORDS = [
+  'invest', 'investment', 'investor', 'foreign investment', 'direct investment',
+  'oil', 'gas', 'energy', 'petroleum', 'fuel', 'pipeline', 'renewable', 'power', 'electricity',
+  'chemical', 'petrochemical', 'fertilizer', 'plastic', 'polymer',
+  'mining', 'mineral', 'copper', 'gold', 'uranium', 'ore', 'metal', 'resource', 'lithium',
+  'infrastructure', 'railway', 'road', 'bridge', 'construction', 'transport', 'logistics', 'highway',
+  'real estate', 'property', 'housing', 'building', 'development',
+  'manufacturing', 'factory', 'industrial', 'production', 'textile', 'automotive',
+  'policy', 'reform', 'regulation', 'law', 'legislation', 'decree', 'strategy',
+  'tax', 'legal', 'compliance', 'company law', 'commercial', 'corporate',
+  'economy', 'gdp', 'trade', 'export', 'import', 'business', 'finance', 'bank',
+  'president', 'parliament', 'government', 'minister', 'diplomat', 'bilateral', 'agreement',
+  'central asia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'turkmenistan', 'tajikistan',
+  'silk road', 'belt and road', ' BRI',
+];
+
+// 对新闻进行投资相关性评分
+function scoreInvestmentRelevance(title: string, summary: string): number {
+  const text = `${title} ${summary}`.toLowerCase();
+  let score = 0;
+  for (const kw of INVESTMENT_KEYWORDS) {
+    if (text.includes(kw)) {
+      score += kw.length; // 长关键词权重更高
+    }
+  }
+  return score;
+}
+
 // 开放接口服务：免 access_token，直接调用
 async function callWechatApi(apiPath: string, data: any): Promise<any> {
   const url = `${WECHAT_API_BASE}${apiPath}`;
@@ -166,32 +195,46 @@ function generateWechatHtml(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { date, pushByCountry } = body;
+    const { hours = 24, minPerCountry = 5 } = body;
 
-    const targetDate = date || new Date().toISOString().split('T')[0];
-    const startDate = `${targetDate}T00:00:00+08:00`;
-    const endDate = `${targetDate}T23:59:59+08:00`;
+    // 计算时间范围（过去 N 小时）
+    const now = new Date();
+    const startDate = new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
+    const endDate = now.toISOString();
+
+    console.log(`微信公众号推送：汇总过去${hours}小时新闻，每个国家精选${minPerCountry}篇`);
 
     const results = [];
 
     // 按国别分组推送
     for (const country of countryList) {
-      // 获取该国家当天的文章
+      // 获取该国家过去 N 小时的文章
       const articles = await getArticlesByDateRange(startDate, endDate, country.code);
       
       if (articles.length === 0) {
-        console.log(`${country.name}今日无文章，跳过`);
+        console.log(`${country.name}过去${hours}小时无文章，跳过`);
         continue;
       }
 
-      console.log(`为${country.name}创建草稿，共${articles.length}篇文章`);
+      console.log(`${country.name}过去${hours}小时共${articles.length}篇文章`);
+
+      // 按投资相关性评分排序，精选前 minPerCountry 篇
+      const scoredArticles = articles.map(a => ({
+        ...a,
+        relevanceScore: scoreInvestmentRelevance(a.title, a.summary),
+      }));
+      
+      scoredArticles.sort((a, b) => b.relevanceScore - a.relevanceScore);
+      const selectedArticles = scoredArticles.slice(0, minPerCountry);
+
+      console.log(`为${country.name}精选${selectedArticles.length}篇投资相关新闻`);
 
       // 生成微信公众号排版 HTML
       const htmlContent = generateWechatHtml(
         country.name,
         country.flag,
-        targetDate,
-        articles.map(a => ({
+        new Date().toISOString().split('T')[0],
+        selectedArticles.map(a => ({
           title: a.title,
           summary: a.summary,
           content: a.content,
@@ -202,15 +245,15 @@ export async function POST(request: NextRequest) {
       );
 
       // 上传缩略图（使用第一篇文章的封面图或默认图）
-      const thumbUrl = articles[0].cover_image || undefined;
+      const thumbUrl = selectedArticles[0].cover_image || undefined;
       const thumbMediaId = await uploadThumb(thumbUrl);
 
       // 创建草稿（每个国家一个草稿）
       const mediaId = await addDraft([{
-        title: `${country.flag} ${country.name} - ${targetDate} 投资资讯`,
+        title: `${country.flag} ${country.name} - ${new Date().toISOString().split('T')[0]} 投资资讯`,
         author: '中亚投资资讯',
         content: htmlContent,
-        digest: `${country.name}今日${articles.length}条投资资讯`,
+        digest: `${country.name}今日精选${selectedArticles.length}条投资资讯`,
         thumbMediaId: thumbMediaId,
         needOpenComment: 0,
         onlyFansCanComment: 0,
@@ -220,7 +263,7 @@ export async function POST(request: NextRequest) {
         country_code: country.code,
         country_name: country.name,
         media_id: mediaId,
-        article_count: articles.length,
+        article_count: selectedArticles.length,
       });
     }
 
