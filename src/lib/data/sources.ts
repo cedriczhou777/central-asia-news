@@ -230,6 +230,12 @@ export const sources: Record<NewsSource, SourceInfo> = {
     country: 'intl',
     type: 'media',
   },
+  instagram: {
+    id: 'instagram',
+    name: 'Instagram',
+    country: 'intl',
+    type: 'social',
+  },
 };
 
 export const sourceList = Object.values(sources);

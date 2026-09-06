@@ -28,13 +28,48 @@ export interface CategoryInfo {
 }
 
 export type NewsSource =
+  // 哈萨克斯坦
   | 'kazinform'
-  | 'dawn_kz'
-  | 'uzdaily'
+  | 'tengrinews'
+  | 'zakon_kz'
+  | 'nur_kz'
+  | 'inbusiness_kz'
+  | 'astana_times'
+  | 'forbes_kz'
+  | 'egemen_qazaqstan'
+  | 'kazpravda_kz'
+  | 'dknews_kz'
+  | 'newtimes_kz'
+  | 'channel_24_kz'
+  | 'khabar_kz'
+  // 乌兹别克斯坦
+  | 'uza_uz'
   | 'kun_uz'
+  | 'daryo_uz'
+  | 'gazeta_uz'
+  | 'spot_uz'
+  | 'repost_uz'
+  | 'anhor_uz'
+  | 'uznews_uz'
+  // 吉尔吉斯斯坦
+  | 'kabar_kg'
   | 'akipress'
-  | 'turkmenistan_golden_age'
+  | 'channel_24_kg'
+  | 'kaktus_media'
+  | 'super_kg'
+  | 'azattyk_kg'
+  // 塔吉克斯坦
   | 'khovar_tj'
+  | 'asia_plus_tj'
+  | 'avesta_tj'
+  // 土库曼斯坦
+  | 'tdh_tm'
+  | 'turkmenportal'
+  // 区域综合媒体
+  | 'times_central_asia'
+  | 'eurasianet'
+  | 'rferl_central_asia'
+  // 国际媒体
   | 'reuters'
   | 'instagram';
 
