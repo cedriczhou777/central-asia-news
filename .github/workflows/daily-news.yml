@@ -18,6 +18,6 @@ jobs:
     steps:
       - name: Call News Pipeline API
         run: |
-          curl -X POST 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/pipeline' \
+          curl -X POST 'https://central-asia-news-022-cdb798674-47qns.sh.run.tcloudbase.com/api/pipeline' \
             -H 'Content-Type: application/json' \
             -d '{"push": true}'
