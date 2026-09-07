@@ -1,0 +1,1608 @@
+09/07 18:18:55
+central-asia-news-035
+ POST /api/fetch-news 200 in 2.6s (compile: 2.6s, render: 14ms)
+09/07 18:18:55
+central-asia-news-035
+开始采集新闻，目标日期：2026-09-07，每个国家至少 3 篇
+09/07 18:18:57
+central-asia-news-035
+从 The Astana Times 采集 7 篇，其中投资相关 7 篇
+09/07 18:18:59
+central-asia-news-035
+从 Egemen Qazaqstan 采集 35 篇，其中投资相关 7 篇
+09/07 18:19:02
+central-asia-news-035
+从 Newtimes.kz 采集 19 篇，其中投资相关 8 篇
+09/07 18:19:09
+central-asia-news-035
+从 UzA 采集 20 篇，其中投资相关 0 篇
+09/07 18:19:12
+central-asia-news-035
+从 Gazeta.uz 采集 15 篇，其中投资相关 1 篇
+09/07 18:19:14
+central-asia-news-035
+从 Spot.uz 采集 9 篇，其中投资相关 2 篇
+09/07 18:19:16
+central-asia-news-035
+从 Uznews.uz 采集 9 篇，其中投资相关 2 篇
+09/07 18:19:20
+central-asia-news-035
+从 Kabar 采集 44 篇，其中投资相关 0 篇
+09/07 18:19:21
+central-asia-news-035
+从 24.kg 采集 50 篇，其中投资相关 12 篇
+09/07 18:19:24
+central-asia-news-035
+从 Khovar 采集 10 篇，其中投资相关 0 篇
+09/07 18:19:27
+central-asia-news-035
+从 Asia-Plus 采集 10 篇，其中投资相关 0 篇
+09/07 18:19:29
+central-asia-news-035
+从 Avesta 采集 10 篇，其中投资相关 1 篇
+09/07 18:19:30
+central-asia-news-035
+开始使用网页爬虫补充新闻...
+09/07 18:19:33
+central-asia-news-035
+[Kazinform] 抓取失败：Status code 404
+09/07 18:19:35
+central-asia-news-035
+[Tengrinews] 抓取 0 篇文章
+09/07 18:19:36
+central-asia-news-035
+[Zakon.kz] 抓取 0 篇文章
+09/07 18:19:39
+central-asia-news-035
+[Nur.kz] 抓取 0 篇文章
+09/07 18:19:41
+central-asia-news-035
+[Forbes.kz] 抓取失败: fetch failed
+09/07 18:19:41
+central-asia-news-035
+[Inbusiness.kz] 抓取 0 篇文章
+09/07 18:19:42
+central-asia-news-035
+[Kazakhstanskaya Pravda] 抓取失败: fetch failed
+09/07 18:19:43
+central-asia-news-035
+[DKNews.kz] 抓取失败：Status code 404
+09/07 18:19:48
+central-asia-news-035
+[Khabar] 抓取 0 篇文章
+09/07 18:19:49
+central-asia-news-035
+[Kun.uz] 抓取失败：Status code 404
+09/07 18:19:55
+central-asia-news-035
+[Daryo.uz] 抓取 0 篇文章
+09/07 18:19:56
+central-asia-news-035
+[Repost.uz] 抓取失败：Status code 404
+09/07 18:19:57
+central-asia-news-035
+[Anhor.uz] 抓取 0 篇文章
+09/07 18:20:27
+central-asia-news-035
+[AKIpress] 抓取失败: The operation was aborted due to timeout
+09/07 18:20:28
+central-asia-news-035
+[Kaktus.media] 抓取失败: fetch failed
+09/07 18:20:31
+central-asia-news-035
+[Super.kg] 抓取失败：Status code 404
+09/07 18:20:34
+central-asia-news-035
+[Avesta] 抓取 0 篇文章
+09/07 18:20:36
+central-asia-news-035
+[TDH] 抓取失败：Status code 404
+09/07 18:20:46
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:20:46
+central-asia-news-035
+kz 精选 8 篇新闻（投资相关8篇，补充0篇）
+09/07 18:20:46
+central-asia-news-035
+[Turkmenportal] 抓取失败: fetch failed
+09/07 18:20:49
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:20:49
+central-asia-news-035
+  "content": "《阿斯塔纳时报》提供来自哈萨克斯坦及全球的新闻和信息。\n阿斯塔纳——哈萨克斯坦计划投资约3.27亿美元，扩建其石油管道系统通往中国
+09/07 18:20:49
+central-asia-news-035
+  "summary": "哈萨克斯坦计划投资3.27亿美元扩建两条关键输油管道，年输送能力将提升至3500万吨，强化对华东部出口走廊。",
+09/07 18:20:49
+central-asia-news-035
+  "title": "哈萨克斯坦计划投资3.27亿美元扩建对华输油管道",
+09/07 18:20:49
+central-asia-news-035
+{
+09/07 18:20:49
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:20:52
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:20:52
+central-asia-news-035
+  "content": "《阿斯塔纳时报》提供来自哈萨克斯坦及全球的新闻和信息。\n\n阿斯塔纳——长期以来，哈萨克斯坦因其内陆地理位置而受到限制，如今正
+09/07 18:20:52
+central-asia-news-035
+  "summary": "哈萨克斯坦正利用其欧亚大陆桥的独特地理位置，投资建设新的运输走廊，旨在成为不可或缺的过境枢纽，为投资者提供多元化供应链机遇。",
+09/07 18:20:52
+central-asia-news-035
+  "title": "哈萨克斯坦物流外交：雄心、杠杆与制约",
+09/07 18:20:52
+central-asia-news-035
+{
+09/07 18:20:52
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:20:56
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:20:56
+central-asia-news-035
+  "content": "《阿斯塔纳时报》提供来自哈萨克斯坦及全球的新闻和信息。\n阿斯塔纳正在寻求更多途径运输其石油
+09/07 18:20:56
+central-asia-news-035
+  "summary": "哈萨克斯坦正寻求多元化石油出口渠道，减少对俄罗斯依赖。因CPC管道黑海终端受损及油轮袭击威胁，每日约150万桶石油出口面临风险，促使哈方调整出口策略。",
+09/07 18:20:56
+central-asia-news-035
+  "title": "哈萨克斯坦升级石油出口战略，多元化布局应对风险",
+09/07 18:20:56
+central-asia-news-035
+{
+09/07 18:20:56
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:20:59
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:20:59
+central-asia-news-035
+  "content": "《阿斯塔纳时报》提供来自哈萨克斯坦及全球的新闻和信息。\n\n阿拉木图——哈萨克斯坦计划在未来三年内增加勘探钻井，预计到2
+09/07 18:20:59
+central-asia-news-035
+  "summary": "哈萨克斯坦计划三年内增加勘探钻井，至2028年钻探多达200口勘探评估井。专家称，真正挑战是将地质发现转化为经济可行项目。",
+09/07 18:20:59
+central-asia-news-035
+  "title": "哈萨克斯坦寻求新矿藏 专家指出勘探后投资挑战",
+09/07 18:20:59
+central-asia-news-035
+{
+09/07 18:20:59
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:02
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:02
+central-asia-news-035
+  "content": "《阿斯塔纳时报》提供来自哈萨克斯坦及全球的新闻和信息。\n\n阿拉木图——根据2026年全球和平指数(GPI)
+09/07 18:21:02
+central-asia-news-035
+  "summary": "哈萨克斯坦在全球和平指数中排名第44位，成为全球最和平的50个国家之一，在全球和平性普遍下降的背景下表现突出，为投资者提供稳定环境。",
+09/07 18:21:02
+central-asia-news-035
+  "title": "哈萨克斯坦跻身全球最和平国家前50名，逆势而上",
+09/07 18:21:02
+central-asia-news-035
+{
+09/07 18:21:02
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:06
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:06
+central-asia-news-035
+  "content": "《阿斯塔纳时报》提供来自哈萨克斯坦及全球的新闻和信息。\n\n阿拉木图讯——OPEC+决定维持10月石油生产目标不变，暂停
+09/07 18:21:06
+central-asia-news-035
+  "summary": "OPEC+决定暂停进一步调整，评估市场状况并准备2027年生产基线全面审查，此举将对全球石油市场产生重要影响。",
+09/07 18:21:06
+central-asia-news-035
+  "title": "OPEC+维持10月石油产量配额不变，焦点转向2027年",
+09/07 18:21:06
+central-asia-news-035
+{
+09/07 18:21:06
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:09
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:09
+central-asia-news-035
+  "content": "《阿斯塔纳时报》提供来自哈萨克斯坦及全球的新闻和信息。\n\n阿斯塔纳 – 哈萨克斯坦哈斯克银行金融分析中心负责人萨尔塔纳特·伊
+09/07 18:21:09
+central-asia-news-035
+  "summary": "哈萨克斯坦坚戈8月对美元升值2.6%，外汇供应持续超过需求，市场活动增加和资本流动变化为投资者带来新机遇。",
+09/07 18:21:09
+central-asia-news-035
+  "title": "专家：外汇供应增加推动坚戈走强，市场流动变化带来新机遇",
+09/07 18:21:09
+central-asia-news-035
+{
+09/07 18:21:09
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:10
+central-asia-news-035
+uz 投资相关新闻不足（2篇 < 3篇），将用最新新闻补充
+09/07 18:21:10
+central-asia-news-035
+  "content": "与客户的WhatsApp通讯将成为部分企业的新支出项目。据NewTimes.kz通讯社报道，Meta将于10月1日
+09/07 18:21:10
+central-asia-news-035
+  "summary": "Meta宣布自10月1日起，通过API发送的WhatsApp Business消息将开始收费，这将增加部分企业的运营成本。",
+09/07 18:21:10
+central-asia-news-035
+  "title": "WhatsApp Business部分消息功能将收费",
+09/07 18:21:10
+central-asia-news-035
+{
+09/07 18:21:10
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:25
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:25
+central-asia-news-035
+uz 精选 25 篇新闻（投资相关25篇，补充0篇）
+09/07 18:21:28
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:28
+central-asia-news-035
+  "content": "威立雅能源塔什干公司宣布，首都塔什干已开始实施计划性秋季热水停供。本周，米尔佐乌鲁格别克区的乌云贡什社区将停供5天，舍赫恩图尔区的撒马尔罕达瓦
+09/07 18:21:28
+central-asia-news-035
+  "summary": "威立雅能源塔什干公司宣布，首都塔什干已开始实施计划性秋季热水停供，部分区域停供时间3-5天，为供暖季做准备。",
+09/07 18:21:28
+central-asia-news-035
+  "title": "塔什干市启动供暖季前热水供应阶段性停供",
+09/07 18:21:28
+central-asia-news-035
+{
+09/07 18:21:28
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:30
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:30
+central-asia-news-035
+```
+09/07 18:21:30
+central-asia-news-035
+}
+09/07 18:21:30
+central-asia-news-035
+  "content": "面积为8056平方米的仓库连同其附属地块估值64.3亿苏姆。"
+09/07 18:21:30
+central-asia-news-035
+  "summary": "Asia Alliance Bank以64.3亿苏姆价格出售塔什干市郊一处8056平方米的仓库及附属地块，为投资者提供中亚商业地产投资机会。",
+09/07 18:21:30
+central-asia-news-035
+  "title": "Asia Alliance Bank出售塔什干市郊闲置建筑",
+09/07 18:21:30
+central-asia-news-035
+{
+09/07 18:21:30
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:32
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:32
+central-asia-news-035
+```
+09/07 18:21:32
+central-asia-news-035
+}
+09/07 18:21:32
+central-asia-news-035
+  "content": "9月7日刊"
+09/07 18:21:32
+central-asia-news-035
+  "summary": "9月7日国际媒体要闻精选，为投资者提供全球市场动态与投资机会。",
+09/07 18:21:32
+central-asia-news-035
+  "title": "国际媒体聚焦",
+09/07 18:21:32
+central-asia-news-035
+{
+09/07 18:21:32
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:33
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:33
+central-asia-news-035
+```
+09/07 18:21:33
+central-asia-news-035
+}
+09/07 18:21:33
+central-asia-news-035
+  "content": "根据政府决议，已批准社会工作者资格证书颁发的新程序。这一制度将为社会保护领域带来哪些变化？"
+09/07 18:21:33
+central-asia-news-035
+  "summary": "乌兹别克斯坦政府批准社会工作者资格证书颁发新程序，这将改变社会保护领域，为投资者提供新的市场机会和监管框架。",
+09/07 18:21:33
+central-asia-news-035
+  "title": "乌兹别克斯坦确立社会工作者资格证书颁发新规",
+09/07 18:21:33
+central-asia-news-035
+{
+09/07 18:21:33
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:38
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:38
+central-asia-news-035
+```
+09/07 18:21:38
+central-asia-news-035
+}
+09/07 18:21:38
+central-asia-news-035
+  "content": "土库曼斯坦将在2027-2028年担任无出海口发展中国家集团(LLDCs)主席，阿塞拜疆则担任副主席。"
+09/07 18:21:38
+central-asia-news-035
+  "summary": "土库曼斯坦将在2027-2028年担任无出海口发展中国家集团主席，阿塞拜疆担任副主席，这对中亚地区投资合作具有重要意义。",
+09/07 18:21:38
+central-asia-news-035
+  "title": "土库曼斯坦当选无出海口发展中国家集团主席",
+09/07 18:21:38
+central-asia-news-035
+{
+09/07 18:21:38
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:41
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:41
+central-asia-news-035
+  "content": "乌兹别克斯坦共和国生态与气候变化委员会副主席伊·库特比季诺夫率领的代表团访问中国，就环保教育发展、为绿色职业院校制定现代教育
+09/07 18:21:41
+central-asia-news-035
+  "summary": "乌兹别克斯坦生态与气候变化委员会代表团访华，双方就环保教育发展、绿色职业院校课程设计及生态领域人才培养展开深入合作。",
+09/07 18:21:41
+central-asia-news-035
+  "title": "乌兹别克斯坦与中国扩大环保教育与绿色人才培养合作",
+09/07 18:21:41
+central-asia-news-035
+{
+09/07 18:21:41
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:43
+central-asia-news-035
+}
+09/07 18:21:43
+central-asia-news-035
+  "content": "乌兹别克斯坦总统米尔济耶耶夫审议了液化气供应体系改革提案。"
+09/07 18:21:43
+central-asia-news-035
+  "summary": "乌总统米尔济耶耶夫审议液化气供应体系改革提案，旨在优化能源供应结构，为投资者提供中亚能源市场改革的重要信号。",
+09/07 18:21:43
+central-asia-news-035
+  "title": "乌兹别克斯坦审议液化气供应体系改革提案",
+09/07 18:21:43
+central-asia-news-035
+{
+09/07 18:21:43
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:43
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:43
+central-asia-news-035
+```
+09/07 18:21:45
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:45
+central-asia-news-035
+```
+09/07 18:21:45
+central-asia-news-035
+}
+09/07 18:21:45
+central-asia-news-035
+  "content": "国际关系中常有这样的访问，它们不仅是外交日程表上的例行会晤，而是作为一项政治事件，标志着两国关系未来发展方向的重要性。"
+09/07 18:21:45
+central-asia-news-035
+  "summary": "乌兹别克斯坦与塞尔维亚高层互访标志两国关系升级，从政治对话转向多领域务实合作，为投资者带来新机遇。",
+09/07 18:21:45
+central-asia-news-035
+  "title": "乌兹别克斯坦-塞尔维亚：从政治接触迈向多领域务实合作",
+09/07 18:21:45
+central-asia-news-035
+{
+09/07 18:21:45
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:47
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:47
+central-asia-news-035
+  "content": "8月份，乌兹别克斯坦物价平均上涨0.2%。年通胀率从上个月的6.4%放缓至6.2%。显著上涨的商品包括汽油和丙烷，食品类别
+09/07 18:21:47
+central-asia-news-035
+  "summary": "乌兹别克斯坦8月通胀率降至6.2%，汽油和丙烷价格分别上涨20.2%和41.4%，肉类、胡萝卜和部分谷物价格显著攀升。",
+09/07 18:21:47
+central-asia-news-035
+  "title": "乌兹别克斯坦8月通胀放缓，汽油和丙烷价格大幅上涨",
+09/07 18:21:47
+central-asia-news-035
+{
+09/07 18:21:47
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:54
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:54
+central-asia-news-035
+  "content": "苏尔汉河州德诺夫区一个无防护的铁路交叉口发生轿车与火车相撞事故，导致两名女性死亡。司机和一名2岁女童受伤。目前，已针
+09/07 18:21:54
+central-asia-news-035
+  "summary": "苏尔汉河州德诺夫区发生火车与轿车相撞事故，造成2名女性死亡，司机和2岁女童受伤。当地居民要求在铁路交叉口设置道闸，事故已引发刑事调查。",
+09/07 18:21:54
+central-asia-news-035
+  "title": "苏尔汉河州发生火车相撞事故，致2死2伤",
+09/07 18:21:54
+central-asia-news-035
+{
+09/07 18:21:54
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:56
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:56
+central-asia-news-035
+  "content": "联合国大会通过了关于使用能更准确反映大陆尺寸且不扭曲非洲相对比例的世界地图的决议。这一倡议得到了164个国家的支持，
+09/07 18:21:56
+central-asia-news-035
+  "summary": "联合国大会通过决议，支持使用更准确反映大陆尺寸且不扭曲非洲相对比例的世界地图，164国包括乌兹别克斯坦共同支持这一倡议。",
+09/07 18:21:56
+central-asia-news-035
+  "title": "联合国大会支持采用更准确的世界地图，反映真实大陆比例",
+09/07 18:21:56
+central-asia-news-035
+{
+09/07 18:21:56
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:21:58
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:21:58
+central-asia-news-035
+  "content": "费尔干纳州正在讨论成立新国际航空公司的问题。该项目在该州州长海鲁拉·博佐罗夫与阿富汗Kam Air航空公司领导层
+09/07 18:21:58
+central-asia-news-035
+  "summary": "费尔干纳州政府与阿富汗Kam Air航空领导层会晤，商讨成立新国际航空公司事宜，双方重点讨论了基础设施和服务合作问题。",
+09/07 18:21:58
+central-asia-news-035
+  "title": "费尔干纳州与阿富汗Kam Air航空商讨成立新国际航空公司",
+09/07 18:21:58
+central-asia-news-035
+{
+09/07 18:21:58
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:00
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:00
+central-asia-news-035
+}
+09/07 18:22:00
+central-asia-news-035
+  "content": "帕尔肯-塔什干方向的新城际电气列车已开通。乘客可在50分钟内到达目的地，成人票价定为1万苏姆，10岁以下儿童票价为6.5千苏姆。"
+09/07 18:22:00
+central-asia-news-035
+  "summary": "乌兹别克斯坦开通帕尔肯至塔什干新城际电气列车，行程仅需50分钟，成人票价1万苏姆，儿童票价6.5千苏姆，提升区域交通便利性。",
+09/07 18:22:00
+central-asia-news-035
+  "title": "帕尔肯-塔什干城际电气列车开通",
+09/07 18:22:00
+central-asia-news-035
+{
+09/07 18:22:00
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:02
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:02
+central-asia-news-035
+```
+09/07 18:22:02
+central-asia-news-035
+}
+09/07 18:22:02
+central-asia-news-035
+  "content": "波拉特·博博江诺夫被免去总统人事顾问副职，总统人事顾问职位及其部门被取消。这是在总统办公厅组织结构优化框架内实施的。"
+09/07 18:22:02
+central-asia-news-035
+  "summary": "乌兹别克斯坦总统办公厅进行结构调整，取消人事顾问职位及其部门，前顾问副职被免职。此举旨在优化总统办公厅组织结构。",
+09/07 18:22:02
+central-asia-news-035
+  "title": "乌兹别克斯坦总统办公厅人事顾问职位被取消",
+09/07 18:22:02
+central-asia-news-035
+{
+09/07 18:22:02
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:03
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:03
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:03
+central-asia-news-035
+```
+09/07 18:22:03
+central-asia-news-035
+}
+09/07 18:22:03
+central-asia-news-035
+  "content": "乌兹别克斯坦将与世界海关组织共同制定改善领域的路线图。"
+09/07 18:22:03
+central-asia-news-035
+  "summary": "乌兹别克斯坦将与世界海关组织共同制定改善领域的路线图，海关申报时间大幅缩短，为投资者提供更高效的贸易环境。",
+09/07 18:22:03
+central-asia-news-035
+  "title": "乌兹别克斯坦海关申报提速至20分钟",
+09/07 18:22:03
+central-asia-news-035
+{
+09/07 18:22:06
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:06
+central-asia-news-035
+```
+09/07 18:22:06
+central-asia-news-035
+}
+09/07 18:22:06
+central-asia-news-035
+  "content": "今年，该连锁品牌计划在撒马尔罕开设餐厅，随后将业务扩展至布哈拉和费尔干纳谷地地区。"
+09/07 18:22:06
+central-asia-news-035
+  "summary": "汉堡王计划今年进入撒马尔罕市场，随后拓展至布哈拉和费尔干纳谷地地区，显示中亚餐饮市场持续吸引国际品牌投资。",
+09/07 18:22:06
+central-asia-news-035
+  "title": "汉堡王将于2026年前在吉尔吉斯斯坦开设首家餐厅",
+09/07 18:22:06
+central-asia-news-035
+{
+09/07 18:22:06
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:08
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:08
+central-asia-news-035
+```
+09/07 18:22:08
+central-asia-news-035
+}
+09/07 18:22:08
+central-asia-news-035
+  "content": "为开通电气化列车，乌兹别克斯坦修建了一条全长24公里的铁路，并在帕尔肯特设立了车站。"
+09/07 18:22:08
+central-asia-news-035
+  "summary": "乌兹别克斯坦塔什干至帕尔肯特电气化铁路正式运营，全长24公里，设有帕尔肯特站，为区域交通和投资带来新机遇。",
+09/07 18:22:08
+central-asia-news-035
+  "title": "塔什干-帕尔肯特铁路电气化列车正式开通",
+09/07 18:22:08
+central-asia-news-035
+{
+09/07 18:22:08
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:10
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:10
+central-asia-news-035
+```
+09/07 18:22:10
+central-asia-news-035
+}
+09/07 18:22:10
+central-asia-news-035
+  "content": "此前，他担任总统人事问题顾问，在此前六年中领导了锡尔河州。"
+09/07 18:22:10
+central-asia-news-035
+  "summary": "乌兹别克斯坦重要人事变动：前总统顾问、锡尔河州长古尔容·米尔佐耶夫被任命为副总理兼马哈拉协会主席，显示其在国家治理中的核心地位。",
+09/07 18:22:10
+central-asia-news-035
+  "title": "古尔容·米尔佐耶夫出任副总理兼马哈拉协会主席",
+09/07 18:22:10
+central-asia-news-035
+{
+09/07 18:22:10
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:11
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:11
+central-asia-news-035
+  "content": "双方就基础设施、项目运营及过渡到实施阶段等问题进行了讨论，并计划引入相关专业人员。
+09/07 18:22:11
+central-asia-news-035
+  "summary": "阿富汗Kam Air计划与费尔干纳合作成立新的国际航空公司，双方已就基础设施、项目运营及专业团队配置等关键问题展开讨论，为中亚地区航空投资带来新机遇。",
+09/07 18:22:11
+central-asia-news-035
+  "title": "阿富汗Kam Air或将参与成立新的费尔干纳国际航空公司",
+09/07 18:22:11
+central-asia-news-035
+{
+09/07 18:22:11
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:15
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:15
+central-asia-news-035
+  "content": "从塔什干至帕尔肯特的新城际电动列车已正式开通。这条新线路将显著缩短两地之间的通勤时间，为当地居民和商务人士提供更便捷的交通选择。电动列车的引入不仅提
+09/07 18:22:15
+central-asia-news-035
+  "summary": "乌兹别克斯坦推出连接首都塔什干与帕尔肯特的新城际电动列车，提升区域交通便利性，为投资者提供物流优化新机遇。",
+09/07 18:22:15
+central-asia-news-035
+  "title": "塔什干至帕尔肯特新城际列车正式开通",
+09/07 18:22:15
+central-asia-news-035
+{
+09/07 18:22:15
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:17
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:17
+central-asia-news-035
+  "content": "著名诗人安娜·埃戈扬将在塔什肯与交响乐团合作演出。这场文化活动将展示当地丰富的文化资源和艺术氛围，为投资者提供文化产业发展的
+09/07 18:22:17
+central-asia-news-035
+  "summary": "塔什肯将举办高规格文化活动，安娜·埃戈扬与交响乐团合作演出，反映当地文化产业发展潜力，为投资者提供文化领域合作机会。",
+09/07 18:22:17
+central-asia-news-035
+  "title": "著名诗人安娜·埃戈扬将在塔什干与交响乐团合作演出",
+09/07 18:22:17
+central-asia-news-035
+{
+09/07 18:22:17
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:19
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:19
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:19
+central-asia-news-035
+  "content": "在纳曼干州，一座近500米长的纳伦河大桥已顺利竣工。这座大桥的建成将极大改善该地区的交通状况，促进区域经济发展，并为投资者提供更好的基础设施条件
+09/07 18:22:19
+central-asia-news-035
+  "summary": "纳曼干州新建近500米纳伦河大桥竣工，显著改善区域交通条件，提升物流效率，为当地经济发展和投资环境带来积极影响。",
+09/07 18:22:19
+central-asia-news-035
+  "title": "纳曼干州近500米纳伦河大桥竣工",
+09/07 18:22:19
+central-asia-news-035
+{
+09/07 18:22:21
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:21
+central-asia-news-035
+  "content": "乌兹别克斯坦半年内被判刑人数增长22%，这一数据引发投资者对当地司法系统稳定性的关注。司法政策的变化可能影响商业环境，建议投资者密切关注当地法律法规动态，
+09/07 18:22:21
+central-asia-news-035
+  "summary": "乌兹别克斯坦半年内被判刑人数增长22%，反映司法系统变化，投资者需关注当地法律环境与政策稳定性。",
+09/07 18:22:21
+central-asia-news-035
+  "title": "乌兹别克斯坦半年内被判刑人数激增22%",
+09/07 18:22:21
+central-asia-news-035
+{
+09/07 18:22:21
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:23
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:23
+central-asia-news-035
+  "content": "King Macarella将在Humo Arena举办五周年纪念演唱会“5”。这场
+09/07 18:22:23
+central-asia-news-035
+  "summary": "乌兹别克斯坦知名歌手King Macarella将在塔什干Humo Arena举办五周年纪念演唱会，展现中亚文化市场投资潜力。",
+09/07 18:22:23
+central-asia-news-035
+  "title": "King Macarella将在Humo Arena举办五周年纪念演唱会“5”",
+09/07 18:22:23
+central-asia-news-035
+{
+09/07 18:22:23
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:27
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:27
+central-asia-news-035
+kg 精选 12 篇新闻（投资相关12篇，补充0篇）
+09/07 18:22:27
+central-asia-news-035
+  "content": "哈萨克斯坦内政部新闻处发布消息称，根据新修订的《行政违法法典》，国家警察和交警部门的执法人员将有权对在公共场所乱扔
+09/07 18:22:27
+central-asia-news-035
+  "summary": "哈萨克斯坦交管部门获得新执法权，将对公共场所乱扔垃圾和饮酒行为进行罚款，此举旨在改善城市环境秩序，可能影响相关行业投资环境。",
+09/07 18:22:27
+central-asia-news-035
+  "title": "交管部门将有权对公共场所乱扔垃圾和饮酒行为进行罚款",
+09/07 18:22:27
+central-asia-news-035
+{
+09/07 18:22:27
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:29
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:29
+central-asia-news-035
+  "content": "吉尔吉斯斯坦国家税务服务委员会主席阿尔姆姆别特·什克马马托夫与Sign公司代表举行了工作会议。Sign是一家由YZi 
+09/07 18:22:29
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦国家税务服务委员会与数字基础设施开发商Sign举行工作会议，将合作在税务系统中引入人工智能技术，提升税务管理效率。",
+09/07 18:22:29
+central-asia-news-035
+  "title": "国际专家助力吉尔吉斯斯坦税务部门引入人工智能",
+09/07 18:22:29
+central-asia-news-035
+{
+09/07 18:22:29
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:31
+central-asia-news-035
+  "summary": "哈萨克斯坦规定，获得荣誉学位的毕业生无需竞争选拔即可进入公务员储备人才库，这将提升政府人才质量，为投资者提供更稳定的政策环境。",
+09/07 18:22:31
+central-asia-news-035
+  "title": "优秀毕业生可直接进入公务员储备人才库",
+09/07 18:22:31
+central-asia-news-035
+{
+09/07 18:22:31
+central-asia-news-035
+原始内容: ```json
+09/07 18:22:31
+central-asia-news-035
+  232 |           summaryZh: parsed.summary || content.substring(0, 100),
+09/07 18:22:31
+central-asia-news-035
+  231 |           titleZh: parsed.title || title,
+09/07 18:22:31
+central-asia-news-035
+  230 |         return {
+09/07 18:22:31
+central-asia-news-035
+      |                             ^
+09/07 18:22:31
+central-asia-news-035
+> 229 |         const parsed = JSON.parse(jsonStr);
+09/07 18:22:31
+central-asia-news-035
+  228 |         
+09/07 18:22:31
+central-asia-news-035
+  227 |         jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
+09/07 18:22:31
+central-asia-news-035
+    at async processFetchNews (file:/app/src/app/api/fetch-news/route.ts:460:32)
+09/07 18:22:31
+central-asia-news-035
+    at translateAndSummarize (file:/app/src/app/api/fetch-news/route.ts:229:29)
+09/07 18:22:31
+central-asia-news-035
+    at JSON.parse (<anonymous>)
+09/07 18:22:31
+central-asia-news-035
+JSON 解析失败: SyntaxError: Expected ',' or '}' after property value in JSON at position 204
+09/07 18:22:31
+central-asia-news-035
+  "content": "获得荣誉学位的毕业生可无需参加竞争选拔过程，直接被纳入公务员储备人才库。哈萨克斯坦国家公务员与地方事务局人力资源政策部部长米尔
+09/07 18:22:31
+central-asia-news-035
+  "summary": "哈萨克斯坦规定，获得荣誉学位的毕业生无需竞争选拔即可进入公务员储备人才库，这将提升政府人才质量，为投资者提供更稳定的政策环境。",
+09/07 18:22:31
+central-asia-news-035
+  "title": "优秀毕业生可直接进入公务员储备人才库",
+09/07 18:22:31
+central-asia-news-035
+{
+09/07 18:22:31
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:31
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:31
+central-asia-news-035
+```
+09/07 18:22:31
+central-asia-news-035
+}
+09/07 18:22:31
+central-asia-news-035
+  "content": "获得荣誉学位的毕业生可无需参加竞争选拔过程，直接被纳入公务员储备人才库。哈萨克斯坦国家公务员与地方事务局人力资源政策部部长米尔季别克·奥穆尔扎科夫在"第一广播电台"上表示。"
+09/07 18:22:33
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:33
+central-asia-news-035
+  "content": "吉尔吉斯斯坦已提交一项法案，提议对故意破坏国家边境基础设施的行为单独设立刑事处罚，目前该法案正进
+09/07 18:22:33
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦提议对故意破坏国家边境基础设施行为单独设立刑事处罚，最高可判处五年监禁，此举旨在加强边境安全，对投资者需关注当地法律法规变化。",
+09/07 18:22:33
+central-asia-news-035
+  "title": "吉尔吉斯斯坦提议：故意破坏边境基础设施最高可判五年监禁",
+09/07 18:22:33
+central-asia-news-035
+{
+09/07 18:22:33
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:35
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:35
+central-asia-news-035
+  "content": "自2026年初以来，俄罗斯天然气工业股份公司（Gazprom）已将其对中亚的天然气出口量增加了70%。该公司首席执行官
+09/07 18:22:35
+central-asia-news-035
+  "summary": "2026年初以来，俄罗斯天然气工业股份公司对中亚天然气出口量大幅增长70%，这一数据由该公司CEO阿列克谢·米勒在俄罗斯石油天然气工业工作者日会议上宣布。",
+09/07 18:22:35
+central-asia-news-035
+  "title": "俄气对中亚天然气出口量激增70%",
+09/07 18:22:35
+central-asia-news-035
+智谱 AI 响应: {
+09/07 18:22:37
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:37
+central-asia-news-035
+  "content": "奥什市已就阿凡-阿克布拉运河上的桥梁重建项目发布招标公告。相关招标信息由奥什市道路市政
+09/07 18:22:37
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦南部城市奥什市发布招标公告，将重建阿凡-阿克布拉运河上的桥梁。该项目由奥什市道路市政企业发起，已在国家采购门户网站公布，为投资者提供当地基建项目机会。",
+09/07 18:22:37
+central-asia-news-035
+  "title": "奥什市启动阿凡-阿克布拉运河桥梁重建招标",
+09/07 18:22:37
+central-asia-news-035
+{
+09/07 18:22:37
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:39
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:39
+central-asia-news-035
+  "content": "吉尔吉斯斯坦饮用水供应与卫生发展部已积极启动'水与卫生普及计划（第一阶段）'。该倡议旨在为奥什、楚伊和伊塞克湖三个地区的130个
+09/07 18:22:39
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦启动'水与卫生普及计划（第一阶段）'，将在奥什、楚伊和伊塞克湖三个地区为130个村庄提供安全饮用水和现代卫生服务，惠及超过45万居民。",
+09/07 18:22:39
+central-asia-news-035
+  "title": "吉尔吉斯斯坦三地将新建供水系统",
+09/07 18:22:39
+central-asia-news-035
+智谱 AI 响应: {
+09/07 18:22:41
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:41
+central-asia-news-035
+```
+09/07 18:22:41
+central-asia-news-035
+}
+09/07 18:22:41
+central-asia-news-035
+  "content": "吉尔吉斯斯坦已提交一项法案草案，供公众讨论，该草案提议对商标、地理标志和原产地名称的注册程序进行修改。"
+09/07 18:22:41
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦提交新法案草案，拟简化商标、地理标志和原产地名称的注册程序，旨在提升知识产权保护效率，为投资者创造更便利的商业环境。",
+09/07 18:22:41
+central-asia-news-035
+  "title": "吉尔吉斯斯坦拟加快商标注册流程",
+09/07 18:22:41
+central-asia-news-035
+{
+09/07 18:22:41
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:43
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:43
+central-asia-news-035
+`
+09/07 18:22:43
+central-asia-news-035
+}
+09/07 18:22:43
+central-asia-news-035
+  "content": "吉尔吉斯斯坦劳动、社会保障和移民部长卡纳特·萨金巴耶夫已被免职。"
+09/07 18:22:43
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦劳动、社会保障和移民部长卡纳特·萨金巴耶夫被免职，阿尔马兹·伊马加济耶夫被任命为代理部长，这将对当地劳工政策和投资环境产生影响。",
+09/07 18:22:43
+central-asia-news-035
+  "title": "卡纳特·萨金巴耶夫被免职，阿尔马兹·伊马加济耶夫任吉尔吉斯斯坦代理劳动部长",
+09/07 18:22:43
+central-asia-news-035
+{
+09/07 18:22:43
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:45
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:45
+central-asia-news-035
+```
+09/07 18:22:45
+central-asia-news-035
+}
+09/07 18:22:45
+central-asia-news-035
+  "content": "天然气服务供应商Chuigas宣布，由于地下高压天然气管道的施工工作，天然气供应将于9月8日至9日暂停。"
+09/07 18:22:45
+central-asia-news-035
+  "summary": "楚伊州天然气供应商Chuigas宣布，因地下高压管道施工，9月8日至9日将暂停供气，可能影响当地工业和居民用户。",
+09/07 18:22:45
+central-asia-news-035
+  "title": "吉尔吉斯斯坦楚伊州多地天然气供应将暂停",
+09/07 18:22:45
+central-asia-news-035
+{
+09/07 18:22:45
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:47
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:47
+central-asia-news-035
+  "content": "吉尔吉斯斯坦初级职业教育机构（职业学校）2026-2027学年将于2026年9月15日开始，2027
+09/07 18:22:47
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦职业学校2026-2027学年将于2026年9月15日开始，2027年7月3日结束，学制延长，为投资者提供更稳定的教育市场预期。",
+09/07 18:22:47
+central-asia-news-035
+  "title": "吉尔吉斯斯坦职业学校学年延长至2027年7月3日",
+09/07 18:22:47
+central-asia-news-035
+{
+09/07 18:22:47
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:48
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:22:48
+central-asia-news-035
+```
+09/07 18:22:48
+central-asia-news-035
+}
+09/07 18:22:48
+central-asia-news-035
+  "content": "联合国粮食及农业组织（FAO）食品价格指数与7月相比，2026年8月上涨了1.9%，达到133.3点。"
+09/07 18:22:48
+central-asia-news-035
+  "summary": "联合国粮农组织8月食品价格指数环比上涨1.9%，达133.3点，全球糖粮价格波动或将影响中亚地区投资环境。",
+09/07 18:22:48
+central-asia-news-035
+  "title": "全球糖粮价格上涨：对吉尔吉斯斯坦的影响分析",
+09/07 18:22:48
+central-asia-news-035
+{
+09/07 18:22:48
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:22:51
+central-asia-news-035
+tj 投资相关新闻不足（1篇 < 3篇），将用最新新闻补充
+09/07 18:22:51
+central-asia-news-035
+tm 精选 0 篇新闻（投资相关0篇，补充0篇）
+09/07 18:22:51
+central-asia-news-035
+tm 投资相关新闻不足（0篇 < 3篇），将用最新新闻补充
+09/07 18:22:51
+central-asia-news-035
+  "content": "吉尔吉斯斯坦乔尔蓬-阿塔市的乔尔蓬影院在翻新后重新开放。该建筑建于1982年，在此之前从未进行过大
+09/07 18:22:51
+central-asia-news-035
+  "summary": "吉尔吉斯斯坦乔尔蓬-阿塔市标志性建筑乔尔蓬影院完成翻新重开，该建筑建于1982年首次大规模改造，提升当地旅游基础设施，对投资者关注地区文旅产业升级具有参考价值。",
+09/07 18:22:51
+central-asia-news-035
+  "title": "乔尔蓬影院翻新后重开，吉尔吉斯斯坦旅游设施升级",
+09/07 18:22:51
+central-asia-news-035
+智谱 AI 响应: {
+09/07 18:23:02
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:02
+central-asia-news-035
+tj 精选 18 篇新闻（投资相关18篇，补充0篇）
+09/07 18:23:05
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:05
+central-asia-news-035
+  "content": "为什么不能错过该地区最重要的科技活动？人
+09/07 18:23:05
+central-asia-news-035
+  "summary": "2026年10月1-3日，哈萨克斯坦首都阿斯塔纳将成为国际科技对话中心，人工智能正在改变市场、职业和商业模式，提前布局技术、合作伙伴和增长机遇的企业将获得竞争优势。",
+09/07 18:23:05
+central-asia-news-035
+  "title": "AI & Digital Bridge 2026：人工智能如何为哈萨克斯坦开启新机遇",
+09/07 18:23:05
+central-asia-news-035
+{
+09/07 18:23:05
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:08
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:08
+central-asia-news-035
+  "content": "杜尚别，2026年9月7日 /«霍瓦尔»通讯社/。为庆祝塔吉克共和国国家独立35周年，塔吉克斯坦国防部、内政部、劳动部、移民与居民就业部，以及旅游发展委
+09/07 18:23:08
+central-asia-news-035
+  "summary": "塔吉克斯坦国防部、内政部、劳动部等部门及科研机构共同庆祝国家独立35周年，展示国家发展成就与投资机遇。",
+09/07 18:23:08
+central-asia-news-035
+  "title": "塔吉克斯坦35周年国庆庆典隆重举行",
+09/07 18:23:08
+central-asia-news-035
+{
+09/07 18:23:08
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:10
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:10
+central-asia-news-035
+  "content": "杜尚别，2026年9月7日/«Ховар»通讯社/。塔吉克斯坦共和国的国家独立为该国环保领域的发展创造
+09/07 18:23:10
+central-asia-news-035
+  "summary": "塔吉克斯坦政府及立法机构在独立35年来，通过23项环保法律为国家环保领域发展创造了有利条件，为投资者提供稳定政策环境。",
+09/07 18:23:10
+central-asia-news-035
+  "title": "巴赫杜尔·舍拉利佐达：塔吉克斯坦35年独立为国家环保领域发展奠定基础",
+09/07 18:23:10
+central-asia-news-035
+{
+09/07 18:23:10
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:12
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:12
+central-asia-news-035
+  "content": "杜尚别，2026年9月7日/阿米特「霍瓦尔」/. 塔吉克民族领袖的亲切问候和远见卓识表明，从独立初期至今，在我们庆祝塔吉克斯坦共和国国家
+09/07 18:23:12
+central-asia-news-035
+  "summary": "塔吉克斯坦政府在国家独立35周年之际，强调国家认同与民族团结的重要性，为投资者提供稳定政治环境的信心。",
+09/07 18:23:12
+central-asia-news-035
+  "title": "雪尔与独立：塔吉克斯坦独立以来的国家认同与民族团结",
+09/07 18:23:12
+central-asia-news-035
+{
+09/07 18:23:12
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:15
+central-asia-news-035
+  "title": "塔吉克斯坦U-20青年队晋级2027年亚洲杯决赛圈",
+09/07 18:23:15
+central-asia-news-035
+{
+09/07 18:23:15
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:15
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:15
+central-asia-news-035
+  "content": "杜尚别，2026年9月7日/霍瓦尔通讯社/。在2027年亚洲杯预选赛决赛阶段，塔吉克斯坦国家青年足球队（U-20）以1:
+09/07 18:23:15
+central-asia-news-035
+  "summary": "塔吉克斯坦U-20青年队在亚洲杯预选赛决赛阶段1:0战胜约旦队，成功晋级2027年亚洲杯决赛圈，展现该国足球发展潜力。",
+09/07 18:23:17
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:17
+central-asia-news-035
+  "content": "杜尚别，2026年9月7日 /«Ховар»阿米特通讯社/. 在“中亚英语学习加速”国际计划框架内，塔吉克斯坦以苏丹·乌
+09/07 18:23:17
+central-asia-news-035
+  "summary": "塔吉克斯坦外国语言大学与英国西敏寺大学在中亚英语加速学习计划框架下签署合作备忘录，为两国教育合作与投资环境优化奠定基础。",
+09/07 18:23:17
+central-asia-news-035
+  "title": "塔吉克斯坦外国语言大学与西敏寺大学签署合作备忘录",
+09/07 18:23:17
+central-asia-news-035
+{
+09/07 18:23:17
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:19
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:19
+central-asia-news-035
+```
+09/07 18:23:19
+central-asia-news-035
+}
+09/07 18:23:19
+central-asia-news-035
+  "content": "杜尚别，2026年9月7日 /霍瓦尔通讯社/。由塔吉克共和国总统新闻处制作的纪录片《人民领袖》通过国家电视网络播出，在观众中"
+09/07 18:23:19
+central-asia-news-035
+  "summary": "塔吉克斯坦总统新闻处制作的纪录片《人民领袖》通过国家电视台播出，在观众中引发热烈反响，展现塔吉克斯坦国家形象。",
+09/07 18:23:19
+central-asia-news-035
+  "title": "《人民领袖》纪录片在观众中广受欢迎",
+09/07 18:23:19
+central-asia-news-035
+{
+09/07 18:23:19
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:21
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:21
+central-asia-news-035
+```
+09/07 18:23:21
+central-asia-news-035
+}
+09/07 18:23:21
+central-asia-news-035
+  "content": "首都内务部解释称，临时禁飞令是出于安全考虑。"
+09/07 18:23:21
+central-asia-news-035
+  "summary": "杜尚别警方以安全为由发布临时无人机禁飞令，涉及投资者需关注当地安全政策变化，避免影响商业活动。",
+09/07 18:23:21
+central-asia-news-035
+  "title": "杜尚别发布无人机禁飞令至9月12日，投资者需知安全新规",
+09/07 18:23:21
+central-asia-news-035
+{
+09/07 18:23:21
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:23
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:23
+central-asia-news-035
+```
+09/07 18:23:23
+central-asia-news-035
+}
+09/07 18:23:23
+central-asia-news-035
+  "content": "我们为您介绍申请地点和流程。"
+09/07 18:23:23
+central-asia-news-035
+  "summary": "塔吉克斯坦开放赴英国和土耳其工作签证申请，为投资者提供劳动力资源新渠道，需关注申请流程与政策变化。",
+09/07 18:23:23
+central-asia-news-035
+  "title": "塔吉克斯坦启动英土工作签证申请，投资者需关注",
+09/07 18:23:23
+central-asia-news-035
+{
+09/07 18:23:23
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:26
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:26
+central-asia-news-035
+  "content": "Google Pay是谷歌推出的无接触支付服务，允许用户使用智能手机代替银行卡。现在，杜尚别市银行的Vi
+09/07 18:23:26
+central-asia-news-035
+  "summary": "杜尚别市银行Visa卡用户现已可绑定Google Wallet，实现手机和智能手表的无接触支付，为中亚地区数字支付市场带来新机遇。",
+09/07 18:23:26
+central-asia-news-035
+  "title": "Google Pay正式接入杜尚别市银行Visa卡服务",
+09/07 18:23:26
+central-asia-news-035
+{
+09/07 18:23:26
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:27
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:27
+central-asia-news-035
+```
+09/07 18:23:27
+central-asia-news-035
+}
+09/07 18:23:27
+central-asia-news-035
+  "content": "请看当时的盛况。"
+09/07 18:23:27
+central-asia-news-035
+  "summary": "塔吉克斯坦首都杜尚别举行盛大阅兵式，庆祝独立35周年，超2.7万名军人参与，展示国防实力，为投资者提供地区安全与稳定的重要参考。",
+09/07 18:23:27
+central-asia-news-035
+  "title": "杜尚别举行独立35周年阅兵，超2.7万军人参与",
+09/07 18:23:27
+central-asia-news-035
+{
+09/07 18:23:27
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:28
+central-asia-news-035
+  "title": "35年后：塔吉克斯坦经济如何蜕变？",
+09/07 18:23:28
+central-asia-news-035
+{
+09/07 18:23:28
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:28
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:28
+central-asia-news-035
+```
+09/07 18:23:28
+central-asia-news-035
+}
+09/07 18:23:28
+central-asia-news-035
+  "content": "从1990年代的危机——到GDP达数百亿索莫尼的经济。"
+09/07 18:23:28
+central-asia-news-035
+  "summary": "塔吉克经济从1990年代危机中复苏，GDP已达数百亿索莫尼，展现投资潜力。",
+09/07 18:23:30
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:30
+central-asia-news-035
+```
+09/07 18:23:30
+central-asia-news-035
+}
+09/07 18:23:30
+central-asia-news-035
+  "content": "在连续第二次在联盟中失利后，这位塔吉克斯坦选手的命运变得越来越不确定。"
+09/07 18:23:30
+central-asia-news-035
+  "summary": "塔吉克斯坦UFC选手穆罕默德·纳伊莫夫连续第二场被KO击败，其职业发展前景面临不确定性，可能影响相关体育投资项目的价值评估。",
+09/07 18:23:30
+central-asia-news-035
+  "title": "塔吉克斯坦UFC选手遭连败，职业前景堪忧",
+09/07 18:23:30
+central-asia-news-035
+{
+09/07 18:23:30
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:34
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:34
+central-asia-news-035
+  "content": "2026年9月6日，塔吉克斯坦共和国内政部举办了一场庆祝活动，邀请海外侨胞参与。据该部门新闻处报道，这些侨胞返回祖国是为了参加庆祝塔吉克斯坦共和国独立
+09/07 18:23:34
+central-asia-news-035
+  "summary": "塔吉克斯坦内政部为庆祝国家独立35周年，举办海外侨胞返乡庆祝活动，展现国家凝聚力与投资环境稳定性。",
+09/07 18:23:34
+central-asia-news-035
+  "title": "塔吉克斯坦内政部举办海外侨胞返乡庆祝活动",
+09/07 18:23:34
+central-asia-news-035
+{
+09/07 18:23:34
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:37
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:37
+central-asia-news-035
+  "content": "2026年9月7日。尼泊尔救援人员发现一名64岁女性幸存者，她在一场毁灭性洪水后被厚厚的泥浆和瓦砾掩埋的四层建筑下度过了十天。这一消息由《
+09/07 18:23:37
+central-asia-news-035
+  "summary": "尼泊尔救援人员在洪水废墟中发现一名64岁女性，她在四层建筑下存活10天，凸显当地基础设施风险，对投资者关注区域安全警示。",
+09/07 18:23:37
+central-asia-news-035
+  "title": "尼泊尔女子废墟下存活10天获救",
+09/07 18:23:37
+central-asia-news-035
+{
+09/07 18:23:37
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:40
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:40
+central-asia-news-035
+  "content": "据塔吉克斯坦国家通讯社「霍瓦尔」援引图尔松扎德市政府执行机构消息，从图尔松扎德市运往杜尚别、索格德州以及其
+09/07 18:23:40
+central-asia-news-035
+  "summary": "塔吉克斯坦图尔松扎德市农业从业者已向全国市场供应超过7万吨农产品，其中仅马铃薯就达7630吨，显示出当地农业生产的强劲势头和投资潜力。",
+09/07 18:23:40
+central-asia-news-035
+  "title": "塔吉克斯坦图尔松扎德农业向市场供应超7万吨农产品",
+09/07 18:23:40
+central-asia-news-035
+{
+09/07 18:23:40
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:44
+central-asia-news-035
+开始调用智谱 AI 翻译...
+09/07 18:23:44
+central-asia-news-035
+  "content": "2026年9月4日，在塔吉克共和国驻阿塞拜疆共和国使馆的倡议下，于巴库举行了庆祝塔吉克斯坦国家独立35周年的隆重活动。据塔吉克共和国驻阿塞拜
+09/07 18:23:44
+central-asia-news-035
+  "summary": "塔吉克驻阿塞拜疆使馆在巴库举办独立35周年庆典，阿政府、外交使节及商界代表出席，彰显两国友好关系与区域合作潜力。",
+09/07 18:23:44
+central-asia-news-035
+  "title": "塔吉克斯坦独立35周年庆典在巴库举行",
+09/07 18:23:44
+central-asia-news-035
+{
+09/07 18:23:44
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:46
+central-asia-news-035
+准备插入 63 篇，去重检查 63 个 URL
+09/07 18:23:46
+central-asia-news-035
+  "content": "2026年7月，在全球监管机构持续操作贵金属的背景下，多家央行成为黄金卖家。乌兹别克斯坦央行也位列其中。Podrobno.uz报道称，根据公布的数据，7月
+09/07 18:23:46
+central-asia-news-035
+  "summary": "2026年7月，乌兹别克斯坦央行成为全球黄金市场卖家之一，当月全球央行净购金23吨，中国为最大买家。",
+09/07 18:23:46
+central-asia-news-035
+  "title": "乌兹别克斯坦7月跻身黄金出售国行列",
+09/07 18:23:46
+central-asia-news-035
+{
+09/07 18:23:46
+central-asia-news-035
+智谱 AI 响应: ```json
+09/07 18:23:48
+central-asia-news-035
+去重后剩余 63 篇新文章
+09/07 18:23:48
+central-asia-news-035
+数据库中已存在 0 个 URL
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Newtimes.kz', fetched: 100, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Egemen Qazaqstan', fetched: 50, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'The Astana Times', fetched: 10, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+新闻抓取完成：日期=2026-09-07, 共保存0篇 [
+09/07 18:23:49
+central-asia-news-035
+插入数据库失败: 批量插入文章失败: Could not find the 'cover_image' column of 'articles' in the schema cache
+09/07 18:23:49
+central-asia-news-035
+]
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Turkmenportal', fetched: 0, saved: 0, errors: [] }
+09/07 18:23:49
+central-asia-news-035
+  { source: 'TDH', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Avesta', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Super.kg', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Kaktus.media', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'AKIpress', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Anhor.uz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Repost.uz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Daryo.uz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Kun.uz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Khabar', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'DKNews.kz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  },
+09/07 18:23:49
+central-asia-news-035
+    errors: []
+09/07 18:23:49
+central-asia-news-035
+    saved: 0,
+09/07 18:23:49
+central-asia-news-035
+    fetched: 0,
+09/07 18:23:49
+central-asia-news-035
+    source: 'Kazakhstanskaya Pravda',
+09/07 18:23:49
+central-asia-news-035
+  {
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Forbes.kz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Inbusiness.kz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Nur.kz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Zakon.kz', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Tengrinews', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Kazinform', fetched: 0, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  },
+09/07 18:23:49
+central-asia-news-035
+    errors: []
+09/07 18:23:49
+central-asia-news-035
+    saved: 0,
+09/07 18:23:49
+central-asia-news-035
+    fetched: 10,
+09/07 18:23:49
+central-asia-news-035
+    source: 'The Times of Central Asia',
+09/07 18:23:49
+central-asia-news-035
+  {
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Avesta', fetched: 10, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Asia-Plus', fetched: 10, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Khovar', fetched: 10, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: '24.kg', fetched: 50, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Kabar', fetched: 50, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Uznews.uz', fetched: 20, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Spot.uz', fetched: 20, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'Gazeta.uz', fetched: 20, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  { source: 'UzA', fetched: 20, saved: 0, errors: [] },
+09/07 18:23:49
+central-asia-news-035
+  },
+09/07 18:23:49
+central-asia-news-035
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 18:23:49
+central-asia-news-035
+    saved: 0,
+09/07 18:23:49
+central-asia-news-035
+    fetched: 0,
+09/07 18:23:49
+central-asia-news-035
+    source: '24.kz',
+09/07 18:23:49
+central-asia-news-035
+  {
+09/07 18:28:47
+central-asia-news-035
+ GET / 200 in 186ms (compile: 7ms, render: 179ms)
+09/07 18:28:49
+central-asia-news-035
+ GET /api/articles?limit=5 200 in 602ms (compile: 2ms, render: 600ms)
+09/07 18:28:49
+central-asia-news-035
+ GET /article/26 200 in 1723ms (compile: 31ms, render: 1692ms)
+09/07 18:28:49
+central-asia-news-035
+ GET /api/articles?_t=1788776927618 200 in 414ms (compile: 2ms, render: 411ms)
