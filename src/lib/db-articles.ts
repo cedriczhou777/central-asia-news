@@ -125,7 +125,7 @@ export async function insertArticles(
 ): Promise<void> {
   if (articles.length === 0) return;
   
-  // 使用原始 SQL 绕过 schema cache
+  // 直接使用 Supabase REST API 插入数据
   const supabaseUrl = process.env.SUPABASE_URL || process.env.COZE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.COZE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
@@ -133,46 +133,16 @@ export async function insertArticles(
     throw new Error('Supabase 环境变量未配置');
   }
   
-  // 构建 SQL INSERT 语句
-  const columns = [
-    'title', 'summary', 'content', 'country_code', 'category', 
-    'source_name', 'source_url', 'original_title', 'original_content',
-    'original_language', 'published_at', 'tags', 'is_featured',
-    'cover_image', 'image_urls'
-  ];
-  
-  const values = articles.map(article => {
-    const vals = [
-      `'${article.title.replace(/'/g, "''")}'`,
-      `'${article.summary.replace(/'/g, "''")}'`,
-      `'${article.content.replace(/'/g, "''")}'`,
-      `'${article.country_code}'`,
-      `'${article.category}'`,
-      `'${article.source_name}'`,
-      article.source_url ? `'${article.source_url}'` : 'NULL',
-      article.original_title ? `'${article.original_title.replace(/'/g, "''")}'` : 'NULL',
-      article.original_content ? `'${article.original_content.replace(/'/g, "''")}'` : 'NULL',
-      article.original_language ? `'${article.original_language}'` : 'NULL',
-      `'${article.published_at}'`,
-      article.tags ? `ARRAY[${article.tags.map(t => `'${t}'`).join(',')}]` : 'NULL',
-      article.is_featured ? 'true' : 'false',
-      article.cover_image ? `'${article.cover_image}'` : 'NULL',
-      article.image_urls ? `'${JSON.stringify(article.image_urls)}'::jsonb` : 'NULL'
-    ];
-    return `(${vals.join(',')})`;
-  }).join(',\n');
-  
-  const sql = `INSERT INTO articles (${columns.join(',')}) VALUES ${values}`;
-  
-  // 使用 Supabase REST API 执行 SQL
-  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/execute_sql`, {
+  // 使用 Supabase REST API 直接插入
+  const response = await fetch(`${supabaseUrl}/rest/v1/articles`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'apikey': supabaseKey,
-      'Authorization': `Bearer ${supabaseKey}`
+      'Authorization': `Bearer ${supabaseKey}`,
+      'Prefer': 'return=minimal'
     },
-    body: JSON.stringify({ sql })
+    body: JSON.stringify(articles)
   });
   
   if (!response.ok) {
