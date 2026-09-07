@@ -51,7 +51,7 @@ export async function getArticles(filters?: {
   }
 
   const { data, error } = await query;
-  if (error) throw new Error(`查询文章失败: ${error.message}`);
+  if (error) throw new Error(`查询文章失败：${error.message}`);
   return (data as ArticleRow[]) || [];
 }
 
@@ -62,7 +62,7 @@ export async function getArticleById(id: number): Promise<ArticleRow | null> {
     .select('*')
     .eq('id', id)
     .maybeSingle();
-  if (error) throw new Error(`查询文章失败: ${error.message}`);
+  if (error) throw new Error(`查询文章失败：${error.message}`);
   return data as ArticleRow | null;
 }
 
@@ -73,7 +73,7 @@ export async function getExistingSourceUrls(urls: string[]): Promise<Set<string>
     .from('articles')
     .select('source_url')
     .in('source_url', urls);
-  if (error) throw new Error(`查询来源URL失败: ${error.message}`);
+  if (error) throw new Error(`查询来源 URL 失败：${error.message}`);
   return new Set((data || []).map((d: { source_url: string }) => d.source_url).filter(Boolean));
 }
 
@@ -100,7 +100,7 @@ export async function insertArticle(article: {
     .insert(article)
     .select()
     .single();
-  if (error) throw new Error(`插入文章失败: ${error.message}`);
+  if (error) throw new Error(`插入文章失败：${error.message}`);
   return data as ArticleRow;
 }
 
@@ -124,9 +124,61 @@ export async function insertArticles(
   }>
 ): Promise<void> {
   if (articles.length === 0) return;
-  const client = getSupabaseClient();
-  const { error } = await client.from('articles').insert(articles);
-  if (error) throw new Error(`批量插入文章失败: ${error.message}`);
+  
+  // 使用原始 SQL 绕过 schema cache
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Supabase 环境变量未配置');
+  }
+  
+  // 构建 SQL INSERT 语句
+  const columns = [
+    'title', 'summary', 'content', 'country_code', 'category', 
+    'source_name', 'source_url', 'original_title', 'original_content',
+    'original_language', 'published_at', 'tags', 'is_featured',
+    'cover_image', 'image_urls'
+  ];
+  
+  const values = articles.map(article => {
+    const vals = [
+      `'${article.title.replace(/'/g, "''")}'`,
+      `'${article.summary.replace(/'/g, "''")}'`,
+      `'${article.content.replace(/'/g, "''")}'`,
+      `'${article.country_code}'`,
+      `'${article.category}'`,
+      `'${article.source_name}'`,
+      article.source_url ? `'${article.source_url}'` : 'NULL',
+      article.original_title ? `'${article.original_title.replace(/'/g, "''")}'` : 'NULL',
+      article.original_content ? `'${article.original_content.replace(/'/g, "''")}'` : 'NULL',
+      article.original_language ? `'${article.original_language}'` : 'NULL',
+      `'${article.published_at}'`,
+      article.tags ? `ARRAY[${article.tags.map(t => `'${t}'`).join(',')}]` : 'NULL',
+      article.is_featured ? 'true' : 'false',
+      article.cover_image ? `'${article.cover_image}'` : 'NULL',
+      article.image_urls ? `'${JSON.stringify(article.image_urls)}'::jsonb` : 'NULL'
+    ];
+    return `(${vals.join(',')})`;
+  }).join(',\n');
+  
+  const sql = `INSERT INTO articles (${columns.join(',')}) VALUES ${values}`;
+  
+  // 使用 Supabase REST API 执行 SQL
+  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/execute_sql`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': supabaseKey,
+      'Authorization': `Bearer ${supabaseKey}`
+    },
+    body: JSON.stringify({ sql })
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`批量插入文章失败：${response.status} - ${errorText}`);
+  }
 }
 
 export async function getArticlesByDateRange(
@@ -147,6 +199,6 @@ export async function getArticlesByDateRange(
   }
 
   const { data, error } = await query;
-  if (error) throw new Error(`查询文章失败: ${error.message}`);
+  if (error) throw new Error(`查询文章失败：${error.message}`);
   return (data as ArticleRow[]) || [];
 }
