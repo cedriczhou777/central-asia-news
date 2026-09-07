@@ -133,6 +133,9 @@ export async function insertArticles(
     throw new Error('Supabase 环境变量未配置');
   }
   
+  // 暂时移除 cover_image 和 image_urls 字段，避免 schema cache 问题
+  const articlesWithoutImages = articles.map(({ cover_image, image_urls, ...rest }) => rest);
+  
   // 使用 Supabase REST API 直接插入
   const response = await fetch(`${supabaseUrl}/rest/v1/articles`, {
     method: 'POST',
@@ -142,7 +145,7 @@ export async function insertArticles(
       'Authorization': `Bearer ${supabaseKey}`,
       'Prefer': 'return=minimal'
     },
-    body: JSON.stringify(articles)
+    body: JSON.stringify(articlesWithoutImages)
   });
   
   if (!response.ok) {
