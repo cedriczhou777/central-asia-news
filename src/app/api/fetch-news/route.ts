@@ -226,12 +226,43 @@ ${content}
         // 移除尾随逗号
         jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
         
-        const parsed = JSON.parse(jsonStr);
-        return {
-          titleZh: parsed.title || title,
-          summaryZh: parsed.summary || content.substring(0, 100),
-          contentZh: parsed.content || content,
-        };
+        // 移除 markdown 代码块标记
+        jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+        
+        // 移除控制字符
+        jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, '');
+        
+        // 尝试多次解析
+        try {
+          const parsed = JSON.parse(jsonStr);
+          return {
+            titleZh: parsed.title || title,
+            summaryZh: parsed.summary || content.substring(0, 100),
+            contentZh: parsed.content || content,
+          };
+        } catch (firstErr) {
+          // 第一次解析失败，尝试更激进的修复
+          console.log('第一次 JSON 解析失败，尝试修复...');
+          
+          // 移除所有非 JSON 字符（保留大括号、引号、冒号、逗号等）
+          jsonStr = jsonStr.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+          
+          // 修复转义问题
+          jsonStr = jsonStr.replace(/\\"/g, '"');
+          jsonStr = jsonStr.replace(/\\'/g, "'");
+          
+          try {
+            const parsed = JSON.parse(jsonStr);
+            return {
+              titleZh: parsed.title || title,
+              summaryZh: parsed.summary || content.substring(0, 100),
+              contentZh: parsed.content || content,
+            };
+          } catch (secondErr) {
+            console.error('JSON 解析失败（两次尝试均失败）:', secondErr);
+            console.error('原始 JSON:', jsonStr.substring(0, 500));
+          }
+        }
       }
     } catch (parseErr) {
       console.error('JSON 解析失败:', parseErr);
