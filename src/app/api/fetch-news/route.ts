@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
+import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS, fetchTelegramRSS, TELEGRAM_CHANNELS } from '@/lib/scraper';
 
 const parser = new Parser({
   timeout: 30000,
@@ -14,39 +15,30 @@ interface RSSSource {
   language: string;
 }
 
-// 更新后的 RSS 源配置（只保留能正常访问的源）
+// RSS 源配置（可用源）
 const RSS_SOURCES: RSSSource[] = [
-  // 哈萨克斯坦（4 个可用源）
+  // 哈萨克斯坦
   { name: 'The Astana Times', url: 'https://astanatimes.com/feed/', country: 'kz', language: 'en' },
   { name: 'Egemen Qazaqstan', url: 'https://egemen.kz/rss/', country: 'kz', language: 'kk' },
   { name: 'Newtimes.kz', url: 'https://newtimes.kz/rss/', country: 'kz', language: 'ru' },
   { name: '24.kz', url: 'https://24.kz/rss/', country: 'kz', language: 'kk' },
 
-  // 乌兹别克斯坦（4 个可用源）
+  // 乌兹别克斯坦
   { name: 'UzA', url: 'https://uza.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Gazeta.uz', url: 'https://gazeta.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Spot.uz', url: 'https://spot.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Uznews.uz', url: 'https://uznews.uz/rss/', country: 'uz', language: 'ru' },
 
-  // 吉尔吉斯斯坦（2 个可用源）
+  // 吉尔吉斯斯坦
   { name: 'Kabar', url: 'https://kabar.kg/rss/', country: 'kg', language: 'ru' },
   { name: '24.kg', url: 'https://24.kg/rss/', country: 'kg', language: 'ru' },
 
-  // 塔吉克斯坦（3 个可用源）
+  // 塔吉克斯坦
   { name: 'Khovar', url: 'https://khovar.tj/rss/', country: 'tj', language: 'ru' },
   { name: 'Asia-Plus', url: 'https://asiaplustj.info/rss/', country: 'tj', language: 'ru' },
   { name: 'Avesta', url: 'https://avesta.tj/rss/', country: 'tj', language: 'ru' },
 
-  // 区域综合媒体（1 个可用源）
-  { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
-];
-
-  // 塔吉克斯坦（3 个可用源）
-  { name: 'Khovar', url: 'https://khovar.tj/rss/', country: 'tj', language: 'ru' },
-  { name: 'Asia-Plus', url: 'https://asiaplustj.info/rss/', country: 'tj', language: 'ru' },
-  { name: 'Avesta', url: 'https://avesta.tj/rss/', country: 'tj', language: 'ru' },
-
-  // 区域综合媒体（1 个可用源）
+  // 区域综合媒体
   { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
 ];
 
@@ -328,6 +320,105 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
       result.errors.push(`RSS 解析失败：${err instanceof Error ? err.message : '未知错误'}`);
     }
     results.push(result);
+  }
+
+  // 第一步半：使用网页爬虫补充失效的 RSS 源
+  console.log('开始使用网页爬虫补充新闻...');
+  for (const scraperConfig of CENTRAL_ASIA_SCRAPERS) {
+    const result = { source: scraperConfig.name, fetched: 0, saved: 0, errors: [] as string[] };
+    try {
+      const scrapedArticles = await scrapeWebsite(scraperConfig);
+      result.fetched = scrapedArticles.length;
+
+      if (scrapedArticles.length === 0) {
+        results.push(result);
+        continue;
+      }
+
+      // 确定国家代码
+      const countryMap: Record<string, string> = {
+        'Kazinform': 'kz', 'Tengrinews': 'kz', 'Zakon.kz': 'kz', 'Nur.kz': 'kz',
+        'Inbusiness.kz': 'kz', 'Forbes.kz': 'kz', 'Kazakhstanskaya Pravda': 'kz',
+        'DKNews.kz': 'kz', 'Khabar': 'kz',
+        'Kun.uz': 'uz', 'Daryo.uz': 'uz', 'Repost.uz': 'uz', 'Anhor.uz': 'uz',
+        'AKIpress': 'kg', 'Kaktus.media': 'kg', 'Super.kg': 'kg',
+        'Avesta': 'tj',
+        'TDH': 'tm', 'Turkmenportal': 'tm',
+      };
+      const country = countryMap[scraperConfig.name] || 'intl';
+
+      // 对每篇新闻进行投资相关性评分
+      for (const article of scrapedArticles) {
+        const title = article.title || '';
+        const description = article.summary || '';
+        
+        if (isInvestmentRelevant(title, description)) {
+          const relevanceScore = scoreInvestmentRelevance(title, description);
+          candidatesByCountry[country]?.push({
+            item: {
+              title: article.title,
+              link: article.url,
+              pubDate: article.publishedAt?.toISOString(),
+              content: article.content || article.summary || '',
+              contentSnippet: article.summary || '',
+            },
+            source: { name: scraperConfig.name, url: scraperConfig.url, country, language: 'ru' },
+            relevanceScore,
+          });
+        }
+      }
+
+      console.log(`[爬虫] ${scraperConfig.name} 抓取 ${scrapedArticles.length} 篇，其中投资相关 ${candidatesByCountry[country]?.length || 0} 篇`);
+    } catch (err) {
+      result.errors.push(`爬虫失败：${err instanceof Error ? err.message : '未知错误'}`);
+    }
+    results.push(result);
+  }
+
+  // 第一步半：使用 Telegram RSS 补充
+  console.log('开始使用 Telegram RSS 补充新闻...');
+  for (const [sourceName, channelId] of Object.entries(TELEGRAM_CHANNELS)) {
+    try {
+      const telegramArticles = await fetchTelegramRSS(channelId);
+      
+      if (telegramArticles.length === 0) continue;
+
+      // 确定国家代码
+      const countryMap: Record<string, string> = {
+        'kazinform': 'kz', 'tengrinews': 'kz', 'zakon_kz': 'kz', 'nur_kz': 'kz',
+        'inbusiness': 'kz', 'forbes_kz': 'kz', 'kazpravda': 'kz', 'dknews': 'kz', 'khabar': 'kz',
+        'kun_uz': 'uz', 'daryo_uz': 'uz', 'repost_uz': 'uz', 'anhor_uz': 'uz',
+        'akipress': 'kg', 'kaktus': 'kg', 'super_kg': 'kg',
+        'avesta': 'tj',
+        'tdh': 'tm', 'turkmenportal': 'tm',
+      };
+      const country = countryMap[sourceName] || 'intl';
+
+      // 对每篇新闻进行投资相关性评分
+      for (const article of telegramArticles) {
+        const title = article.title || '';
+        const description = '';
+        
+        if (isInvestmentRelevant(title, description)) {
+          const relevanceScore = scoreInvestmentRelevance(title, description);
+          candidatesByCountry[country]?.push({
+            item: {
+              title: article.title,
+              link: article.url,
+              pubDate: article.publishedAt?.toISOString(),
+              content: '',
+              contentSnippet: '',
+            },
+            source: { name: `Telegram ${sourceName}`, url: `https://t.me/${channelId}`, country, language: 'ru' },
+            relevanceScore,
+          });
+        }
+      }
+
+      console.log(`[Telegram] ${sourceName} 获取 ${telegramArticles.length} 篇，其中投资相关 ${candidatesByCountry[country]?.length || 0} 篇`);
+    } catch (err) {
+      console.error(`[Telegram] ${sourceName} 获取失败:`, err instanceof Error ? err.message : String(err));
+    }
   }
 
   // 第二步：每个国家精选至少 minPerCountry 篇新闻
