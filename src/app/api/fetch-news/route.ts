@@ -3,7 +3,7 @@ import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 
 const parser = new Parser({
-  timeout: 15000,
+  timeout: 30000,
   headers: { 'User-Agent': 'CentralAsiaNewsBot/1.0' },
 });
 
@@ -14,57 +14,40 @@ interface RSSSource {
   language: string;
 }
 
-// 更新后的 RSS 源配置
+// 更新后的 RSS 源配置（只保留能正常访问的源）
 const RSS_SOURCES: RSSSource[] = [
-  // 哈萨克斯坦
-  { name: 'Kazinform', url: 'https://www.kazinform.kz/rss/', country: 'kz', language: 'ru' },
-  { name: 'Tengrinews', url: 'https://tengrinews.kz/rss/', country: 'kz', language: 'ru' },
-  { name: 'Zakon.kz', url: 'https://www.zakon.kz/rss/', country: 'kz', language: 'ru' },
-  { name: 'Nur.kz', url: 'https://www.nur.kz/rss/', country: 'kz', language: 'ru' },
-  { name: 'Inbusiness.kz', url: 'https://inbusiness.kz/rss/', country: 'kz', language: 'ru' },
+  // 哈萨克斯坦（4 个可用源）
   { name: 'The Astana Times', url: 'https://astanatimes.com/feed/', country: 'kz', language: 'en' },
-  { name: 'Forbes.kz', url: 'https://forbes.kz/rss/', country: 'kz', language: 'ru' },
   { name: 'Egemen Qazaqstan', url: 'https://egemen.kz/rss/', country: 'kz', language: 'kk' },
-  { name: 'Kazakhstanskaya Pravda', url: 'https://kazpravda.kz/rss/', country: 'kz', language: 'ru' },
-  { name: 'DKNews.kz', url: 'https://dknews.kz/rss/', country: 'kz', language: 'ru' },
   { name: 'Newtimes.kz', url: 'https://newtimes.kz/rss/', country: 'kz', language: 'ru' },
   { name: '24.kz', url: 'https://24.kz/rss/', country: 'kz', language: 'kk' },
-  { name: 'Khabar', url: 'https://khabar.kz/rss/', country: 'kz', language: 'kk' },
 
-  // 乌兹别克斯坦
+  // 乌兹别克斯坦（4 个可用源）
   { name: 'UzA', url: 'https://uza.uz/rss/', country: 'uz', language: 'ru' },
-  { name: 'Kun.uz', url: 'https://kun.uz/rss/', country: 'uz', language: 'uz' },
-  { name: 'Daryo.uz', url: 'https://daryo.uz/rss/', country: 'uz', language: 'uz' },
   { name: 'Gazeta.uz', url: 'https://gazeta.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Spot.uz', url: 'https://spot.uz/rss/', country: 'uz', language: 'ru' },
-  { name: 'Repost.uz', url: 'https://repost.uz/rss/', country: 'uz', language: 'ru' },
-  { name: 'Anhor.uz', url: 'https://anhor.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Uznews.uz', url: 'https://uznews.uz/rss/', country: 'uz', language: 'ru' },
 
-  // 吉尔吉斯斯坦
+  // 吉尔吉斯斯坦（2 个可用源）
   { name: 'Kabar', url: 'https://kabar.kg/rss/', country: 'kg', language: 'ru' },
-  { name: 'AKIpress', url: 'https://kg.akipress.org/rss/', country: 'kg', language: 'en' },
   { name: '24.kg', url: 'https://24.kg/rss/', country: 'kg', language: 'ru' },
-  { name: 'Kaktus.media', url: 'https://kaktus.media/rss/', country: 'kg', language: 'ru' },
-  { name: 'Super.kg', url: 'https://super.kg/rss/', country: 'kg', language: 'ru' },
-  { name: 'Azattyk', url: 'https://www.azattyk.org/rss/', country: 'kg', language: 'ky' },
 
-  // 塔吉克斯坦
+  // 塔吉克斯坦（3 个可用源）
   { name: 'Khovar', url: 'https://khovar.tj/rss/', country: 'tj', language: 'ru' },
   { name: 'Asia-Plus', url: 'https://asiaplustj.info/rss/', country: 'tj', language: 'ru' },
   { name: 'Avesta', url: 'https://avesta.tj/rss/', country: 'tj', language: 'ru' },
 
-  // 土库曼斯坦
-  { name: 'TDH', url: 'https://tdh.gov.tm/rss/', country: 'tm', language: 'ru' },
-  { name: 'Turkmenportal', url: 'https://turkmenportal.com/rss/', country: 'tm', language: 'ru' },
-
-  // 区域综合媒体
+  // 区域综合媒体（1 个可用源）
   { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
-  { name: 'Eurasianet', url: 'https://eurasianet.org/rss', country: 'intl', language: 'en' },
-  { name: 'RFE/RL Central Asia', url: 'https://www.rferl.org/rss/', country: 'intl', language: 'en' },
+];
 
-  // 国际媒体
-  { name: 'Reuters', url: 'https://feeds.reuters.com/reuters/worldNews', country: 'intl', language: 'en' },
+  // 塔吉克斯坦（3 个可用源）
+  { name: 'Khovar', url: 'https://khovar.tj/rss/', country: 'tj', language: 'ru' },
+  { name: 'Asia-Plus', url: 'https://asiaplustj.info/rss/', country: 'tj', language: 'ru' },
+  { name: 'Avesta', url: 'https://avesta.tj/rss/', country: 'tj', language: 'ru' },
+
+  // 区域综合媒体（1 个可用源）
+  { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
 ];
 
 // 投资相关关键词（用于精选新闻）
@@ -367,16 +350,39 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
   }> = [];
 
   for (const [country, candidates] of Object.entries(candidatesByCountry)) {
-    if (candidates.length === 0) {
-      console.log(`${country} 没有投资相关新闻，将抓取最新新闻`);
-      continue;
+    // 如果投资相关新闻不足 minPerCountry 篇，用最新新闻补充
+    let selectedCandidates = candidates;
+    
+    if (candidates.length < minPerCountry) {
+      console.log(`${country} 投资相关新闻不足（${candidates.length}篇 < ${minPerCountry}篇），将用最新新闻补充`);
+      // 重新从所有源获取最新新闻作为补充
+      for (const source of RSS_SOURCES.filter(s => s.country === country)) {
+        try {
+          const feed = await parser.parseURL(source.url);
+          const latestItems = feed.items.slice(0, minPerCountry * 2); // 多取一些作为候选
+          
+          for (const item of latestItems) {
+            // 避免重复
+            const alreadyExists = candidates.some(c => c.item.link === item.link);
+            if (!alreadyExists) {
+              selectedCandidates.push({
+                item,
+                source,
+                relevanceScore: 0, // 补充新闻评分为 0
+              });
+            }
+          }
+        } catch (err) {
+          // 忽略错误
+        }
+      }
     }
 
     // 按相关性评分排序，取前 minPerCountry 篇
-    candidates.sort((a, b) => b.relevanceScore - a.relevanceScore);
-    const selected = candidates.slice(0, Math.max(minPerCountry, candidates.length));
+    selectedCandidates.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    const selected = selectedCandidates.slice(0, Math.max(minPerCountry, selectedCandidates.length));
 
-    console.log(`${country} 精选 ${selected.length} 篇投资相关新闻`);
+    console.log(`${country} 精选 ${selected.length} 篇新闻（投资相关${candidates.length}篇，补充${selected.length - candidates.length}篇）`);
 
     for (const { item, source } of selected) {
       try {

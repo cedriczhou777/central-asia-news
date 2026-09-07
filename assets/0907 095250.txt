@@ -1,0 +1,507 @@
+09/07 09:52:50
+central-asia-news-031
+ POST /fetch-news 404 in 58ms (compile: 5ms, render: 53ms)
+09/07 09:54:48
+central-asia-news-031
+ GET / 200 in 156ms (compile: 3ms, render: 153ms)
+09/07 09:54:50
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 1338ms (compile: 3ms, render: 1335ms)
+09/07 09:54:50
+central-asia-news-031
+ GET /api/articles?_t=1788746088308 200 in 1346ms (compile: 3ms, render: 1343ms)
+09/07 09:56:19
+central-asia-news-031
+ POST /api/fetch-news 200 in 570ms (compile: 557ms, render: 13ms)
+09/07 09:56:19
+central-asia-news-031
+开始采集新闻，目标日期：2026-09-07，每个国家至少 3 篇
+09/07 09:57:00
+central-asia-news-031
+从 Newtimes.kz 采集 1 篇，其中投资相关 0 篇
+09/07 09:57:04
+central-asia-news-031
+ GET / 200 in 60ms (compile: 3ms, render: 57ms)
+09/07 09:57:06
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 899ms (compile: 3ms, render: 896ms)
+09/07 09:57:06
+central-asia-news-031
+ GET /api/articles?_t=1788746224538 200 in 873ms (compile: 2ms, render: 871ms)
+09/07 09:58:15
+central-asia-news-031
+从 24.kg 采集 1 篇，其中投资相关 0 篇
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+新闻抓取完成：日期=2026-09-07, 共保存0篇 [
+09/07 09:58:58
+central-asia-news-031
+去重后剩余 0 篇新文章
+09/07 09:58:58
+central-asia-news-031
+tj 没有投资相关新闻，将抓取最新新闻
+09/07 09:58:58
+central-asia-news-031
+tm 没有投资相关新闻，将抓取最新新闻
+09/07 09:58:58
+central-asia-news-031
+kg 没有投资相关新闻，将抓取最新新闻
+09/07 09:58:58
+central-asia-news-031
+uz 没有投资相关新闻，将抓取最新新闻
+09/07 09:58:58
+central-asia-news-031
+kz 没有投资相关新闻，将抓取最新新闻
+09/07 09:58:58
+central-asia-news-031
+    ]
+09/07 09:58:58
+central-asia-news-031
+      'RSS 解析失败：Attribute without value\nLine: 21\nColumn: 17\nChar: s'
+09/07 09:58:58
+central-asia-news-031
+    errors: [
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'DKNews.kz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Kazakhstanskaya Pravda',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Egemen Qazaqstan', fetched: 50, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Forbes.kz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: 'The Astana Times', fetched: 10, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Request timed out after 15000ms' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Inbusiness.kz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Nur.kz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Zakon.kz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Tengrinews',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Unexpected close tag\nLine: 12\nColumn: 17\nChar: >' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Kazinform',
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Request timed out after 15000ms' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'AKIpress',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Kabar', fetched: 50, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Uznews.uz', fetched: 20, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Feed not recognized as RSS 1 or 2.' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Anhor.uz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Repost.uz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Spot.uz', fetched: 20, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Gazeta.uz', fetched: 20, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Request timed out after 15000ms' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Daryo.uz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Kun.uz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: 'UzA', fetched: 20, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    ]
+09/07 09:58:58
+central-asia-news-031
+      'RSS 解析失败：Invalid character in tag name\nLine: 77\nColumn: 215\nChar: ;'
+09/07 09:58:58
+central-asia-news-031
+    errors: [
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Khabar',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: '24.kz',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Newtimes.kz', fetched: 100, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+]
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Reuters', fetched: 0, saved: 0, errors: [ 'RSS 解析失败：' ] }
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'RFE/RL Central Asia',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Eurasianet',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: []
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 10,
+09/07 09:58:58
+central-asia-news-031
+    source: 'The Times of Central Asia',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 403' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Turkmenportal',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'TDH',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Avesta', fetched: 10, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Asia-Plus', fetched: 10, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Khovar', fetched: 10, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  { source: 'Azattyk', fetched: 0, saved: 0, errors: [ 'RSS 解析失败：' ] },
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Super.kg',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  },
+09/07 09:58:58
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 09:58:58
+central-asia-news-031
+    saved: 0,
+09/07 09:58:58
+central-asia-news-031
+    fetched: 0,
+09/07 09:58:58
+central-asia-news-031
+    source: 'Kaktus.media',
+09/07 09:58:58
+central-asia-news-031
+  {
+09/07 09:58:58
+central-asia-news-031
+  { source: '24.kg', fetched: 50, saved: 0, errors: [] },
+09/07 09:58:58
+central-asia-news-031
+  },
