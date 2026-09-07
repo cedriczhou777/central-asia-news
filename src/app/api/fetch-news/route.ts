@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
-import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS, fetchTelegramRSS, TELEGRAM_CHANNELS } from '@/lib/scraper';
+import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS } from '@/lib/scraper';
 
 const parser = new Parser({
   timeout: 30000,
@@ -214,9 +214,19 @@ ${content}
     console.log('智谱 AI 响应:', llmContent.substring(0, 200));
 
     try {
-      const jsonMatch = llmContent.match(/\{[\s\S]*\}/);
+      // 移除 markdown 代码块标记
+      let cleanedContent = llmContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      
+      // 尝试提取 JSON
+      const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
+        // 尝试修复常见的 JSON 格式问题
+        let jsonStr = jsonMatch[0];
+        
+        // 移除尾随逗号
+        jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
+        
+        const parsed = JSON.parse(jsonStr);
         return {
           titleZh: parsed.title || title,
           summaryZh: parsed.summary || content.substring(0, 100),
@@ -225,6 +235,7 @@ ${content}
       }
     } catch (parseErr) {
       console.error('JSON 解析失败:', parseErr);
+      console.error('原始内容:', llmContent.substring(0, 500));
     }
 
     return {
@@ -373,52 +384,6 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
       result.errors.push(`爬虫失败：${err instanceof Error ? err.message : '未知错误'}`);
     }
     results.push(result);
-  }
-
-  // 第一步半：使用 Telegram RSS 补充
-  console.log('开始使用 Telegram RSS 补充新闻...');
-  for (const [sourceName, channelId] of Object.entries(TELEGRAM_CHANNELS)) {
-    try {
-      const telegramArticles = await fetchTelegramRSS(channelId);
-      
-      if (telegramArticles.length === 0) continue;
-
-      // 确定国家代码
-      const countryMap: Record<string, string> = {
-        'kazinform': 'kz', 'tengrinews': 'kz', 'zakon_kz': 'kz', 'nur_kz': 'kz',
-        'inbusiness': 'kz', 'forbes_kz': 'kz', 'kazpravda': 'kz', 'dknews': 'kz', 'khabar': 'kz',
-        'kun_uz': 'uz', 'daryo_uz': 'uz', 'repost_uz': 'uz', 'anhor_uz': 'uz',
-        'akipress': 'kg', 'kaktus': 'kg', 'super_kg': 'kg',
-        'avesta': 'tj',
-        'tdh': 'tm', 'turkmenportal': 'tm',
-      };
-      const country = countryMap[sourceName] || 'intl';
-
-      // 对每篇新闻进行投资相关性评分
-      for (const article of telegramArticles) {
-        const title = article.title || '';
-        const description = '';
-        
-        if (isInvestmentRelevant(title, description)) {
-          const relevanceScore = scoreInvestmentRelevance(title, description);
-          candidatesByCountry[country]?.push({
-            item: {
-              title: article.title,
-              link: article.url,
-              pubDate: article.publishedAt?.toISOString(),
-              content: '',
-              contentSnippet: '',
-            },
-            source: { name: `Telegram ${sourceName}`, url: `https://t.me/${channelId}`, country, language: 'ru' },
-            relevanceScore,
-          });
-        }
-      }
-
-      console.log(`[Telegram] ${sourceName} 获取 ${telegramArticles.length} 篇，其中投资相关 ${candidatesByCountry[country]?.length || 0} 篇`);
-    } catch (err) {
-      console.error(`[Telegram] ${sourceName} 获取失败:`, err instanceof Error ? err.message : String(err));
-    }
   }
 
   // 第二步：每个国家精选至少 minPerCountry 篇新闻
