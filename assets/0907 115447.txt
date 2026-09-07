@@ -1,0 +1,660 @@
+09/07 11:54:47
+central-asia-news-031
+ GET / 200 in 146ms (compile: 2ms, render: 144ms)
+09/07 11:54:51
+central-asia-news-031
+ GET /api/articles?_t=1788753288873 200 in 1699ms (compile: 2ms, render: 1697ms)
+09/07 11:54:51
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 1683ms (compile: 1871µs, render: 1681ms)
+09/07 11:57:27
+central-asia-news-031
+ GET / 200 in 53ms (compile: 2ms, render: 51ms)
+09/07 11:57:31
+central-asia-news-031
+ GET /api/articles?_t=1788753449203 200 in 1483ms (compile: 1701µs, render: 1481ms)
+09/07 11:57:31
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 1432ms (compile: 1837µs, render: 1431ms)
+09/07 12:14:42
+central-asia-news-031
+ GET / 200 in 55ms (compile: 3ms, render: 52ms)
+09/07 12:14:45
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 1526ms (compile: 1450µs, render: 1525ms)
+09/07 12:14:46
+central-asia-news-031
+ GET /api/articles?_t=1788754482464 200 in 3.4s (compile: 1744µs, render: 3.4s)
+09/07 12:15:46
+central-asia-news-031
+ GET / 200 in 51ms (compile: 2ms, render: 49ms)
+09/07 12:15:49
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 1533ms (compile: 3ms, render: 1530ms)
+09/07 12:15:49
+central-asia-news-031
+ GET /api/articles?_t=1788754546721 200 in 1491ms (compile: 1951µs, render: 1490ms)
+09/07 12:19:33
+central-asia-news-031
+ GET / 200 in 56ms (compile: 3ms, render: 52ms)
+09/07 12:19:36
+central-asia-news-031
+ GET /api/articles?_t=1788754772882 200 in 2.8s (compile: 8ms, render: 2.8s)
+09/07 12:19:36
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 2.3s (compile: 3ms, render: 2.3s)
+09/07 12:22:18
+central-asia-news-031
+ POST /api/fetch-news 200 in 9ms (compile: 1747µs, render: 7ms)
+09/07 12:22:18
+central-asia-news-031
+开始采集新闻，目标日期：2026-09-07，每个国家至少 3 篇
+09/07 12:22:45
+central-asia-news-031
+从 Egemen Qazaqstan 采集 4 篇，其中投资相关 0 篇
+09/07 12:22:56
+central-asia-news-031
+从 Newtimes.kz 采集 4 篇，其中投资相关 0 篇
+09/07 12:23:11
+central-asia-news-031
+从 UzA 采集 3 篇，其中投资相关 0 篇
+09/07 12:23:32
+central-asia-news-031
+从 Gazeta.uz 采集 1 篇，其中投资相关 0 篇
+09/07 12:23:50
+central-asia-news-031
+从 Kabar 采集 11 篇，其中投资相关 0 篇
+09/07 12:23:57
+central-asia-news-031
+从 AKIpress 采集 21 篇，其中投资相关 0 篇
+09/07 12:23:59
+central-asia-news-031
+从 24.kg 采集 29 篇，其中投资相关 4 篇
+09/07 12:24:11
+central-asia-news-031
+从 Khovar 采集 5 篇，其中投资相关 0 篇
+09/07 12:24:14
+central-asia-news-031
+从 Asia-Plus 采集 3 篇，其中投资相关 0 篇
+09/07 12:24:16
+central-asia-news-031
+从 Avesta 采集 5 篇，其中投资相关 0 篇
+09/07 12:24:26
+central-asia-news-031
+开始调用智谱 AI 翻译...
+09/07 12:24:26
+central-asia-news-031
+kg 精选 4 篇投资相关新闻
+09/07 12:24:26
+central-asia-news-031
+uz 没有投资相关新闻，将抓取最新新闻
+09/07 12:24:26
+central-asia-news-031
+kz 没有投资相关新闻，将抓取最新新闻
+09/07 12:24:30
+central-asia-news-031
+开始调用智谱 AI 翻译...
+09/07 12:24:30
+central-asia-news-031
+  "content": "塔塔尔斯坦领导人鲁斯塔姆·明尼卡诺夫抵达乔蓬-阿塔后，与吉尔吉斯斯坦总统萨德尔·扎帕罗夫举行了会晤。塔塔尔斯坦领导人新
+09/07 12:24:30
+central-asia-news-031
+  "summary": "塔塔尔斯坦领导人鲁斯塔姆·明尼卡诺夫抵达乔蓬-阿塔并与吉尔吉斯斯坦总统萨德尔·扎帕罗夫举行会晤，双方讨论了潜在合作机会。",
+09/07 12:24:30
+central-asia-news-031
+  "title": "塔塔尔斯坦领导人与吉尔吉斯斯坦总统在乔蓬-阿塔会晤",
+09/07 12:24:30
+central-asia-news-031
+{
+09/07 12:24:30
+central-asia-news-031
+智谱 AI 响应: ```json
+09/07 12:24:33
+central-asia-news-031
+开始调用智谱 AI 翻译...
+09/07 12:24:33
+central-asia-news-031
+```
+09/07 12:24:33
+central-asia-news-031
+}
+09/07 12:24:33
+central-asia-news-031
+  "content": "鞑靼斯坦领导人鲁斯塔姆·明尼卡诺夫向吉尔吉斯斯坦总统萨德尔·扎帕罗夫赠送了两只猎隼的证书。其新闻服务部门报道称。"
+09/07 12:24:33
+central-asia-news-031
+  "summary": "鞑靼斯坦领导人向吉尔吉斯斯坦总统赠送两只猎隼，展示两国友好关系，为中亚地区投资合作创造良好氛围。",
+09/07 12:24:33
+central-asia-news-031
+  "title": "世界游牧民族运动会：鞑靼斯坦领导人赠予吉尔吉斯斯坦两只猎隼",
+09/07 12:24:33
+central-asia-news-031
+{
+09/07 12:24:33
+central-asia-news-031
+智谱 AI 响应: ```json
+09/07 12:24:35
+central-asia-news-031
+开始调用智谱 AI 翻译...
+09/07 12:24:35
+central-asia-news-031
+  "content": "吉尔吉斯斯坦U20国家队已结束2027年亚足联U20亚洲杯预选赛的征程。在他们的最后一场比赛中
+09/07 12:24:35
+central-asia-news-031
+  "summary": "吉尔吉斯斯坦U20国家队在2027年亚足联U20亚洲杯预选赛最后一战中0-0战平韩国队，未能晋级正赛。这一结果对当地足球产业发展及体育投资前景产生直接影响。",
+09/07 12:24:35
+central-asia-news-031
+  "title": "吉尔吉斯斯坦U20队战平韩国无缘亚洲杯",
+09/07 12:24:35
+central-asia-news-031
+{
+09/07 12:24:35
+central-asia-news-031
+智谱 AI 响应: ```json
+09/07 12:24:38
+central-asia-news-031
+准备插入 4 篇，去重检查 4 个 URL
+09/07 12:24:38
+central-asia-news-031
+tj 没有投资相关新闻，将抓取最新新闻
+09/07 12:24:38
+central-asia-news-031
+tm 没有投资相关新闻，将抓取最新新闻
+09/07 12:24:38
+central-asia-news-031
+```
+09/07 12:24:38
+central-asia-news-031
+}
+09/07 12:24:38
+central-asia-news-031
+  "content": "吉尔吉斯斯坦在第六届世界游牧民族运动会上最终位居奖牌榜首位。吉尔吉斯运动员共获得72枚奖牌。"
+09/07 12:24:38
+central-asia-news-031
+  "summary": "吉尔吉斯斯坦运动员在第六届世界游牧民族运动会上共获得72枚奖牌，位居奖牌榜首位，展现该国在传统体育领域的强大实力和投资潜力。",
+09/07 12:24:38
+central-asia-news-031
+  "title": "吉尔吉斯斯坦在第六届世界游牧民族运动会中荣登奖牌榜榜首",
+09/07 12:24:38
+central-asia-news-031
+{
+09/07 12:24:38
+central-asia-news-031
+智谱 AI 响应: ```json
+09/07 12:24:39
+central-asia-news-031
+去重后剩余 4 篇新文章
+09/07 12:24:39
+central-asia-news-031
+数据库中已存在 0 个 URL
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Unexpected close tag\nLine: 12\nColumn: 17\nChar: >' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Kazinform',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+新闻抓取完成：日期=2026-09-07, 共保存0篇 [
+09/07 12:24:40
+central-asia-news-031
+插入数据库失败: 批量插入文章失败: Could not find the 'cover_image' column of 'articles' in the schema cache
+09/07 12:24:40
+central-asia-news-031
+    source: '24.kz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Newtimes.kz', fetched: 100, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    ]
+09/07 12:24:40
+central-asia-news-031
+      'RSS 解析失败：Attribute without value\nLine: 21\nColumn: 17\nChar: s'
+09/07 12:24:40
+central-asia-news-031
+    errors: [
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'DKNews.kz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Kazakhstanskaya Pravda',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Egemen Qazaqstan', fetched: 50, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Forbes.kz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  { source: 'The Astana Times', fetched: 10, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Request timed out after 15000ms' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Inbusiness.kz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Nur.kz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Zakon.kz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Tengrinews',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Kaktus.media',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  { source: '24.kg', fetched: 50, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  { source: 'AKIpress', fetched: 30, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Kabar', fetched: 50, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Uznews.uz', fetched: 20, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Feed not recognized as RSS 1 or 2.' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Anhor.uz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Repost.uz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Spot.uz', fetched: 20, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Gazeta.uz', fetched: 20, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Request timed out after 15000ms' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Daryo.uz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Kun.uz',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  { source: 'UzA', fetched: 20, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    ]
+09/07 12:24:40
+central-asia-news-031
+      'RSS 解析失败：Invalid character in tag name\nLine: 77\nColumn: 215\nChar: ;'
+09/07 12:24:40
+central-asia-news-031
+    errors: [
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Khabar',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+]
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Reuters', fetched: 0, saved: 0, errors: [ 'RSS 解析失败：' ] }
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'RFE/RL Central Asia',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Eurasianet',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: []
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 10,
+09/07 12:24:40
+central-asia-news-031
+    source: 'The Times of Central Asia',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 403' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Turkmenportal',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'TDH',
+09/07 12:24:40
+central-asia-news-031
+  {
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Avesta', fetched: 10, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Asia-Plus', fetched: 10, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Khovar', fetched: 10, saved: 0, errors: [] },
+09/07 12:24:40
+central-asia-news-031
+  { source: 'Azattyk', fetched: 0, saved: 0, errors: [ 'RSS 解析失败：' ] },
+09/07 12:24:40
+central-asia-news-031
+  },
+09/07 12:24:40
+central-asia-news-031
+    errors: [ 'RSS 解析失败：Status code 404' ]
+09/07 12:24:40
+central-asia-news-031
+    saved: 0,
+09/07 12:24:40
+central-asia-news-031
+    fetched: 0,
+09/07 12:24:40
+central-asia-news-031
+    source: 'Super.kg',
+09/07 12:37:05
+central-asia-news-031
+ GET / 200 in 170ms (compile: 3ms, render: 167ms)
+09/07 12:37:07
+central-asia-news-031
+ GET /api/articles?_t=1788755824650 200 in 1536ms (compile: 12ms, render: 1523ms)
+09/07 12:37:09
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 3.7s (compile: 3ms, render: 3.7s)
+09/07 12:39:35
+central-asia-news-031
+ GET / 200 in 50ms (compile: 2ms, render: 48ms)
+09/07 12:39:37
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 1449ms (compile: 4ms, render: 1445ms)
+09/07 12:39:37
+central-asia-news-031
+ GET /api/articles?_t=1788755975005 200 in 1268ms (compile: 1949µs, render: 1266ms)
+09/07 12:42:55
+central-asia-news-031
+ GET / 200 in 176ms (compile: 3ms, render: 173ms)
+09/07 12:42:57
+central-asia-news-031
+ GET /api/articles?_t=1788756175059 200 in 1583ms (compile: 3ms, render: 1580ms)
+09/07 12:42:57
+central-asia-news-031
+ GET /api/articles?limit=5 200 in 1429ms (compile: 8ms, render: 1420ms)
