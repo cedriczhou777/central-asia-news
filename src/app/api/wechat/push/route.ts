@@ -34,6 +34,59 @@ function scoreInvestmentRelevance(title: string, summary: string): number {
   return score;
 }
 
+// 提取主题关键词（用于去重）
+function extractTopicKeywords(title: string, summary: string): string {
+  const text = `${title} ${summary}`;
+  
+  // 提取人名（常见人名模式）
+  const personPatterns = [
+    /[\u4e00-\u9fa5]{2,4}(?:·[\u4e00-\u9fa5]{2,4}){1,3}/g, // 中文人名（如：米尔济约耶夫）
+    /[A-Z][a-z]+ [A-Z][a-z]+/g, // 英文名（如：Shavkat Mirziyoyev）
+  ];
+  
+  // 提取地名/机构名
+  const locationPatterns = [
+    /[\u4e00-\u9fa5]{2,6}(?:斯坦|尼亚|利亚|克|国)/g, // 国家名
+    /[A-Z][a-z]+(?:stan|nia|lia|land)/gi, // 英文国家名
+  ];
+  
+  const keywords: string[] = [];
+  
+  for (const pattern of personPatterns) {
+    const matches = text.match(pattern);
+    if (matches) keywords.push(...matches.slice(0, 3));
+  }
+  
+  for (const pattern of locationPatterns) {
+    const matches = text.match(pattern);
+    if (matches) keywords.push(...matches.slice(0, 3));
+  }
+  
+  // 如果没有提取到关键词，使用标题前 20 个字符
+  if (keywords.length === 0) {
+    return title.substring(0, 20);
+  }
+  
+  return keywords.slice(0, 3).join(',');
+}
+
+// 检查新闻是否与目标国家相关
+function isCountryRelevant(title: string, summary: string, countryCode: string): boolean {
+  const text = `${title} ${summary}`.toLowerCase();
+  
+  // 国家相关关键词
+  const countryKeywords: Record<string, string[]> = {
+    kz: ['kazakhstan', 'kazakh', '哈萨克斯坦', '哈萨克', 'astana', '阿斯塔纳', 'almaty', '阿拉木图'],
+    uz: ['uzbekistan', 'uzbek', '乌兹别克斯坦', '乌兹别克', 'tashkent', '塔什干', 'samarkand', '撒马尔罕'],
+    kg: ['kyrgyzstan', 'kyrgyz', '吉尔吉斯斯坦', '吉尔吉斯', 'bishkek', '比什凯克'],
+    tm: ['turkmenistan', 'turkmen', '土库曼斯坦', '土库曼', 'ashgabat', '阿什哈巴德'],
+    tj: ['tajikistan', 'tajik', '塔吉克斯坦', '塔吉克', 'dushanbe', '杜尚别'],
+  };
+  
+  const keywords = countryKeywords[countryCode] || [];
+  return keywords.some(kw => text.includes(kw.toLowerCase()));
+}
+
 // 开放接口服务：免 access_token，直接调用
 async function callWechatApi(apiPath: string, data: any): Promise<any> {
   const url = `${WECHAT_API_BASE}${apiPath}`;
@@ -228,28 +281,43 @@ export async function POST(request: NextRequest) {
       scoredArticles.sort((a, b) => b.relevanceScore - a.relevanceScore);
       
       // 去重：确保每篇新闻讲不同的事情
+      // 使用更智能的去重：提取人名、地名、事件关键词
       const selectedArticles: typeof scoredArticles = [];
-      const usedKeywords = new Set<string>();
+      const usedTopics = new Set<string>();
       
       for (const article of scoredArticles) {
-        if (selectedArticles.length >= minPerCountry) break;
+        // 至少 7 篇，如果质量高可以更多（最多 10 篇）
+        if (selectedArticles.length >= 10) break;
+        if (selectedArticles.length >= 7 && article.relevanceScore < 5) break;
         
-        // 提取标题中的关键词（前 10 个字符）
-        const titleKey = article.title.substring(0, 10);
+        // 检查是否与目标国家相关
+        if (!isCountryRelevant(article.title, article.summary, country.code)) {
+          console.log(`跳过与${country.name}无关的新闻：${article.title}`);
+          continue;
+        }
         
-        // 如果这个关键词已经用过，跳过（避免重复主题）
-        if (usedKeywords.has(titleKey)) continue;
+        // 提取主题关键词（人名、地名、事件）
+        const topicKey = extractTopicKeywords(article.title, article.summary);
         
-        usedKeywords.add(titleKey);
+        // 如果这个主题已经出现过，跳过
+        if (usedTopics.has(topicKey)) {
+          console.log(`跳过重复主题：${article.title}（主题：${topicKey}）`);
+          continue;
+        }
+        
+        usedTopics.add(topicKey);
         selectedArticles.push(article);
       }
       
-      // 如果去重后不足 minPerCountry 篇，用剩余文章补充
+      // 如果去重后不足 minPerCountry 篇，用剩余文章补充（但仍然要检查国家相关性）
       if (selectedArticles.length < minPerCountry) {
         for (const article of scoredArticles) {
           if (selectedArticles.length >= minPerCountry) break;
           if (!selectedArticles.find(a => a.id === article.id)) {
-            selectedArticles.push(article);
+            // 补充的新闻也要检查国家相关性
+            if (isCountryRelevant(article.title, article.summary, country.code)) {
+              selectedArticles.push(article);
+            }
           }
         }
       }
