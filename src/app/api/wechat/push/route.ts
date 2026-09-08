@@ -186,7 +186,7 @@ function generateWechatHtml(
       <!-- 底部 -->
       <div style="text-align: center; margin-top: 30px; padding: 20px; color: #999; font-size: 12px;">
         <div style="margin-bottom: 8px;">中亚投资资讯 | Central Asia Investment Daily</div>
-        <div>数据来源：各国主流媒体 | 由 AI 自动翻译整理</div>
+        <div>数据来源：各国主流媒体</div>
       </div>
     </div>
   `;
@@ -195,7 +195,7 @@ function generateWechatHtml(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { hours = 24, minPerCountry = 5 } = body;
+    const { hours = 24, minPerCountry = 7 } = body;
 
     // 计算时间范围（过去 N 小时）
     const now = new Date();
@@ -219,13 +219,40 @@ export async function POST(request: NextRequest) {
       console.log(`${country.name}过去${hours}小时共${articles.length}篇文章`);
 
       // 按投资相关性评分排序，精选前 minPerCountry 篇
+      // 确保不重复：按标题关键词去重，避免相同主题的新闻
       const scoredArticles = articles.map(a => ({
         ...a,
         relevanceScore: scoreInvestmentRelevance(a.title, a.summary),
       }));
       
       scoredArticles.sort((a, b) => b.relevanceScore - a.relevanceScore);
-      const selectedArticles = scoredArticles.slice(0, minPerCountry);
+      
+      // 去重：确保每篇新闻讲不同的事情
+      const selectedArticles: typeof scoredArticles = [];
+      const usedKeywords = new Set<string>();
+      
+      for (const article of scoredArticles) {
+        if (selectedArticles.length >= minPerCountry) break;
+        
+        // 提取标题中的关键词（前 10 个字符）
+        const titleKey = article.title.substring(0, 10);
+        
+        // 如果这个关键词已经用过，跳过（避免重复主题）
+        if (usedKeywords.has(titleKey)) continue;
+        
+        usedKeywords.add(titleKey);
+        selectedArticles.push(article);
+      }
+      
+      // 如果去重后不足 minPerCountry 篇，用剩余文章补充
+      if (selectedArticles.length < minPerCountry) {
+        for (const article of scoredArticles) {
+          if (selectedArticles.length >= minPerCountry) break;
+          if (!selectedArticles.find(a => a.id === article.id)) {
+            selectedArticles.push(article);
+          }
+        }
+      }
 
       console.log(`为${country.name}精选${selectedArticles.length}篇投资相关新闻`);
 

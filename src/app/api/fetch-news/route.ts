@@ -82,6 +82,23 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   manufacturing: ['manufacturing', 'factory', 'industrial', 'production', 'textile'],
 };
 
+// 国家相关关键词（用于筛选与该国相关的新闻）
+const COUNTRY_KEYWORDS: Record<string, string[]> = {
+  kz: ['kazakhstan', 'kazakh', 'astana', 'almaty', 'kazakhstani', '哈萨克斯坦', '阿斯塔纳', '阿拉木图'],
+  uz: ['uzbekistan', 'uzbek', 'tashkent', 'samarkand', 'uzbekistani', '乌兹别克斯坦', '塔什干', '撒马尔罕'],
+  kg: ['kyrgyzstan', 'kyrgyz', 'bishkek', 'kyrgyzstani', '吉尔吉斯斯坦', '比什凯克'],
+  tm: ['turkmenistan', 'turkmen', 'ashgabat', '土库曼斯坦', '阿什哈巴德'],
+  tj: ['tajikistan', 'tajik', 'dushanbe', '塔吉克斯坦', '杜尚别'],
+  intl: ['central asia', '中亚', 'silk road', 'belt and road', ' BRI', 'shanghai cooperation'],
+};
+
+// 检查新闻是否与目标国家相关
+function isCountryRelevant(title: string, description: string, countryCode: string): boolean {
+  const text = `${title} ${description}`.toLowerCase();
+  const keywords = COUNTRY_KEYWORDS[countryCode] || [];
+  return keywords.some(kw => text.includes(kw.toLowerCase()));
+}
+
 // 检查新闻是否与投资主题相关
 function isInvestmentRelevant(title: string, description: string): boolean {
   const text = `${title} ${description}`.toLowerCase();
@@ -165,9 +182,9 @@ async function translateAndSummarize(
       };
     }
 
-    const prompt = `你是一位专业的中亚地区新闻翻译编辑，服务于面向中国投资者的中亚资讯平台。
+    const prompt = `你是一位专业的中亚地区新闻翻译编辑。
 
-请将以下${sourceLanguage === 'en' ? '英文' : sourceLanguage === 'ru' ? '俄文' : '其他语言'}新闻翻译为中文，并按要求输出。
+请将以下${sourceLanguage === 'en' ? '英文' : sourceLanguage === 'ru' ? '俄文' : '其他语言'}新闻翻译为中文。
 
 原始标题：${title}
 
@@ -176,9 +193,9 @@ ${content}
 
 请严格按以下 JSON 格式输出（不要输出其他内容）：
 {
-  "title": "翻译后的中文标题，简洁有力，适合投资资讯平台",
-  "summary": "100 字以内的中文摘要，突出对投资者的关键信息",
-  "content": "完整的中文翻译内容，保持原文段落结构，语言专业流畅。如果原文中有图片 URL，直接保留为 HTML img 标签格式：<img src='图片 URL' style='width:100%; border-radius:8px; margin:15px 0;' />"
+  "title": "翻译后的中文标题",
+  "summary": "100 字以内的中文摘要",
+  "content": "完整的中文翻译，保持原文段落结构。如果原文中有图片 URL，直接保留为 HTML img 标签：<img src='图片 URL' style='width:100%; border-radius:8px; margin:15px 0;' />。翻译后的正文控制在 250 字以内，如果超过则缩写总结。"
 }`;
 
     console.log('开始调用智谱 AI 翻译...');
@@ -341,10 +358,15 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         continue;
       }
 
-      // 对每篇新闻进行投资相关性评分
+      // 对每篇新闻进行投资相关性评分和国家相关性检查
       for (const item of targetItems) {
         const title = item.title || '';
         const description = item.contentSnippet || item.content || '';
+        
+        // 检查是否与目标国家相关
+        if (!isCountryRelevant(title, description, source.country)) {
+          continue; // 跳过与该国无关的新闻
+        }
         
         // 检查是否与投资主题相关
         if (isInvestmentRelevant(title, description)) {
