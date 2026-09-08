@@ -170,7 +170,7 @@ async function translateAndSummarize(
   title: string,
   content: string,
   sourceLanguage: string
-): Promise<{ titleZh: string; summaryZh: string; contentZh: string }> {
+): Promise<{ titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean }> {
   try {
     const apiKey = process.env.ZHIPU_API_KEY;
     if (!apiKey) {
@@ -179,10 +179,11 @@ async function translateAndSummarize(
         titleZh: title,
         summaryZh: content.substring(0, 100),
         contentZh: content,
+        isInvestmentRelated: false,
       };
     }
 
-    const prompt = `你是一位专业的中亚地区新闻翻译编辑。
+    const prompt = `你是一位专业的中亚地区新闻翻译编辑，专注于为中国投资者提供高质量的中亚投资资讯。
 
 请将以下${sourceLanguage === 'en' ? '英文' : sourceLanguage === 'ru' ? '俄文' : '其他语言'}新闻翻译为中文。
 
@@ -191,11 +192,22 @@ async function translateAndSummarize(
 原始内容：
 ${content}
 
+翻译要求：
+1. **标题**：必须准确反映新闻核心内容，包含关键人物/机构、事件、地点。避免笼统表述（如"比赛进入激烈阶段"），要具体（如"乌兹别克斯坦与塞尔维亚签署 5 亿美元能源合作协议"）。
+2. **摘要**：100 字以内，必须包含 5W1H（谁、做了什么、何时、何地、为什么、如何）。让读者一眼了解新闻要点。
+3. **正文**：
+   - 语法正确，逻辑清晰，人物时间地点明确
+   - 保持原文段落结构
+   - 如果原文中有图片 URL，直接保留为 HTML img 标签：<img src='图片 URL' style='width:100%; border-radius:8px; margin:15px 0;' />
+   - 控制在 250 字以内，如果超过则缩写总结，保留关键信息
+4. **投资相关性判断**：只有真正与投资环境、政策、项目、经贸合作相关的新闻才标记为投资相关。不要只要有"投资"两个字就认为是投资新闻。家庭、教育、体育等社会新闻除非直接影响投资环境，否则不算投资新闻。
+
 请严格按以下 JSON 格式输出（不要输出其他内容）：
 {
-  "title": "翻译后的中文标题",
-  "summary": "100 字以内的中文摘要",
-  "content": "完整的中文翻译，保持原文段落结构。如果原文中有图片 URL，直接保留为 HTML img 标签：<img src='图片 URL' style='width:100%; border-radius:8px; margin:15px 0;' />。翻译后的正文控制在 250 字以内，如果超过则缩写总结。"
+  "title": "翻译后的中文标题（准确、具体）",
+  "summary": "100 字以内的中文摘要（包含 5W1H）",
+  "content": "完整的中文翻译（语法正确，逻辑清晰，250 字以内）",
+  "isInvestmentRelated": true/false（是否真正与投资相关）
 }`;
 
     console.log('开始调用智谱 AI 翻译...');
@@ -222,6 +234,7 @@ ${content}
         titleZh: title,
         summaryZh: content.substring(0, 100),
         contentZh: content,
+        isInvestmentRelated: false,
       };
     }
 
@@ -256,6 +269,7 @@ ${content}
             titleZh: parsed.title || title,
             summaryZh: parsed.summary || content.substring(0, 100),
             contentZh: parsed.content || content,
+            isInvestmentRelated: parsed.isInvestmentRelated === true,
           };
         } catch (firstErr) {
           // 第一次解析失败，尝试更激进的修复
@@ -274,6 +288,7 @@ ${content}
               titleZh: parsed.title || title,
               summaryZh: parsed.summary || content.substring(0, 100),
               contentZh: parsed.content || content,
+              isInvestmentRelated: parsed.isInvestmentRelated === true,
             };
           } catch (secondErr) {
             console.error('JSON 解析失败（两次尝试均失败）:', secondErr);
@@ -290,6 +305,7 @@ ${content}
       titleZh: title,
       summaryZh: content.substring(0, 100),
       contentZh: content,
+      isInvestmentRelated: false,
     };
   } catch (err) {
     console.error('LLM 调用失败:', err instanceof Error ? err.message : err);
@@ -297,6 +313,7 @@ ${content}
       titleZh: title,
       summaryZh: content.substring(0, 100),
       contentZh: content,
+      isInvestmentRelated: false,
     };
   }
 }
@@ -488,7 +505,12 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
     }
 
     // 按相关性评分排序，取前 minPerCountry 篇
-    selectedCandidates.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    // 有图片的新闻优先（图片权重 +5）
+    selectedCandidates.sort((a, b) => {
+      const aHasImage = (a.item.contentSnippet || a.item.content || '').includes('<img') ? 5 : 0;
+      const bHasImage = (b.item.contentSnippet || b.item.content || '').includes('<img') ? 5 : 0;
+      return (b.relevanceScore + bHasImage) - (a.relevanceScore + aHasImage);
+    });
     const selected = selectedCandidates.slice(0, Math.max(minPerCountry, selectedCandidates.length));
 
     console.log(`${country} 精选 ${selected.length} 篇新闻（投资相关${candidates.length}篇，补充${selected.length - candidates.length}篇）`);
@@ -518,6 +540,13 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
             titleZh = translated.titleZh || originalTitle;
             summaryZh = translated.summaryZh || originalContent.substring(0, 200);
             contentZh = translated.contentZh || originalContent;
+            
+            // 使用 AI 判断的投资相关性
+            if (translated.isInvestmentRelated) {
+              relevanceScore += 10; // AI 确认与投资相关，加分
+            } else {
+              relevanceScore -= 5; // AI 认为与投资无关，减分
+            }
           } catch (err) {
             console.error(`翻译失败：${originalTitle.substring(0, 30)}`, err);
           }
