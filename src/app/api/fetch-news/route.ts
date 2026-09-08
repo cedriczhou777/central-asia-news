@@ -541,12 +541,6 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
             summaryZh = translated.summaryZh || originalContent.substring(0, 200);
             contentZh = translated.contentZh || originalContent;
             
-            // 使用 AI 判断的投资相关性
-            if (translated.isInvestmentRelated) {
-              relevanceScore += 10; // AI 确认与投资相关，加分
-            } else {
-              relevanceScore -= 5; // AI 认为与投资无关，减分
-            }
           } catch (err) {
             console.error(`翻译失败：${originalTitle.substring(0, 30)}`, err);
           }

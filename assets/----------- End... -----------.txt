@@ -1,0 +1,335 @@
+----------- End... -----------
+----------- 清理token -----------
+----------- 检出代码仓库 -----------
+[2026-09-08 17:09:35] Cloning Git repository...
+[2026-09-08 17:09:35] Cloning into '.'...
+[2026-09-08 17:09:45] Already on 'main'
+[2026-09-08 17:09:45] Your branch is up to date with 'origin/main'.
+[2026-09-08 17:09:45] Repository cloned and checked out.
+----------- 构建并推送 Docker 镜像 -----------
+[2026-09-08 17:09:46] Logging into Docker registry...
+[2026-09-08 17:09:46] 
+[2026-09-08 17:09:46] WARNING! Your credentials are stored unencrypted in '/root/.docker/config.json'.
+[2026-09-08 17:09:46] Configure a credential helper to remove this warning. See
+[2026-09-08 17:09:46] https://docs.docker.com/go/credential-store/
+[2026-09-08 17:09:46] 
+[2026-09-08 17:09:46] Login Succeeded
+[2026-09-08 17:09:46] Building Docker image: ccr.ccs.tencentyun.com/****:central-asia-news-046-20260908170921
+[2026-09-08 17:09:47] #0 building with "default" instance using docker driver
+[2026-09-08 17:09:47] 
+[2026-09-08 17:09:47] #1 [internal] load build definition from Dockerfile
+[2026-09-08 17:09:47] #1 transferring dockerfile: 378B done
+[2026-09-08 17:09:47] #1 DONE 0.0s
+[2026-09-08 17:09:47] 
+[2026-09-08 17:09:47] #2 [internal] load metadata for docker.io/library/node:20
+[2026-09-08 17:09:47] #2 DONE 0.9s
+[2026-09-08 17:09:47] 
+[2026-09-08 17:09:47] #3 [internal] load .dockerignore
+[2026-09-08 17:09:47] #3 transferring context: 2B done
+[2026-09-08 17:09:47] #3 DONE 0.0s
+[2026-09-08 17:09:47] 
+[2026-09-08 17:09:47] #4 [1/7] FROM docker.io/library/node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5
+[2026-09-08 17:09:47] #4 resolve docker.io/library/node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5 0.0s done
+[2026-09-08 17:09:48] #4 ...
+[2026-09-08 17:09:48] 
+[2026-09-08 17:09:48] #5 [internal] load build context
+[2026-09-08 17:09:48] #5 transferring context: 85.02MB 0.2s done
+[2026-09-08 17:09:48] #5 DONE 0.3s
+[2026-09-08 17:09:48] 
+[2026-09-08 17:09:48] #4 [1/7] FROM docker.io/library/node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5
+[2026-09-08 17:09:48] #4 sha256:0b22ec2d9b1a1a0e906e301b5ef08efe7774d5fc001b9cfa08e4e980152a0357 0B / 448B 0.2s
+[2026-09-08 17:09:48] #4 sha256:2f2ab6e4eb4619f7b8506c38dc79c8adf77acffb7622bc15ceeabb0fbc73b8a1 0B / 1.25MB 0.2s
+[2026-09-08 17:09:48] #4 sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 0B / 48.62MB 0.2s
+[2026-09-08 17:09:48] #4 sha256:c83419f4430962505175b565eb8a24aafeaa4d441c0b22234e94c6e8160848ba 0B / 3.32kB 0.2s
+[2026-09-08 17:09:48] #4 sha256:0b22ec2d9b1a1a0e906e301b5ef08efe7774d5fc001b9cfa08e4e980152a0357 448B / 448B 0.3s done
+[2026-09-08 17:09:48] #4 sha256:c83419f4430962505175b565eb8a24aafeaa4d441c0b22234e94c6e8160848ba 3.32kB / 3.32kB 0.4s done
+[2026-09-08 17:09:48] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 0B / 211.55MB 0.2s
+[2026-09-08 17:09:48] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 0B / 64.40MB 0.2s
+[2026-09-08 17:09:48] #4 sha256:2f2ab6e4eb4619f7b8506c38dc79c8adf77acffb7622bc15ceeabb0fbc73b8a1 1.25MB / 1.25MB 0.6s done
+[2026-09-08 17:09:48] #4 sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 3.15MB / 48.62MB 0.6s
+[2026-09-08 17:09:48] #4 sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 14.68MB / 48.62MB 0.8s
+[2026-09-08 17:09:48] #4 sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 0B / 24.04MB 0.2s
+[2026-09-08 17:09:49] #4 sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 26.21MB / 48.62MB 0.9s
+[2026-09-08 17:09:49] #4 sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 34.60MB / 48.62MB 1.1s
+[2026-09-08 17:09:49] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 4.19MB / 64.40MB 0.8s
+[2026-09-08 17:09:49] #4 sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 41.94MB / 48.62MB 1.2s
+[2026-09-08 17:09:49] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 15.73MB / 211.55MB 0.9s
+[2026-09-08 17:09:49] #4 sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 5.24MB / 24.04MB 0.6s
+[2026-09-08 17:09:49] #4 sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 48.62MB / 48.62MB 1.3s done
+[2026-09-08 17:09:49] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 9.44MB / 64.40MB 1.1s
+[2026-09-08 17:09:49] #4 sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 8.39MB / 24.04MB 0.8s
+[2026-09-08 17:09:49] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 30.41MB / 211.55MB 1.2s
+[2026-09-08 17:09:49] #4 sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 11.53MB / 24.04MB 0.9s
+[2026-09-08 17:09:49] #4 sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 0B / 48.49MB 0.2s
+[2026-09-08 17:09:49] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 14.68MB / 64.40MB 1.4s
+[2026-09-08 17:09:49] #4 sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 15.73MB / 24.04MB 1.1s
+[2026-09-08 17:09:49] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 46.14MB / 211.55MB 1.5s
+[2026-09-08 17:09:49] #4 sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 19.92MB / 24.04MB 1.2s
+[2026-09-08 17:09:50] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 19.92MB / 64.40MB 1.7s
+[2026-09-08 17:09:50] #4 sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 24.04MB / 24.04MB 1.4s done
+[2026-09-08 17:09:50] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 63.96MB / 211.55MB 1.8s
+[2026-09-08 17:09:50] #4 sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 6.29MB / 48.49MB 0.8s
+[2026-09-08 17:09:50] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 26.21MB / 64.40MB 2.0s
+[2026-09-08 17:09:50] #4 sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 16.78MB / 48.49MB 0.9s
+[2026-09-08 17:09:50] #4 sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 23.07MB / 48.49MB 1.1s
+[2026-09-08 17:09:50] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 79.69MB / 211.55MB 2.3s
+[2026-09-08 17:09:50] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 30.41MB / 64.40MB 2.3s
+[2026-09-08 17:09:50] #4 sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 26.21MB / 48.49MB 1.2s
+[2026-09-08 17:09:50] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 34.60MB / 64.40MB 2.4s
+[2026-09-08 17:09:50] #4 sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 35.65MB / 48.49MB 1.4s
+[2026-09-08 17:09:50] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 97.52MB / 211.55MB 2.6s
+[2026-09-08 17:09:50] #4 sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 48.49MB / 48.49MB 1.6s done
+[2026-09-08 17:09:50] #4 extracting sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00
+[2026-09-08 17:09:51] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 40.09MB / 64.40MB 2.7s
+[2026-09-08 17:09:51] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 114.29MB / 211.55MB 2.9s
+[2026-09-08 17:09:51] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 44.04MB / 64.40MB 2.9s
+[2026-09-08 17:09:51] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 131.47MB / 211.55MB 3.3s
+[2026-09-08 17:09:51] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 50.33MB / 64.40MB 3.3s
+[2026-09-08 17:09:51] #4 extracting sha256:db53381ee51f9e43304e236099ba097ae1b33ae41a8007e0b6319992eb55fd00 0.9s done
+[2026-09-08 17:09:51] #4 extracting sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e
+[2026-09-08 17:09:52] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 153.09MB / 211.55MB 3.8s
+[2026-09-08 17:09:52] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 60.82MB / 64.40MB 3.8s
+[2026-09-08 17:09:52] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 64.40MB / 64.40MB 3.9s
+[2026-09-08 17:09:52] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 177.21MB / 211.55MB 4.2s
+[2026-09-08 17:09:52] #4 sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 64.40MB / 64.40MB 3.9s done
+[2026-09-08 17:09:52] #4 extracting sha256:e5203b2bfeff92b72e816dc6cbb1f16856f0cd592e521e3c0cfa195a78fe180e 0.5s done
+[2026-09-08 17:09:52] #4 extracting sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa
+[2026-09-08 17:09:52] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 193.99MB / 211.55MB 4.5s
+[2026-09-08 17:09:53] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 211.55MB / 211.55MB 4.8s
+[2026-09-08 17:09:53] #4 sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 211.55MB / 211.55MB 4.9s done
+[2026-09-08 17:09:53] #4 extracting sha256:8fcda2b4d7993820b00c5488d173051e76d01ba6b85620617ba77001b0f9e2fa 1.2s done
+[2026-09-08 17:09:53] #4 DONE 5.7s
+[2026-09-08 17:09:53] 
+[2026-09-08 17:09:53] #4 [1/7] FROM docker.io/library/node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5
+[2026-09-08 17:09:53] #4 extracting sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9
+[2026-09-08 17:09:56] #4 extracting sha256:2933ecab0f11302fd71f29aa83ad2904683246f7a8320ad0dc3a60b23f05fee9 3.1s done
+[2026-09-08 17:09:56] #4 DONE 8.7s
+[2026-09-08 17:09:56] 
+[2026-09-08 17:09:56] #4 [1/7] FROM docker.io/library/node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5
+[2026-09-08 17:09:56] #4 extracting sha256:c83419f4430962505175b565eb8a24aafeaa4d441c0b22234e94c6e8160848ba 0.0s done
+[2026-09-08 17:09:56] #4 extracting sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0
+[2026-09-08 17:09:57] #4 extracting sha256:76e6b8204a89d20e7915fdc9a98ff33cb65fd7ce44ecf5a84b6cfca4bdb3d6d0 1.2s done
+[2026-09-08 17:09:57] #4 DONE 10.0s
+[2026-09-08 17:09:58] 
+[2026-09-08 17:09:58] #4 [1/7] FROM docker.io/library/node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5
+[2026-09-08 17:09:58] #4 extracting sha256:2f2ab6e4eb4619f7b8506c38dc79c8adf77acffb7622bc15ceeabb0fbc73b8a1 0.0s done
+[2026-09-08 17:09:58] #4 extracting sha256:0b22ec2d9b1a1a0e906e301b5ef08efe7774d5fc001b9cfa08e4e980152a0357 0.0s done
+[2026-09-08 17:09:58] #4 DONE 10.0s
+[2026-09-08 17:09:58] 
+[2026-09-08 17:09:58] #6 [2/7] WORKDIR /app
+[2026-09-08 17:09:58] #6 DONE 0.0s
+[2026-09-08 17:09:58] 
+[2026-09-08 17:09:58] #7 [3/7] RUN corepack enable && corepack prepare pnpm@latest --activate
+[2026-09-08 17:09:59] #7 1.792 Preparing pnpm@latest for immediate activation...
+[2026-09-08 17:10:00] #7 DONE 2.2s
+[2026-09-08 17:10:00] 
+[2026-09-08 17:10:00] #8 [4/7] COPY package.json pnpm-lock.yaml ./
+[2026-09-08 17:10:00] #8 DONE 0.0s
+[2026-09-08 17:10:00] 
+[2026-09-08 17:10:00] #9 [5/7] RUN pnpm install --frozen-lockfile
+[2026-09-08 17:10:00] #9 0.315 ! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-9.0.0.tgz
+[2026-09-08 17:10:02] #9 2.276 Lockfile is up to date, resolution step is skipped
+[2026-09-08 17:10:02] #9 2.365 Progress: resolved 1, reused 0, downloaded 0, added 0
+[2026-09-08 17:10:02] #9 2.499 Packages: +1113
+[2026-09-08 17:10:02] #9 2.499 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+[2026-09-08 17:10:03] #9 3.366 Progress: resolved 1113, reused 0, downloaded 40, added 39
+[2026-09-08 17:10:03] #9 3.490 
+[2026-09-08 17:10:03] #9 3.490    ╭──────────────────────────────────────────────────────────────────╮
+[2026-09-08 17:10:03] #9 3.490    │                                                                  │
+[2026-09-08 17:10:03] #9 3.490    │                Update available! 9.0.0 → 12.3.4.                 │
+[2026-09-08 17:10:03] #9 3.490    │   Changelog: https://github.com/pnpm/pnpm/releases/tag/v12.3.4   │
+[2026-09-08 17:10:03] #9 3.490    │     Run "corepack prepare pnpm@12.3.4 --activate" to update.     │
+[2026-09-08 17:10:03] #9 3.490    │                                                                  │
+[2026-09-08 17:10:03] #9 3.490    │      Follow @pnpmjs for updates: https://twitter.com/pnpmjs      │
+[2026-09-08 17:10:03] #9 3.490    │                                                                  │
+[2026-09-08 17:10:03] #9 3.490    ╰──────────────────────────────────────────────────────────────────╯
+[2026-09-08 17:10:03] #9 3.490 
+[2026-09-08 17:10:04] #9 4.366 Progress: resolved 1113, reused 0, downloaded 140, added 136
+[2026-09-08 17:10:05] #9 5.366 Progress: resolved 1113, reused 0, downloaded 233, added 232
+[2026-09-08 17:10:06] #9 6.366 Progress: resolved 1113, reused 0, downloaded 283, added 281
+[2026-09-08 17:10:07] #9 7.366 Progress: resolved 1113, reused 0, downloaded 320, added 318
+[2026-09-08 17:10:08] #9 8.366 Progress: resolved 1113, reused 0, downloaded 346, added 343
+[2026-09-08 17:10:09] #9 9.366 Progress: resolved 1113, reused 0, downloaded 384, added 381
+[2026-09-08 17:10:10] #9 10.37 Progress: resolved 1113, reused 0, downloaded 450, added 448
+[2026-09-08 17:10:11] #9 11.37 Progress: resolved 1113, reused 0, downloaded 492, added 491
+[2026-09-08 17:10:12] #9 12.37 Progress: resolved 1113, reused 0, downloaded 524, added 523
+[2026-09-08 17:10:13] #9 13.37 Progress: resolved 1113, reused 0, downloaded 582, added 578
+[2026-09-08 17:10:14] #9 14.37 Progress: resolved 1113, reused 0, downloaded 658, added 657
+[2026-09-08 17:10:15] #9 15.37 Progress: resolved 1113, reused 0, downloaded 743, added 738
+[2026-09-08 17:10:16] #9 16.37 Progress: resolved 1113, reused 0, downloaded 812, added 808
+[2026-09-08 17:10:17] #9 17.37 Progress: resolved 1113, reused 0, downloaded 897, added 897
+[2026-09-08 17:10:18] #9 18.37 Progress: resolved 1113, reused 0, downloaded 962, added 957
+[2026-09-08 17:10:19] #9 19.37 Progress: resolved 1113, reused 0, downloaded 1022, added 1021
+[2026-09-08 17:10:20] #9 20.37 Progress: resolved 1113, reused 0, downloaded 1074, added 1074
+[2026-09-08 17:10:21] #9 21.37 Progress: resolved 1113, reused 0, downloaded 1099, added 1098
+[2026-09-08 17:10:22] #9 22.37 Progress: resolved 1113, reused 0, downloaded 1106, added 1105
+[2026-09-08 17:10:23] #9 23.37 Progress: resolved 1113, reused 0, downloaded 1109, added 1106
+[2026-09-08 17:10:24] #9 24.46 Progress: resolved 1113, reused 0, downloaded 1109, added 1107
+[2026-09-08 17:10:25] #9 25.47 Progress: resolved 1113, reused 0, downloaded 1111, added 1111
+[2026-09-08 17:10:30] #9 30.24 Progress: resolved 1113, reused 0, downloaded 1112, added 1111
+[2026-09-08 17:10:31] #9 31.24 Progress: resolved 1113, reused 0, downloaded 1112, added 1112
+[2026-09-08 17:10:32] #9 32.24 Progress: resolved 1113, reused 0, downloaded 1113, added 1112
+[2026-09-08 17:10:37] #9 37.46 Progress: resolved 1113, reused 0, downloaded 1113, added 1113
+[2026-09-08 17:10:37] #9 37.47 Progress: resolved 1113, reused 0, downloaded 1113, added 1113, done
+[2026-09-08 17:10:37] #9 37.69 .../node_modules/unrs-resolver postinstall$ napi-postinstall unrs-resolver 1.11.1 check
+[2026-09-08 17:10:37] #9 37.69 .../esbuild@0.27.3/node_modules/esbuild postinstall$ node install.js
+[2026-09-08 17:10:37] #9 37.69 .../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
+[2026-09-08 17:10:37] #9 37.69 .../esbuild@0.18.20/node_modules/esbuild postinstall$ node install.js
+[2026-09-08 17:10:37] #9 37.80 .../node_modules/msw postinstall$ node -e "import('./config/scripts/postinstall.js').catch(() => void 0)"
+[2026-09-08 17:10:38] #9 37.90 .../node_modules/unrs-resolver postinstall: Done
+[2026-09-08 17:10:38] #9 37.90 .../node_modules/msw postinstall: Done
+[2026-09-08 17:10:38] #9 37.90 .../esbuild@0.27.3/node_modules/esbuild postinstall: Done
+[2026-09-08 17:10:38] #9 37.91 .../sharp@0.34.5/node_modules/sharp install$ node install/check.js || npm run build
+[2026-09-08 17:10:38] #9 37.91 .../esbuild@0.25.12/node_modules/esbuild postinstall: Done
+[2026-09-08 17:10:38] #9 37.94 .../esbuild@0.18.20/node_modules/esbuild postinstall: Done
+[2026-09-08 17:10:38] #9 38.00 .../sharp@0.34.5/node_modules/sharp install: Done
+[2026-09-08 17:10:38] #9 38.46 
+[2026-09-08 17:10:38] #9 38.46 dependencies:
+[2026-09-08 17:10:38] #9 38.46 + @aws-sdk/client-s3 3.975.0
+[2026-09-08 17:10:38] #9 38.46 + @aws-sdk/lib-storage 3.975.0
+[2026-09-08 17:10:38] #9 38.46 + @hookform/resolvers 5.2.2
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-accordion 1.2.12
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-alert-dialog 1.1.15
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-aspect-ratio 1.1.8
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-avatar 1.1.11
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-checkbox 1.3.3
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-collapsible 1.1.12
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-context-menu 2.2.16
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-dialog 1.1.15
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-dropdown-menu 2.1.16
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-hover-card 1.1.15
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-label 2.1.8
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-menubar 1.1.16
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-navigation-menu 1.2.14
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-popover 1.1.15
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-progress 1.1.8
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-radio-group 1.3.8
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-scroll-area 1.2.10
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-select 2.2.6
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-separator 1.1.8
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-slider 1.3.6
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-slot 1.2.4
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-switch 1.2.6
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-tabs 1.1.13
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-toggle 1.1.10
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-toggle-group 1.1.11
+[2026-09-08 17:10:38] #9 38.46 + @radix-ui/react-tooltip 1.2.8
+[2026-09-08 17:10:38] #9 38.46 + @supabase/supabase-js 2.95.3
+[2026-09-08 17:10:38] #9 38.46 + cheerio 1.2.0
+[2026-09-08 17:10:38] #9 38.46 + class-variance-authority 0.7.1
+[2026-09-08 17:10:38] #9 38.46 + clsx 2.1.1
+[2026-09-08 17:10:38] #9 38.46 + cmdk 1.1.1
+[2026-09-08 17:10:38] #9 38.46 + coze-coding-dev-sdk 0.7.30
+[2026-09-08 17:10:38] #9 38.46 + date-fns 4.1.0
+[2026-09-08 17:10:38] #9 38.46 + dotenv 17.2.3
+[2026-09-08 17:10:38] #9 38.46 + drizzle-kit 0.31.8
+[2026-09-08 17:10:38] #9 38.46 + drizzle-orm 0.45.1
+[2026-09-08 17:10:38] #9 38.46 + drizzle-zod 0.8.3
+[2026-09-08 17:10:38] #9 38.46 + embla-carousel-react 8.6.0
+[2026-09-08 17:10:38] #9 38.46 + input-otp 1.4.2
+[2026-09-08 17:10:38] #9 38.46 + lucide-react 0.468.0
+[2026-09-08 17:10:38] #9 38.46 + next 16.1.1
+[2026-09-08 17:10:38] #9 38.46 + next-themes 0.4.6
+[2026-09-08 17:10:38] #9 38.46 + node-cron 4.6.0
+[2026-09-08 17:10:38] #9 38.46 + pg 8.17.2
+[2026-09-08 17:10:38] #9 38.46 + react 19.2.3
+[2026-09-08 17:10:38] #9 38.46 + react-day-picker 9.13.0
+[2026-09-08 17:10:38] #9 38.46 + react-dom 19.2.3
+[2026-09-08 17:10:38] #9 38.46 + react-hook-form 7.71.1
+[2026-09-08 17:10:38] #9 38.46 + react-resizable-panels 4.5.2
+[2026-09-08 17:10:38] #9 38.46 + recharts 2.15.4
+[2026-09-08 17:10:38] #9 38.46 + rss-parser 3.13.0
+[2026-09-08 17:10:38] #9 38.46 + sonner 2.0.7
+[2026-09-08 17:10:38] #9 38.46 + tailwind-merge 2.6.0
+[2026-09-08 17:10:38] #9 38.46 + tw-animate-css 1.4.0
+[2026-09-08 17:10:38] #9 38.46 + vaul 1.1.2
+[2026-09-08 17:10:38] #9 38.46 + zod 4.3.6
+[2026-09-08 17:10:38] #9 38.46 
+[2026-09-08 17:10:38] #9 38.46 devDependencies:
+[2026-09-08 17:10:38] #9 38.46 + @react-dev-inspector/babel-plugin 2.0.1
+[2026-09-08 17:10:38] #9 38.46 + @react-dev-inspector/middleware 2.0.1
+[2026-09-08 17:10:38] #9 38.46 + @tailwindcss/postcss 4.1.18
+[2026-09-08 17:10:38] #9 38.46 + @types/node 20.19.30
+[2026-09-08 17:10:38] #9 38.46 + @types/node-cron 3.0.11
+[2026-09-08 17:10:38] #9 38.46 + @types/pg 8.16.0
+[2026-09-08 17:10:38] #9 38.46 + @types/react 19.2.10
+[2026-09-08 17:10:38] #9 38.46 + @types/react-dom 19.2.3
+[2026-09-08 17:10:38] #9 38.46 + eslint 9.39.2
+[2026-09-08 17:10:38] #9 38.46 + eslint-config-next 16.1.1
+[2026-09-08 17:10:38] #9 38.46 + only-allow 1.2.2
+[2026-09-08 17:10:38] #9 38.46 + react-dev-inspector 2.0.1
+[2026-09-08 17:10:38] #9 38.46 + shadcn 3.7.0
+[2026-09-08 17:10:38] #9 38.46 + stylelint 16.26.1
+[2026-09-08 17:10:38] #9 38.46 + stylelint-config-standard 38.0.0
+[2026-09-08 17:10:38] #9 38.46 + tailwindcss 4.1.18
+[2026-09-08 17:10:38] #9 38.46 + tsup 8.5.1
+[2026-09-08 17:10:38] #9 38.46 + tsx 4.21.0
+[2026-09-08 17:10:38] #9 38.46 + typescript 5.9.3
+[2026-09-08 17:10:38] #9 38.46 
+[2026-09-08 17:10:38] #9 38.51 Done in 36.6s
+[2026-09-08 17:10:39] #9 DONE 39.1s
+[2026-09-08 17:10:39] 
+[2026-09-08 17:10:39] #10 [6/7] COPY . .
+[2026-09-08 17:10:39] #10 DONE 0.7s
+[2026-09-08 17:10:40] 
+[2026-09-08 17:10:40] #11 [7/7] RUN pnpm build
+[2026-09-08 17:10:40] #11 1.001 
+[2026-09-08 17:10:40] #11 1.001 > projects@0.1.0 build /app
+[2026-09-08 17:10:40] #11 1.001 > bash ./scripts/build.sh
+[2026-09-08 17:10:40] #11 1.001 
+[2026-09-08 17:10:41] #11 1.005 Installing dependencies...
+[2026-09-08 17:10:42] #11 2.498 
+[2026-09-08 17:10:42] #11 2.538 Done in 1.4s
+[2026-09-08 17:10:42] #11 2.555 Building the Next.js project...
+[2026-09-08 17:10:43] #11 3.974 Attention: Next.js now collects completely anonymous telemetry regarding usage.
+[2026-09-08 17:10:44] #11 3.974 This information is used to shape Next.js' roadmap and prioritize features.
+[2026-09-08 17:10:44] #11 3.974 You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+[2026-09-08 17:10:44] #11 3.974 https://nextjs.org/telemetry
+[2026-09-08 17:10:44] #11 3.974 
+[2026-09-08 17:10:44] #11 3.987 ▲ Next.js 16.1.1 (Turbopack)
+[2026-09-08 17:10:44] #11 3.987 
+[2026-09-08 17:10:44] #11 4.061   Creating an optimized production build ...
+[2026-09-08 17:10:45] #11 5.246   Using external babel configuration from /app/.babelrc
+[2026-09-08 17:10:48] #11 8.803 ✓ Compiled successfully in 4.3s
+[2026-09-08 17:10:48] #11 8.808   Running TypeScript ...
+[2026-09-08 17:10:54] #11 15.03 Failed to compile.
+[2026-09-08 17:10:54] #11 15.03 
+[2026-09-08 17:10:55] #11 15.03 ./src/app/api/fetch-news/route.ts:546:15
+[2026-09-08 17:10:55] #11 15.03 Type error: Cannot find name 'relevanceScore'.
+[2026-09-08 17:10:55] #11 15.03 
+[2026-09-08 17:10:55] #11 15.03   544 |             // 使用 AI 判断的投资相关性
+[2026-09-08 17:10:55] #11 15.03   545 |             if (translated.isInvestmentRelated) {
+[2026-09-08 17:10:55] #11 15.03 > 546 |               relevanceScore += 10; // AI 确认与投资相关，加分
+[2026-09-08 17:10:55] #11 15.03       |               ^
+[2026-09-08 17:10:55] #11 15.03   547 |             } else {
+[2026-09-08 17:10:55] #11 15.03   548 |               relevanceScore -= 5; // AI 认为与投资无关，减分
+[2026-09-08 17:10:55] #11 15.03   549 |             }
+[2026-09-08 17:10:55] #11 15.14 Next.js build worker exited with code: 1 and signal: null
+[2026-09-08 17:10:55] #11 15.21  ELIFECYCLE  Command failed with exit code 1.
+[2026-09-08 17:10:55] #11 ERROR: process "/bin/sh -c pnpm build" did not complete successfully: exit code: 1
+[2026-09-08 17:10:55] ------
+[2026-09-08 17:10:55]  > [7/7] RUN pnpm build:
+[2026-09-08 17:10:55] 15.03 
+[2026-09-08 17:10:55] 15.03   544 |             // 使用 AI 判断的投资相关性
+[2026-09-08 17:10:55] 15.03   545 |             if (translated.isInvestmentRelated) {
+[2026-09-08 17:10:55] 15.03 > 546 |               relevanceScore += 10; // AI 确认与投资相关，加分
+[2026-09-08 17:10:55] 15.03       |               ^
+[2026-09-08 17:10:55] 15.03   547 |             } else {
+[2026-09-08 17:10:55] 15.03   548 |               relevanceScore -= 5; // AI 认为与投资无关，减分
+[2026-09-08 17:10:55] 15.03   549 |             }
+[2026-09-08 17:10:55] 15.14 Next.js build worker exited with code: 1 and signal: null
+[2026-09-08 17:10:55] 15.21  ELIFECYCLE  Command failed with exit code 1.
+[2026-09-08 17:10:55] ------
+[2026-09-08 17:10:55] Dockerfile:18
+[2026-09-08 17:10:55] --------------------
+[2026-09-08 17:10:55]   16 |     
+[2026-09-08 17:10:55]   17 |     # 构建应用
+[2026-09-08 17:10:55]   18 | >>> RUN pnpm build
+[2026-09-08 17:10:55]   19 |     
+[2026-09-08 17:10:55]   20 |     # 暴露端口
+[2026-09-08 17:10:55] --------------------
+[2026-09-08 17:10:55] ERROR: failed to build: failed to solve: process "/bin/sh -c pnpm build" did not complete successfully: exit code: 1
+***
+-----------构建central-asia-news-046-----------
+2026-09-08 17:09:21 create_build_image : creating
+2026-09-08 17:11:04 check_build_image : fail
