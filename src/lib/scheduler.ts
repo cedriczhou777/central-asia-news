@@ -12,13 +12,17 @@ const WEB_FETCH_SCHEDULES = [
 
 const WECHAT_PUSH_SCHEDULE = '30 8 * * *';  // 北京时间 08:30
 
+// 服务端口：优先取环境变量（生产环境微信云托管注入的真实端口），fallback 到 5000
+const API_PORT = process.env.PORT || process.env.NODE_PORT || '5000';
+const API_BASE = `http://localhost:${API_PORT}`;
+
 // 网页端新闻抓取
 async function runWebFetch() {
   console.log(`[${new Date().toISOString()}] 开始执行网页端新闻抓取任务...`);
   
   try {
     // 调用 fetch-news API，每个国家至少 3 篇
-    const response = await fetch('http://localhost:5000/api/fetch-news', {
+    const response = await fetch(`${API_BASE}/api/fetch-news`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -40,12 +44,12 @@ async function runWechatPush() {
   
   try {
     // 调用 wechat/push API，按国别分组推送
-    const response = await fetch('http://localhost:5000/api/wechat/push', {
+    const response = await fetch(`${API_BASE}/api/wechat/push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         hours: 24,  // 汇总过去 24 小时
-        minPerCountry: 5  // 每个国家精选 5 篇
+        minPerCountry: 7  // 每个国家精选至少 7 篇
       }),
     });
     

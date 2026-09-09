@@ -166,6 +166,30 @@ function extractImagesFromHtml(html: string): string[] {
   return images;
 }
 
+// 从文章原始 URL 获取 og:image 作为封面图（RSS 内容无图时的兜底）
+async function fetchOgImage(url: string): Promise<string> {
+  if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) return '';
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+      if (!res.ok) return '';
+      const html = await res.text();
+      const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+        || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+      if (ogMatch && ogMatch[1] && ogMatch[1].startsWith('http')) {
+        return ogMatch[1];
+      }
+      return '';
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    return '';
+  }
+}
+
 async function translateAndSummarize(
   title: string,
   content: string,
@@ -526,8 +550,12 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         let summaryZh = originalContent.substring(0, 200);
         let contentZh = originalContent;
 
-        // 提取图片
-        const imageUrls = extractImagesFromHtml(originalContent);
+        // 提取图片：优先从内容中提取，其次从文章原始 URL 获取 og:image
+        let imageUrls = extractImagesFromHtml(originalContent);
+        if (imageUrls.length === 0 && item.link) {
+          const ogImage = await fetchOgImage(item.link);
+          if (ogImage) imageUrls = [ogImage];
+        }
         const coverImage = imageUrls[0] || '';
 
         if (!skipTranslation) {
@@ -540,7 +568,11 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
             titleZh = translated.titleZh || originalTitle;
             summaryZh = translated.summaryZh || originalContent.substring(0, 200);
             contentZh = translated.contentZh || originalContent;
-            
+
+            // 将封面图嵌入正文开头（绕开 cover_image 字段限制，网页端/公众号都能显示）
+            if (coverImage) {
+              contentZh = `<img src="${coverImage}" referrerpolicy="no-referrer" />\n\n${contentZh}`;
+            }
           } catch (err) {
             console.error(`翻译失败：${originalTitle.substring(0, 30)}`, err);
           }
