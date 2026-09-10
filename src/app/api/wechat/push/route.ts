@@ -23,6 +23,18 @@ const INVESTMENT_KEYWORDS = [
   'silk road', 'belt and road', ' BRI',
 ];
 
+// 清理正文末尾的省略号：以省略号/多个省略符收尾时替换为句号，确保以完整语句收尾
+function cleanSummary(text: string): string {
+  let t = (text || '').trim();
+  // 剥离末尾的省略号（全角/半角），若其后无其它文字则补一个句号
+  if (/(?:…|\.\.\.|\.\.)+[\s，,、；;：:]?$/.test(t)) {
+    t = t.replace(/(?:…|\.\.\.|\.\.)+[\s，,、；;：:]*$/g, '。');
+  }
+  // 去除结尾的多余标点，保留句号/感叹号/问号收尾
+  t = t.replace(/([，,、；;：:（\s])+$/g, '');
+  return t.trim();
+}
+
 // 对新闻进行投资相关性评分
 function scoreInvestmentRelevance(title: string, summary: string): number {
   const text = `${title} ${summary}`.toLowerCase();
@@ -262,6 +274,8 @@ function generateWechatHtml(
     const contentHtml = article.content
       .replace(/referrerpolicy="[^"]*"/gi, '')
       .replace(/\[IMAGE:([^\]]+)\]/g, `<div style="margin: 15px 0;"><img src="$1" style="width: 100%; border-radius: 8px;" /></div>`);
+    // 去掉正文末尾的省略号，确保以完整语句收尾
+    const bodyHtml = cleanSummary(contentHtml);
 
     // 若正文 content 已经自带 `<img>` 首图，就不再重复输出独立封面，避免同一张图出现两次
     const bodyHasImg = /<img[^>]*\ssrc=/i.test(contentHtml);
@@ -279,14 +293,10 @@ function generateWechatHtml(
           </div>
         </div>
         
-        <div style="font-size: 14px; color: #666; line-height: 1.8; margin-bottom: 10px;">
-          <strong>摘要：</strong>${article.summary}
-        </div>
-        
         ${coverBlock}
-        
+
         <div style="font-size: 15px; color: #333; line-height: 1.8;">
-          ${contentHtml}
+          ${bodyHtml}
         </div>
         
         <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #E8E8E8; font-size: 12px; color: #999;">
@@ -323,7 +333,7 @@ function generateWechatHtml(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { hours = 24, minPerCountry = 7 } = body;
+    const { hours = 24, minPerCountry = 15 } = body;
 
     // 计算时间范围（过去 N 小时）
     const now = new Date();
@@ -361,9 +371,9 @@ export async function POST(request: NextRequest) {
       const usedTopics = new Set<string>();
       
       for (const article of scoredArticles) {
-        // 至少 7 篇，如果质量高可以更多（最多 10 篇）
-        if (selectedArticles.length >= 10) break;
-        if (selectedArticles.length >= 7 && article.relevanceScore < 5) break;
+        // 每国精选 15 篇：不足量时不轻易打断，尽量凑满
+        if (selectedArticles.length >= 15) break;
+        if (selectedArticles.length >= 15 && article.relevanceScore < 5) break;
         
         // 检查是否与目标国家相关
         if (!isCountryRelevant(article.title, article.summary, country.code)) {

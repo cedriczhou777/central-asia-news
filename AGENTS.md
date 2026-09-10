@@ -78,55 +78,47 @@
 
 ## 关键入口
 
-### 页面路由
-- `/` - 首页仪表盘（国家概览、重点新闻、分类筛选）
-- `/countries/[code]` - 国家详情页（kz/uz/kg/tm/tj）
-- `/article/[id]` - 文章详情页
+### 数据链路（仅公众号推送，已取消网页端展示）
+- 抓取 → 翻译 → 入库 → 推送公众号草稿
 
 ### API 路由
-- `GET /api/articles` - 获取文章列表（支持 country/category/limit 筛选）
-- `POST /api/articles` - 手动添加文章
-- `POST /api/fetch-news` - 从 RSS 源抓取新闻并用 LLM 翻译摘要
+- `POST /api/fetch-news` - 从 RSS 源抓取新闻并用 LLM 翻译（正文≤300字、完整收尾、无省略号）
+- `POST /api/wechat/push` - 推送文章到微信公众号草稿箱（每国精选15篇，正文去摘要只留主体）
 - `POST /api/daily-digest` - 生成今日摘要（按国别汇总）
-- `POST /api/wechat/push` - 推送文章到微信公众号草稿箱
 - `POST /api/pipeline` - 一键执行完整流程（抓取 → 翻译 → 入库 → 生成摘要 → 推送草稿）
+- `GET /api/articles` - 文章列表（保留供调试）
 
 ### 数据层
 - **数据库**: Supabase PostgreSQL，表 `articles`
 - `src/lib/db-articles.ts` - 数据库 CRUD 操作
-- `src/lib/article-service.ts` - 文章服务（优先数据库，fallback mock）
 - `src/storage/database/shared/schema.ts` - Drizzle ORM schema
 - `src/lib/data/types.ts` - 类型定义
 - `src/lib/data/countries.ts` - 国家数据
 - `src/lib/data/categories.ts` - 分类数据
 - `src/lib/data/sources.ts` - 新闻来源
-- `src/lib/data/articles.ts` - Mock 数据（数据库为空时 fallback）
-- `src/lib/data/sources.ts` - 新闻来源
-- `src/lib/data/articles.ts` - 新闻数据（当前为 mock）
 
-### 组件
-- `src/components/news-card.tsx` - 新闻卡片
-- `src/components/news-badges.tsx` - 国家/分类/来源标签
-- `src/components/country-card.tsx` - 国家卡片
-
-### 设计风格
+### 设计风格（公众号排版配色）
 - 主色：深藏青 #0F1B2D（权威、信任）
 - 辅助色：丝路金 #C8A45C（财富、机遇）
 - 背景色：羊皮白 #F8F6F1
-- 详见 `DESIGN.md`
 
 ## 图片链路（重要）
 
 - 数据库 `articles` 表的 `cover_image`/`image_urls` 字段因 Supabase schema cache 问题被废弃，插入时被移除。
 - 图片 URL 改为**嵌入 `content`（contentZh）正文开头**：`fetch-news` 在翻译后把首图拼为 `<img src="..." referrerpolicy="no-referrer" />\n\n正文`（见 `src/app/api/fetch-news/route.ts`）。
-- 渲染层通过 `src/lib/utils.ts` 的 `extractFirstImage`/`splitContentImage` 从 content 提取首图、剥离图片标签，供网页端和公众号使用。
-- 网页端展示点：`NewsCard / FeaturedCard / article/[id]/page.tsx` 均读 `DisplayArticle.coverImage`；`article-service.ts` 的 `dbRowToDisplay` 用 `splitContentImage` 拆出 `coverImage`。
-- 公众号推送：`src/app/api/wechat/push/route.ts` 用 `extractFirstImage(a.content)` 兜底取封面，排版内先剥离 content 里的 `<img>` 再统一输出首图，避免重复图。
-- 图片 URL 常带 `referrerpolicy="no-referrer"`，前端 `<img>` 同样加该属性，规避源站防盗链。
+- 渲染层通过 `src/lib/utils.ts` 的 `extractFirstImage`/`splitContentImage` 从 content 提取首图、剥离图片标签。
+- 公众号推送：`src/app/api/wechat/push/route.ts` 用 `extractFirstImage(a.content)` 兜底取封面。
+- 图片 URL 常带 `referrerpolicy="no-referrer"`，前端/公众号 `<img>` 同样加该属性，规避源站防盗链。
 
 ## 定时任务
 
-- `src/lib/scheduler.ts` 用 node-cron 注册 5 个任务（网页抓取 08/12:30/15/22 点 + 公众号推送 08:30，Asia/Shanghai 时区）。
+- `src/lib/scheduler.ts` 用 node-cron 注册 2 个任务（每天早上 08:00、晚上 19:00，Asia/Shanghai 时区），每次先抓取当天新闻（每国≥15篇）再推送公众号（过去24h，每国精选15篇）。
 - **仅生产模式启动**：`src/server.ts` 在 `!dev`（NODE_ENV=production）时调用 `startScheduler()`；`scripts/start.sh` 设置 `NODE_ENV=production`。本地 `pnpm dev` 也会启动调度器。
-- 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发网页端抓取任务」「触发微信公众号推送任务」。
-- 曾出现早上未触发：根因是旧版本（033~047）运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用；048 起已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。
+- 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发公众号推送任务」。
+- 曾出现早上未触发：旧版本运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用，后已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。
+
+## 公众号推送排版规范（重要）
+
+- `src/app/api/wechat/push/route.ts`：每国精选 15 篇，过去 24h；正文**只保留主体**，不显示"摘要"块。
+- 正文默认以完整语句收尾，末尾省略号会被 `cleanSummary` 清理为句号；翻译 prompt 亦要求 ≤300 字、完整收尾、禁止省略号。
+- 图片链路见上文「图片链路」。
