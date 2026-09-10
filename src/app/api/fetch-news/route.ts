@@ -83,6 +83,13 @@ const INVESTMENT_KEYWORDS = [
   'silk road', 'belt and road', ' BRI',
 ];
 
+// Telegram 频道默认配置（格式：country:@channel@channel, ...）
+// 这些频道 id 均经 t.me/s/<id> 公开预览验证可读（微信云托管无法直连 Telegram，
+// 必须经 Cloudflare Worker 代理读取，见 scraper.ts fetchTelegramRSS 的 Worker 优先路径）。
+// 可通过环境变量 TELEGRAM_CHANNELS 覆盖。
+const DEFAULT_TELEGRAM_CHANNELS =
+  'kz:@tengrinews, uz:@kunuzofficial@gazetauz, kg:@akipress, tj:@asiaplus';
+
 // 分类关键词
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
   politics: ['politic', 'president', 'parliament', 'election', 'government', 'minister', 'diplomat'],
@@ -368,7 +375,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
   // 配置 TELEGRAM_WORKER_URL（Worker 地址）与 TELEGRAM_CHANNELS（如 "kz:@channel1,kz:@channel2"）
   // 后才启用；未配置或请求失败时如实跳过，不伪造。
   const telegramWorkerUrl = process.env.TELEGRAM_WORKER_URL;
-  const telegramChannelsRaw = process.env.TELEGRAM_CHANNELS;
+  const telegramChannelsRaw = process.env.TELEGRAM_CHANNELS || DEFAULT_TELEGRAM_CHANNELS;
   if (telegramWorkerUrl && telegramChannelsRaw) {
     console.log('开始通过 Cloudflare Worker 代理抓取 Telegram 频道...');
     const channelEntries: Array<{ country: string; channel: string }> = [];
