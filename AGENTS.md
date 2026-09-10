@@ -78,7 +78,7 @@
 
 ## 关键入口
 
-### 数据链路（仅公众号推送，已取消网页端展示）
+### 数据链路（仅公众号推送，已取消网页端）
 - 抓取 → 翻译 → 入库 → 推送公众号草稿
 
 ### API 路由
@@ -109,6 +109,13 @@
 - 渲染层通过 `src/lib/utils.ts` 的 `extractFirstImage`/`splitContentImage` 从 content 提取首图、剥离图片标签。
 - 公众号推送：`src/app/api/wechat/push/route.ts` 用 `extractFirstImage(a.content)` 兜底取封面。
 - 图片 URL 常带 `referrerpolicy="no-referrer"`，前端/公众号 `<img>` 同样加该属性，规避源站防盗链。
+
+## 翻译保中文（重要）
+
+- **部分国家（哈萨克、吉尔吉斯等）曾推送英文原文**：根因是 LLM 翻译失败/JSON 解析失败后，抓取侧静默把原文入库，推送又被优选出去。
+- **入库端**（`fetch-news/route.ts`）：`translateAndSummarize` 增加 LLM 重试（最多 3 次）与多策略 JSON 解析；翻译结果必须通过 `isChineseText` 校验（标题+正文中文字符占比达标才视为成功），否则 `translated=false` 且**跳过该篇不入库**（`continue`），绝不把原文写入 content。
+- **推送端**（`wechat/push/route.ts`）：精选前用 `isChineseText(a.title) && isChineseText(a.content)` 过滤非中文文章，历史英文数据也不会被推送。
+- 搭配工具：`src/lib/utils.ts` 的 `isChineseText(text, threshold=0.4)`，中文字符占比达到阈值即视为中文。
 
 ## 定时任务
 

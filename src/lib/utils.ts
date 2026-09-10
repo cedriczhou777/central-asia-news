@@ -19,3 +19,11 @@ export function splitContentImage(content: string): { coverImage: string | null;
     : content.trim();
   return { coverImage, textContent };
 }
+
+// 检测文本是否为中文：中文字符占比达到阈值（默认 40%）即视为已翻译为中文
+export function isChineseText(text: string, threshold = 0.4): boolean {
+  const cleaned = (text || '').replace(/<[^>]+>/g, ' ').replace(/[\s，。、；：,.!?…\-"'“”‘’()·%$]+/g, '');
+  if (!cleaned) return false;
+  const han = cleaned.match(/[\u4e00-\u9fa5]/g)?.length || 0;
+  return han / cleaned.length >= threshold;
+}

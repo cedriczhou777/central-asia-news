@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
-import { extractFirstImage } from '@/lib/utils';
+import { extractFirstImage, isChineseText } from '@/lib/utils';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
@@ -356,9 +356,17 @@ export async function POST(request: NextRequest) {
 
       console.log(`${country.name}过去${hours}小时共${articles.length}篇文章`);
 
+      // 过滤未翻译为中文的原文：只推送中文内容，英文/俄文原文直接跳过
+      const chineseArticles = articles.filter(
+        a => isChineseText(a.title) && isChineseText(a.content)
+      );
+      if (chineseArticles.length < articles.length) {
+        console.log(`[${country.name}] 过滤掉 ${articles.length - chineseArticles.length} 篇非中文文章，保留 ${chineseArticles.length} 篇`);
+      }
+
       // 按投资相关性评分排序，精选前 minPerCountry 篇
       // 确保不重复：按标题关键词去重，避免相同主题的新闻
-      const scoredArticles = articles.map(a => ({
+      const scoredArticles = chineseArticles.map(a => ({
         ...a,
         relevanceScore: scoreInvestmentRelevance(a.title, a.summary),
       }));

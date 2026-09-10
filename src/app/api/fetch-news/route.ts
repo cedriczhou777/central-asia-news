@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS } from '@/lib/scraper';
+import { isChineseText } from '@/lib/utils';
 
 const parser = new Parser({
   timeout: 30000,
@@ -194,20 +195,22 @@ async function translateAndSummarize(
   title: string,
   content: string,
   sourceLanguage: string
-): Promise<{ titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean }> {
-  try {
-    const apiKey = process.env.ZHIPU_API_KEY;
-    if (!apiKey) {
-      console.error('ZHIPU_API_KEY 未配置');
-      return {
-        titleZh: title,
-        summaryZh: content.substring(0, 100),
-        contentZh: content,
-        isInvestmentRelated: false,
-      };
-    }
+): Promise<{ titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean; translated: boolean }> {
+  const fallback = (): { titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean; translated: boolean } => ({
+    titleZh: title,
+    summaryZh: content.substring(0, 100),
+    contentZh: content,
+    isInvestmentRelated: false,
+    translated: false,
+  });
 
-    const prompt = `你是一位专业的中亚地区新闻翻译编辑，专注于为中国投资者提供高质量的中亚投资资讯。
+  const apiKey = process.env.ZHIPU_API_KEY;
+  if (!apiKey) {
+    console.error('ZHIPU_API_KEY 未配置');
+    return fallback();
+  }
+
+  const prompt = `你是一位专业的中亚地区新闻翻译编辑，专注于为中国投资者提供高质量的中亚投资资讯。
 
 请将以下${sourceLanguage === 'en' ? '英文' : sourceLanguage === 'ru' ? '俄文' : '其他语言'}新闻翻译为中文。
 
@@ -235,8 +238,10 @@ ${content}
   "isInvestmentRelated": true/false（是否真正与投资相关）
 }`;
 
-    console.log('开始调用智谱 AI 翻译...');
-    
+  // 单次尝试：调用 LLM 并尽力解析 JSON，返回 null 表示失败
+  const attempt = async (): Promise<{
+    titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean;
+  } | null> => {
     const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
       method: 'POST',
       headers: {
@@ -245,9 +250,7 @@ ${content}
       },
       body: JSON.stringify({
         model: 'glm-4',
-        messages: [
-          { role: 'user', content: prompt }
-        ],
+        messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
       }),
     });
@@ -255,92 +258,65 @@ ${content}
     if (!response.ok) {
       const errorText = await response.text();
       console.error('智谱 AI 请求失败:', response.status, errorText);
-      return {
-        titleZh: title,
-        summaryZh: content.substring(0, 100),
-        contentZh: content,
-        isInvestmentRelated: false,
-      };
+      return null;
     }
 
     const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const llmContent = data.choices?.[0]?.message?.content || '';
-    
+    if (!llmContent) {
+      console.error('智谱 AI 返回空内容');
+      return null;
+    }
     console.log('智谱 AI 响应:', llmContent.substring(0, 200));
 
-    try {
-      // 移除 markdown 代码块标记
-      let cleanedContent = llmContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-      
-      // 尝试提取 JSON
-      const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        // 尝试修复常见的 JSON 格式问题
-        let jsonStr = jsonMatch[0];
-        
-        // 移除尾随逗号
-        jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
-        
-        // 移除 markdown 代码块标记
-        jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-        
-        // 移除控制字符
-        jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, '');
-        
-        // 尝试多次解析
-        try {
-          const parsed = JSON.parse(jsonStr);
-          return {
-            titleZh: parsed.title || title,
-            summaryZh: parsed.summary || content.substring(0, 100),
-            contentZh: parsed.content || content,
-            isInvestmentRelated: parsed.isInvestmentRelated === true,
-          };
-        } catch (firstErr) {
-          // 第一次解析失败，尝试更激进的修复
-          console.log('第一次 JSON 解析失败，尝试修复...');
-          
-          // 移除所有非 JSON 字符（保留大括号、引号、冒号、逗号等）
-          jsonStr = jsonStr.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
-          
-          // 修复转义问题
-          jsonStr = jsonStr.replace(/\\"/g, '"');
-          jsonStr = jsonStr.replace(/\\'/g, "'");
-          
-          try {
-            const parsed = JSON.parse(jsonStr);
-            return {
-              titleZh: parsed.title || title,
-              summaryZh: parsed.summary || content.substring(0, 100),
-              contentZh: parsed.content || content,
-              isInvestmentRelated: parsed.isInvestmentRelated === true,
-            };
-          } catch (secondErr) {
-            console.error('JSON 解析失败（两次尝试均失败）:', secondErr);
-            console.error('原始 JSON:', jsonStr.substring(0, 500));
-          }
-        }
-      }
-    } catch (parseErr) {
-      console.error('JSON 解析失败:', parseErr);
-      console.error('原始内容:', llmContent.substring(0, 500));
-    }
+    let cleanedContent = llmContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
 
-    return {
-      titleZh: title,
-      summaryZh: content.substring(0, 100),
-      contentZh: content,
-      isInvestmentRelated: false,
-    };
-  } catch (err) {
-    console.error('LLM 调用失败:', err instanceof Error ? err.message : err);
-    return {
-      titleZh: title,
-      summaryZh: content.substring(0, 100),
-      contentZh: content,
-      isInvestmentRelated: false,
-    };
+    // 依次尝试多种 JSON 修复策略
+    const parseStrategies: Array<[string, string]> = [
+      [jsonMatch[0], '原始提取'],
+      [jsonMatch[0].replace(/,(\s*[}\]])/g, '$1').replace(/[\x00-\x1F\x7F]/g, ''), '去尾逗号+控制符'],
+      [jsonMatch[0].replace(/[\u0000-\u001F\u007F-\u009F]/g, '').replace(/\\"/g, '"').replace(/\\'/g, "'"), '激进修复'],
+    ];
+
+    for (const [str, label] of parseStrategies) {
+      try {
+        const parsed = JSON.parse(str);
+        const titleZh = parsed.title || title;
+        const summaryZh = parsed.summary || content.substring(0, 100);
+        const contentZh = parsed.content || content;
+        // 翻译是否真正成功：标题或正文必须是中文（且不是原样返回英文）
+        const ok = isChineseText(titleZh) && isChineseText(contentZh);
+        return {
+          titleZh: ok ? titleZh : title,
+          summaryZh: ok ? summaryZh : content.substring(0, 100),
+          contentZh: ok ? contentZh : content,
+          isInvestmentRelated: ok && parsed.isInvestmentRelated === true,
+        };
+      } catch {
+        console.log(`JSON 解析失败（${label}），尝试下一策略`);
+      }
+    }
+    return null;
+  };
+
+  // 最多重试 3 次
+  for (let retry = 1; retry <= 3; retry++) {
+    console.log(`开始调用智谱 AI 翻译（第 ${retry}/3 次尝试）...`);
+    try {
+      const result = await attempt();
+      if (result && result.contentZh !== content) {
+        return { ...result, translated: true };
+      }
+      console.log(`第 ${retry} 次翻译结果非有效中文，继续重试`);
+    } catch (err) {
+      console.error(`LLM 调用失败（第 ${retry} 次）:`, err instanceof Error ? err.message : err);
+    }
+    if (retry < 3) await new Promise(r => setTimeout(r, 800));
   }
+
+  return fallback();
 }
 
 export async function POST(request: NextRequest) {
@@ -560,22 +536,25 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         const coverImage = imageUrls[0] || '';
 
         if (!skipTranslation) {
-          try {
-            const translated = await translateAndSummarize(
-              originalTitle,
-              originalContent,
-              source.language
-            );
-            titleZh = translated.titleZh || originalTitle;
-            summaryZh = translated.summaryZh || originalContent.substring(0, 200);
-            contentZh = translated.contentZh || originalContent;
+          const translated = await translateAndSummarize(
+            originalTitle,
+            originalContent,
+            source.language
+          );
 
-            // 将封面图嵌入正文开头（绕开 cover_image 字段限制，网页端/公众号都能显示）
-            if (coverImage) {
-              contentZh = `<img src="${coverImage}" referrerpolicy="no-referrer" />\n\n${contentZh}`;
-            }
-          } catch (err) {
-            console.error(`翻译失败：${originalTitle.substring(0, 30)}`, err);
+          // 翻译失败（结果非中文）则跳过该篇，绝不以原文入库，避免推送英文
+          if (!translated.translated && !isChineseText(originalTitle)) {
+            console.log(`跳过未翻译文章（保留原文不入库）：${originalTitle.substring(0, 40)}`);
+            continue;
+          }
+
+          titleZh = translated.titleZh || originalTitle;
+          summaryZh = translated.summaryZh || originalContent.substring(0, 200);
+          contentZh = translated.contentZh || originalContent;
+
+          // 将封面图嵌入正文开头（绕开 cover_image 字段限制，网页端/公众号都能显示）
+          if (coverImage) {
+            contentZh = `<img src="${coverImage}" referrerpolicy="no-referrer" />\n\n${contentZh}`;
           }
         }
 
