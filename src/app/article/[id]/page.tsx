@@ -78,6 +78,19 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
             </span>
           </div>
 
+          {/* Cover Image */}
+          {article.coverImage ? (
+            <div className="mb-6 overflow-hidden rounded-lg">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={article.coverImage}
+                referrerPolicy="no-referrer"
+                alt=""
+                className="w-full max-h-96 object-cover"
+              />
+            </div>
+          ) : null}
+
           {/* Summary */}
           <div className="mb-6 rounded-lg border border-gold/20 bg-gold/5 p-4">
             <p className="text-sm text-foreground/80 leading-relaxed">

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
+import { extractFirstImage } from '@/lib/utils';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
@@ -98,29 +99,92 @@ async function callWechatApi(apiPath: string, data: any): Promise<any> {
   return res.json();
 }
 
+// 下载外链图片的请求头：加浏览器 UA + 无 referrer，规避目标站防盗链/默认 UA 拦截
+function imageFetchInit(): RequestInit {
+  return {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Referer: '',
+      'Accept': 'image/*,*/*;q=0.8',
+    },
+    redirect: 'follow',
+  };
+}
+
+// 将外链图片上传到微信素材库，返回微信可访问的 URL（解决防盗链导致草稿无图的问题）
+async function uploadImageToWechat(imageUrl: string): Promise<string> {
+  try {
+    const res = await fetch(imageUrl, imageFetchInit());
+    if (!res.ok) {
+      console.log(`下载图片失败 ${imageUrl}: HTTP ${res.status}`);
+      return '';
+    }
+    const buf = await res.arrayBuffer();
+    const contentType = res.headers.get('content-type') || 'image/jpeg';
+
+    // 上传到微信永久图片素材
+    const url = `${WECHAT_API_BASE}/material/add_material?type=image`;
+    const formData = new FormData();
+    formData.append(
+      'media',
+      new Blob([buf], { type: contentType }),
+      `img_${Date.now()}.jpg`
+    );
+
+    const uploadRes = await fetch(url, { method: 'POST', body: formData });
+    const data = await uploadRes.json() as {
+      url?: string;
+      media_id?: string;
+      errcode?: number;
+      errmsg?: string;
+    };
+
+    if (data.errcode) {
+      console.log(`上传图片到微信失败 ${imageUrl}: ${data.errmsg}`);
+      return '';
+    }
+    // add_material 上传图片返回的 url 是微信 CDN 地址，可直接用于正文
+    return data.url || data.media_id || '';
+  } catch (err) {
+    console.log(`上传图片到微信异常 ${imageUrl}:`, err);
+    return '';
+  }
+}
+
 async function uploadThumb(imageUrl?: string): Promise<string> {
-  // 使用默认缩略图或指定图片
+  // 使用文章封面图或默认缩略图
   const defaultThumbUrl = imageUrl || 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif';
 
-  // 先下载图片
+  // 封面必须是微信素材库里的图片（add_material 上传后返回 media_id）。
+  // 直接下载图片字节并上传为永久素材，返回 media_id。
+  try {
+    const imageRes = await fetch(defaultThumbUrl, imageFetchInit());
+    if (!imageRes.ok) throw new Error(`下载封面失败 HTTP ${imageRes.status}`);
+    const imageBuffer = await imageRes.arrayBuffer();
+    const contentType = imageRes.headers.get('content-type') || 'image/jpeg';
+    const url = `${WECHAT_API_BASE}/material/add_material?type=image`;
+    const formData = new FormData();
+    formData.append('media', new Blob([imageBuffer], { type: contentType }), `thumb_${Date.now()}.jpg`);
+    const res = await fetch(url, { method: 'POST', body: formData });
+    const data = await res.json() as { media_id?: string; errcode?: number; errmsg?: string };
+    if (data.errcode) {
+      throw new Error(`上传封面失败：${data.errmsg}`);
+    }
+    return data.media_id || '';
+  } catch (err) {
+    console.log('上传封面缩略图失败，使用默认图:', err);
+  }
+
+  // 兜底：默认图
   const imageRes = await fetch(defaultThumbUrl);
   const imageBuffer = await imageRes.arrayBuffer();
-
-  // 上传到微信永久素材（开放接口服务免 access_token）
   const url = `${WECHAT_API_BASE}/material/add_material?type=image`;
-  
-  // 使用 FormData 上传
   const formData = new FormData();
   formData.append('media', new Blob([imageBuffer], { type: 'image/jpeg' }), 'thumb.jpg');
-
-  const res = await fetch(url, {
-    method: 'POST',
-    body: formData,
-  });
+  const res = await fetch(url, { method: 'POST', body: formData });
   const data = await res.json() as { media_id?: string; errcode?: number; errmsg?: string };
-  
   console.log('上传缩略图返回:', JSON.stringify(data));
-  
   if (data.errcode) {
     throw new Error(`上传缩略图失败：${data.errmsg}`);
   }
@@ -190,10 +254,21 @@ function generateWechatHtml(
 
   const articlesHtml = articles.map((article, index) => {
     const categoryLabel = categoryLabels[article.category] || article.category;
-    const coverImageHtml = article.cover_image 
-      ? `<div style="margin: 15px 0;"><img src="${article.cover_image}" style="width: 100%; border-radius: 8px;" /></div>`
+    const imgSrc = article.cover_image
+      ? article.cover_image
+      : (article.content.match(/<img[^>]*?\ssrc=["']([^"']+)["']/i)?.[1]) || '';
+
+    // 正文里的 `<img>` 标签直接保留（promise 过程中已替换为微信 CDN 图），仅去掉 referrerpolicy
+    const contentHtml = article.content
+      .replace(/referrerpolicy="[^"]*"/gi, '')
+      .replace(/\[IMAGE:([^\]]+)\]/g, `<div style="margin: 15px 0;"><img src="$1" style="width: 100%; border-radius: 8px;" /></div>`);
+
+    // 若正文 content 已经自带 `<img>` 首图，就不再重复输出独立封面，避免同一张图出现两次
+    const bodyHasImg = /<img[^>]*\ssrc=/i.test(contentHtml);
+    const coverBlock = (!bodyHasImg && imgSrc)
+      ? `<div style="margin: 15px 0;"><img src="${imgSrc}" style="width: 100%; border-radius: 8px;" referrerpolicy="no-referrer" /></div>`
       : '';
-    
+
     return `
       <div style="margin-bottom: 40px; padding-bottom: 30px; border-bottom: 1px solid #E8E8E8;">
         <div style="display: flex; align-items: center; margin-bottom: 15px;">
@@ -208,10 +283,10 @@ function generateWechatHtml(
           <strong>摘要：</strong>${article.summary}
         </div>
         
-        ${coverImageHtml}
+        ${coverBlock}
         
         <div style="font-size: 15px; color: #333; line-height: 1.8;">
-          ${article.content.replace(/\[IMAGE:([^\]]+)\]/g, '<div style="margin: 15px 0;"><img src="$1" style="width: 100%; border-radius: 8px;" /></div>')}
+          ${contentHtml}
         </div>
         
         <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #E8E8E8; font-size: 12px; color: #999;">
@@ -324,28 +399,56 @@ export async function POST(request: NextRequest) {
 
       console.log(`为${country.name}精选${selectedArticles.length}篇投资相关新闻`);
 
+      // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
+      // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
+      const wechatArticles = [];
+      for (const a of selectedArticles) {
+        const imgRegex = /<img[^>]*?\ssrc=["']([^"']+)["'][^>]*>/gi;
+        let content = a.content;
+        const urls = [...content.matchAll(imgRegex)].map(m => m[1]);
+        if (urls.length > 0) {
+          // 每个 URL 并行上传，替换成微信 CDN url
+          const replacements = await Promise.all(
+            urls.map(async (u) => {
+              const wxUrl = await uploadImageToWechat(u);
+              return { from: u, to: wxUrl || u };
+            })
+          );
+          for (const r of replacements) {
+            content = content.split(r.from).join(r.to);
+          }
+        }
+        wechatArticles.push({
+          title: a.title,
+          summary: a.summary,
+          content,
+          category: a.category,
+          source_name: a.source_name,
+          // 封面优先取已替换成微信 CDN 的正文首图，保证微信可访问
+          cover_image: content.match(/<img[^>]*?\ssrc=["']([^"']+)["']/i)?.[1] || extractFirstImage(a.content) || undefined,
+        });
+      }
+
       // 生成微信公众号排版 HTML
       const htmlContent = generateWechatHtml(
         country.name,
         country.flag,
         new Date().toISOString().split('T')[0],
-        selectedArticles.map(a => ({
-          title: a.title,
-          summary: a.summary,
-          content: a.content,
-          category: a.category,
-          source_name: a.source_name,
-          cover_image: a.cover_image || undefined,
-        }))
+        wechatArticles
       );
 
-      // 上传缩略图（使用第一篇文章的封面图或默认图）
-      const thumbUrl = selectedArticles[0].cover_image || undefined;
+      // 上传缩略图（优先用第一篇文章已上传微信的封面图，再从原图取）
+      const thumbUrl =
+        wechatArticles[0]?.cover_image ||
+        selectedArticles[0].cover_image ||
+        extractFirstImage(selectedArticles[0].content) ||
+        undefined;
       const thumbMediaId = await uploadThumb(thumbUrl);
 
-      // 创建草稿（每个国家一个草稿）
+      // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
+      const dateStr = new Date().toISOString().split('T')[0];
       const mediaId = await addDraft([{
-        title: `${country.flag} ${country.name} - ${new Date().toISOString().split('T')[0]} 投资资讯`,
+        title: `${country.name} - ${dateStr} 投资资讯`,
         author: '中亚投资资讯',
         content: htmlContent,
         digest: `${country.name}今日精选${selectedArticles.length}条投资资讯`,

@@ -8,6 +8,17 @@ export function NewsCard({ article }: { article: DisplayArticle }) {
       href={`/article/${article.id}`}
       className="group block rounded-lg border border-border bg-card p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-gold/30"
     >
+      {article.coverImage ? (
+        <div className="mb-3 -mx-5 -mt-5 overflow-hidden rounded-t-lg">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={article.coverImage}
+            referrerPolicy="no-referrer"
+            alt=""
+            className="h-36 w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          />
+        </div>
+      ) : null}
       <div className="mb-3 flex items-center gap-2">
         <CountryBadge code={article.country} />
         <CategoryBadge category={article.category} />
@@ -34,6 +45,17 @@ export function FeaturedCard({ article }: { article: DisplayArticle }) {
       href={`/article/${article.id}`}
       className="group block rounded-lg border border-gold/20 bg-card p-6 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:border-gold/40"
     >
+      {article.coverImage ? (
+        <div className="mb-4 -mx-6 -mt-6 overflow-hidden rounded-t-lg">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={article.coverImage}
+            referrerPolicy="no-referrer"
+            alt=""
+            className="h-44 w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          />
+        </div>
+      ) : null}
       <div className="mb-1 flex items-center gap-2">
         <span className="inline-flex items-center rounded-sm bg-gold/10 px-1.5 py-0.5 text-xs font-medium text-gold">
           重点

@@ -114,3 +114,19 @@
 - 辅助色：丝路金 #C8A45C（财富、机遇）
 - 背景色：羊皮白 #F8F6F1
 - 详见 `DESIGN.md`
+
+## 图片链路（重要）
+
+- 数据库 `articles` 表的 `cover_image`/`image_urls` 字段因 Supabase schema cache 问题被废弃，插入时被移除。
+- 图片 URL 改为**嵌入 `content`（contentZh）正文开头**：`fetch-news` 在翻译后把首图拼为 `<img src="..." referrerpolicy="no-referrer" />\n\n正文`（见 `src/app/api/fetch-news/route.ts`）。
+- 渲染层通过 `src/lib/utils.ts` 的 `extractFirstImage`/`splitContentImage` 从 content 提取首图、剥离图片标签，供网页端和公众号使用。
+- 网页端展示点：`NewsCard / FeaturedCard / article/[id]/page.tsx` 均读 `DisplayArticle.coverImage`；`article-service.ts` 的 `dbRowToDisplay` 用 `splitContentImage` 拆出 `coverImage`。
+- 公众号推送：`src/app/api/wechat/push/route.ts` 用 `extractFirstImage(a.content)` 兜底取封面，排版内先剥离 content 里的 `<img>` 再统一输出首图，避免重复图。
+- 图片 URL 常带 `referrerpolicy="no-referrer"`，前端 `<img>` 同样加该属性，规避源站防盗链。
+
+## 定时任务
+
+- `src/lib/scheduler.ts` 用 node-cron 注册 5 个任务（网页抓取 08/12:30/15/22 点 + 公众号推送 08:30，Asia/Shanghai 时区）。
+- **仅生产模式启动**：`src/server.ts` 在 `!dev`（NODE_ENV=production）时调用 `startScheduler()`；`scripts/start.sh` 设置 `NODE_ENV=production`。本地 `pnpm dev` 也会启动调度器。
+- 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发网页端抓取任务」「触发微信公众号推送任务」。
+- 曾出现早上未触发：根因是旧版本（033~047）运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用；048 起已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。

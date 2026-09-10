@@ -1,5 +1,6 @@
 import { getArticles as getDbArticles, type ArticleRow } from '@/lib/db-articles';
 import { getArticles as getMockArticles, type NewsArticle } from '@/lib/data/articles';
+import { splitContentImage } from '@/lib/utils';
 import type { CountryCode, Category } from '@/lib/data/types';
 
 export type DisplayArticle = {
@@ -7,6 +8,7 @@ export type DisplayArticle = {
   title: string;
   summary: string;
   content: string;
+  coverImage?: string | null;
   country: CountryCode;
   category: Category;
   source: string;
@@ -17,11 +19,13 @@ export type DisplayArticle = {
 };
 
 function dbRowToDisplay(row: ArticleRow): DisplayArticle {
+  const { coverImage, textContent } = splitContentImage(row.content);
   return {
     id: String(row.id),
     title: row.title,
     summary: row.summary,
-    content: row.content,
+    content: textContent,
+    coverImage,
     country: row.country_code as CountryCode,
     category: row.category as Category,
     source: row.source_name,
