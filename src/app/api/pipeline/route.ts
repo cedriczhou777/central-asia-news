@@ -7,6 +7,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const date = (body as Record<string, string>).date || new Date().toISOString().split('T')[0];
     const pushToWechat = (body as Record<string, boolean>).push || false;
+    // 与定时任务保持一致的合理默认：每国≥15篇、推送过去24h
+    const minPerCountry = typeof (body as Record<string, number>).minPerCountry === 'number' ? (body as Record<string, number>).minPerCountry : 15;
+    const hours = typeof (body as Record<string, number>).hours === 'number' ? (body as Record<string, number>).hours : 24;
+    const skipTranslation = (body as Record<string, boolean>).skipTranslation === true;
 
     const log: string[] = [];
 
@@ -16,7 +20,7 @@ export async function POST(request: NextRequest) {
       const fetchRes = await fetch(`${baseUrl}/api/fetch-news`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date }),
+        body: JSON.stringify({ date, minPerCountry, skipTranslation }),
       });
       const fetchResult = await fetchRes.json();
       log.push(`[${new Date().toISOString()}] 采集完成：共入库 ${(fetchResult as Record<string, number>).total_saved} 篇文章`);
@@ -31,7 +35,7 @@ export async function POST(request: NextRequest) {
       const digestRes = await fetch(`${baseUrl}/api/daily-digest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date }),
+        body: JSON.stringify({ date, minPerCountry }),
       });
       const digestResult = await digestRes.json();
       digests = (digestResult as Record<string, unknown>).digests as Array<{ country_name: string; article_count: number }>;
@@ -48,7 +52,7 @@ export async function POST(request: NextRequest) {
         const wechatRes = await fetch(`${baseUrl}/api/wechat/push`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ date }),
+          body: JSON.stringify({ date, hours, minPerCountry }),
         });
         wechatResult = await wechatRes.json() as Record<string, unknown>;
         log.push(`[${new Date().toISOString()}] 公众号推送完成`);

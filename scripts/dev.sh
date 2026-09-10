@@ -31,4 +31,8 @@ echo "Clearing port ${DEPLOY_RUN_PORT} before start."
 kill_port_if_listening
 echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for dev..."
 
-PORT=${DEPLOY_RUN_PORT} pnpm tsx watch src/server.ts
+# 预览端口从 .preview 读取，读取不到 fallback 5000
+EXPOSE_PORT=$(awk -F '[ =]+' '/^expose_port/ {gsub(/[^0-9]/, "", $2); print $2; exit}' .preview 2>/dev/null || echo 5000)
+export DEPLOY_RUN_PORT="${DEPLOY_RUN_PORT:-$EXPOSE_PORT}"
+
+exec pnpm exec next dev --hostname 0.0.0.0 --port "${DEPLOY_RUN_PORT}"

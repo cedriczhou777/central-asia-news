@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS } from '@/lib/scraper';
-import { isChineseText } from '@/lib/utils';
+import { isChineseText, isDuplicateContent } from '@/lib/utils';
+import { translateNews } from '@/lib/translate';
 
 const parser = new Parser({
   timeout: 30000,
@@ -17,30 +18,43 @@ interface RSSSource {
 }
 
 // RSS 源配置（可用源）
+// 说明：优先收录大陆网络可达的源。Telegram(api.telegram.org / t.me) 与 Instagram
+// 在国内网络不可达（本项目部署于微信云托管/大陆服务器），无法作为自动信息源接入；
+// 如需读取 Telegram 频道，请自建境外 RSSHub 桥并在 RSS_SOURCES 中声明其 telegram 镜像。
 const RSS_SOURCES: RSSSource[] = [
   // 哈萨克斯坦
   { name: 'The Astana Times', url: 'https://astanatimes.com/feed/', country: 'kz', language: 'en' },
   { name: 'Egemen Qazaqstan', url: 'https://egemen.kz/rss/', country: 'kz', language: 'kk' },
   { name: 'Newtimes.kz', url: 'https://newtimes.kz/rss/', country: 'kz', language: 'ru' },
   { name: '24.kz', url: 'https://24.kz/rss/', country: 'kz', language: 'kk' },
+  { name: 'Tengrinews', url: 'https://tengrinews.kz/rss_news/all.xml', country: 'kz', language: 'ru' },
+  { name: 'Kazinform', url: 'https://www.inform.kz/ros/rss/news/english', country: 'kz', language: 'en' },
 
   // 乌兹别克斯坦
   { name: 'UzA', url: 'https://uza.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Gazeta.uz', url: 'https://gazeta.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Spot.uz', url: 'https://spot.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Uznews.uz', url: 'https://uznews.uz/rss/', country: 'uz', language: 'ru' },
+  { name: 'Kun.uz', url: 'https://kun.uz/en/news/list', country: 'uz', language: 'en' },
+  { name: 'Daryo.uz', url: 'https://daryo.uz/ru/feed', country: 'uz', language: 'ru' },
 
   // 吉尔吉斯斯坦
-  { name: 'Kabar', url: 'https://kabar.kg/rss/', country: 'kg', language: 'ru' },
-  { name: '24.kg', url: 'https://24.kg/rss/', country: 'kg', language: 'ru' },
+  { name: 'Kabar', url: 'https://kabar.kg/rus/rss', country: 'kg', language: 'ru' },
+  { name: '24.kg', url: 'https://24.kg/rss/all', country: 'kg', language: 'ru' },
 
   // 塔吉克斯坦
   { name: 'Khovar', url: 'https://khovar.tj/rss/', country: 'tj', language: 'ru' },
   { name: 'Asia-Plus', url: 'https://asiaplustj.info/rss/', country: 'tj', language: 'ru' },
   { name: 'Avesta', url: 'https://avesta.tj/rss/', country: 'tj', language: 'ru' },
 
+  // 土库曼斯坦
+  { name: 'Turkmenistan Gov', url: 'https://www.turkmenistan.gov.tm/ru', country: 'tm', language: 'ru' },
+  { name: 'Orient.tm', url: 'https://orient.tm/ru', country: 'tm', language: 'ru' },
+  { name: 'Trend Kazakistan', url: 'https://www.trend.az/rss/', country: 'tm', language: 'en' },
+
   // 区域综合媒体
   { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
+  { name: 'Central Asia News', url: 'https://centralasia.news/feed/', country: 'intl', language: 'en' },
 ];
 
 // 投资相关关键词（用于精选新闻）
@@ -93,11 +107,26 @@ const COUNTRY_KEYWORDS: Record<string, string[]> = {
   intl: ['central asia', '中亚', 'silk road', 'belt and road', ' BRI', 'shanghai cooperation'],
 };
 
-// 检查新闻是否与目标国家相关
-function isCountryRelevant(title: string, description: string, countryCode: string): boolean {
+// 判断新闻是否属于目标国家（智能判定，非仅关键词）：
+// 1. 若该条内容/来源明确指向其他某个国家，则可能不归属目标国；
+// 2. 目标国家关键词命中即判定相关；
+// 3. 来源本身就是该国媒体（source.country === countryCode）时默认相关（该源只报道本国新闻）。
+function isCountryRelevant(title: string, description: string, countryCode: string, sourceCountry: string): boolean {
   const text = `${title} ${description}`.toLowerCase();
   const keywords = COUNTRY_KEYWORDS[countryCode] || [];
-  return keywords.some(kw => text.includes(kw.toLowerCase()));
+  // 明确提到目标国 → 相关
+  if (keywords.some(kw => text.includes(kw.toLowerCase()))) return true;
+  // 来源媒体显著指向其他国家，则非目标国
+  for (const [otherCountry, ows] of Object.entries(COUNTRY_KEYWORDS)) {
+    if (otherCountry === countryCode || otherCountry === 'intl') continue;
+    if (ows.some(kw => text.includes(kw.toLowerCase()))) {
+      // 出现其它国名 = 该新闻核心是他国，排除
+      return false;
+    }
+  }
+  // 未明确指向他国：来源即该国媒体则默认相关；intl 综合源按关键词结果
+  if (sourceCountry === countryCode) return true;
+  return false;
 }
 
 // 检查新闻是否与投资主题相关
@@ -191,133 +220,6 @@ async function fetchOgImage(url: string): Promise<string> {
   }
 }
 
-async function translateAndSummarize(
-  title: string,
-  content: string,
-  sourceLanguage: string
-): Promise<{ titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean; translated: boolean }> {
-  const fallback = (): { titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean; translated: boolean } => ({
-    titleZh: title,
-    summaryZh: content.substring(0, 100),
-    contentZh: content,
-    isInvestmentRelated: false,
-    translated: false,
-  });
-
-  const apiKey = process.env.ZHIPU_API_KEY;
-  if (!apiKey) {
-    console.error('ZHIPU_API_KEY 未配置');
-    return fallback();
-  }
-
-  const prompt = `你是一位专业的中亚地区新闻翻译编辑，专注于为中国投资者提供高质量的中亚投资资讯。
-
-请将以下${sourceLanguage === 'en' ? '英文' : sourceLanguage === 'ru' ? '俄文' : '其他语言'}新闻翻译为中文。
-
-原始标题：${title}
-
-原始内容：
-${content}
-
-翻译要求：
-1. **标题**：必须准确反映新闻核心内容，包含关键人物/机构、事件、地点。避免笼统表述（如"比赛进入激烈阶段"），要具体（如"乌兹别克斯坦与塞尔维亚签署 5 亿美元能源合作协议"）。
-2. **摘要**：100 字以内，必须包含 5W1H（谁、做了什么、何时、何地、为什么、如何）。让读者一眼了解新闻要点。
-3. **正文**：
-   - 语法正确，逻辑清晰，人物时间地点明确
-   - 保持原文段落结构
-   - 如果原文中有图片 URL，直接保留为 HTML img 标签：<img src='图片 URL' style='width:100%; border-radius:8px; margin:15px 0;' />
-   - 尽量控制在 300 字以内，用简洁但完整的语言概述原新闻的核心事实，不要泛泛而谈
-   - **必须完整收尾，结尾以句号结束，严禁出现省略号（...、……）或"等""等等"等截断性表述**
-4. **投资相关性判断**：只有真正与投资环境、政策、项目、经贸合作相关的新闻才标记为投资相关。不要只要有"投资"两个字就认为是投资新闻。家庭、教育、体育等社会新闻除非直接影响投资环境，否则不算投资新闻。
-
-请严格按以下 JSON 格式输出（不要输出其他内容）：
-{
-  "title": "翻译后的中文标题（准确、具体）",
-  "summary": "100 字以内的中文摘要（包含 5W1H）",
-  "content": "完整的中文翻译（语法正确，逻辑清晰，250 字以内）",
-  "isInvestmentRelated": true/false（是否真正与投资相关）
-}`;
-
-  // 单次尝试：调用 LLM 并尽力解析 JSON，返回 null 表示失败
-  const attempt = async (): Promise<{
-    titleZh: string; summaryZh: string; contentZh: string; isInvestmentRelated: boolean;
-  } | null> => {
-    const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'glm-4',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('智谱 AI 请求失败:', response.status, errorText);
-      return null;
-    }
-
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const llmContent = data.choices?.[0]?.message?.content || '';
-    if (!llmContent) {
-      console.error('智谱 AI 返回空内容');
-      return null;
-    }
-    console.log('智谱 AI 响应:', llmContent.substring(0, 200));
-
-    let cleanedContent = llmContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-
-    // 依次尝试多种 JSON 修复策略
-    const parseStrategies: Array<[string, string]> = [
-      [jsonMatch[0], '原始提取'],
-      [jsonMatch[0].replace(/,(\s*[}\]])/g, '$1').replace(/[\x00-\x1F\x7F]/g, ''), '去尾逗号+控制符'],
-      [jsonMatch[0].replace(/[\u0000-\u001F\u007F-\u009F]/g, '').replace(/\\"/g, '"').replace(/\\'/g, "'"), '激进修复'],
-    ];
-
-    for (const [str, label] of parseStrategies) {
-      try {
-        const parsed = JSON.parse(str);
-        const titleZh = parsed.title || title;
-        const summaryZh = parsed.summary || content.substring(0, 100);
-        const contentZh = parsed.content || content;
-        // 翻译是否真正成功：标题或正文必须是中文（且不是原样返回英文）
-        const ok = isChineseText(titleZh) && isChineseText(contentZh);
-        return {
-          titleZh: ok ? titleZh : title,
-          summaryZh: ok ? summaryZh : content.substring(0, 100),
-          contentZh: ok ? contentZh : content,
-          isInvestmentRelated: ok && parsed.isInvestmentRelated === true,
-        };
-      } catch {
-        console.log(`JSON 解析失败（${label}），尝试下一策略`);
-      }
-    }
-    return null;
-  };
-
-  // 最多重试 3 次
-  for (let retry = 1; retry <= 3; retry++) {
-    console.log(`开始调用智谱 AI 翻译（第 ${retry}/3 次尝试）...`);
-    try {
-      const result = await attempt();
-      if (result && result.contentZh !== content) {
-        return { ...result, translated: true };
-      }
-      console.log(`第 ${retry} 次翻译结果非有效中文，继续重试`);
-    } catch (err) {
-      console.error(`LLM 调用失败（第 ${retry} 次）:`, err instanceof Error ? err.message : err);
-    }
-    if (retry < 3) await new Promise(r => setTimeout(r, 800));
-  }
-
-  return fallback();
-}
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as Record<string, string | number | boolean>;
@@ -342,9 +244,14 @@ export async function POST(request: NextRequest) {
 async function processFetchNews(targetDate: string, minPerCountry: number, skipTranslation: boolean) {
   const results: { source: string; fetched: number; saved: number; errors: string[] }[] = [];
   
+  // 目标日期的前一天（用于放宽到最多 2 天时间窗）
+  const targetDateMinusOne = new Date(new Date(`${targetDate}T00:00:00Z`).getTime() - 86400000)
+    .toISOString().split('T')[0];
+  console.log(`采集时间窗：${targetDateMinusOne} ~ ${targetDate}（最多回溯 2 天）`);
+  
   // 按国家分组存储候选新闻
   const candidatesByCountry: Record<string, Array<{
-    item: any;
+    item: Parser.Item;
     source: RSSSource;
     relevanceScore: number;
   }>> = {
@@ -364,11 +271,11 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
       const feed = await parser.parseURL(source.url);
       result.fetched = feed.items.length;
 
-      // 筛选目标日期的新闻
+      // 筛选目标日期（放宽：目标日期及前 1 天，即最多回溯 2 天）的新闻
       const targetItems = feed.items.filter((item) => {
         if (!item.pubDate) return true;
         const itemDate = new Date(item.pubDate).toISOString().split('T')[0];
-        return itemDate === targetDate;
+        return itemDate === targetDate || itemDate === targetDateMinusOne;
       });
 
       if (targetItems.length === 0) {
@@ -381,8 +288,8 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         const title = item.title || '';
         const description = item.contentSnippet || item.content || '';
         
-        // 检查是否与目标国家相关
-        if (!isCountryRelevant(title, description, source.country)) {
+        // 检查是否与目标国家相关（智能判定：源归国兜底 / 其它国家信号排除）
+        if (!isCountryRelevant(title, description, source.country, source.country)) {
           continue; // 跳过与该国无关的新闻
         }
         
@@ -478,7 +385,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
 
   for (const [country, candidates] of Object.entries(candidatesByCountry)) {
     // 如果投资相关新闻不足 minPerCountry 篇，用最新新闻补充
-    let selectedCandidates = candidates;
+    const selectedCandidates = candidates;
     
     if (candidates.length < minPerCountry) {
       console.log(`${country} 投资相关新闻不足（${candidates.length}篇 < ${minPerCountry}篇），将用最新新闻补充`);
@@ -499,7 +406,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
               });
             }
           }
-        } catch (err) {
+        } catch {
           // 忽略错误
         }
       }
@@ -536,7 +443,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         const coverImage = imageUrls[0] || '';
 
         if (!skipTranslation) {
-          const translated = await translateAndSummarize(
+          const translated = await translateNews(
             originalTitle,
             originalContent,
             source.language
@@ -598,12 +505,28 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
   }
 
   const newArticles = articlesToInsert.filter(a => !existingUrls.has(a.source_url));
-  console.log(`去重后剩余 ${newArticles.length} 篇新文章`);
+  console.log(`URL 去重后剩余 ${newArticles.length} 篇新文章`);
 
-  if (newArticles.length > 0) {
+  // 内容级去重：本批内同国家文章，若标题+正文语义相似则只保留最先出现的一篇
+  // （放宽时间窗至 2 天后，不同源可能报道同一事件，杜绝重复内容入库/推送）
+  const contentDeduped: typeof newArticles = [];
+  for (const article of newArticles) {
+    const isDup = contentDeduped.some(
+      pre => pre.country_code === article.country_code &&
+        isDuplicateContent(pre.title, pre.content, article.title, article.content)
+    );
+    if (!isDup) {
+      contentDeduped.push(article);
+    }
+  }
+  if (contentDeduped.length < newArticles.length) {
+    console.log(`内容级去重剔除 ${newArticles.length - contentDeduped.length} 篇重复内容，剩余 ${contentDeduped.length} 篇`);
+  }
+
+  if (contentDeduped.length > 0) {
     try {
-      await insertArticles(newArticles);
-      console.log(`成功保存 ${newArticles.length} 篇到数据库`);
+      await insertArticles(contentDeduped);
+      console.log(`成功保存 ${contentDeduped.length} 篇到数据库`);
     } catch (insertErr) {
       console.error('插入数据库失败:', insertErr instanceof Error ? insertErr.message : insertErr);
     }

@@ -113,14 +113,27 @@
 ## 翻译保中文（重要）
 
 - **部分国家（哈萨克、吉尔吉斯等）曾推送英文原文**：根因是 LLM 翻译失败/JSON 解析失败后，抓取侧静默把原文入库，推送又被优选出去。
-- **入库端**（`fetch-news/route.ts`）：`translateAndSummarize` 增加 LLM 重试（最多 3 次）与多策略 JSON 解析；翻译结果必须通过 `isChineseText` 校验（标题+正文中文字符占比达标才视为成功），否则 `translated=false` 且**跳过该篇不入库**（`continue`），绝不把原文写入 content。
+- **翻译逻辑已抽到 `src/lib/translate.ts`（`translateNews`）**：多模型降级链，按序尝试智谱（GLM，`ZHIPU_API_KEY`）→ 豆包（动态 import `coze-coding-dev-sdk` 的 `LLMClient`，模型 `doubao-seed-2-0-lite`）；每模型内部最多重试 3 次 + 多策略 JSON 解析；全部失败才按失败处理。
+- **入库端**（`fetch-news/route.ts`）：翻译结果必须通过 `isChineseText` 校验（标题+正文中文字符占比达标才视为成功），否则 `translated=false` 且**跳过该篇不入库**（`continue`），绝不把原文写入 content。
 - **推送端**（`wechat/push/route.ts`）：精选前用 `isChineseText(a.title) && isChineseText(a.content)` 过滤非中文文章，历史英文数据也不会被推送。
 - 搭配工具：`src/lib/utils.ts` 的 `isChineseText(text, threshold=0.4)`，中文字符占比达到阈值即视为中文。
+
+## 抓取放宽与内容去重（重要，曾因过严导致每国不足15篇）
+
+- **日期窗口**（`fetch-news/route.ts`）：`targetDate` 默认回溯最多 2 天（当天及前 1 天），放宽超时，不再严格限制当日。
+- **智能国家判定**：RSS 源自身按国别归属 `source.country`；正文缺失国名关键词时不再硬筛，仅过滤明确指向他国的内容（`isCountryRelevant` 放宽为"无明确他国指向即按源归属放行"）。
+- **内容级去重**：`src/lib/utils.ts` 的 `hasDuplicateContent` 对同国候选两两做标题规范化+正文相似度比对，防同一主题重复入库；推送端精选时同样对已选做两两去重（`isDuplicateContent`），确保每次推送内容不重复。
+- **每国篇数下限**：默认 `minPerCountry=15`，但已允许"确实不足时适当少于 15"（不硬性凑数）。
+
+## 信息源与社交网络（重要）
+
+- RSS 源定义在 `src/lib/data/sources.ts`（按 `country: kz/uz/kg/tm/tj` 分组）；已补充大陆可访问的真实媒体源。
+- **Telegram / Instagram / 公共 RSSHub 在大陆网络不可达**（本项目部署在微信云托管，`t.me`、`api.telegram.org`、`instagram.com` 均 `000`），**不能伪造社交集成**；社交媒体读取需用户先提供可用的海外代理/镜像/API，否则跳过。
 
 ## 定时任务
 
 - `src/lib/scheduler.ts` 用 node-cron 注册 2 个任务（每天早上 08:00、晚上 19:00，Asia/Shanghai 时区），每次先抓取当天新闻（每国≥15篇）再推送公众号（过去24h，每国精选15篇）。
-- **仅生产模式启动**：`src/server.ts` 在 `!dev`（NODE_ENV=production）时调用 `startScheduler()`；`scripts/start.sh` 设置 `NODE_ENV=production`。本地 `pnpm dev` 也会启动调度器。
+- **仅生产模式启动**：`src/server.ts` 在 `!dev`（NODE_ENV=production）时调用 `startScheduler()`；`scripts/start.sh` 设置 `NODE_ENV=production` 并 `node dist/server.js`。本地预览走 `scripts/dev.sh`（`next dev`），**不启动调度器**。
 - 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发公众号推送任务」。
 - 曾出现早上未触发：旧版本运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用，后已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。
 
