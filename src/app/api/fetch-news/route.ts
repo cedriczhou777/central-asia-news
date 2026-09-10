@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
-import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS } from '@/lib/scraper';
+import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS, fetchTelegramRSS } from '@/lib/scraper';
 import { isChineseText, isDuplicateContent } from '@/lib/utils';
 import { translateNews } from '@/lib/translate';
 
@@ -362,6 +362,51 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
       result.errors.push(`爬虫失败：${err instanceof Error ? err.message : '未知错误'}`);
     }
     results.push(result);
+  }
+
+  // 补充：通过 Cloudflare Worker 代理抓取 Telegram 频道（可选）
+  // 配置 TELEGRAM_WORKER_URL（Worker 地址）与 TELEGRAM_CHANNELS（如 "kz:@channel1,kz:@channel2"）
+  // 后才启用；未配置或请求失败时如实跳过，不伪造。
+  const telegramWorkerUrl = process.env.TELEGRAM_WORKER_URL;
+  const telegramChannelsRaw = process.env.TELEGRAM_CHANNELS;
+  if (telegramWorkerUrl && telegramChannelsRaw) {
+    console.log('开始通过 Cloudflare Worker 代理抓取 Telegram 频道...');
+    const channelEntries: Array<{ country: string; channel: string }> = [];
+    for (const seg of telegramChannelsRaw.split(',').map((s) => s.trim()).filter(Boolean)) {
+      const idx = seg.indexOf(':');
+      if (idx <= 0) continue;
+      const country = seg.slice(0, idx).trim();
+      const channel = seg.slice(idx + 1).trim();
+      if (country && channel) channelEntries.push({ country, channel });
+    }
+    for (const { country, channel } of channelEntries) {
+      try {
+        const articles = await fetchTelegramRSS(channel);
+        if (articles.length === 0) continue;
+        const bucket = candidatesByCountry[country] || (candidatesByCountry[country] = [] as Array<{ item: { title: string; link: string; pubDate?: string; content: string; contentSnippet?: string }; source: { name: string; url: string; country: string; language: string }; relevanceScore: number }>);
+        for (const article of articles) {
+          const title = article.title || '';
+          const description = article.summary || '';
+          if (!isInvestmentRelevant(title, description)) continue;
+          bucket.push({
+            item: {
+              title,
+              link: article.url,
+              pubDate: article.publishedAt?.toISOString(),
+              content: article.content || article.summary || '',
+              contentSnippet: article.summary || '',
+            },
+            source: { name: `Telegram/${channel}`, url: article.url, country, language: 'en' },
+            relevanceScore: scoreInvestmentRelevance(title, description),
+          });
+        }
+        console.log(`[Telegram Worker] ${channel}(${country}) 补充 ${articles.length} 篇，投资相关 ${bucket.length} 篇`);
+      } catch (error) {
+        console.error(`[Telegram Worker] ${channel} 处理失败:`, error instanceof Error ? error.message : String(error));
+      }
+    }
+  } else if (telegramChannelsRaw) {
+    console.log('检测到 TELEGRAM_CHANNELS 但未配置 TELEGRAM_WORKER_URL，跳过 Telegram 抓取');
   }
 
   // 第二步：每个国家精选至少 minPerCountry 篇新闻

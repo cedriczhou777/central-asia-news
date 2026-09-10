@@ -313,9 +313,60 @@ export const CENTRAL_ASIA_SCRAPERS: ScraperConfig[] = [
 ];
 
 /**
- * 使用 RSSHub 获取 Telegram 频道 RSS
+ * 通过 Cloudflare Worker 代理获取 Telegram 频道消息。
+ *
+ * Telegram（t.me / api.telegram.org）在大陆网络不可达（本项目部署于微信云托管）。
+ * 因此优先请求用户自建的境外 Cloudflare Worker（一个"转发桥"），由 Worker 就近
+ * 访问 Telegram API 并把最近消息以 JSON 返回到本项目。Worker 地址来自环境变量
+ * `TELEGRAM_WORKER_URL`（例如 https://your-worker.workers.dev）。
+ *
+ * 只有在配置了 `TELEGRAM_WORKER_URL` 时才启用；未配置或调用失败时如实记录并跳过，
+ * 不会伪造返回假文章。
  */
-export async function fetchTelegramRSS(channelId: string): Promise<ScrapedArticle[]> {
+async function fetchTelegramByWorker(channelId: string): Promise<ScrapedArticle[]> {
+  const workerUrl = process.env.TELEGRAM_WORKER_URL;
+  if (!workerUrl) {
+    console.log(`[Telegram ${channelId}] 未配置 TELEGRAM_WORKER_URL，跳过 Worker 代理抓取`);
+    return [];
+  }
+
+  try {
+    const url = `${workerUrl.replace(/\/+$/, '')}/?channel=${encodeURIComponent(channelId)}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+
+    if (!response.ok) {
+      console.error(`[Telegram ${channelId}] Worker 返回 ${response.status}`);
+      return [];
+    }
+
+    const data = (await response.json()) as {
+      posts?: Array<{ title?: string; url?: string; date?: string | number; summary?: string }>;
+    };
+
+    const posts = Array.isArray(data?.posts) ? data.posts : [];
+    const articles: ScrapedArticle[] = posts
+      .filter((p) => p?.title && p?.url)
+      .map((p) => ({
+        title: String(p.title).trim(),
+        url: String(p.url),
+        publishedAt: p.date ? new Date(p.date) : null,
+        summary: p.summary ? String(p.summary).trim() : undefined,
+      }));
+
+    if (articles.length > 0) {
+      console.log(`[Telegram ${channelId}] 经 Worker 获取 ${articles.length} 篇文章`);
+    }
+    return articles;
+  } catch (error) {
+    console.error(`[Telegram ${channelId}] Worker 代理抓取失败:`, error instanceof Error ? error.message : String(error));
+    return [];
+  }
+}
+
+/**
+ * 使用 RSSHub 获取 Telegram 频道 RSS（兜底，公共实例在大陆常不可达）
+ */
+async function fetchTelegramByRSSHub(channelId: string): Promise<ScrapedArticle[]> {
   const rsshubUrls = [
     `https://rsshub.app/telegram/channel/${channelId}`,
     `https://rss.shab.fun/telegram/channel/${channelId}`,
@@ -332,7 +383,6 @@ export async function fetchTelegramRSS(channelId: string): Promise<ScrapedArticl
       const xml = await response.text();
       const articles: ScrapedArticle[] = [];
 
-      // 简单的 XML 解析
       const itemRegex = /<item>([\s\S]*?)<\/item>/g;
       let match;
       
@@ -363,6 +413,17 @@ export async function fetchTelegramRSS(channelId: string): Promise<ScrapedArticl
   }
 
   return [];
+}
+
+/**
+ * 获取 Telegram 频道内容：优先 Cloudflare Worker 代理，其次 RSSHub 兜底。
+ */
+export async function fetchTelegramRSS(channelId: string): Promise<ScrapedArticle[]> {
+  const viaWorker = await fetchTelegramByWorker(channelId);
+  if (viaWorker.length > 0) return viaWorker;
+
+  const viaRSSHub = await fetchTelegramByRSSHub(channelId);
+  return viaRSSHub;
 }
 
 /**
