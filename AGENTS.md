@@ -72,9 +72,10 @@
 有意在中亚五国（哈萨克斯坦、乌兹别克斯坦、吉尔吉斯斯坦、土库曼斯坦、塔吉克斯坦）投资的中国投资商。
 
 ### 内容覆盖
-- 政治、经济、政策、工商税法
-- 投资领域：能源、化工、矿产、基建、房地产、制造业
-- 新闻来源：各国主流媒体、社交媒体
+- 涵盖 16 个分类：政治、经济、政策、法律、社会、人文、医疗卫生、能源、化工、矿产、基建、住建、制造业、民生、国安、交通
+- 分类定义在 `src/lib/data/categories.ts`（label + color），`Category` 类型在 `src/lib/data/types.ts`
+- 抓取端 `fetch-news/route.ts` 的 `CATEGORY_KEYWORDS` 按英文关键词自动归类（`classifyCategory`）
+- 新闻来源：各国主流媒体、Telegram（经 Cloudflare Worker）、社交媒体
 
 ## 关键入口
 
@@ -83,7 +84,7 @@
 
 ### API 路由
 - `POST /api/fetch-news` - 从 RSS 源抓取新闻并用 LLM 翻译（正文≤300字、完整收尾、无省略号）
-- `POST /api/wechat/push` - 推送文章到微信公众号草稿箱（每国精选15篇，正文去摘要只留主体）
+- `POST /api/wechat/push` - 推送文章到微信公众号草稿箱（"今日精选投资资讯"，每国按实际可用量推送，正文只留主体）
 - `POST /api/daily-digest` - 生成今日摘要（按国别汇总）
 - `POST /api/pipeline` - 一键执行完整流程（抓取 → 翻译 → 入库 → 生成摘要 → 推送草稿）
 - `GET /api/articles` - 文章列表（保留供调试）
@@ -123,7 +124,7 @@
 - **日期窗口**（`fetch-news/route.ts`）：`targetDate` 默认回溯最多 2 天（当天及前 1 天），放宽超时，不再严格限制当日。
 - **智能国家判定**：RSS 源自身按国别归属 `source.country`；正文缺失国名关键词时不再硬筛，仅过滤明确指向他国的内容（`isCountryRelevant` 放宽为"无明确他国指向即按源归属放行"）。
 - **内容级去重**：`src/lib/utils.ts` 的 `hasDuplicateContent` 对同国候选两两做标题规范化+正文相似度比对，防同一主题重复入库；推送端精选时同样对已选做两两去重（`isDuplicateContent`），确保每次推送内容不重复。
-- **每国篇数下限**：默认 `minPerCountry=15`，但已允许"确实不足时适当少于 15"（不硬性凑数）。
+- **每国篇数**：抓取端下限默认 `minPerCountry=10`（保证有内容可推）；推送端**不固定篇数**，"今日精选"按实际可用量推送（上限宽松 30 篇），不硬凑。
 
 ## 信息源与社交网络（重要）
 
@@ -138,13 +139,13 @@
 
 ## 定时任务
 
-- `src/lib/scheduler.ts` 用 node-cron 注册 2 个任务（每天早上 08:00、晚上 19:00，Asia/Shanghai 时区），每次先抓取当天新闻（每国≥15篇）再推送公众号（过去24h，每国精选15篇）。
+- `src/lib/scheduler.ts` 用 node-cron 注册 2 个任务（每天早上 08:00、晚上 19:00，Asia/Shanghai 时区），每次先抓取当天新闻（每国≥10篇）再推送公众号（过去24h，"今日精选"按实际可用量推送）。
 - **仅生产模式启动**：`src/server.ts` 在 `!dev`（NODE_ENV=production）时调用 `startScheduler()`；`scripts/start.sh` 设置 `NODE_ENV=production` 并 `node dist/server.js`。本地预览走 `scripts/dev.sh`（`next dev`），**不启动调度器**。
 - 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发公众号推送任务」。
 - 曾出现早上未触发：旧版本运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用，后已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。
 
 ## 公众号推送排版规范（重要）
 
-- `src/app/api/wechat/push/route.ts`：每国精选 15 篇，过去 24h；正文**只保留主体**，不显示"摘要"块。
+- `src/app/api/wechat/push/route.ts`：推送标题「今日精选投资资讯」，每国按实际可用量推送（不固定 15），过去 24h；正文**只保留主体**，不显示"摘要"块。
 - 正文默认以完整语句收尾，末尾省略号会被 `cleanSummary` 清理为句号；翻译 prompt 亦要求 ≤300 字、完整收尾、禁止省略号。
-- 图片链路见上文「图片链路」。
+- 公众号排版：外层 padding 8px、内容卡片 padding 18px 16px、正文字号 16px、行距 2.0（已收窄左右留白、加宽正文）。分类标签颜色来自 `categories.ts`，中文标签与 16 类分类对齐。

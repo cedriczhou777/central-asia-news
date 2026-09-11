@@ -16,10 +16,25 @@ export const categories: Record<Category, CategoryInfo> = {
     label: '政策',
     color: '#D97706',
   },
-  business_law: {
-    id: 'business_law',
-    label: '工商税法',
+  law: {
+    id: 'law',
+    label: '法律',
     color: '#7C3AED',
+  },
+  society: {
+    id: 'society',
+    label: '社会',
+    color: '#DB2777',
+  },
+  culture: {
+    id: 'culture',
+    label: '人文',
+    color: '#9333EA',
+  },
+  healthcare: {
+    id: 'healthcare',
+    label: '医疗卫生',
+    color: '#14B8A6',
   },
   energy: {
     id: 'energy',
@@ -41,15 +56,30 @@ export const categories: Record<Category, CategoryInfo> = {
     label: '基建',
     color: '#0891B2',
   },
-  real_estate: {
-    id: 'real_estate',
-    label: '房地产',
+  housing: {
+    id: 'housing',
+    label: '住建',
     color: '#BE185D',
   },
   manufacturing: {
     id: 'manufacturing',
     label: '制造业',
     color: '#4F46E5',
+  },
+  livelihood: {
+    id: 'livelihood',
+    label: '民生',
+    color: '#EA580C',
+  },
+  security: {
+    id: 'security',
+    label: '国安',
+    color: '#0F766E',
+  },
+  transport: {
+    id: 'transport',
+    label: '交通',
+    color: '#3B82F6',
   },
 };
 

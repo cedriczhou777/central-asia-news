@@ -92,16 +92,22 @@ const DEFAULT_TELEGRAM_CHANNELS =
 
 // 分类关键词
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  politics: ['politic', 'president', 'parliament', 'election', 'government', 'minister', 'diplomat'],
-  economy: ['economy', 'gdp', 'trade', 'export', 'import', 'investment', 'business', 'finance', 'bank'],
-  policy: ['policy', 'reform', 'regulation', 'law', 'legislation', 'decree', 'strategy'],
-  business_law: ['tax', 'legal', 'compliance', 'company law', 'commercial', 'corporate'],
-  energy: ['oil', 'gas', 'energy', 'petroleum', 'fuel', 'pipeline', 'renewable', 'power'],
-  chemicals: ['chemical', 'petrochemical', 'fertilizer', 'plastic', 'polymer'],
-  minerals: ['mining', 'mineral', 'copper', 'gold', 'uranium', 'ore', 'metal', 'resource'],
-  infrastructure: ['infrastructure', 'railway', 'road', 'bridge', 'construction', 'transport', 'logistics'],
-  real_estate: ['real estate', 'property', 'housing', 'construction', 'building'],
-  manufacturing: ['manufacturing', 'factory', 'industrial', 'production', 'textile'],
+  politics: ['politic', 'president', 'parliament', 'election', 'government', 'minister', 'diplomat', 'vote', 'cabinet'],
+  economy: ['economy', 'gdp', 'trade', 'export', 'import', 'investment', 'business', 'finance', 'bank', 'market', 'inflation', 'currency'],
+  policy: ['policy', 'reform', 'regulation', 'legislation', 'decree', 'strategy', 'initiative', 'program'],
+  law: ['law', 'legal', 'tax', 'compliance', 'court', 'litigation', 'legislation', 'code', 'amendment', 'attorney'],
+  society: ['society', 'social', 'protest', 'community', 'civil', 'human', 'population', 'demographic'],
+  culture: ['culture', 'heritage', 'museum', 'art', 'festival', 'traditio', 'touris', 'language', 'history'],
+  healthcare: ['health', 'medical', 'hospital', 'clinic', 'vaccine', 'doctor', 'pharma', 'disease', 'medicine', 'epidemic'],
+  energy: ['oil', 'gas', 'energy', 'petroleum', 'fuel', 'pipeline', 'renewable', 'power', 'electricity', 'solar', 'hydropower'],
+  chemicals: ['chemical', 'petrochemical', 'fertilizer', 'plastic', 'polymer', 'pharmaceutical'],
+  minerals: ['mining', 'mineral', 'copper', 'gold', 'uranium', 'ore', 'metal', 'resource', 'lithium', 'rare earth', 'coal'],
+  infrastructure: ['infrastructure', 'railway', 'road', 'bridge', 'construction', 'logistics', 'port', 'airport', 'highway'],
+  housing: ['housing', 'real estate', 'property', 'apartment', 'construction', 'building', 'residential', 'mortgage', 'urban'],
+  manufacturing: ['manufacturing', 'factory', 'industrial', 'production', 'textile', 'assembly', 'plant'],
+  livelihood: ['livelihood', 'welfare', 'pension', 'subsidy', 'salary', 'wage', 'price', 'food', 'age', 'utility'],
+  security: ['security', 'defense', 'military', 'army', 'border', 'intelligence', 'counterterrorism', 'cyber'],
+  transport: ['transport', 'logistics', 'railway', 'highway', 'road', 'airline', 'shipping', 'transit', 'corridor'],
 };
 
 // 国家相关关键词（用于筛选与该国相关的新闻）
@@ -231,7 +237,7 @@ async function fetchOgImage(url: string): Promise<string> {
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as Record<string, string | number | boolean>;
   const targetDate = (body.date as string) || new Date().toISOString().split('T')[0];
-  const minPerCountry = typeof body.minPerCountry === 'number' ? body.minPerCountry : 3;
+  const minPerCountry = typeof body.minPerCountry === 'number' ? body.minPerCountry : 10;
   const skipTranslation = body.skipTranslation === true;
 
   // 立即返回，后台异步处理
@@ -591,7 +597,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
 export async function GET() {
   return NextResponse.json({
     message: '新闻采集接口',
-    usage: 'POST /api/fetch-news with optional { date: "YYYY-MM-DD", minPerCountry: 3, skipTranslation: true }',
+    usage: 'POST /api/fetch-news with optional { date: "YYYY-MM-DD", minPerCountry: 10, skipTranslation: true }',
     sources: RSS_SOURCES.map((s) => ({ name: s.name, country: s.country })),
   });
 }

@@ -220,13 +220,19 @@ function generateWechatHtml(
     politics: '政治',
     economy: '经济',
     policy: '政策',
-    business_law: '工商法律',
+    law: '法律',
+    society: '社会',
+    culture: '人文',
+    healthcare: '医疗卫生',
     energy: '能源',
     chemicals: '化工',
     minerals: '矿产',
     infrastructure: '基建',
-    real_estate: '房地产',
+    housing: '住建',
     manufacturing: '制造业',
+    livelihood: '民生',
+    security: '国安',
+    transport: '交通',
   };
 
   const articlesHtml = articles.map((article, index) => {
@@ -260,7 +266,7 @@ function generateWechatHtml(
         
         ${coverBlock}
 
-        <div style="font-size: 15px; color: #333; line-height: 1.8;">
+        <div style="font-size: 16px; color: #333; line-height: 2;">
           ${bodyHtml}
         </div>
         
@@ -272,22 +278,22 @@ function generateWechatHtml(
   }).join('');
 
   return `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; padding: 20px; background: #F8F6F1;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; padding: 8px; background: #F8F6F1;">
       <!-- 头部 -->
-      <div style="text-align: center; padding: 30px 20px; background: linear-gradient(135deg, #0F1B2D 0%, #1a2d4a 100%); border-radius: 12px; margin-bottom: 30px;">
+      <div style="text-align: center; padding: 24px 16px; background: linear-gradient(135deg, #0F1B2D 0%, #1a2d4a 100%); border-radius: 10px; margin-bottom: 20px;">
         <div style="font-size: 48px; margin-bottom: 10px;">${countryFlag}</div>
-        <h1 style="color: #C8A45C; font-size: 28px; margin: 0 0 10px 0; font-weight: bold;">${countryName}</h1>
-        <h2 style="color: white; font-size: 20px; margin: 0 0 15px 0; font-weight: normal;">每日投资资讯</h2>
+        <h1 style="color: #C8A45C; font-size: 26px; margin: 0 0 10px 0; font-weight: bold;">${countryName}</h1>
+        <h2 style="color: white; font-size: 20px; margin: 0 0 15px 0; font-weight: normal;">今日精选投资资讯</h2>
         <div style="color: rgba(255,255,255,0.7); font-size: 14px;">${date}</div>
       </div>
       
       <!-- 新闻列表 -->
-      <div style="background: white; border-radius: 12px; padding: 25px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
+      <div style="background: white; border-radius: 10px; padding: 18px 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.06);">
         ${articlesHtml}
       </div>
       
       <!-- 底部 -->
-      <div style="text-align: center; margin-top: 30px; padding: 20px; color: #999; font-size: 12px;">
+      <div style="text-align: center; margin-top: 20px; padding: 16px; color: #999; font-size: 12px;">
         <div style="margin-bottom: 8px;">中亚投资资讯 | Central Asia Investment Daily</div>
         <div>数据来源：各国主流媒体</div>
       </div>
@@ -298,14 +304,15 @@ function generateWechatHtml(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { hours = 24, minPerCountry = 15 } = body;
+    const { hours = 24 } = body;
+    const maxPerCountry = 30;
 
     // 计算时间范围（过去 N 小时）
     const now = new Date();
     const startDate = new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
     const endDate = now.toISOString();
 
-    console.log(`微信公众号推送：汇总过去${hours}小时新闻，每个国家精选${minPerCountry}篇`);
+    console.log(`微信公众号推送：汇总过去${hours}小时新闻，每国精选（上限 ${maxPerCountry} 篇）`);
 
     const results = [];
 
@@ -329,7 +336,7 @@ export async function POST(request: NextRequest) {
         console.log(`[${country.name}] 过滤掉 ${articles.length - chineseArticles.length} 篇非中文文章，保留 ${chineseArticles.length} 篇`);
       }
 
-      // 按投资相关性评分排序，精选前 minPerCountry 篇
+      // 按投资相关性评分排序，今日精选（上限 maxPerCountry 篇）
       const scoredArticles = chineseArticles.map(a => ({
         ...a,
         relevanceScore: scoreInvestmentRelevance(a.title, a.summary),
@@ -341,8 +348,8 @@ export async function POST(request: NextRequest) {
       const selectedArticles: typeof scoredArticles = [];
       
       for (const article of scoredArticles) {
-        // 优先精选前 15 篇；若不足 15 篇，尽力多选（不因相关性不足而少推）
-        if (selectedArticles.length >= 15) break;
+        // 今日精选：只设宽松上限防文章过长，不写死篇数
+        if (selectedArticles.length >= maxPerCountry) break;
         
         // 国家相关性（智能判定：明确指向其它国家才排除）
         if (!isCountryRelevant(article.title, article.summary, country.code)) {
@@ -360,17 +367,6 @@ export async function POST(request: NextRequest) {
         }
         
         selectedArticles.push(article);
-      }
-      
-      // 如果去重后不足 minPerCountry 篇，用剩余文章补充（仍然要检查国家相关性）
-      if (selectedArticles.length < minPerCountry) {
-        for (const article of scoredArticles) {
-          if (selectedArticles.length >= minPerCountry) break;
-          if (selectedArticles.find(a => a.id === article.id)) continue;
-          if (isCountryRelevant(article.title, article.summary, country.code)) {
-            selectedArticles.push(article);
-          }
-        }
       }
 
       console.log(`为${country.name}精选${selectedArticles.length}篇投资相关新闻`);

@@ -11,7 +11,7 @@ const PUBLISH_SCHEDULES = [
 const API_PORT = process.env.PORT || process.env.NODE_PORT || '5000';
 const API_BASE = `http://localhost:${API_PORT}`;
 
-// 抓取当天新闻（每国 15 篇）
+// 抓取当天新闻（每国先凑足一个下限量，具体推送篇数由推送端"今日精选"决定）
 async function runFetchNews() {
   console.log(`[${new Date().toISOString()}] 开始抓取当天新闻...`);
 
@@ -20,7 +20,7 @@ async function runFetchNews() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        minPerCountry: 15,
+        minPerCountry: 10,
         skipTranslation: false,
       }),
     });
@@ -32,7 +32,7 @@ async function runFetchNews() {
   }
 }
 
-// 微信公众号推送（汇总过去 24h 新闻，每个国家精选 15 篇）
+// 微信公众号推送（汇总过去 24h 新闻，按"今日精选投资资讯"逐国推送，不写死篇数）
 async function runWechatPush() {
   console.log(`[${new Date().toISOString()}] 开始执行微信公众号推送任务...`);
 
@@ -42,7 +42,6 @@ async function runWechatPush() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         hours: 24,
-        minPerCountry: 15,
       }),
     });
 

@@ -13,13 +13,19 @@ export type Category =
   | 'politics'
   | 'economy'
   | 'policy'
-  | 'business_law'
+  | 'law'
+  | 'society'
+  | 'culture'
+  | 'healthcare'
   | 'energy'
   | 'chemicals'
   | 'minerals'
   | 'infrastructure'
-  | 'real_estate'
-  | 'manufacturing';
+  | 'housing'
+  | 'manufacturing'
+  | 'livelihood'
+  | 'security'
+  | 'transport';
 
 export interface CategoryInfo {
   id: Category;
