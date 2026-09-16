@@ -1,0 +1,27 @@
+# Docker 构建上下文排除清单
+#
+# 背景：Dockerfile 里有 `COPY . .`，默认会把整个目录塞进构建上下文。
+# 本地仓库里躺着约 30MB 的文档截图（assets/），每次构建都要传一遍，
+# 云托管上还会拉长构建时间。这些文件代码里没有任何引用（已核对 src / scripts /
+# Dockerfile / next.config.ts / container.config.json / package.json）。
+
+# 依赖与构建产物 —— 容器内由 pnpm install / pnpm build 重新生成。
+# 若把本地（macOS）编译的产物复制进去，会覆盖容器内为 Linux 编译的版本。
+node_modules
+.next
+dist
+*.tsbuildinfo
+
+# 本地密钥，绝不能进镜像
+.env
+.env.local
+.env.*.local
+
+# 文档截图与扣子时代遗留文件，约 30MB，代码中无引用
+assets
+.coze
+
+# 版本控制与系统文件
+.git
+.gitignore
+.DS_Store
