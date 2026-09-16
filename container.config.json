@@ -21,23 +21,24 @@ container:
   executeSQLs:
     - "CREATE TABLE IF NOT EXISTS articles (id SERIAL PRIMARY KEY, title TEXT, summary TEXT, content TEXT, country_code VARCHAR(2), category VARCHAR(20), source_name VARCHAR(50), source_url TEXT, original_title TEXT, original_content TEXT, original_language VARCHAR(5), published_at TIMESTAMP WITH TIME ZONE, tags JSONB, is_featured BOOLEAN DEFAULT false, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());"
 
+# 定时抓取与推送由应用内调度器负责：src/lib/scheduler.ts，每天 08:00 / 19:00 北京时间。
+#
+# 下面这两个触发器不承担业务逻辑，唯一作用是「预热」：
+# container.minNum 为 0 时实例会被缩容到零，进程一停应用内的定时器也就没了。
+# 提前 5 分钟把实例唤醒，应用内调度器才能在 08:00 / 19:00 准时触发。
+# 想彻底摆脱这个依赖，可以把上面 container.minNum 改成 1
+# （代价是常驻一个 0.5 核 1G 的实例，按量计费）。
+#
+# 注意：旧版这里挂着 4 条 08:00/12:30/15:00/21:00 的触发器，
+# payload 是 {"action":"fetch-and-push"}——代码里根本没有处理这个 payload 的地方，
+# 属于「看起来在定时抓取、实际什么都没干」，已清理。
 triggers:
-  - name: morning-fetch
+  - name: warmup-morning
     type: timer
-    config: "0 0 * * *"  # 北京时间 08:00 (UTC 00:00)
-    payload: '{"action": "fetch-and-push", "limit": 10}'
-  
-  - name: noon-fetch
+    config: "55 23 * * *"  # 北京时间 07:55（UTC 前一日 23:55）
+    payload: '{}'
+
+  - name: warmup-evening
     type: timer
-    config: "30 4 * * *"  # 北京时间 12:30 (UTC 04:30)
-    payload: '{"action": "fetch-and-push", "limit": 10}'
-  
-  - name: afternoon-fetch
-    type: timer
-    config: "0 7 * * *"  # 北京时间 15:00 (UTC 07:00)
-    payload: '{"action": "fetch-and-push", "limit": 10}'
-  
-  - name: evening-fetch
-    type: timer
-    config: "0 13 * * *"  # 北京时间 21:00 (UTC 13:00)
-    payload: '{"action": "fetch-and-push", "limit": 10}'
+    config: "55 10 * * *"  # 北京时间 18:55（UTC 10:55）
+    payload: '{}'

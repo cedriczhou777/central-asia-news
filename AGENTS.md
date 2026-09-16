@@ -137,7 +137,8 @@
 - **Telegram 通过 Cloudflare Worker 反向代理接入（已实现，配置驱动）**：
   - 链路：`微信云托管代码 → TELEGRAM_WORKER_URL（你的 Cloudflare Worker） → Telegram API → 返回给本项目`。
   - `src/lib/scraper.ts` 的 `fetchTelegramRSS(channelId)` 现**优先走 Worker**（`fetchTelegramByWorker`），无 Worker 时回退 RSSHub，均失败则丢篇。
-  - 本项目在 fetch-news 主流程（`src/app/api/fetch-news/route.ts`）**新增 Telegram 补充段**：读 `TELEGRAM_CHANNELS` 环境变量（格式 `kz:@channelA@channelB`，按 `country:频道@...` 分组），**只有配置了 `TELEGRAM_WORKER_URL` 才启用**，抓到的文章走同样优选/翻译/入库链路，帮助凑齐每国 15 篇。
+  - 本项目在 fetch-news 主流程（`src/app/api/fetch-news/route.ts`）**新增 Telegram 补充段**：读 `TELEGRAM_CHANNELS` 环境变量，**只有配置了 `TELEGRAM_WORKER_URL` 才启用**，抓到的文章走同样优选/翻译/入库链路，帮助凑齐每国篇数。
+  - **频道配置格式**：`国家:频道[@频道...]`，多个国家用逗号分隔。例：`kz:@tengrinews, uz:@kunuzofficial@gazetauz` —— uz 会展开成 2 个频道；不带 `@` 的裸写法也支持。解析结果会打进日志（搜「Telegram 待抓取频道」），配错了一眼能看见。
   - 启用前提（微信云托管环境变量）：`TELEGRAM_WORKER_URL=<你的worker域名>` + `TELEGRAM_CHANNELS=kz:@xnxxx...` 等；未配置时自动跳过、不影响现有 RSS/爬虫链路。
   - Worker 脚本需在 Cloudflare 免费版部署，把请求转发到 `https://api.telegram.org` 的 `getUpdates`/`getChat`，按 channel 返回文本与日期（参考 scraper.ts 中 worker 期望的返回结构）。
 
@@ -147,6 +148,15 @@
 - **仅生产模式启动**：`src/server.ts` 在 `!dev`（NODE_ENV=production）时调用 `startScheduler()`；`scripts/start.sh` 设置 `NODE_ENV=production` 并 `node dist/server.js`。本地预览走 `scripts/dev.sh`（`next dev`），**不启动调度器**。
 - 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发公众号推送任务」。
 - 曾出现早上未触发：旧版本运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用，后已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。
+- **`container.config.json` 的 triggers 只做「预热」**：该文件里 `container.minNum: 0` 表示实例可缩容到零，进程一停应用内定时器也就没了。所以挂了 2 条 warmup 触发器（北京 07:55 / 18:55）提前唤醒实例，真正干活的是应用内调度器。想让调度更可靠可把 `minNum` 改成 1（代价是常驻实例）。
+- **不要**在 `container.config.json` 里再加业务触发器：旧版曾挂着 4 条 `{"action":"fetch-and-push"}` 的触发器，但代码里没有任何地方处理这个 payload，属于「看着在跑、其实没干活」，已清理。
+
+## 端口约定（重要）
+
+- 全项目唯一的端口口径在 `src/lib/runtime.ts` 的 `resolvePort()`：`DEPLOY_RUN_PORT` → `PORT` → `3000`。
+- `3000` 与 `container.config.json` 的 `container.port`、`Dockerfile` 的 `EXPOSE` 保持一致。
+- `scripts/start.sh` 在拉起 node 前会把解析结果写回 `PORT`，因此进程内 `process.env.PORT` 已是最终值。
+- **禁止**在业务代码里写死端口（旧版 `api/pipeline/route.ts` 写死 `localhost:5000`，与部署声明对不上就是静默失败）。需要内部互调请用 `resolveSelfBaseUrl()`。
 
 ## 公众号推送排版规范（重要）
 

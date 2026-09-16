@@ -2,6 +2,7 @@ import { createServer } from 'http';
 import { parse } from 'url';
 import next from 'next';
 import { startScheduler } from './lib/scheduler';
+import { resolvePort } from './lib/runtime';
 
 // 修复微信 API 调用的 SSL 证书问题
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -9,7 +10,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 // 生产环境判断：NODE_ENV=production 或 COZE_PROJECT_ENV=PROD
 const dev = process.env.NODE_ENV === 'development' && process.env.COZE_PROJECT_ENV !== 'PROD';
 const hostname = process.env.HOSTNAME || '0.0.0.0';
-const port = parseInt(process.env.PORT || '5000', 10);
+const port = parseInt(resolvePort(), 10);
 
 // 全局错误处理，防止未捕获异常导致进程崩溃
 process.on('uncaughtException', (err) => {

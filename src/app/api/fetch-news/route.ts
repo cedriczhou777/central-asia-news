@@ -4,6 +4,7 @@ import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS, fetchTelegramRSS } from '@/lib/scraper';
 import { isChineseText, isDuplicateContent } from '@/lib/utils';
 import { translateNews } from '@/lib/translate';
+import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
 const parser = new Parser({
   timeout: 30000,
@@ -83,12 +84,10 @@ const INVESTMENT_KEYWORDS = [
   'silk road', 'belt and road', ' BRI',
 ];
 
-// Telegram 频道默认配置（格式：country:@channel@channel, ...）
+// Telegram 频道的默认值与解析规则见 @/lib/telegram-channels：
+// 格式 `国家:频道[@频道...]`，可用环境变量 TELEGRAM_CHANNELS 整体覆盖。
 // 这些频道 id 均经 t.me/s/<id> 公开预览验证可读（微信云托管无法直连 Telegram，
 // 必须经 Cloudflare Worker 代理读取，见 scraper.ts fetchTelegramRSS 的 Worker 优先路径）。
-// 可通过环境变量 TELEGRAM_CHANNELS 覆盖。
-const DEFAULT_TELEGRAM_CHANNELS =
-  'kz:@tengrinews, uz:@kunuzofficial@gazetauz, kg:@akipress, tj:@asiaplus';
 
 // 分类关键词
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
@@ -255,7 +254,10 @@ export async function POST(request: NextRequest) {
 }
 
 async function processFetchNews(targetDate: string, minPerCountry: number, skipTranslation: boolean) {
-  const results: { source: string; fetched: number; saved: number; errors: string[] }[] = [];
+  // 每个源的采集情况。注意：这里只记录「取到多少 / 报了什么错」，
+  // 真正的入库篇数在最后统一统计（旧版给每个源挂了 saved 字段但从不赋值，
+  // 导致汇总日志永远打印「共保存0篇」，排查时严重误导）。
+  const results: { source: string; fetched: number; errors: string[] }[] = [];
   
   // 目标日期的前一天（用于放宽到最多 2 天时间窗）
   const targetDateMinusOne = new Date(new Date(`${targetDate}T00:00:00Z`).getTime() - 86400000)
@@ -279,7 +281,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
 
   // 第一步：从所有 RSS 源采集候选新闻
   for (const source of RSS_SOURCES) {
-    const result = { source: source.name, fetched: 0, saved: 0, errors: [] as string[] };
+    const result = { source: source.name, fetched: 0, errors: [] as string[] };
     try {
       const feed = await parser.parseURL(source.url);
       result.fetched = feed.items.length;
@@ -327,7 +329,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
   // 第一步半：使用网页爬虫补充失效的 RSS 源
   console.log('开始使用网页爬虫补充新闻...');
   for (const scraperConfig of CENTRAL_ASIA_SCRAPERS) {
-    const result = { source: scraperConfig.name, fetched: 0, saved: 0, errors: [] as string[] };
+    const result = { source: scraperConfig.name, fetched: 0, errors: [] as string[] };
     try {
       const scrapedArticles = await scrapeWebsite(scraperConfig);
       result.fetched = scrapedArticles.length;
@@ -384,13 +386,15 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
   const telegramChannelsRaw = process.env.TELEGRAM_CHANNELS || DEFAULT_TELEGRAM_CHANNELS;
   if (telegramWorkerUrl && telegramChannelsRaw) {
     console.log('开始通过 Cloudflare Worker 代理抓取 Telegram 频道...');
-    const channelEntries: Array<{ country: string; channel: string }> = [];
-    for (const seg of telegramChannelsRaw.split(',').map((s) => s.trim()).filter(Boolean)) {
-      const idx = seg.indexOf(':');
-      if (idx <= 0) continue;
-      const country = seg.slice(0, idx).trim();
-      const channel = seg.slice(idx + 1).trim();
-      if (country && channel) channelEntries.push({ country, channel });
+    // 解析规则（含 `@a@b` 展开成多个频道）见 lib/telegram-channels.ts。
+    const channelEntries = parseTelegramChannels(telegramChannelsRaw);
+
+    if (channelEntries.length === 0) {
+      console.warn(`TELEGRAM_CHANNELS 解析后没有任何有效频道，原始值：${telegramChannelsRaw}`);
+    } else {
+      console.log(
+        `Telegram 待抓取频道（共 ${channelEntries.length} 个）：${channelEntries.map((e) => `${e.country}:${e.channel}`).join('、')}`
+      );
     }
     for (const { country, channel } of channelEntries) {
       try {
@@ -470,16 +474,18 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
       }
     }
 
-    // 按相关性评分排序，取前 minPerCountry 篇
-    // 有图片的新闻优先（图片权重 +5）
+    // 按相关性评分排序，有图片的新闻额外加权（公众号排版需要配图）
     selectedCandidates.sort((a, b) => {
       const aHasImage = (a.item.contentSnippet || a.item.content || '').includes('<img') ? 5 : 0;
       const bHasImage = (b.item.contentSnippet || b.item.content || '').includes('<img') ? 5 : 0;
       return (b.relevanceScore + bHasImage) - (a.relevanceScore + aHasImage);
     });
-    const selected = selectedCandidates.slice(0, Math.max(minPerCountry, selectedCandidates.length));
 
-    console.log(`${country} 精选 ${selected.length} 篇新闻（投资相关${candidates.length}篇，补充${selected.length - candidates.length}篇）`);
+    // 抓取端不做截断：该国候选全部保留，最终推送多少篇由推送端「今日精选」（宽松上限 30 篇）决定。
+    // （旧版写的是 slice(0, Math.max(minPerCountry, len))，恒等于不截断，但看起来像有限制，容易误判。）
+    const selected = selectedCandidates;
+
+    console.log(`${country} 候选 ${selected.length} 篇（其中投资相关 ${candidates.length} 篇，兜底补充 ${selected.length - candidates.length} 篇）`);
 
     for (const { item, source } of selected) {
       try {
@@ -581,17 +587,30 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
     console.log(`内容级去重剔除 ${newArticles.length - contentDeduped.length} 篇重复内容，剩余 ${contentDeduped.length} 篇`);
   }
 
+  let savedCount = 0;
   if (contentDeduped.length > 0) {
     try {
       await insertArticles(contentDeduped);
-      console.log(`成功保存 ${contentDeduped.length} 篇到数据库`);
+      savedCount = contentDeduped.length;
+      console.log(`成功保存 ${savedCount} 篇到数据库`);
     } catch (insertErr) {
       console.error('插入数据库失败:', insertErr instanceof Error ? insertErr.message : insertErr);
     }
   }
 
-  const totalSaved = results.reduce((sum, r) => sum + r.saved, 0);
-  console.log(`新闻抓取完成：日期=${targetDate}, 共保存${totalSaved}篇`, results);
+  const totalFetched = results.reduce((sum, r) => sum + r.fetched, 0);
+  const failedSources = results.filter((r) => r.errors.length > 0);
+
+  console.log(
+    `新闻抓取完成：日期=${targetDate}｜原始采集 ${totalFetched} 篇 → 投资相关候选 ${articlesToInsert.length} 篇 ` +
+      `→ URL 去重剔除 ${articlesToInsert.length - newArticles.length} 篇 ` +
+      `→ 内容去重剔除 ${newArticles.length - contentDeduped.length} 篇 ` +
+      `→ 实际入库 ${savedCount} 篇`
+  );
+  console.log(`各源采集量：${results.map((r) => `${r.source}=${r.fetched}`).join(' | ')}`);
+  if (failedSources.length > 0) {
+    console.warn(`${failedSources.length} 个信息源采集失败：${failedSources.map((r) => r.source).join('、')}`);
+  }
 }
 
 export async function GET() {

@@ -26,7 +26,7 @@
 
 ### 3. 通过 API 调用
 ```bash
-curl -X POST http://localhost:5000/api/pipeline \
+curl -X POST http://localhost:3000/api/pipeline \
   -H "Content-Type: application/json" \
   -d '{"limit": 10, "autoPush": true}'
 ```
