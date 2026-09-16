@@ -69,11 +69,15 @@ pnpm verify:local
 再单独跑一下 lint：
 
 ```bash
-pnpm lint:build
+pnpm lint:build    # = eslint . --quiet，只报 error，通过时无任何输出
+pnpm lint          # = eslint 全量，会多出 7 条 warning
 ```
 
-> `pnpm lint:build` 会报 7 条 warning，都在 `storage/database/*`、`lib/db-articles.ts` 等
-> 历史文件里（未使用的导入），是接手前就有的，**0 error** 即为正常。
+> 两条命令的区别只在 `--quiet`：`lint:build` 把 warning 吞掉了，所以**通过时安静得像没跑**，
+> 这是正常的（exit code 0）。想看到那 7 条 warning 就用 `pnpm lint`。
+>
+> 那 7 条都在 `storage/database/*`、`lib/db-articles.ts` 等历史文件里（未使用的导入与变量），
+> 是接手前就存在的，**0 error 即为正常**，不用管。
 
 ---
 
