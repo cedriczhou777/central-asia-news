@@ -1,30 +1,53 @@
-# projects
+# 中亚投资快报
 
-这是一个基于 [Next.js 16](https://nextjs.org) + [shadcn/ui](https://ui.shadcn.com) 的全栈应用项目，由扣子编程 CLI 创建。
+抓取中亚五国（哈/乌/吉/土/塔）投资相关新闻 → 翻译整理成中文 → 推送至微信公众号草稿箱。
+定时每天 08:00 / 19:00（北京时间）各推一次，部署在微信云托管。
+
+- 生产模式跑的是自定义服务器 `src/server.ts`（内嵌 Next.js + node-cron 调度器）
+- 推公众号走微信**云调用**，免 IP 白名单、免 access_token
+- 部署步骤见 [DEPLOY_WECHAT_CLOUD.md](./DEPLOY_WECHAT_CLOUD.md)
+- **本地怎么验证见 [LOCAL_VERIFY.md](./LOCAL_VERIFY.md)**
 
 ## 快速开始
+
+### 安装依赖
+
+```bash
+pnpm install
+```
+
+> 若卡在 `? Do you want to continue? [Y/n]`，是 corepack 在等你确认下载锁定的 pnpm 版本，
+> 先执行一次 `corepack prepare pnpm@9.0.0 --activate`。详见 LOCAL_VERIFY.md。
 
 ### 启动开发服务器
 
 ```bash
-coze-dev dev
+pnpm dev
 ```
 
-启动后，在浏览器中打开 [http://localhost:3000](http://localhost:3000) 查看应用。
+启动后打开 [http://localhost:3000](http://localhost:3000)。
 
-开发服务器支持热更新，修改代码后页面会自动刷新。
+开发模式走 `next dev`（见 `scripts/dev.sh`），支持热更新，且**不会启动定时调度器**。
+
+### 提交前自检
+
+```bash
+pnpm verify:local    # 类型检查 + 频道解析用例，不需要 API Key
+```
 
 ### 构建生产版本
 
 ```bash
-coze-dev build
+pnpm build
 ```
 
 ### 启动生产服务器
 
 ```bash
-coze-dev start
+pnpm start
 ```
+
+生产模式会拉起 `startScheduler()`，注册 08:00 / 19:00 两个定时任务。
 
 ## 项目结构
 
@@ -44,10 +67,15 @@ src/
 │   └── utils.ts            # cn() 等工具函数
 └── hooks/                   # 自定义 React Hooks（可选）
 
-server/
-├── index.ts                 # 自定义服务器入口
-├── tsconfig.json           # Server TypeScript 配置
-└── dist/                    # 编译输出目录（自动生成）
+核心业务文件：
+
+├── src/server.ts                    # 自定义服务器入口（内嵌 Next.js + 调度器）
+├── src/lib/scheduler.ts             # node-cron 定时任务（08:00 / 19:00 北京时间）
+├── src/lib/translate.ts             # 翻译链路：智谱 → DeepSeek 多通道降级
+├── src/lib/runtime.ts               # 端口口径与自身地址（唯一来源）
+├── src/lib/telegram-channels.ts     # TELEGRAM_CHANNELS 解析（纯函数，有测试）
+├── src/app/api/fetch-news/route.ts  # 采集 + 翻译 + 入库主流程
+└── src/app/api/wechat/push/route.ts # 按国别组装并推送公众号草稿
 ```
 
 ## 核心开发规范

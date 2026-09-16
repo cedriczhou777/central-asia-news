@@ -141,9 +141,21 @@ tail -f /app/work/logs/bypass/app.log
 部分 RSS 源可能失效，检查 `src/app/api/fetch-news/route.ts` 中的 RSS_URLS 配置。
 
 ### LLM 翻译失败
-检查 `COZE_API_TOKEN` 环境变量是否配置。
+翻译链路是「智谱 → DeepSeek」多通道降级，检查：
+
+1. 环境变量里有没有 `ZHIPU_API_KEY`（`COZE_API_TOKEN` 已废弃，换掉了）
+2. 智谱控制台的余额/配额。返回 **429** 就是欠费或超出免费档限制
+3. 用 `pnpm test:translate` 本地打一次，日志会打出每个通道的尝试与失败原因
+4. 翻译失败时文章会被**丢弃而不是以原文入库**，所以表面现象是
+   「候选有 N 篇，实际入库 0 篇」，而不是公众号里出现英文
 
 ### 微信推送失败
 1. 检查 AppID/AppSecret 是否正确
-2. 检查 IP 白名单是否包含服务器出口 IP
+2. 确认 `USE_WECHAT_CLOUD_CALL=true`，云调用功能已开启，且接口路径已添加
+   （`/cgi-bin/draft/add`、`/cgi-bin/material/add_material`）
 3. 查看日志中的错误信息
+
+> 走云调用**不需要 IP 白名单**，也**不需要配置 access_token**——
+> 由微信云托管侧拦截 `api.weixin.qq.com` 完成鉴权。
+> 这也是当初选择留在云托管的原因（固定出口 IP 问题被绕开了）。
+> 代价是：**本地永远推不出去**，推送只能在云上验证。
