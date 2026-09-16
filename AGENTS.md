@@ -114,7 +114,11 @@
 ## 翻译保中文（重要）
 
 - **部分国家（哈萨克、吉尔吉斯等）曾推送英文原文**：根因是 LLM 翻译失败/JSON 解析失败后，抓取侧静默把原文入库，推送又被优选出去。
-- **翻译逻辑已抽到 `src/lib/translate.ts`（`translateNews`）**：多模型降级链，按序尝试智谱（GLM，`ZHIPU_API_KEY`）→ 豆包（动态 import `coze-coding-dev-sdk` 的 `LLMClient`，模型 `doubao-seed-2-0-lite`）；每模型内部最多重试 3 次 + 多策略 JSON 解析；全部失败才按失败处理。
+- **翻译逻辑已抽到 `src/lib/translate.ts`（`translateNews`）**：多模型降级链，按序尝试智谱（GLM，`ZHIPU_API_KEY`，默认型号 `glm-4.7-flash`）→ DeepSeek（`DEEPSEEK_API_KEY`，默认型号 `deepseek-chat`）；每个模型最多重试 3 次（指数退避）+ 多策略 JSON 解析；全部失败才按失败处理。
+- **模型名可通过环境变量覆盖**（`ZHIPU_MODEL` / `DEEPSEEK_MODEL`），厂商调整型号代号时不需要改代码。
+- **未配置 Key 的通道会被直接跳过**，不做无意义重试；启动日志里会打印「以下翻译通道未启用」。
+- **已移除扣子专属依赖 `coze-coding-dev-sdk`**（原豆包降级通道），备用模型不再绑定扣子平台。
+- **本地自测**：`pnpm tsx scripts/test-translate.ts`（在 `.env.local` 里配好 Key 后运行），只验证模型调用与中文解析，不碰数据库和微信接口。
 - **入库端**（`fetch-news/route.ts`）：翻译结果必须通过 `isChineseText` 校验（标题+正文中文字符占比达标才视为成功），否则 `translated=false` 且**跳过该篇不入库**（`continue`），绝不把原文写入 content。
 - **推送端**（`wechat/push/route.ts`）：精选前用 `isChineseText(a.title) && isChineseText(a.content)` 过滤非中文文章，历史英文数据也不会被推送。
 - 搭配工具：`src/lib/utils.ts` 的 `isChineseText(text, threshold=0.4)`，中文字符占比达到阈值即视为中文。

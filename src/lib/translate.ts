@@ -1,8 +1,14 @@
 import { isChineseText } from './utils';
 
 /**
- * 多模型新闻翻译：优先智谱，失败自动降级到平台豆包等模型，
- * 从根上减少“翻译失败导致原文入库/推送英文”的概率。
+ * 多模型新闻翻译：按顺序尝试多个 OpenAI 兼容的大模型接口，任一成功即返回。
+ *
+ * 设计要点
+ * --------
+ * - 所有 provider 都走 OpenAI 兼容的 /chat/completions，新增一家只需往 PROVIDERS 里加一条。
+ * - 每个 provider 的 Key 与模型名都从环境变量读取，未配置 Key 的 provider 直接跳过，
+ *   不做无意义的重试（旧版会把没配 Key 的模型硬重试 3 次，白等 2.4 秒）。
+ * - 已移除对扣子专属 SDK（coze-coding-dev-sdk）的依赖，备用通道不再绑定扣子平台。
  */
 export interface TranslateResult {
   titleZh: string;
@@ -13,6 +19,39 @@ export interface TranslateResult {
   translated: boolean;
   provider: string;
 }
+
+interface ChatProvider {
+  /** 日志与 provider 字段用的名字 */
+  name: string;
+  /** 存放 API Key 的环境变量名；未设置则跳过该通道 */
+  keyEnv: string;
+  /** 覆盖模型名的环境变量名（可选） */
+  modelEnv: string;
+  defaultModel: string;
+  endpoint: string;
+}
+
+const PROVIDERS: ChatProvider[] = [
+  {
+    // 智谱 GLM-4.7-Flash：当前免费档，200K 上下文，国内直连。
+    // 注意免费档限制为「同时 1 个并发」，本项目是顺序翻译，正好不受影响。
+    // 若控制台的免费型号代号有变，改 ZHIPU_MODEL 环境变量即可，不必改代码。
+    name: 'zhipu',
+    keyEnv: 'ZHIPU_API_KEY',
+    modelEnv: 'ZHIPU_MODEL',
+    defaultModel: 'glm-4.7-flash',
+    endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+  },
+  {
+    // DeepSeek：按量付费，价格极低，作为降级通道。
+    // 模型名请以控制台「模型与价格」页为准，用 DEEPSEEK_MODEL 覆盖。
+    name: 'deepseek',
+    keyEnv: 'DEEPSEEK_API_KEY',
+    modelEnv: 'DEEPSEEK_MODEL',
+    defaultModel: 'deepseek-chat',
+    endpoint: 'https://api.deepseek.com/v1/chat/completions',
+  },
+];
 
 const TRANSLATE_PROMPT = `你是一位专业的中亚地区新闻翻译编辑，专注于为中国投资者提供高质量的中亚投资资讯。
 
@@ -97,64 +136,60 @@ function normalizeResult(
   };
 }
 
-// ---- Provider 1：智谱（ZHIPU_API_KEY） ----
-async function translateWithZhipu(title: string, content: string, sourceLanguage: string): Promise<TranslateResult | null> {
-  const apiKey = process.env.ZHIPU_API_KEY;
-  if (!apiKey) return null;
-
-  const prompt = buildPrompt(title, content, sourceLanguage);
-  try {
-    const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'glm-4',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-      }),
-    });
-    if (!response.ok) {
-      console.error('智谱 AI 请求失败:', response.status, (await response.text()).substring(0, 200));
-      return null;
-    }
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const llmContent = data.choices?.[0]?.message?.content || '';
-    if (!llmContent) return null;
-    const parsed = parseLlmJson(llmContent);
-    if (!parsed) return null;
-    return normalizeResult(parsed, title, content, 'zhipu');
-  } catch (err) {
-    console.error('智谱 AI 调用异常:', err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-
-// ---- Provider 2：平台豆包（coze-coding-dev-sdk） ----
-async function translateWithDoubao(title: string, content: string, sourceLanguage: string): Promise<TranslateResult | null> {
-  try {
-    const { LLMClient, Config } = await import('coze-coding-dev-sdk');
-    const client = new LLMClient(new Config());
-    const prompt = buildPrompt(title, content, sourceLanguage);
-    const response = await client.invoke(
-      [{ role: 'user', content: prompt }],
-      { model: 'doubao-seed-2-0-lite-260215', temperature: 0.3 }
-    );
-    const llmContent = response.content || '';
-    if (!llmContent) return null;
-    const parsed = parseLlmJson(llmContent);
-    if (!parsed) return null;
-    return normalizeResult(parsed, title, content, 'doubao');
-  } catch (err) {
-    console.error('豆包翻译失败:', err instanceof Error ? err.message : err);
-    return null;
-  }
+function resolveModel(provider: ChatProvider): string {
+  const override = process.env[provider.modelEnv];
+  return (override && override.trim()) || provider.defaultModel;
 }
 
 /**
- * 多模型翻译主入口：依次尝试智谱 → 豆包，中途成功即返回。
+ * 调用一个 OpenAI 兼容的 chat/completions 接口，返回模型输出的原始文本。
+ * 任何失败（未配置 Key / 网络错误 / 非 2xx / 空响应）都返回 null，由调用方决定是否重试。
+ */
+async function callChatProvider(provider: ChatProvider, prompt: string): Promise<string | null> {
+  const apiKey = process.env[provider.keyEnv];
+  if (!apiKey) return null;
+
+  const model = resolveModel(provider);
+
+  try {
+    const response = await fetch(provider.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      console.error(`[${provider.name}/${model}] 请求失败 ${response.status}: ${body.substring(0, 200)}`);
+      return null;
+    }
+
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const llmContent = data.choices?.[0]?.message?.content || '';
+    if (!llmContent) {
+      console.error(`[${provider.name}/${model}] 返回内容为空`);
+      return null;
+    }
+    return llmContent;
+  } catch (err) {
+    console.error(`[${provider.name}/${model}] 调用异常:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+const MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 800;
+
+/**
+ * 多模型翻译主入口：按 PROVIDERS 顺序依次尝试，中途成功即返回。
  * 若全部失败，返回 translated=false（内容保持原文但不入库，由调用方处理）。
  */
 export async function translateNews(
@@ -162,29 +197,47 @@ export async function translateNews(
   content: string,
   sourceLanguage: string
 ): Promise<TranslateResult> {
-  const providers: Array<[string, () => Promise<TranslateResult | null>]> = [
-    ['zhipu', () => translateWithZhipu(title, content, sourceLanguage)],
-    ['doubao', () => translateWithDoubao(title, content, sourceLanguage)],
-  ];
+  const prompt = buildPrompt(title, content, sourceLanguage);
+  const unconfigured: string[] = [];
 
-  for (const [name, fn] of providers) {
-    for (let retry = 1; retry <= 3; retry++) {
-      console.log(`开始调用 ${name} 翻译（第 ${retry}/3 次尝试）...`);
-      try {
-        const result = await fn();
-        if (result && result.translated && result.contentZh !== content) {
-          return result;
-        }
-        if (result && !result.translated) {
-          console.log(`${name} 返回非有效中文，继续下次`);
-          continue;
-        }
-      } catch (err) {
-        console.error(`${name} 调用失败（第 ${retry} 次）:`, err instanceof Error ? err.message : err);
-      }
-      if (retry < 3) await new Promise((r) => setTimeout(r, 800));
+  for (const provider of PROVIDERS) {
+    if (!process.env[provider.keyEnv]) {
+      unconfigured.push(`${provider.name}（缺少 ${provider.keyEnv}）`);
+      continue;
     }
+
+    const model = resolveModel(provider);
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      console.log(`[translate] ${provider.name}/${model} 第 ${attempt}/${MAX_ATTEMPTS} 次尝试...`);
+
+      const raw = await callChatProvider(provider, prompt);
+      if (raw) {
+        const parsed = parseLlmJson(raw);
+        if (parsed) {
+          const result = normalizeResult(parsed, title, content, provider.name);
+          if (result.translated && result.contentZh !== content) {
+            return result;
+          }
+          console.log(`[translate] ${provider.name} 返回内容未通过中文校验，继续重试`);
+        } else {
+          console.log(`[translate] ${provider.name} 返回内容不是合法 JSON，继续重试`);
+        }
+      }
+
+      // 指数退避：800ms / 1600ms。限流（429）时给服务端一点恢复时间。
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * attempt));
+      }
+    }
+
+    console.log(`[translate] ${provider.name} 通道失败，切换到下一个通道`);
   }
+
+  if (unconfigured.length > 0) {
+    console.error(`[translate] 以下翻译通道未启用：${unconfigured.join('、')}`);
+  }
+  console.error('[translate] 所有翻译通道均失败，本篇将不入库（保持中文优先策略）');
 
   return {
     titleZh: title,
