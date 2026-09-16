@@ -40,6 +40,35 @@
 - 安装所有依赖：`pnpm install`
 - 移除依赖：`pnpm remove <package>`
 
+### corepack 交互式确认（本地必踩）
+
+`package.json` 里锁了 `packageManager: pnpm@9.0.0`。若本机 pnpm 版本与它不一致，
+corepack 会先下载指定版本，并**弹一个交互式确认**：
+
+```
+! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-9.0.0.tgz
+? Do you want to continue? [Y/n]
+```
+
+在脚本/CI/容器里没人回答这一问，就会永久停在原地（表现为「命令跑着跑着没反应了」）。
+
+- `scripts/dev.sh` 与 `scripts/build.sh` 已在脚本内置 `COREPACK_ENABLE_DOWNLOAD_PROMPT=0`，走脚本不受影响。
+- 但**外层** `pnpm <script>` 由你自己 shell 里的 pnpm shim 处理，脚本内的设置管不到它。
+  首次卡住时任选其一：
+  - 直接调脚本：`bash scripts/dev.sh`（绕过外层 shim）
+  - 或给当前 shell 加：`export COREPACK_ENABLE_DOWNLOAD_PROMPT=0`
+  - 或一次性激活锁定版本：`corepack prepare pnpm@9.0.0 --activate`
+
+### 本地校验命令
+
+| 命令 | 作用 | 需要 Key |
+| --- | --- | --- |
+| `pnpm verify:local` | 类型检查 + 频道解析用例，**提交前先跑这个** | 否 |
+| `pnpm ts-check` | 全量 TypeScript 类型检查 | 否 |
+| `pnpm test:channels` | `TELEGRAM_CHANNELS` 解析用例（12 条） | 否 |
+| `pnpm test:translate` | 真实调一次翻译模型 | **是** |
+| `pnpm lint:build` | ESLint | 否 |
+
 ## 开发规范
 
 ### 编码规范
