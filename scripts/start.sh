@@ -12,9 +12,9 @@ DEPLOY_RUN_PORT="${DEPLOY_RUN_PORT:-${PORT:-$DEFAULT_PORT}}"
 
 start_service() {
     cd "${COZE_WORKSPACE_PATH}"
+    # 这一行只在 start_service 里打一次。旧版函数内、函数外各打一遍，日志里看起来像启动了两次。
     echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for deploy..."
     PORT=${DEPLOY_RUN_PORT} NODE_ENV=production node dist/server.js
 }
 
-echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for deploy..."
 start_service

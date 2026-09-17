@@ -202,6 +202,27 @@ async function addDraft(articles: DraftArticle[]): Promise<string> {
   return data.media_id;
 }
 
+// 当天日期（北京时间）。
+// 旧版用的是 `new Date().toISOString().split('T')[0]`，取的是 UTC 日期：
+// 北京 08:00 与 19:00 都落在同一个 UTC 日，于是同一天两次推送生成同名草稿。
+// 这里统一按 Asia/Shanghai 出 YYYY-MM-DD。
+function beijingDate(d: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+// 时段标记：由调度器传入，只用来区分同一天的早报/晚报。
+// 手动调用（不带 period）时返回空串，标题退回原来的格式。
+function periodSuffix(period: unknown): string {
+  if (period === 'morning') return '早报';
+  if (period === 'evening') return '晚报';
+  return '';
+}
+
 // 生成微信公众号排版 HTML
 function generateWechatHtml(
   countryName: string,
@@ -304,7 +325,9 @@ function generateWechatHtml(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { hours = 24 } = body;
+    const { hours = 24, period } = body;
+    const suffix = periodSuffix(period);
+    const today = beijingDate();
     const maxPerCountry = 30;
 
     // 计算时间范围（过去 N 小时）
@@ -312,7 +335,9 @@ export async function POST(request: NextRequest) {
     const startDate = new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
     const endDate = now.toISOString();
 
-    console.log(`微信公众号推送：汇总过去${hours}小时新闻，每国精选（上限 ${maxPerCountry} 篇）`);
+    console.log(
+      `微信公众号推送：${today}${suffix ? ' ' + suffix : ''}，汇总 ${startDate} 至 ${endDate}（过去 ${hours} 小时），每国精选（上限 ${maxPerCountry} 篇）`
+    );
 
     const results = [];
 
@@ -405,7 +430,7 @@ export async function POST(request: NextRequest) {
       const htmlContent = generateWechatHtml(
         country.name,
         country.flag,
-        new Date().toISOString().split('T')[0],
+        suffix ? `${today} · ${suffix}` : today,
         wechatArticles
       );
 
@@ -418,12 +443,13 @@ export async function POST(request: NextRequest) {
       const thumbMediaId = await uploadThumb(thumbUrl);
 
       // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
-      const dateStr = new Date().toISOString().split('T')[0];
+      // 标题带「早报 / 晚报」：同一天两次推送的草稿标题必须不同，
+      // 否则草稿箱里会出现两份一模一样的标题，分不清哪份是哪份。
       const mediaId = await addDraft([{
-        title: `${country.name} - ${dateStr} 投资资讯`,
+        title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
         author: '中亚投资资讯',
         content: htmlContent,
-        digest: `${country.name}今日精选${selectedArticles.length}条投资资讯`,
+        digest: `${country.name}${suffix || '今日'}精选${selectedArticles.length}条投资资讯`,
         thumbMediaId: thumbMediaId,
         needOpenComment: 0,
         onlyFansCanComment: 0,

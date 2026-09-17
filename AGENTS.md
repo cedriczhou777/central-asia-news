@@ -173,7 +173,16 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 
 ## 定时任务
 
-- `src/lib/scheduler.ts` 用 node-cron 注册 2 个任务（每天早上 08:00、晚上 19:00，Asia/Shanghai 时区），每次先抓取当天新闻（每国≥10篇）再推送公众号（过去24h，"今日精选"按实际可用量推送）。
+- `src/lib/scheduler.ts` 用 node-cron 注册 2 个任务（每天早上 08:00、晚上 19:00，Asia/Shanghai 时区），每次先抓取当天新闻（每国≥10篇）再推送公众号（"今日精选"按实际可用量推送）。
+- **两次推送的回看窗口首尾相接、互不重叠**（改动原因见下）：早报回看 **13h**（昨日19:00→今日08:00），晚报回看 **11h**（今日08:00→今日19:00）。
+  窗口与时段标记由 `PUBLISH_SCHEDULES` 给出，经 `runPublishCycle(hours, period)` 传给 `POST /api/wechat/push`。
+- **旧版两个坑（已修，别再退回去）**：① 两次都用 `hours: 24`，中间 13 小时重叠 → 同一条新闻连着进两次推送；
+  ② 草稿标题的日期用 `new Date().toISOString().split('T')[0]`（**UTC 日期**），北京 08:00 与 19:00 落在同一个 UTC 日 →
+  同一天 5 国草稿标题完全相同，草稿箱里成对出现。现在日期改为 `Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai'})`，
+  并在标题/digest 里加「早报 / 晚报」后缀（`periodSuffix()`）。
+- **`/api/wechat/push` 的入参契约**：`{ hours?: number (默认24), period?: 'morning'|'evening' }`。
+  不传 `period` → 标题不带后缀、窗口按传入 hours 走，用于人工补跑（`{"hours": 24}`）。
+- 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发公众号推送任务」「回看 N 小时」。
 - **仅生产模式启动**：`src/server.ts` 在 `!dev`（NODE_ENV=production）时调用 `startScheduler()`；`scripts/start.sh` 设置 `NODE_ENV=production` 并 `node dist/server.js`。本地预览走 `scripts/dev.sh`（`next dev`），**不启动调度器**。
 - 调试定时任务是否触发：运行日志搜「启动定时任务调度器」「触发公众号推送任务」。
 - 曾出现早上未触发：旧版本运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用，后已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。

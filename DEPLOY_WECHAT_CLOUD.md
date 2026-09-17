@@ -21,32 +21,36 @@
 
 在云托管控制台 → **设置** → **环境变量** 中添加：
 
+**必填（缺了会直接影响功能）**
+
 | 变量名 | 值 | 说明 |
 |--------|-----|------|
-| `WECHAT_APP_ID` | `wxe8aafd263a7d6a8c` | 公众号 AppID |
-| `WECHAT_APP_SECRET` | `af0d77688688178c85dab4ad8cc5ca6d` | 公众号 AppSecret |
-| `USE_WECHAT_CLOUD_CALL` | `true` | 启用云调用 |
-| `WECHAT_CLOUD_KEY` | (留空) | 云调用密钥（如需要） |
-| `NEXT_PUBLIC_SUPABASE_URL` | (你的 Supabase URL) | 数据库地址 |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (你的 Supabase Key) | 数据库密钥 |
-| `ZHIPU_API_KEY` | (你的智谱 Key) | **翻译用，必填**（旧版是 `COZE_API_TOKEN`，已废弃） |
-| `ZHIPU_MODEL` | `glm-4.7-flash` | 可选，留空即用此默认值 |
+| `ZHIPU_API_KEY` | (你的智谱 Key) | **翻译用，必填**。`glm-4.7-flash` 当前免费档；缺了翻译链路全断，文章会在入库前被丢弃 |
+| Supabase 地址 / Key | (你的 Supabase URL / Key) | 数据库。读变量的顺序是 `SUPABASE_URL` → `NEXT_PUBLIC_SUPABASE_URL` → `COZE_SUPABASE_URL`（Key 同理，`ANON_KEY` 三套命名任选其一） |
 
-**关于 Supabase 变量名**：读变量的顺序是 `SUPABASE_URL` → `NEXT_PUBLIC_SUPABASE_URL` → `COZE_SUPABASE_URL`，
-三套命名任选其一都能跑。**已经在用 `NEXT_PUBLIC_SUPABASE_URL` 的不用改**，照旧即可。
+**建议配置**
 
-**关于翻译**：`COZE_API_TOKEN` 已随扣子 SDK 一并移除，**必须新增 `ZHIPU_API_KEY`**，
-否则翻译链路全断，所有文章会在入库前被丢弃（日志表现为「投资相关候选 N 篇 → 实际入库 0 篇」）。
-Key 在 <https://open.bigmodel.cn> 控制台申请，`glm-4.7-flash` 当前是免费档。
+| 变量名 | 值 | 说明 |
+|--------|-----|------|
+| `DEEPSEEK_API_KEY` | (你的 DeepSeek Key) | 智谱失败时的**降级通道**，按量付费。不配的话智谱一旦限流/欠费，整批文章直接不入库（单点风险） |
+| `SUPABASE_SERVICE_ROLE_KEY` | (Supabase service_role) | 服务端直接写库，不受 RLS 影响。不配则回退到 anon key |
 
-**可选变量**（不配则自动跳过，不影响主链路）：
+**可选**
 
 | 变量名 | 说明 |
 |--------|------|
 | `TELEGRAM_WORKER_URL` | Cloudflare Worker 代理地址；不配则不抓 Telegram |
 | `TELEGRAM_CHANNELS` | 频道配置，格式 `国家:频道[@频道...]`，逗号分隔。留空用内置默认值 |
-| `DEEPSEEK_API_KEY` | 智谱失败时的降级通道，按量付费 |
-| `SUPABASE_SERVICE_ROLE_KEY` | 有则优先用于写入 |
+| `ZHIPU_MODEL` | 覆盖翻译型号，留空即用默认值 `glm-4.7-flash` |
+| `DEEPSEEK_MODEL` | 覆盖降级型号，留空即用默认值 `deepseek-chat` |
+
+> **推送不需要任何变量。** 代码走微信**云调用**：由云托管侧拦截 `api.weixin.qq.com`
+> 完成鉴权，既不需要 `access_token`，也不需要 AppID / AppSecret。
+> 所以 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`USE_WECHAT_CLOUD_CALL`、`WECHAT_CLOUD_KEY`
+> 这几个变量**代码根本不读**（`grep -r "WECHAT_APP_ID" src` 是空的），留着无害，
+> 但别指望改它们能影响推送行为。真正要做的控制台配置见 6.4 节。
+
+**关于翻译**：`COZE_API_TOKEN` 已随扣子 SDK 一并移除。Key 在 <https://open.bigmodel.cn> 控制台申请。
 
 ### 3. 上传代码
 
@@ -73,7 +77,14 @@ tar -czf deploy.tar.gz --exclude=node_modules --exclude=.next --exclude=.git .
 
 > **重要变更**：这里**只配预热触发器，不配业务触发器**。
 >
-> 真正的抓取+推送由**应用内调度器**负责（`src/lib/scheduler.ts`，北京时间 08:00 / 19:00）。
+> 真正的抓取+推送由**应用内调度器**负责（`src/lib/scheduler.ts`）。每天两次，
+> 两段回看窗口**首尾相接、互不重叠**：
+>
+> | 时段 | 触发（北京时间） | 回看窗口 |
+> |------|----------------|---------|
+> | 早报 | 08:00 | 13 小时（昨日 19:00 → 今日 08:00） |
+> | 晚报 | 19:00 | 11 小时（今日 08:00 → 今日 19:00） |
+>
 > 云托管在 `container.minNum: 0` 时会把实例缩容到零，进程一停应用内定时器也就没了，
 > 所以需要提前 5 分钟把实例唤醒。
 >
@@ -107,24 +118,39 @@ payload 留空 `{}` 即可，不需要传任何业务参数。
 
 #### 6.1 确认服务起来了
 
-访问控制台里该服务的「访问地址」。如果服务不对外，就看日志里有没有：
+**访问地址怎么找**（控制台里没有叫「访问地址」的独立菜单）：
+
+1. 进云托管控制台，左侧选到服务 `central-asia-news`
+2. 顶部页签切到 **服务设置**（有的版本叫「设置」）
+3. 往下找 **默认域名 / 公网访问** 一栏 —— 打开它旁边那个开关，域名就在同一行
+4. 当前这个环境的域名是
+   `https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com`
+   （结尾固定是 `.sh.run.tcloudbase.com`）
+
+> 控制台提示「测试期间默认域名有效期至 2026/09/04」——**这条提示可以忽略**，
+> 它只约束「小程序/公众号后台里回填请求域名」的场景，不影响直接用浏览器或 curl 访问。
+> 要续期就点提示后面的「点击续期」。
+
+如果服务不对外，就看日志里有没有：
 
 ```
-> Server listening at http://0.0.0.0:3000
+> Server listening at http://central-asia-news-056:3000 as production
 启动定时任务调度器...
-已注册公众号推送任务：0 8 * * * (早上 08:00)
-已注册公众号推送任务：0 19 * * * (晚上 19:00)
+已注册公众号推送任务：0 8 * * * (早上 08:00（早报）)，回看 13 小时
+已注册公众号推送任务：0 19 * * * (晚上 19:00（晚报）)，回看 11 小时
 共注册 2 个定时任务
 ```
 
 - 看到「共注册 **2** 个定时任务」= 版本对了。**如果是 4 个，说明部署的还是旧代码。**
-- 完全看不到这两行 = 实例被缩容到零了，发一次请求把它唤醒再看。
+- 看到「回看 13 小时 / 11 小时」= 代码里「两次推送窗口不重叠」的修复已生效。
+  **如果两行都是「回看 24 小时」，说明跑的是修复前的旧版本。**
+- 完全看不到这几行 = 实例被缩容到零了，发一次请求把它唤醒再看。
 
 #### 6.2 探活接口（不写库）
 
 ```bash
-curl https://<你的服务域名>/api/fetch-news
-curl https://<你的服务域名>/api/pipeline
+curl https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/fetch-news
+curl https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/pipeline
 ```
 
 都该返回 `HTTP 200` + 一段 JSON 说明。
@@ -132,7 +158,7 @@ curl https://<你的服务域名>/api/pipeline
 #### 6.3 真实抓一次（不推送，先验证抓取+翻译）
 
 ```bash
-curl -X POST https://<你的服务域名>/api/fetch-news \
+curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/fetch-news \
   -H 'Content-Type: application/json' \
   -d '{"minPerCountry": 3}'
 ```
@@ -159,13 +185,25 @@ curl -X POST https://<你的服务域名>/api/fetch-news \
 
 #### 6.4 全链路 + 推送
 
+**推送前必须在控制台做两件事**（这是云调用，不是环境变量能解决的）：
+
+1. 确认该服务已开通**微信开放接口服务**（云调用），并把公众号授权给这个环境
+2. 把用到的接口路径加进白名单，一共两个：
+   - `/cgi-bin/draft/add` —— 建草稿
+   - `/cgi-bin/material/add_material` —— 上传正文图片/封面到微信素材库
+
+> 少了第 2 步的典型症状：日志里能看到 `公众号推送失败`，或者草稿建出来了但正文图片全没了。
+
 确认 6.3 能入库之后：
 
 ```bash
-curl -X POST https://<你的服务域名>/api/pipeline \
+curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/pipeline \
   -H 'Content-Type: application/json' \
   -d '{"push": true}'
 ```
+
+> 这个接口不带 `period`，按老口径汇总**过去 24 小时**，生成的草稿标题没有「早报/晚报」后缀。
+> 它适合用来人工补跑；日常的两次定时推送由应用内调度器按 13h / 11h 的增量窗口跑。
 
 日志里应有：
 
@@ -180,16 +218,35 @@ curl -X POST https://<你的服务域名>/api/pipeline \
 
 #### 6.5 等一次真实定时
 
-上面都通了，再等下一个 08:00 / 19:00 看是否自动触发。
-日志关键词：`触发公众号推送任务 (早上 08:00)`。
+上面都通了，再等下一个 08:00 / 19:00 看是否自动触发。日志关键词：
+
+```
+触发公众号推送任务 (早上 08:00（早报）)
+开始执行微信公众号推送任务（时段 morning，回看过去 13 小时）...
+微信公众号推送：2026-09-18 早报，汇总 ...T19:00:00.000Z 至 ...T00:00:00.000Z（过去 13 小时）
+```
+
+推送完成后到公众号草稿箱确认：同一天应该只有 **5 个草稿**（5 个国家各 1 个），
+标题形如 `哈萨克斯坦 - 2026-09-18 早报 投资资讯`，晚报是 `... 晚报 ...`。
 
 ## 常见问题
 
+### Q: 草稿箱里同一个国家出现两份标题相同的草稿？
+A: 这是修复前的旧行为，两个成因已一并修掉：
+1. 两次推送都用「过去 24 小时」窗口，中间 13 小时重叠 → 改成 13h + 11h 首尾相接；
+2. 标题里的日期取的是 **UTC 日期**，北京 08:00 与 19:00 落在同一个 UTC 日 →
+   改成按 `Asia/Shanghai` 出日期，并加上「早报 / 晚报」后缀。
+
+看到「回看 24 小时」的注册日志 = 线上还是旧版本。
+
 ### Q: 云调用失败怎么办？
-A: 检查：
-1. 云调用功能是否已开启
-2. 接口路径是否已添加
-3. `USE_WECHAT_CLOUD_CALL` 是否设为 `true`
+A: 检查控制台（**都不是环境变量**）：
+1. 微信开放接口服务（云调用）是否已开通、公众号是否已授权给这个环境
+2. 接口路径白名单是否加了 `/cgi-bin/draft/add` 和 `/cgi-bin/material/add_material`
+3. 错误码对照：`40001/40014` = 未授权或走了普通 HTTP 调用（不是云调用）
+
+> 注意：`USE_WECHAT_CLOUD_CALL=true` 这种写法**在代码里没有任何作用**，
+> 云调用的开关只在控制台，不在环境变量。
 
 ### Q: 定时任务不执行？
 A: 按顺序检查：
@@ -197,6 +254,8 @@ A: 按顺序检查：
    看预热触发器（`55 23 * * *` / `55 10 * * *`）是否已启用、时区是否按 UTC 填。
 2. 有这行但到点没动 = 看有没有 `触发公众号推送任务` 这行，再看后续报错。
 3. 嫌预热不可靠，把 `container.config.json` 的 `minNum` 改成 `1` 让实例常驻。
+4. 某一时段失败导致那一段新闻没推：手动补一次
+   `curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push -H 'Content-Type: application/json' -d '{"hours": 24}'`
 
 ### Q: 抓取日志显示「实际入库 0 篇」，但候选数量正常？
 A: 翻译链路断了，文章在入库前被丢弃。检查：
