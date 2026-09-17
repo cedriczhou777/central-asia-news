@@ -184,6 +184,10 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 
 - 全项目唯一的端口口径在 `src/lib/runtime.ts` 的 `resolvePort()`：`DEPLOY_RUN_PORT` → `PORT` → `3000`。
 - `3000` 与 `container.config.json` 的 `container.port`、`Dockerfile` 的 `EXPOSE` 保持一致。
+- ⚠️ **线上跑多少端口，由「控制台 → 云托管 → 服务设置 → 端口」决定，不是由仓库里这几个文件决定。**
+  `container.config.json` 并不会被「Git 推送触发」这条流水线读取（2026-09-16 实测：文件写 3000，
+  而探针实际打 5000，部署因此失败）。改端口时**必须同步改控制台**，否则容器按代码里的端口监听、
+  平台按控制台的端口探活，表现为 `Liveness probe failed: connection refused`。
 - `scripts/start.sh` 在拉起 node 前会把解析结果写回 `PORT`，因此进程内 `process.env.PORT` 已是最终值。
 - **禁止**在业务代码里写死端口（旧版 `api/pipeline/route.ts` 写死 `localhost:5000`，与部署声明对不上就是静默失败）。需要内部互调请用 `resolveSelfBaseUrl()`。
 
