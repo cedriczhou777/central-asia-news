@@ -184,7 +184,15 @@ curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.co
 ```
 
 > 这个接口是**立即返回、后台处理**，响应里只有「任务已启动」，
-> **真正的结果在日志里**。不知道这点会以为它没跑。
+> **真正的结果要么在日志里、要么在 `lastRun` 里**。不知道这点会以为它没跑。
+>
+> 想看结果就 GET 同一个地址，读 `lastRun`（字段含义见下面「抓取到底跑完没有？」那条）。
+
+```bash
+# 轮询到 running=false 就是本轮跑完了
+curl -s https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/fetch-news \
+  | python3 -c 'import sys,json; s=json.load(sys.stdin)["lastRun"]; print(s["running"], s["finishedAt"], (s.get("summary") or {}).get("saved"), s.get("error"))'
+```
 
 日志里应出现完整的漏斗：
 
@@ -222,14 +230,51 @@ curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.co
   -d '{"push": true}'
 ```
 
-> 这个接口不带 `period`，按老口径汇总**过去 24 小时**，生成的草稿标题没有「早报/晚报」后缀。
-> 它适合用来人工补跑；日常的两次定时推送由应用内调度器按 13h / 11h 的增量窗口跑。
+> **这个接口也是「立即返回、后台跑完」的**（和 fetch-news 一样）。响应里只有
+> 「流水线已启动」，真正的进度和结果要 GET 同一个地址、读 `lastRun.steps`。
+>
+> ⚠️ **别对着公网域名等它跑完**：整条链是「抓取（十几分钟）→ 日报 → 推送」，
+> 网关 65 秒就把连接切了，curl 只会拿到 `HTTP 504 Gateway Time-out`。
+> 那**不代表任务失败** —— 请求在服务端照样继续跑到结束，只是响应送不回来。
+> 判断成功与否的唯一办法是轮询 `lastRun`。
 
-日志里应有：
+```bash
+# 边跑边看进度：steps 是逐步日志，running=false 就是整条跑完了
+curl -s https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/pipeline \
+  | python3 -c 'import sys,json; s=json.load(sys.stdin)["lastRun"]; print("running=",s["running"]); [print(" ",l) for l in s["steps"]]; print("error=",s["error"])'
+```
+
+跑完后 `lastRun.steps` 应形如：
 
 ```
-公众号推送完成：成功创建 N 个草稿（共 M 篇）
+[2026-09-18T...] 开始采集新闻...
+[2026-09-18T...] 采集已触发：{"success":true,...}
+[2026-09-18T...] 采集完成：{"saved":40,"sourceCounts":{...}}
+[2026-09-18T...] 开始生成各国日报...
+[2026-09-18T...] 日报生成完成：5 个国家
+[2026-09-18T...] 开始推送微信公众号草稿（按国别分组）...
+[2026-09-18T...] 公众号推送完成：{"drafts":[...5 个...],"failures":[]}
 ```
+
+> `steps` 里带的是**真实结果**，不是「已触发」。旧实现在异步接口出现后读的是启动响应，
+> 日志会写成「采集完成：共入库 undefined 篇文章」——看着像成功，其实什么都没读到。
+
+只补推送（不重跑抓取和日报）就直接调推送接口：
+
+```bash
+curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push \
+  -H 'Content-Type: application/json' \
+  -d '{"hours": 11, "period": "evening"}'
+
+# 结果同样靠 GET 拿
+curl -s https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push \
+  | python3 -c 'import sys,json; s=json.load(sys.stdin)["lastRun"]; print("running=",s["running"],"dur=",s["durationMs"],"ms"); print("drafts=",[d["country_name"] for d in (s.get("summary") or {}).get("drafts",[])]); print("failures=",(s.get("summary") or {}).get("failures")); print("error=",s.get("error"))'
+```
+
+> 推送不带 `period` 时按老口径汇总**过去 24 小时**，草稿标题没有「早报/晚报」后缀，
+> 适合人工补跑；日常两次定时推送由应用内调度器按 13h / 11h 的增量窗口跑。
+> 一轮推送要做「逐篇下载外链图 → 转码 → 传微信素材库 → 建草稿」，实测远超 65 秒，
+> 所以**手动调也一定会遇到 504**，照上面轮询 `lastRun` 即可。
 
 然后去公众号后台的草稿箱确认。
 
@@ -242,9 +287,18 @@ curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.co
 
 ```
 触发公众号推送任务 (早上 08:00（早报）)
+开始抓取当天新闻...
+新闻抓取已触发: {"success":true,...}
+新闻抓取完成: {"saved":40,"sourceCounts":{...}}
 开始执行微信公众号推送任务（时段 morning，回看过去 13 小时）...
 微信公众号推送：2026-09-18 早报，汇总 ...T19:00:00.000Z 至 ...T00:00:00.000Z（过去 13 小时）
+微信公众号推送完成: {"drafts":[...],"failures":[]}
 ```
+
+> 注意是「**已触发**」和「**完成**」两行 —— 调度器触发了异步接口后会轮询到这一轮真正结束
+> 才往下走，所以日志里能看到 `drafts` / `failures` 的真实内容。
+> 只有「已触发」没有「完成」，说明等超时了（抓取 25 分钟 / 推送 20 分钟上限），
+> 日志里会有 `等待...超过 N 分钟仍未结束，不再等待` 的 warn。
 
 推送完成后到公众号草稿箱确认：同一天应该只有 **5 个草稿**（5 个国家各 1 个），
 标题形如 `哈萨克斯坦 - 2026-09-18 早报 投资资讯`，晚报是 `... 晚报 ...`。
@@ -276,6 +330,31 @@ A: 按顺序检查：
 3. 嫌预热不可靠，把 `container.config.json` 的 `minNum` 改成 `1` 让实例常驻。
 4. 某一时段失败导致那一段新闻没推：手动补一次
    `curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push -H 'Content-Type: application/json' -d '{"hours": 24}'`
+   —— 这个接口是异步的，curl 很可能报 504，**别当成失败**，结果用 `GET` 读 `lastRun`（见 6.4）。
+
+### Q: 手动调推送/流水线返回 `504 Gateway Time-out`，是失败了吗？
+A: **不一定是。** 微信云托管的网关（nginx）在 **65 秒**时切断连接，而推送一轮要在
+5 个国家上「下载外链图 → 转码 → 传微信素材库 → 建草稿」，流水线更重（还串了抓取和日报），
+**必然超过 65 秒** → 客户端拿到 504。
+
+关键区别：
+
+| | 表现 |
+|---|---|
+| 网关 65 秒切断 | 调用方 504；**服务端请求继续跑完** |
+| 任务真的失败 | `lastRun.error` 有值，或 `summary.failures` 里列了国家和原因 |
+
+所以 504 之后**先去查 `lastRun`**，别急着重推 —— 重推会建出重复草稿：
+
+```bash
+curl -s https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push \
+  | python3 -c 'import sys,json; s=json.load(sys.stdin)["lastRun"]; print(s["running"], s["finishedAt"], (s.get("summary") or {}).get("failures"), s.get("error"))'
+```
+
+`running=true` 说明还在跑，等着；`running=false` 且 `finishedAt` 已更新就是跑完了。
+
+**定时推送不受此影响**：应用内调度器走 `http://localhost:PORT`（见 `lib/runtime.ts` 的
+`resolveSelfBaseUrl`），不经过网关，没有 65 秒这回事。这个限制只影响「人工 curl 公网域名」。
 
 ### Q: 抓取到底跑完没有？推送为什么像是用的旧数据？
 A: `POST /api/fetch-news` 是「**立即返回、后台跑完**」的：HTTP 200 只代表任务已启动，
@@ -302,6 +381,17 @@ curl https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/fe
 | `error` | 整轮失败的原因（成功时为 null） |
 
 同一时间只允许跑一轮：重复 POST 会返回「上一轮抓取仍在进行，本次跳过」，不会并发抓。
+
+**推送接口 `/api/wechat/push` 和流水线 `/api/pipeline` 已经改成同一套模式**（2026-09-18），
+`GET` 也都返回 `lastRun`，字段口径一致：
+
+| 字段 | 含义 |
+|------|------|
+| `running` / `startedAt` / `finishedAt` / `durationMs` | 同抓取 |
+| `lastRun.summary.drafts[]` | **本轮建成功的草稿**（含 `country_name` / `media_id` / `article_count`） |
+| `lastRun.summary.failures[]` | **没建成的国家和原因** —— 排查「今天怎么没推」先看这个 |
+| `lastRun.error` | 整轮失败的原因（单国失败不会写这里，会进 `failures`） |
+| `lastRun.steps[]` | 仅流水线有：逐步日志（采集 / 日报 / 推送），一眼看出卡在哪一步 |
 
 ### Q: 抓取日志显示「实际入库 0 篇」，但候选数量正常？
 A: 翻译链路断了，文章在入库前被丢弃。检查：

@@ -18,6 +18,14 @@ import { resolveSelfBaseUrl } from './runtime';
 // 不会被下一次推送自动补上。人工补齐的办法是手动调一次
 //   POST /api/wechat/push  {"hours": 24}
 // 它不传 period，不走增量窗口，按老口径汇总过去 24 小时。
+//
+// ⚠️ 推送接口是**异步**的（和抓取一样）：POST 只代表任务已启动，立刻返回 200。
+// 结果要 GET 同一个地址、读 lastRun（summary.drafts 是建成功的草稿，
+// summary.failures 是失败的国家和原因）。
+// 直接对着公网域名 curl 会拿到 HTTP 504 —— 网关 65 秒就切断，
+// 而一轮推送（逐张下载外链图 → 转码 → 传素材库）远不止 65 秒。
+// 那只是响应送不回来，请求在服务端照样跑完；想知道结果就轮询 lastRun。
+// 应用内调度器走 localhost，不经过网关，没有这个问题。
 const PUBLISH_SCHEDULES = [
   { cron: '0 8 * * *', label: '早上 08:00（早报）', period: 'morning', hours: 13 },
   { cron: '0 19 * * *', label: '晚上 19:00（晚报）', period: 'evening', hours: 11 },
@@ -37,10 +45,15 @@ const API_BASE = resolveSelfBaseUrl();
 // 等待上限 25 分钟：2026-09-18 实测一轮抓取要十几分钟（触发后 9 分钟内库里一篇没多，
 // 之后才陆续入库）。超时也会继续推送 —— 宁可推稍旧的数据，也不要整轮什么都不做，
 // 但会打 warn，方便从日志看出「这轮是超时后硬推的」。
-const FETCH_POLL_INTERVAL_MS = 15_000;
+// 轮询间隔，抓取与推送共用 —— 两者都是「触发后要等一会儿」的后台任务。
+const POLL_INTERVAL_MS = 15_000;
 const FETCH_WAIT_TIMEOUT_MS = 25 * 60_000;
+// 推送比抓取快，但它要做「逐篇下载外链图 → 转码 → 传微信素材库 → 建草稿」，
+// 5 个国家串行，留 20 分钟足够宽松。
+const PUSH_WAIT_TIMEOUT_MS = 20 * 60_000;
 
-interface FetchRunStateLite {
+// 两个接口的 GET 都返回同样形状的 lastRun，这里只声明调度器真正用到的字段。
+interface RunStateLite {
   running?: boolean;
   finishedAt?: string | null;
   summary?: unknown;
@@ -51,26 +64,71 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// 读一次抓取状态。失败返回 null，由调用方决定忽略还是继续等。
-async function readFetchState(): Promise<FetchRunStateLite | null> {
+// 读一次任务状态。失败返回 null，由调用方决定忽略还是继续等。
+async function readRunState(path: string): Promise<RunStateLite | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/fetch-news`, { cache: 'no-store' });
-    return await res.json() as FetchRunStateLite;
+    const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
+    return await res.json() as RunStateLite;
   } catch (error) {
-    console.log(`[${new Date().toISOString()}] 读取抓取状态失败（忽略，继续等）:`, error);
+    console.log(`[${new Date().toISOString()}] 读取 ${path} 状态失败（忽略，继续等）:`, error);
     return null;
   }
 }
 
-async function runFetchNews() {
-  console.log(`[${new Date().toISOString()}] 开始抓取当天新闻...`);
-
-  // 先记下「此刻」的 finishedAt，用它区分「等到的完成」是新一轮还是上一轮的残留状态。
-  // 取不到（GET 失败）时为 null，下面的判断同样成立。
-  const before = await readFetchState();
+// 「触发 → 轮询到跑完」的通用流程，抓取与推送共用。
+//
+// 为什么必须等：这两个接口都是「立即返回、后台跑完」的 —— POST 返回 200 只代表
+// 任务已启动，真正的工作还在后台。旧调度器写的是
+//   await runFetchNews(); await runWechatPush();
+// 看着是串行，实际推送在抓取刚起步时就执行了，读到的永远是上一轮的旧数据，
+// 早报会把前一晚已经推过的新闻再推一遍。
+//
+// 判据必须是「running === false 且 finishedAt 与触发前不同」：
+// 只判 running === false 会立刻命中上一轮留下的终态，等于没等。
+async function triggerAndWait(
+  label: string,
+  path: string,
+  timeoutMs: number,
+  trigger: () => Promise<void>,
+) {
+  const before = await readRunState(path);
   const finishedBefore = before?.finishedAt ?? null;
 
   try {
+    await trigger();
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ${label}触发失败:`, error);
+    return;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS);
+    const state = await readRunState(path);
+    if (!state) continue;
+
+    const finishedNow = state.finishedAt ?? null;
+    if (!state.running && finishedNow && finishedNow !== finishedBefore) {
+      // summary 是各源采集量与最终入库数，或本轮建的草稿与失败国家；失败时这里是 error
+      console.log(
+        `[${new Date().toISOString()}] ${label}完成:`,
+        JSON.stringify(state.summary ?? state.error ?? state)
+      );
+      return;
+    }
+  }
+
+  // 超时也继续往下走：宁可推稍旧的数据 / 少一条日志，也不要整轮什么都不做。
+  // 但打 warn，方便从日志看出「这轮是超时后硬走的」。
+  console.warn(
+    `[${new Date().toISOString()}] 等待${label}超过 ${timeoutMs / 60_000} 分钟仍未结束，不再等待`
+  );
+}
+
+// 抓取当天新闻（每国先凑足一个下限量，具体推送篇数由推送端"今日精选"决定）
+async function runFetchNews() {
+  await triggerAndWait('新闻抓取', '/api/fetch-news', FETCH_WAIT_TIMEOUT_MS, async () => {
+    console.log(`[${new Date().toISOString()}] 开始抓取当天新闻...`);
     const response = await fetch(`${API_BASE}/api/fetch-news`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -79,57 +137,36 @@ async function runFetchNews() {
         skipTranslation: false,
       }),
     });
-
-    const result = await response.json();
-    console.log(`[${new Date().toISOString()}] 新闻抓取已触发:`, JSON.stringify(result));
-
-    const deadline = Date.now() + FETCH_WAIT_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      await sleep(FETCH_POLL_INTERVAL_MS);
-      const state = await readFetchState();
-      if (!state) continue;
-
-      const finishedNow = state.finishedAt ?? null;
-      if (!state.running && finishedNow && finishedNow !== finishedBefore) {
-        // summary 是各源采集量与最终入库数；失败时这里是 error 字符串
-        console.log(
-          `[${new Date().toISOString()}] 新闻抓取完成:`,
-          JSON.stringify(state.summary ?? state.error ?? state)
-        );
-        return;
-      }
-    }
-
-    console.warn(
-      `[${new Date().toISOString()}] 等待抓取超过 ${FETCH_WAIT_TIMEOUT_MS / 60_000} 分钟仍未结束，` +
-        `不再等待、直接开始推送（本轮可能用的是上一轮的数据）`
+    console.log(
+      `[${new Date().toISOString()}] 新闻抓取已触发:`,
+      JSON.stringify(await response.json())
     );
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] 新闻抓取失败:`, error);
-  }
+  });
 }
 
 // 微信公众号推送（按固定时段汇总新闻，逐国推送，不写死篇数）
 // hours 由定时表给出：早报 13h、晚报 11h，两段首尾相接不重叠。
 // period 只影响草稿标题里的「早报 / 晚报」标记，让同一天的两份草稿能区分开。
+//
+// 推送接口和抓取一样是异步的（原因见 push/route.ts 顶部的注释：手动调公网域名
+// 会被网关 65 秒切断）。调度器走 localhost 本来就不受那个限制，
+// 但同样要等到终态，日志里才会留下「本轮建了哪几个草稿 / 哪几个国家失败」这行 ——
+// 排查「今天怎么没推」全靠它。
 async function runWechatPush(hours: number, period: string) {
-  console.log(`[${new Date().toISOString()}] 开始执行微信公众号推送任务（时段 ${period}，回看过去 ${hours} 小时）...`);
-
-  try {
+  await triggerAndWait('微信公众号推送', '/api/wechat/push', PUSH_WAIT_TIMEOUT_MS, async () => {
+    console.log(
+      `[${new Date().toISOString()}] 开始执行微信公众号推送任务（时段 ${period}，回看过去 ${hours} 小时）...`
+    );
     const response = await fetch(`${API_BASE}/api/wechat/push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        hours,
-        period,
-      }),
+      body: JSON.stringify({ hours, period }),
     });
-
-    const result = await response.json();
-    console.log(`[${new Date().toISOString()}] 微信公众号推送任务完成:`, JSON.stringify(result));
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] 微信公众号推送任务失败:`, error);
-  }
+    console.log(
+      `[${new Date().toISOString()}] 微信公众号推送任务已触发:`,
+      JSON.stringify(await response.json())
+    );
+  });
 }
 
 // 每次推送：先抓最新新闻，再按本时段窗口整理推送公众号
@@ -157,7 +194,10 @@ export function startScheduler() {
   PUBLISH_SCHEDULES.forEach(({ cron: schedule, label, period, hours }) => {
     cron.schedule(schedule, () => {
       console.log(`[${new Date().toISOString()}] 触发公众号推送任务 (${label})`);
-      runPublishCycle(hours, period);
+      // cron 回调没人 await，必须在这里兜住异常，否则会变成 unhandled rejection
+      runPublishCycle(hours, period).catch((err) => {
+        console.error(`[${new Date().toISOString()}] 本轮「抓取 + 推送」异常:`, err);
+      });
     }, {
       timezone: 'Asia/Shanghai',
     });

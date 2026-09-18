@@ -392,10 +392,137 @@ function generateWechatHtml(
   `;
 }
 
+interface PushFailure {
+  country_code: string;
+  country_name: string;
+  error: string;
+}
+
+interface PushDraft {
+  country_code: string;
+  country_name: string;
+  media_id: string;
+  article_count: number;
+}
+
+// 一轮推送的结果。除 success/message 外，字段与原同步响应的结构保持一致，
+// 老调用方改成读 lastRun.summary 时不用改字段名。
+interface PushSummary {
+  hours: number;
+  period: string | null;
+  today: string;
+  drafts: PushDraft[];
+  failures: PushFailure[];
+}
+
+interface PushRunState {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  summary: PushSummary | null;
+  error: string | null;
+}
+
+// 上一轮推送的状态，放模块作用域（Next 的服务端路由与自定义服务器同进程，
+// 所以 POST 和 GET 拿到的是同一份状态）。
+//
+// 为什么推送也必须改成「立即返回、后台跑完」（2026-09-18 实测）：
+// 推送是重活 —— 要把每篇正文里的外链图片逐张下载、按魔数嗅探格式、必要时用 sharp 转码，
+// 再上传进微信素材库，5 个国家加起来远超网关的上限。手动 curl 公网域名会直接拿到
+// HTTP 504 Gateway Time-out（65 秒，nginx 切掉连接；此时请求在服务端很可能仍在继续，
+// 但调用方完全看不到结果，也就无法判断到底推成功没有）。
+// 改成异步后 POST 立刻返回 200，真正的结果用 GET 查 lastRun。
+// 顺带解决第二个问题：推送失败以前只写进容器日志（要进控制台才看得到）。
+//
+// 注意：应用内调度器走的是 http://localhost:PORT（见 lib/runtime.ts 的
+// resolveSelfBaseUrl），不经过网关，所以**定时推送本来就不受这个 65 秒限制**。
+// 本次改动主要惠及「人工补跑」和外部可观测性。
+let pushRunState: PushRunState = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  durationMs: null,
+  summary: null,
+  error: null,
+};
+
 export async function POST(request: NextRequest) {
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const hours = typeof body.hours === 'number' ? body.hours : 24;
+  const period = body.period;
+
+  // 同一时间只允许跑一轮：并发推送会对同一批文章重复建草稿，
+  // 草稿箱里就会出现成对的同名草稿（正是「一天两次窗口重叠」那类问题的观感）。
+  if (pushRunState.running) {
+    return NextResponse.json({
+      success: true,
+      message: '上一轮推送仍在进行，本次跳过（不重复触发）',
+      running: true,
+      startedAt: pushRunState.startedAt,
+    });
+  }
+
+  const startedAt = new Date().toISOString();
+  pushRunState = {
+    running: true,
+    startedAt,
+    finishedAt: null,
+    durationMs: null,
+    summary: null,
+    error: null,
+  };
+
+  // 立即返回，后台异步处理
+  processPush(hours, period)
+    .then((summary) => {
+      pushRunState = {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        summary,
+        error: null,
+      };
+    })
+    .catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('后台微信公众号推送失败:', err);
+      pushRunState = {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        summary: null,
+        error: message,
+      };
+    });
+
+  return NextResponse.json({
+    success: true,
+    message: '微信公众号推送任务已启动，后台处理中（用 GET 查 lastRun 看结果）',
+    hours,
+    period: typeof period === 'string' ? period : null,
+    startedAt,
+  });
+}
+
+export async function GET() {
+  return NextResponse.json({
+    message: '微信公众号推送接口',
+    usage: 'POST /api/wechat/push with optional { hours: 24, period: "morning" | "evening" }',
+    // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
+    // 人工排查时 summary.drafts 是成功建的草稿，summary.failures 是哪些国家失败、为什么。
+    lastRun: pushRunState,
+  }, {
+    // 必须禁掉缓存：调度器轮询这个接口等状态变化，被缓存住就会一直看到旧状态，
+    // 表现为「干等到超时」。
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+  });
+}
+
+async function processPush(hours: number, period: unknown): Promise<PushSummary> {
   try {
-    const body = await request.json();
-    const { hours = 24, period } = body;
     const suffix = periodSuffix(period);
     const today = beijingDate();
     const maxPerCountry = 30;
@@ -409,9 +536,9 @@ export async function POST(request: NextRequest) {
       `微信公众号推送：${today}${suffix ? ' ' + suffix : ''}，汇总 ${startDate} 至 ${endDate}（过去 ${hours} 小时），每国精选（上限 ${maxPerCountry} 篇）`
     );
 
-    const results = [];
+    const results: PushDraft[] = [];
     // 失败的国家单独记账，最后一起返回 —— 排查「今天怎么没推」时能一眼看出卡在哪一国
-    const failures: Array<{ country_code: string; country_name: string; error: string }> = [];
+    const failures: PushFailure[] = [];
 
     // 按国别分组推送
     for (const country of countryList) {
@@ -566,18 +693,16 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json({
-      success: failures.length === 0,
-      message: failures.length === 0
-        ? `成功创建 ${results.length} 个草稿`
-        : `成功创建 ${results.length} 个草稿，${failures.length} 个国家失败`,
+    return {
+      hours,
+      period: typeof period === 'string' ? period : null,
+      today,
       drafts: results,
       failures,
-    });
+    };
   } catch (error) {
-    console.error('微信推送失败:', error);
-    return NextResponse.json({
-      error: error instanceof Error ? error.message : '推送失败',
-    }, { status: 500 });
+    console.error('微信推送失败（本轮整体失败）:', error);
+    // 抛给后台任务的 .catch，记进 pushRunState.error —— 调用方一个 GET 就能看到原因
+    throw error;
   }
 }
