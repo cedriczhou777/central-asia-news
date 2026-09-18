@@ -3,6 +3,7 @@ import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS, fetchTelegramRSS } from '@/lib/scraper';
 import { isChineseText, isDuplicateContent, beijingDate } from '@/lib/utils';
+import { countryList } from '@/lib/data/countries';
 import { translateNews } from '@/lib/translate';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
@@ -16,6 +17,42 @@ interface RSSSource {
   url: string;
   country: string;
   language: string;
+}
+
+/** 一条待入库的候选新闻。RSS / 网页爬虫 / Telegram 三条采集路径共用这个结构。 */
+interface Candidate {
+  item: Parser.Item;
+  source: RSSSource;
+  relevanceScore: number;
+}
+
+/** 一次抓取跑完后的汇总，既用于日志，也通过 GET /api/fetch-news 暴露给调度器。 */
+interface FetchSummary {
+  date: string;
+  /** 各信息源取到的原始条数合计 */
+  totalFetched: number;
+  /** 通过投资相关性初筛的条数 */
+  candidates: number;
+  /** URL 去重后剩余 */
+  afterUrlDedup: number;
+  /** 内容级去重后剩余 */
+  afterContentDedup: number;
+  /** 实际写入数据库的条数 */
+  saved: number;
+  sourceCounts: Array<{ source: string; fetched: number }>;
+  sourceErrors: Array<{ source: string; errors: string[] }>;
+}
+
+/** 抓取任务的执行状态。见 GET /api/fetch-news 的说明。 */
+interface FetchRunState {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  summary: FetchSummary | null;
+  error: string | null;
+  /** 触发这次抓取时请求里带的 targetDate */
+  targetDate: string | null;
 }
 
 // RSS 源配置（可用源）
@@ -244,6 +281,29 @@ async function fetchOgImage(url: string): Promise<string> {
 }
 
 
+// 上一轮抓取的状态。放在模块作用域：Next 的服务端路由与自定义服务器
+// （src/server.ts）同进程，POST 和 GET 拿到的是同一份状态。
+//
+// 为什么需要它（2026-09-18 实测）：
+// processFetchNews 是「立即返回、后台跑完」的，POST 在抓取真正开始前就回了 200。
+// 调度器原本写的是 `await runFetchNews(); await runWechatPush()`，看着像串行，
+// 实际上推送在抓取刚起步时就执行了 —— 读到的永远是上一轮的旧数据，
+// 早报会把前一晚已经推过的新闻再推一遍。
+// 现在调度器改成「触发 → 轮询 GET 到 running=false 且 finishedAt 变新 → 再推送」。
+// 顺带解决第二个问题：抓取失败以前只写进容器日志（要进控制台才看得到），
+// 现在一个 GET 就能拿到 summary / error，排查不用再猜。
+// 实测抓取一轮要十几分钟（2026-09-18 手动触发后 9 分钟内库里一篇没多，
+// 之后才陆续入库），所以调度器的等待上限不能设得太短。
+let fetchRunState: FetchRunState = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  durationMs: null,
+  summary: null,
+  error: null,
+  targetDate: null,
+};
+
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as Record<string, string | number | boolean>;
   // 不传 date 时按北京时间取当天。别写 new Date().toISOString().split('T')[0]：
@@ -252,10 +312,55 @@ export async function POST(request: NextRequest) {
   const minPerCountry = typeof body.minPerCountry === 'number' ? body.minPerCountry : 10;
   const skipTranslation = body.skipTranslation === true;
 
+  // 同一时间只允许跑一轮：并发抓取会重复下载、重复调用翻译（又贵又慢），
+  // 还可能在入库前去重的时间窗里塞进重复条目。
+  if (fetchRunState.running) {
+    return NextResponse.json({
+      success: true,
+      message: '上一轮抓取仍在进行，本次跳过（不重复触发）',
+      running: true,
+      startedAt: fetchRunState.startedAt,
+      targetDate: fetchRunState.targetDate,
+    });
+  }
+
+  const startedAt = new Date().toISOString();
+  fetchRunState = {
+    running: true,
+    startedAt,
+    finishedAt: null,
+    durationMs: null,
+    summary: null,
+    error: null,
+    targetDate,
+  };
+
   // 立即返回，后台异步处理
-  processFetchNews(targetDate, minPerCountry, skipTranslation).catch(err => {
-    console.error('后台新闻抓取失败:', err);
-  });
+  processFetchNews(targetDate, minPerCountry, skipTranslation)
+    .then((summary) => {
+      fetchRunState = {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        summary,
+        error: null,
+        targetDate,
+      };
+    })
+    .catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('后台新闻抓取失败:', err);
+      fetchRunState = {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        summary: null,
+        error: message,
+        targetDate,
+      };
+    });
 
   return NextResponse.json({
     success: true,
@@ -263,10 +368,15 @@ export async function POST(request: NextRequest) {
     date: targetDate,
     minPerCountry,
     skipTranslation,
+    startedAt,
   });
 }
 
-async function processFetchNews(targetDate: string, minPerCountry: number, skipTranslation: boolean) {
+async function processFetchNews(
+  targetDate: string,
+  minPerCountry: number,
+  skipTranslation: boolean,
+): Promise<FetchSummary> {
   // 每个源的采集情况。注意：这里只记录「取到多少 / 报了什么错」，
   // 真正的入库篇数在最后统一统计（旧版给每个源挂了 saved 字段但从不赋值，
   // 导致汇总日志永远打印「共保存0篇」，排查时严重误导）。
@@ -277,18 +387,26 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
     .toISOString().split('T')[0];
   console.log(`采集时间窗：${targetDateMinusOne} ~ ${targetDate}（最多回溯 2 天）`);
   
-  // 按国家分组存储候选新闻
-  const candidatesByCountry: Record<string, Array<{
-    item: Parser.Item;
-    source: RSSSource;
-    relevanceScore: number;
-  }>> = {
-    kz: [],
-    uz: [],
-    kg: [],
-    tm: [],
-    tj: [],
-  };
+  // 按国家分组存储候选新闻。
+  //
+  // ⚠️ 这里刻意**不写死国家清单**，改成按需建键。
+  // 写死清单的代价已经踩过一次：把 tm 换成 az 时漏了同步这个对象，于是
+  // candidatesByCountry['az'] 是 undefined，`?.push()` 静默不执行 ——
+  // 阿塞拜疆 6 个源采集到的候选被**全部无声丢弃**，日志里只表现为
+  // 「投资相关 0 篇」，一点都不像出错。
+  // 'intl' 同样从来没被列进去过，两个区域综合源的候选也一直在被丢；
+  // 而且下面第 564 行是按 Object.entries 遍历的，没建过键的国别连后续流程都进不去。
+  // 现在统一走 addCandidate / getCandidates —— RSS、爬虫、Telegram 三条路径行为一致
+  // （Telegram 那条本来就自己做了懒创建，属于偶然写对，现已并入同一套写法）。
+  const candidatesByCountry: Record<string, Candidate[]> = {};
+
+  function addCandidate(country: string, candidate: Candidate) {
+    (candidatesByCountry[country] ??= []).push(candidate);
+  }
+
+  function getCandidates(country: string): Candidate[] {
+    return candidatesByCountry[country] ?? [];
+  }
 
   console.log(`开始采集新闻，目标日期：${targetDate}，每个国家至少 ${minPerCountry} 篇`);
 
@@ -324,15 +442,11 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         // 检查是否与投资主题相关
         if (isInvestmentRelevant(title, description)) {
           const relevanceScore = scoreInvestmentRelevance(title, description);
-          candidatesByCountry[source.country]?.push({
-            item,
-            source,
-            relevanceScore,
-          });
+          addCandidate(source.country, { item, source, relevanceScore });
         }
       }
 
-      console.log(`从 ${source.name} 采集 ${targetItems.length} 篇，其中投资相关 ${candidatesByCountry[source.country]?.length || 0} 篇`);
+      console.log(`从 ${source.name} 采集 ${targetItems.length} 篇，其中投资相关 ${getCandidates(source.country).length} 篇`);
     } catch (err) {
       result.errors.push(`RSS 解析失败：${err instanceof Error ? err.message : '未知错误'}`);
     }
@@ -372,7 +486,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         
         if (isInvestmentRelevant(title, description)) {
           const relevanceScore = scoreInvestmentRelevance(title, description);
-          candidatesByCountry[country]?.push({
+          addCandidate(country, {
             item: {
               title: article.title,
               link: article.url,
@@ -386,7 +500,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         }
       }
 
-      console.log(`[爬虫] ${scraperConfig.name} 抓取 ${scrapedArticles.length} 篇，其中投资相关 ${candidatesByCountry[country]?.length || 0} 篇`);
+      console.log(`[爬虫] ${scraperConfig.name} 抓取 ${scrapedArticles.length} 篇，其中投资相关 ${getCandidates(country).length} 篇`);
     } catch (err) {
       result.errors.push(`爬虫失败：${err instanceof Error ? err.message : '未知错误'}`);
     }
@@ -414,12 +528,11 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
       try {
         const articles = await fetchTelegramRSS(channel);
         if (articles.length === 0) continue;
-        const bucket = candidatesByCountry[country] || (candidatesByCountry[country] = [] as Array<{ item: { title: string; link: string; pubDate?: string; content: string; contentSnippet?: string }; source: { name: string; url: string; country: string; language: string }; relevanceScore: number }>);
         for (const article of articles) {
           const title = article.title || '';
           const description = article.summary || '';
           if (!isInvestmentRelevant(title, description)) continue;
-          bucket.push({
+          addCandidate(country, {
             item: {
               title,
               link: article.url,
@@ -431,7 +544,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
             relevanceScore: scoreInvestmentRelevance(title, description),
           });
         }
-        console.log(`[Telegram Worker] ${channel}(${country}) 补充 ${articles.length} 篇，投资相关 ${bucket.length} 篇`);
+        console.log(`[Telegram Worker] ${channel}(${country}) 补充 ${articles.length} 篇，投资相关 ${getCandidates(country).length} 篇`);
       } catch (error) {
         console.error(`[Telegram Worker] ${channel} 处理失败:`, error instanceof Error ? error.message : String(error));
       }
@@ -440,7 +553,7 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
     console.log('检测到 TELEGRAM_CHANNELS 但未配置 TELEGRAM_WORKER_URL，跳过 Telegram 抓取');
   }
 
-  // 第二步：每个国家精选至少 minPerCountry 篇新闻
+  // 第二步：每个国家精选至少 minPerCountry 篇新闻（见下方 for 的说明）
   const articlesToInsert: Array<{
     title: string;
     summary: string;
@@ -459,7 +572,15 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
     image_urls: string[];
   }> = [];
 
-  for (const [country, candidates] of Object.entries(candidatesByCountry)) {
+  // 第二步：每个国家精选至少 minPerCountry 篇新闻
+  //
+  // 遍历的目标是**固定的国家清单**，不是 candidatesByCountry 的现有键。
+  // 因为候选是按需建键的，某个国家一篇候选都没有时它压根不会有键 ——
+  // 若按 Object.entries 遍历，这些国家会被整段跳过，连「用最新新闻兜底补充」
+  // 都轮不到（kg / tj 常年就是靠兜底才有的文章，实测踩到过）。
+  // 'intl' 是区域综合源的归属，不属于 countries 表，单独补上。
+  for (const country of [...countryList.map((c) => c.code), 'intl']) {
+    const candidates = getCandidates(country);
     // 如果投资相关新闻不足 minPerCountry 篇，用最新新闻补充
     const selectedCandidates = candidates;
     
@@ -625,6 +746,17 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
   if (failedSources.length > 0) {
     console.warn(`${failedSources.length} 个信息源采集失败：${failedSources.map((r) => r.source).join('、')}`);
   }
+
+  return {
+    date: targetDate,
+    totalFetched,
+    candidates: articlesToInsert.length,
+    afterUrlDedup: newArticles.length,
+    afterContentDedup: contentDeduped.length,
+    saved: savedCount,
+    sourceCounts: results.map((r) => ({ source: r.source, fetched: r.fetched })),
+    sourceErrors: failedSources.map((r) => ({ source: r.source, errors: r.errors })),
+  };
 }
 
 export async function GET() {
@@ -632,5 +764,12 @@ export async function GET() {
     message: '新闻采集接口',
     usage: 'POST /api/fetch-news with optional { date: "YYYY-MM-DD", minPerCountry: 10, skipTranslation: true }',
     sources: RSS_SOURCES.map((s) => ({ name: s.name, country: s.country })),
+    // 上一轮抓取的状态。调度器靠 running / finishedAt 判断「抓完了没」；
+    // 人工排查时 summary 里有各源采集量与最终入库数，error 是失败原因。
+    lastRun: fetchRunState,
+  }, {
+    // 必须禁掉缓存：调度器轮询这个接口等状态变化，被缓存住就会一直看到旧状态，
+    // 表现为「干等到超时」。
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
   });
 }

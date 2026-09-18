@@ -27,8 +27,48 @@ const PUBLISH_SCHEDULES = [
 const API_BASE = resolveSelfBaseUrl();
 
 // 抓取当天新闻（每国先凑足一个下限量，具体推送篇数由推送端"今日精选"决定）
+//
+// ⚠️ 这个接口是「立即返回、后台跑完」的（见 fetch-news 里的说明），所以**不能**
+// 发完 POST 就当抓取结束了。旧版就是这么写的，于是
+// `await runFetchNews(); await runWechatPush();` 看着是串行，实际推送在抓取刚起步时
+// 就执行了，读到的永远是上一轮的旧数据 —— 早报会把前一晚推过的新闻再推一遍。
+// 现在改成「触发 → 轮询 GET 到 running=false 且 finishedAt 变新 → 才让推送开始」。
+//
+// 等待上限 25 分钟：2026-09-18 实测一轮抓取要十几分钟（触发后 9 分钟内库里一篇没多，
+// 之后才陆续入库）。超时也会继续推送 —— 宁可推稍旧的数据，也不要整轮什么都不做，
+// 但会打 warn，方便从日志看出「这轮是超时后硬推的」。
+const FETCH_POLL_INTERVAL_MS = 15_000;
+const FETCH_WAIT_TIMEOUT_MS = 25 * 60_000;
+
+interface FetchRunStateLite {
+  running?: boolean;
+  finishedAt?: string | null;
+  summary?: unknown;
+  error?: string | null;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 读一次抓取状态。失败返回 null，由调用方决定忽略还是继续等。
+async function readFetchState(): Promise<FetchRunStateLite | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/fetch-news`, { cache: 'no-store' });
+    return await res.json() as FetchRunStateLite;
+  } catch (error) {
+    console.log(`[${new Date().toISOString()}] 读取抓取状态失败（忽略，继续等）:`, error);
+    return null;
+  }
+}
+
 async function runFetchNews() {
   console.log(`[${new Date().toISOString()}] 开始抓取当天新闻...`);
+
+  // 先记下「此刻」的 finishedAt，用它区分「等到的完成」是新一轮还是上一轮的残留状态。
+  // 取不到（GET 失败）时为 null，下面的判断同样成立。
+  const before = await readFetchState();
+  const finishedBefore = before?.finishedAt ?? null;
 
   try {
     const response = await fetch(`${API_BASE}/api/fetch-news`, {
@@ -41,7 +81,29 @@ async function runFetchNews() {
     });
 
     const result = await response.json();
-    console.log(`[${new Date().toISOString()}] 新闻抓取完成:`, JSON.stringify(result));
+    console.log(`[${new Date().toISOString()}] 新闻抓取已触发:`, JSON.stringify(result));
+
+    const deadline = Date.now() + FETCH_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await sleep(FETCH_POLL_INTERVAL_MS);
+      const state = await readFetchState();
+      if (!state) continue;
+
+      const finishedNow = state.finishedAt ?? null;
+      if (!state.running && finishedNow && finishedNow !== finishedBefore) {
+        // summary 是各源采集量与最终入库数；失败时这里是 error 字符串
+        console.log(
+          `[${new Date().toISOString()}] 新闻抓取完成:`,
+          JSON.stringify(state.summary ?? state.error ?? state)
+        );
+        return;
+      }
+    }
+
+    console.warn(
+      `[${new Date().toISOString()}] 等待抓取超过 ${FETCH_WAIT_TIMEOUT_MS / 60_000} 分钟仍未结束，` +
+        `不再等待、直接开始推送（本轮可能用的是上一轮的数据）`
+    );
   } catch (error) {
     console.error(`[${new Date().toISOString()}] 新闻抓取失败:`, error);
   }

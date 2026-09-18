@@ -102,6 +102,9 @@ tar -czf deploy.tar.gz --exclude=node_modules --exclude=.next --exclude=.git .
 > | 早报 | 08:00 | 13 小时（昨日 19:00 → 今日 08:00） |
 > | 晚报 | 19:00 | 11 小时（今日 08:00 → 今日 19:00） |
 >
+> 每次是**先抓取、等抓完再推送**（抓取本身要 4–5 分钟，所以实际出草稿时间在
+> 08:05 / 19:05 左右）。顺序很关键，原因见文末「抓取到底跑完没有」一条。
+>
 > 云托管在 `container.minNum: 0` 时会把实例缩容到零，进程一停应用内定时器也就没了，
 > 所以需要提前 5 分钟把实例唤醒。
 >
@@ -273,6 +276,32 @@ A: 按顺序检查：
 3. 嫌预热不可靠，把 `container.config.json` 的 `minNum` 改成 `1` 让实例常驻。
 4. 某一时段失败导致那一段新闻没推：手动补一次
    `curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push -H 'Content-Type: application/json' -d '{"hours": 24}'`
+
+### Q: 抓取到底跑完没有？推送为什么像是用的旧数据？
+A: `POST /api/fetch-news` 是「**立即返回、后台跑完**」的：HTTP 200 只代表任务已启动，
+真正的采集 + 翻译还在后台继续。实测一轮约 **4–5 分钟**（本机 255 秒，云托管上更慢）。
+所以「拿到 200 就立刻推送」，推的必然是上一轮的旧数据 —— 2026-09-18 之前就是这个毛病，
+表现为早报把前一晚推过的新闻再推一遍。
+
+现在调度器改成「触发 → 轮询到这一轮跑完 → 才推送」，等待上限 25 分钟，超时会打 warn 后硬推。
+
+查进度直接 GET（响应里的 `lastRun` 就是状态）：
+
+```
+curl https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/fetch-news
+```
+
+| 字段 | 含义 |
+|------|------|
+| `running` | 是否还在跑 |
+| `startedAt` / `finishedAt` / `durationMs` | 开始 / 结束 / 本轮耗时 |
+| `targetDate` | 本轮抓的是哪一天（北京时间） |
+| `summary.saved` | **实际入库篇数 —— 排查时先看这个数** |
+| `summary.totalFetched` | 各源取到的原始条数合计 |
+| `summary.sourceCounts` / `summary.sourceErrors` | 每个源取到多少 / 报了什么错 |
+| `error` | 整轮失败的原因（成功时为 null） |
+
+同一时间只允许跑一轮：重复 POST 会返回「上一轮抓取仍在进行，本次跳过」，不会并发抓。
 
 ### Q: 抓取日志显示「实际入库 0 篇」，但候选数量正常？
 A: 翻译链路断了，文章在入库前被丢弃。检查：
