@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
 import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
 import { scrapeWebsite, CENTRAL_ASIA_SCRAPERS, fetchTelegramRSS } from '@/lib/scraper';
-import { isChineseText, isDuplicateContent } from '@/lib/utils';
+import { isChineseText, isDuplicateContent, beijingDate } from '@/lib/utils';
 import { translateNews } from '@/lib/translate';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
@@ -235,7 +235,9 @@ async function fetchOgImage(url: string): Promise<string> {
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as Record<string, string | number | boolean>;
-  const targetDate = (body.date as string) || new Date().toISOString().split('T')[0];
+  // 不传 date 时按北京时间取当天。别写 new Date().toISOString().split('T')[0]：
+  // 那是 UTC 日期，北京 00:00–08:00 手动触发会抓到前一天，和推送的日期口径对不上。
+  const targetDate = (body.date as string) || beijingDate();
   const minPerCountry = typeof body.minPerCountry === 'number' ? body.minPerCountry : 10;
   const skipTranslation = body.skipTranslation === true;
 

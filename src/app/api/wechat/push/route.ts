@@ -467,6 +467,16 @@ export async function POST(request: NextRequest) {
 
       console.log(`为${country.name}精选${selectedArticles.length}篇投资相关新闻`);
 
+      // 一国新闻被全部过滤掉（典型情况：该国当天只有「讲别国」的新闻，
+      // 被上面的 isCountryRelevant 判为无关）→ 这一国本轮没有可推送内容。
+      // 必须在下面取 selectedArticles[0] 之前拦掉：旧代码直接写
+      // `selectedArticles[0].cover_image`，数组为空时抛
+      // TypeError: Cannot read properties of undefined → 整轮请求 500。
+      if (selectedArticles.length === 0) {
+        console.log(`${country.name}无相关新闻，跳过本轮推送`);
+        continue;
+      }
+
       // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
       // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
       const wechatArticles = [];
@@ -507,10 +517,11 @@ export async function POST(request: NextRequest) {
       );
 
       // 上传缩略图（优先用第一篇文章已上传微信的封面图，再从原图取）
+      // 上面已保证 selectedArticles 非空；这里统一用可选链，避免将来改动再踩空数组。
       const thumbUrl =
         wechatArticles[0]?.cover_image ||
-        selectedArticles[0].cover_image ||
-        extractFirstImage(selectedArticles[0].content) ||
+        selectedArticles[0]?.cover_image ||
+        extractFirstImage(selectedArticles[0]?.content || '') ||
         undefined;
       const thumbMediaId = await uploadThumb(thumbUrl);
 
