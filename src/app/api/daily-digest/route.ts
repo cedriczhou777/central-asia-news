@@ -3,6 +3,7 @@ import { getArticlesByDateRange } from '@/lib/db-articles';
 import { countries, countryList } from '@/lib/data/countries';
 import { categories } from '@/lib/data/categories';
 import type { CountryCode } from '@/lib/data/types';
+import { beijingDate } from '@/lib/utils';
 
 interface CountryDigest {
   country_code: string;
@@ -61,7 +62,9 @@ ${articlesText}
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'glm-4',
+        // 型号口径与 translate.ts 统一（同一份 ZHIPU_MODEL）。
+        // 旧版在这里写死 `glm-4`：既不在免费档，厂商换代号后还会静默失效。
+        model: process.env.ZHIPU_MODEL || 'glm-4.7-flash',
         messages: [
           { role: 'user', content: prompt }
         ],
@@ -89,7 +92,7 @@ ${articlesText}
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const targetDate = (body as Record<string, string>).date || new Date().toISOString().split('T')[0];
+    const targetDate = (body as Record<string, string>).date || beijingDate();
 
     // 使用 +08:00 时区（北京时间）
     const startDate = `${targetDate}T00:00:00+08:00`;

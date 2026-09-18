@@ -83,3 +83,22 @@ export function isDuplicateContent(
   const cSim = similarity(contentA, contentB);
   return (tSim + cSim) / 2 >= threshold;
 }
+
+// ----- 日期口径（唯一出口）-----
+
+/**
+ * 当天日期，按北京时间算，返回 `YYYY-MM-DD`。
+ *
+ * **不要再写 `new Date().toISOString().split('T')[0]`** —— 那是 UTC 日期，
+ * 北京 00:00–08:00 会算成前一天。本项目所有「今天」的语义都是北京时间的今天：
+ * 草稿标题（曾因 UTC 日期导致同一天两次推送生成同名草稿）、
+ * 日报的日期区间（本来就用 `+08:00` 圈范围）、抓取的 targetDate。
+ */
+export function beijingDate(d: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}

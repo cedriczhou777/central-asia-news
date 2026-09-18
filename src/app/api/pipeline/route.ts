@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveSelfBaseUrl } from '@/lib/runtime';
+import { beijingDate } from '@/lib/utils';
 
 export async function POST(request: NextRequest) {
   try {
@@ -7,7 +8,7 @@ export async function POST(request: NextRequest) {
     // 端口口径统一由 lib/runtime 决定（旧版写死 5000，与部署声明的端口对不上就静默失败）。
     const baseUrl = resolveSelfBaseUrl();
     const body = await request.json().catch(() => ({}));
-    const date = (body as Record<string, string>).date || new Date().toISOString().split('T')[0];
+    const date = (body as Record<string, string>).date || beijingDate();
     const pushToWechat = (body as Record<string, boolean>).push || false;
     // 与定时任务保持一致的合理默认：每国≥15篇、推送过去24h
     const minPerCountry = typeof (body as Record<string, number>).minPerCountry === 'number' ? (body as Record<string, number>).minPerCountry : 15;

@@ -143,7 +143,9 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 ## 翻译保中文（重要）
 
 - **部分国家（哈萨克、吉尔吉斯等）曾推送英文原文**：根因是 LLM 翻译失败/JSON 解析失败后，抓取侧静默把原文入库，推送又被优选出去。
-- **翻译逻辑已抽到 `src/lib/translate.ts`（`translateNews`）**：多模型降级链，按序尝试智谱（GLM，`ZHIPU_API_KEY`，默认型号 `glm-4.7-flash`）→ DeepSeek（`DEEPSEEK_API_KEY`，默认型号 `deepseek-chat`）；每个模型最多重试 3 次（指数退避）+ 多策略 JSON 解析；全部失败才按失败处理。
+- **翻译逻辑已抽到 `src/lib/translate.ts`（`translateNews`）**：多模型降级链，按序尝试智谱（GLM，`ZHIPU_API_KEY`，默认型号 `glm-4.7-flash`，免费档）→ DeepSeek（`DEEPSEEK_API_KEY`，默认型号 `deepseek-flash`）；每个模型最多重试 3 次（指数退避）+ 多策略 JSON 解析；全部失败才按失败处理。
+- **通道定义已导出为 `PROVIDERS`**，`scripts/test-translate.ts` 直接读它打印「已配置通道 + 型号」——**型号只在一处定义**，避免代码改了脚本/文档还写旧名字。
+- **⚠️ 型号代号是易腐的**：`deepseek-chat` 已被官方下线（2026-09 查 `https://api-docs.deepseek.com/quick_start/pricing`，在售的只有 `deepseek-flash` / `deepseek-v4-pro`）；`daily-digest` 里也曾写死过 `glm-4`。**用错型号不会报错到用户面前**，只在日志留一行 `[deepseek/xxx] 请求失败 400`，降级链等于没有。加凭据类配置时**必须顺手核对型号**。
 - **模型名可通过环境变量覆盖**（`ZHIPU_MODEL` / `DEEPSEEK_MODEL`），厂商调整型号代号时不需要改代码。
 - **未配置 Key 的通道会被直接跳过**，不做无意义重试；启动日志里会打印「以下翻译通道未启用」。
 - **已移除扣子专属依赖 `coze-coding-dev-sdk`**（原豆包降级通道），备用模型不再绑定扣子平台。
@@ -188,6 +190,16 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 - 曾出现早上未触发：旧版本运行时 `NODE_ENV` 非 production、`startScheduler` 未被调用，后已修复。部署后要等到下一个到点时间才会触发（cron 精确到点）。
 - **`container.config.json` 的 triggers 只做「预热」**：该文件里 `container.minNum: 0` 表示实例可缩容到零，进程一停应用内定时器也就没了。所以挂了 2 条 warmup 触发器（北京 07:55 / 18:55）提前唤醒实例，真正干活的是应用内调度器。想让调度更可靠可把 `minNum` 改成 1（代价是常驻实例）。
 - **不要**在 `container.config.json` 里再加业务触发器：旧版曾挂着 4 条 `{"action":"fetch-and-push"}` 的触发器，但代码里没有任何地方处理这个 payload，属于「看着在跑、其实没干活」，已清理。
+
+## 日期口径（重要）
+
+- **所有「今天」一律走 `src/lib/utils.ts` 的 `beijingDate()`**（`Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai'})`，返回 `YYYY-MM-DD`）。
+- **不要再用 `new Date().toISOString().split('T')[0]`** —— 那是 UTC 日期，北京 00:00–08:00 会算成前一天。
+  已经踩过的坑：草稿标题里的日期，以及日报/流水线不带 `date` 时的默认值。
+- 例外并**故意保留**：`src/app/api/fetch-news/route.ts` 的 `targetDate` 默认值仍是 UTC 日期。
+  原因：它要和 `item.pubDate` 转出来的（UTC）日期做 2 天窗口比较，两边同口径才自洽；
+  且两次定时推送（北京 08:00 / 19:00）恰好都落在「北京日期 == UTC 日期」区间内，不受影响。
+  **要动它得连 `itemDate` 的口径一起改。**
 
 ## 端口约定（重要）
 

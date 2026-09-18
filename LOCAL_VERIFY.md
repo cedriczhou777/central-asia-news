@@ -98,12 +98,16 @@ cp .env.local.example .env.local
 # 通道 1：智谱 GLM，glm-4.7-flash 当前免费
 ZHIPU_API_KEY=你的key
 
-# 通道 2：DeepSeek，按量付费，作为降级
+# 通道 2：DeepSeek，按量付费，作为降级（账号余额为 0 时会 402）
 DEEPSEEK_API_KEY=你的key
+DEEPSEEK_MODEL=deepseek-flash
 ```
 
 - 智谱 Key：<https://open.bigmodel.cn> → 控制台 → API Keys
+- DeepSeek Key：<https://platform.deepseek.com> → API keys（**要先充值**）
 - `.env.local` 已在 `.gitignore` 里，不会被提交
+- `DEEPSEEK_MODEL` 建议显式写上：代码默认值已经跟着官方调整过（`deepseek-chat` 已下线），
+  显式写死可以避免厂商再换代号时踩坑。型号默认值定义在 `src/lib/translate.ts` 的 `PROVIDERS`。
 
 ### 2.2 跑
 
@@ -236,7 +240,11 @@ Telegram 待抓取频道（共 5 个）：kz:@tengrinews、uz:@kunuzofficial、u
 - [ ] `pnpm lint:build` 无 error
 - [ ] `pnpm test:translate` 通过（有 Key 的话）
 - [ ] `.env.local` 里的值**没有**被写进任何会被提交的文件
-- [ ] 微信云托管控制台的环境变量已同步（新增了 `ZHIPU_API_KEY`，建议加 `ZHIPU_MODEL=glm-4.7-flash`）
+- [ ] 微信云托管控制台的环境变量已同步：`ZHIPU_API_KEY`（必填）、
+      `DEEPSEEK_API_KEY` + `DEEPSEEK_MODEL=deepseek-flash`（降级通道，建议）、
+      `SUPABASE_SERVICE_ROLE_KEY`（建议）、`TELEGRAM_WORKER_URL`（可选）。
+      **改完别忘了「新建版本并部署」—— 只保存不部署，跑的还是旧值。**
+- [ ] 型号代号已按厂商控制台「模型与价格」页核对过（`deepseek-chat` 已下线，现用 `deepseek-flash`）
 
 ---
 

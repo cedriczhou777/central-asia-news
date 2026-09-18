@@ -31,7 +31,12 @@ interface ChatProvider {
   endpoint: string;
 }
 
-const PROVIDERS: ChatProvider[] = [
+/**
+ * 降级链的通道定义。**导出是故意的**：
+ * `scripts/test-translate.ts` 直接读它来打印「已配置通道 + 型号」，
+ * 这样型号代号只有一处定义，不会出现「代码改了、脚本/文档还写着旧型号」的漂移。
+ */
+export const PROVIDERS: ChatProvider[] = [
   {
     // 智谱 GLM-4.7-Flash：当前免费档，200K 上下文，国内直连。
     // 注意免费档限制为「同时 1 个并发」，本项目是顺序翻译，正好不受影响。
@@ -44,11 +49,20 @@ const PROVIDERS: ChatProvider[] = [
   },
   {
     // DeepSeek：按量付费，价格极低，作为降级通道。
-    // 模型名请以控制台「模型与价格」页为准，用 DEEPSEEK_MODEL 覆盖。
+    //
+    // 型号历史（别再改回去）：旧默认值 `deepseek-chat` 已被官方下线。
+    // 2026-09 查 https://api-docs.deepseek.com/quick_start/pricing，
+    // 当前在售型号只有 `deepseek-flash`（DeepSeek-V4.1-Flash）和 `deepseek-v4-pro`；
+    // 文档里明确「仍然接受」的旧名只有 `deepseek-v4-flash`，不含 `deepseek-chat`。
+    // 用错型号的表现是：通道一调用就 400，降级链等于没有 —— 而且**不会报错到用户面前**，
+    // 只会在日志里留一行 `[deepseek/xxx] 请求失败 400`。
+    //
+    // 厂商换型号代号是常态，所以代号永远以控制台「模型与价格」页为准，
+    // 用 DEEPSEEK_MODEL 覆盖即可，不必改代码。
     name: 'deepseek',
     keyEnv: 'DEEPSEEK_API_KEY',
     modelEnv: 'DEEPSEEK_MODEL',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-flash',
     endpoint: 'https://api.deepseek.com/v1/chat/completions',
   },
 ];

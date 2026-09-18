@@ -2,7 +2,9 @@
  * 翻译链路自测脚本
  *
  * 用法：
- *   1. 在项目根目录建 .env.local，写入 ZHIPU_API_KEY（可选再加 DEEPSEEK_API_KEY）
+ *   1. 在项目根目录建 .env.local，写入 ZHIPU_API_KEY（可选再加 DEEPSEEK_API_KEY；
+ *      型号默认值取 src/lib/translate.ts 的 PROVIDERS，可分别用
+ *      ZHIPU_MODEL / DEEPSEEK_MODEL 覆盖）
  *   2. pnpm tsx scripts/test-translate.ts
  *
  * 它会拿一段英文新闻走一遍真实的 translateNews 流程，打印每个通道的尝试过程，
@@ -11,7 +13,7 @@
  * 注意：这里不碰数据库、不碰微信接口，只验证「模型能不能调通 + 返回的中文能不能解析」。
  */
 import { config as loadEnv } from 'dotenv';
-import { translateNews } from '../src/lib/translate';
+import { translateNews, PROVIDERS } from '../src/lib/translate';
 
 // 先读 .env.local（本地私密配置，优先），再兜底读 .env。
 // 必须在调用 translateNews 之前执行——translate.ts 是在函数内部读 process.env 的。
@@ -33,20 +35,28 @@ Uzbekistan's installed generating capacity by roughly 4 percent by 2029.
 `;
 
 async function main() {
-  const configured = [
-    process.env.ZHIPU_API_KEY ? `zhipu（模型 ${process.env.ZHIPU_MODEL || 'glm-4.7-flash'}）` : null,
-    process.env.DEEPSEEK_API_KEY ? `deepseek（模型 ${process.env.DEEPSEEK_MODEL || 'deepseek-chat'}）` : null,
-  ].filter(Boolean);
+  // 通道与型号全部从 translate.ts 的 PROVIDERS 推导，不在脚本里重复写死。
+  // 之前这里各写了一份默认型号，translate.ts 换型号后脚本还打着旧名字。
+  const configured = PROVIDERS.filter((p) => process.env[p.keyEnv]).map(
+    (p) => `${p.name}（模型 ${process.env[p.modelEnv] || p.defaultModel}）`
+  );
+  const unconfigured = PROVIDERS.filter((p) => !process.env[p.keyEnv]);
 
   if (configured.length === 0) {
     console.error('✗ 没有检测到任何翻译通道的 API Key。');
     console.error('  请在项目根目录的 .env.local 里至少配置一个：');
-    console.error('    ZHIPU_API_KEY=...      （智谱，glm-4.7-flash 当前免费）');
-    console.error('    DEEPSEEK_API_KEY=...   （DeepSeek，按量付费）');
+    for (const p of unconfigured) {
+      console.error(`    ${p.keyEnv}=...      （${p.name}，默认型号 ${p.defaultModel}）`);
+    }
     process.exit(1);
   }
 
   console.log(`已配置的翻译通道：${configured.join('、')}`);
+  if (unconfigured.length > 0) {
+    console.log(
+      `未配置（会被跳过）：${unconfigured.map((p) => `${p.name}（缺 ${p.keyEnv}）`).join('、')}`
+    );
+  }
   console.log('开始翻译测试样本...\n');
 
   const startedAt = Date.now();

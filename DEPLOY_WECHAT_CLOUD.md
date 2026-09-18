@@ -32,8 +32,9 @@
 
 | 变量名 | 值 | 说明 |
 |--------|-----|------|
-| `DEEPSEEK_API_KEY` | (你的 DeepSeek Key) | 智谱失败时的**降级通道**，按量付费。不配的话智谱一旦限流/欠费，整批文章直接不入库（单点风险） |
-| `SUPABASE_SERVICE_ROLE_KEY` | (Supabase service_role) | 服务端直接写库，不受 RLS 影响。不配则回退到 anon key |
+| `DEEPSEEK_API_KEY` | `sk-...`（[platform.deepseek.com](https://platform.deepseek.com) → API keys） | 智谱失败时的**降级通道**，按量付费。不配的话智谱一旦限流/欠费，整批文章直接不入库（单点风险）。⚠️ 新账号余额为 0，**必须先充值**，否则请求直接 402 |
+| `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...`（Supabase → Settings → API Keys → Legacy API keys → `service_role`） | 服务端直接写库，不受 RLS 影响。不配则回退到 anon key。⚠️ 全权限钥匙，别外传 |
+| `DEEPSEEK_MODEL` | `deepseek-flash` | **建议显式写上**。旧默认值 `deepseek-chat` 已被官方下线（见下方「型号代号会过期」） |
 
 **可选**
 
@@ -42,7 +43,23 @@
 | `TELEGRAM_WORKER_URL` | Cloudflare Worker 代理地址；不配则不抓 Telegram |
 | `TELEGRAM_CHANNELS` | 频道配置，格式 `国家:频道[@频道...]`，逗号分隔。留空用内置默认值 |
 | `ZHIPU_MODEL` | 覆盖翻译型号，留空即用默认值 `glm-4.7-flash` |
-| `DEEPSEEK_MODEL` | 覆盖降级型号，留空即用默认值 `deepseek-chat` |
+| `DEEPSEEK_MODEL` | 覆盖降级型号，留空即用代码默认值 |
+
+#### 型号代号会过期（加凭据配置时必查）
+
+**只加 Key、不管型号 = 通道等于没有**，而且**不会报错到你面前** ——
+只在日志里留一行 `[deepseek/xxx] 请求失败 400`，然后翻译链直接判失败、文章不入库。
+
+已踩过两次：
+
+| 位置 | 写死的型号 | 现状 |
+|------|-----------|------|
+| `src/lib/translate.ts` | `deepseek-chat` | 已被官方下线。在售型号只剩 `deepseek-flash`（V4.1-Flash）和 `deepseek-v4-pro` |
+| `src/app/api/daily-digest/route.ts` | `glm-4` | 不在免费档，且厂商换代号后会静默失效（已改成跟 `ZHIPU_MODEL` 同口径） |
+
+所以规矩是：**代号永远以厂商控制台「模型与价格」页为准**，
+智谱用 `ZHIPU_MODEL`、DeepSeek 用 `DEEPSEEK_MODEL` 覆盖，不必改代码。
+型号只在 `src/lib/translate.ts` 的 `PROVIDERS` 里定义一处，`pnpm test:translate` 会打出实际用的型号。
 
 > **推送不需要任何变量。** 代码走微信**云调用**：由云托管侧拦截 `api.weixin.qq.com`
 > 完成鉴权，既不需要 `access_token`，也不需要 AppID / AppSecret。
