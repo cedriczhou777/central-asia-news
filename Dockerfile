@@ -26,10 +26,11 @@ RUN pnpm install --frozen-lockfile \
 RUN node -e "require('next'); require('node-cron'); console.log('runtime deps ok')"
 
 # sharp 探针：推送前要把外链封面（中亚媒体站大量用 .webp）转成微信素材接口认的 JPEG。
-# sharp 是 next 的 optionalDependency，Next 默认把它列为 serverExternalPackages，
-# 所以代码里是 `await import('sharp')` 运行时加载。这里只做「报告」不做「断言」：
-# 万一 pnpm prune --prod 把它裁掉了，代码会退回内置品牌图，推送照常出草稿
-# （只是封面用默认图），不能因此让构建失败。
+# sharp 已在 package.json 的 dependencies 里**显式声明** —— 这是必需的，别删：
+# pnpm 只对直接依赖在根 node_modules 建软链，而 next build 的类型检查会解析
+# import('sharp')，解析不到就直接 TS2307 构建失败。（scripts/build.sh 里有对应的提前诊断。）
+# 这里只做「报告」不做「断言」：万一 pnpm prune --prod 把它裁掉了，
+# 代码会退回内置品牌图，推送照常出草稿（只是封面用默认图），不能因此让构建失败。
 RUN node -e "try{const s=require('sharp');console.log('sharp 可用，封面可按文章图生成:', s.versions.vips)}catch(e){console.log('[warn] sharp 不可用，封面将退回内置品牌图:', e.code||e.message)}"
 
 EXPOSE 3000

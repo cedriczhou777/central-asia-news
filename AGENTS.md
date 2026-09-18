@@ -40,6 +40,25 @@
 - 安装所有依赖：`pnpm install`
 - 移除依赖：`pnpm remove <package>`
 
+### ⚠️ 用到「传递依赖」时必须先提升为直接依赖
+
+pnpm 默认是**隔离式链接**：只有 `package.json` 里**显式声明**的包才会在根 `node_modules`
+建软链（自己验一下：`node -e "console.log(require('fs').readlinkSync('node_modules/rss-parser'))"`
+→ 指向 `.pnpm/rss-parser@3.13.0/...`）。传递依赖只做**私有提升**到
+`node_modules/.pnpm/node_modules/`，**根目录解析不到**。
+
+**后果**：代码里写 `await import('sharp')`，而 sharp 只是某个包的 `optionalDependency` 时，
+`next build` 的类型检查会报 `TS2307: Cannot find module 'sharp'` 并**直接让构建失败**。
+
+**已踩过**：`sharp` 原本只是 `next` 的 optionalDependency。2026-09-18 线上连续 5 个提交
+（`6f85900`…`fcdaf94`）一个都没部署上去，全是这个原因 —— 而本地 `pnpm build` 却能过，
+因为本机 `node_modules` 早先被 npm 装过、依赖被拍平了，把差异掩盖了。
+**所以「本地能构建」不能证明云端能构建。**
+
+**规矩**：任何在 `src/` 里被 `import` 的包，都必须在 `package.json` 里显式声明。
+`scripts/build.sh` 在装完依赖后会跑一次 `require.resolve` 预检，
+解析不到就打 `[FATAL]` 把原因说清楚（不 exit 1，成败交给后面的 `next build`）。
+
 ### corepack 交互式确认（本地必踩）
 
 `package.json` 里锁了 `packageManager: pnpm@9.0.0`。若本机 pnpm 版本与它不一致，

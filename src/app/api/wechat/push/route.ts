@@ -144,7 +144,16 @@ function toArrayBuffer(buf: Buffer): ArrayBuffer {
 
 // 整理成「微信能收」的格式：本来就是 jpeg/png/gif/bmp 就原样返回，
 // 其它（webp/avif/heif/认不出来的）用 sharp 转 JPEG。
-// sharp 是 next 的 optionalDependency，容器里不一定有，所以动态 import + 兜底。
+//
+// ⚠️ sharp 必须留在 package.json 的 dependencies 里 —— 别当成「next 自带的」删掉。
+// 它原本只是 next 的 optionalDependency，而 pnpm 对传递依赖只做「私有提升」
+// （提升到 node_modules/.pnpm/node_modules），**根 node_modules 里没有它**。
+// 这种状态下 `await import('sharp')` 会让 next build 的类型检查直接报
+// TS2307: Cannot find module 'sharp'，把整个构建打挂 ——
+// 2026-09-18 线上连续 5 个提交没上去就是这个原因。
+// 本地能过是因为本机 node_modules 被 npm 拍平过，把差异掩盖了。
+// 声明成直接依赖后，pnpm 才会像 rss-parser 那样在根 node_modules 建软链。
+// 运行时仍保留 try/catch 兜底：真取不到就退回内置品牌图，绝不打断推送。
 async function toWechatReadyImage(raw: ArrayBuffer): Promise<ImagePayload | null> {
   const sniffed = sniffImage(raw);
   if (sniffed && WECHAT_IMAGE_MIMES.has(sniffed.mime)) {

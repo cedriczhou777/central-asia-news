@@ -309,9 +309,134 @@ A: 翻译链路断了，文章在入库前被丢弃。检查：
 2. 智谱控制台里的余额/配额，429 就是欠费或超出免费档限制
 3. 把 `ZHIPU_MODEL` 设成 `glm-4.7-flash`（免费档）
 
-### Q: 部署了但行为没变？
-A: 九成是推的分支不对。控制台绑定的分支决定了推哪里才会触发部署，
-推错分支**不会报错**，只是「没有任何变化」。去 服务设置 → 部署配置 核对绑定分支。
+### Q: 推了代码但线上没变化？（按这三步查，别猜）
+
+**先接受一个反直觉的事实：「没变化」有三种完全不同的成因，症状一模一样。**
+
+| 成因 | 部署记录里的样子 |
+|---|---|
+| A. Git 触发链路断了（授权失效 / 自动部署关了 / 分支绑错） | **根本没有新记录** |
+| B. 触发了，但构建失败 | 有一条**失败**状态的记录；旧版本继续接流量 |
+| C. 构建成功，但生效版本没切过去 | 有成功记录，但「当前版本」还是老的 |
+
+所以第一步永远是：**控制台 → 部署（页签）→ 部署记录**，
+看最近一次构建的时间戳和状态。看到什么，再跳到对应那一步。
+
+#### 第 0 步：先钉死「线上到底跑的是哪个版本」
+
+别拿主观感觉或 CDN 缓存当证据。用**版本指纹** —— 挑一个「新代码独有的、
+能在无副作用 GET 里看到」的字段：
+
+```bash
+# 本项目实测可用的三条指纹
+curl -s "$URL/api/fetch-news?cb=$(date +%s)"     # 新代码含 lastRun；sources 里不应再有 tm
+curl -s -X POST "$URL/api/wechat/push" -H 'Content-Type: application/json' -d '{"hours":0}'
+                                                 # 新代码含 failures 字段
+```
+
+```bash
+# 同时确认请求真打到了应用、而不是网关缓存
+curl -s -D - -o /dev/null "$URL/api/fetch-news?cb=$(date +%s)" \
+  | grep -iE 'cache-control|x-cloudbase-upstream-type'
+# 期望：cache-control: no-store ...  且  x-cloudbase-upstream-type: Tencent-CloudBaseRun
+```
+
+两个都满足，才能说「线上是旧版」。**只凭"感觉没变"就下结论，
+会把构建失败误判成流水线坏了。**
+
+#### A. 部署记录里没有新记录 → 触发链路断了
+
+按这个顺序查，第 1 条最常见 **而且完全不报错**：
+
+1. **GitHub 授权是否还有效。** 服务设置 → 部署配置（有的版本叫「Git 仓库」），
+   看仓库连接状态是不是「已失效 / 需重新授权」。失效就重新授权一次。
+   > 关联线索：如果近期在 GitHub 上清理过 PAT / OAuth 授权（比如迁 Deploy Key 时），
+   > 微信云托管当年建立的那条授权**可能被一起吊销**。
+2. **GitHub 侧那条 webhook 还在不在。** 仓库 → Settings → **Webhooks**，
+   看有没有指向腾讯/微信云托管的条目，以及 **Recent Deliveries** 里最近一次投递
+   是成功还是失败（这里直接给 HTTP 响应码）。条目消失、或持续 4xx/5xx = 就是它。
+3. **绑定分支是否还是 `main`。** 推错分支不报错，只是「没有任何变化」。
+4. **「自动部署」开关**是否被关了。关掉后必须手动点「部署」才会构建。
+
+#### B. 有失败的构建记录 → 先在本地复现
+
+点进那次构建的日志看失败步骤。同时本地跑三件套（能排掉大部分原因，省一轮往返）：
+
+```bash
+# ① lockfile 与 package.json 是否一致（--frozen-lockfile 不一致会硬失败）
+#    pnpm v9 的 importers 段里 scoped 包名带引号，别用简单字符串包含判断
+# ② 类型检查（云端 build 会跑 TS）
+./node_modules/.bin/tsc --noEmit -p tsconfig.json
+# ③ 真实构建，最接近云端行为
+HOME=/tmp/wb-build NEXT_TELEMETRY_DISABLED=1 ./node_modules/.bin/next build
+```
+
+三项全绿 ⇒ 原因在构建环境差异（基础镜像、pnpm 版本、网络），不在代码里。
+
+#### C. 构建成功但版本没切
+
+看「当前生效版本」是不是最新那个；再看新版本的健康检查有没有过。
+**探针失败会导致「不回滚、也不切流量」** —— 表现就是「构建成功、线上照旧」，
+比直接失败更难察觉。回上面「探针端口」一问检查端口三处是否一致。
+
+#### D. 兜底：绕开 Git 流水线
+
+调查要时间，但线上不能一直跑旧代码。确定性路径是**本地上传**：
+
+```bash
+tar -czf deploy.tar.gz --exclude=node_modules --exclude=.next --exclude=.git .
+# 控制台 → 部署 → 本地上传 deploy.tar.gz
+```
+
+打包后**一定校验三件事**，否则传上去才发现白跑：
+
+```bash
+tar -tzf deploy.tar.gz | wc -l                                            # 文件数是否合理
+tar -tzf deploy.tar.gz | grep -cE '^(\./)?(node_modules|\.next|\.git)/'   # 必须为 0
+tar -tzf deploy.tar.gz | grep -E 'Dockerfile|package.json|pnpm-lock\.yaml' # 构建必需文件在不在
+```
+
+⚠️ `*.gz` 常被 `.gitignore` 排除，**不能靠提交分发，得本地留着**；
+`.dockerignore` 里排除的目录（本项目是 `assets`、`.coze`）打包时一并排掉，保持一致。
+
+### Q: 构建日志报 `Cannot find module 'sharp'` / `TS2307`？
+
+A: 这是 **pnpm 隔离式链接**导致的「传递依赖解析不到」，已在 2026-09-18 踩过一次 ——
+当时线上连续 5 个提交一个都没部署上去，全卡在这里。
+
+`sharp` 原本只是 `next` 的 `optionalDependency`。pnpm 只对 `package.json` 里**显式声明**的包
+在根 `node_modules` 建软链，传递依赖只私有提升到 `node_modules/.pnpm/node_modules/`。
+而 `src/app/api/wechat/push/route.ts` 里有 `await import('sharp')`，
+`next build` 的类型检查解析不到 → `TS2307` → **整个构建失败，旧版本继续服务**。
+
+**修法**：把 sharp 写进 `package.json` 的 `dependencies`（本仓库已这么做，别删）：
+
+```json
+"dependencies": { "sharp": "^0.34.5" }
+```
+
+**为什么本地测不出来**：本机 `node_modules` 被 npm 装过、依赖是拍平的，
+`node_modules/sharp` 是个真实目录；而云端是纯 pnpm 装的全新依赖树。
+**所以「本地 `pnpm build` 能过」不能证明云端能过。**
+
+**想本地复现**（30 秒，能直接看到同一个报错）：
+
+```bash
+# 临时把根目录的 sharp 挪走，模拟 pnpm 的隔离布局
+mv node_modules/sharp /tmp/sharp-backup
+./node_modules/.bin/tsc --noEmit -p tsconfig.json   # 应报 TS2307（= 云端那个错）
+
+# 复原成 pnpm 会建的那种软链，再验一次应该就过了
+ln -s .pnpm/sharp@0.34.5/node_modules/sharp node_modules/sharp
+./node_modules/.bin/tsc --noEmit -p tsconfig.json   # 无输出 = 通过
+```
+
+> 判断依据：根 `node_modules` 里的直接依赖**都是软链**，可以抽查一个
+> （`node -e "console.log(require('fs').readlinkSync('node_modules/rss-parser'))"` → 指向 `.pnpm/...`）。
+> 如果某个包在根目录是**真实目录**，那它多半是 npm 装的残留，会掩盖云端问题。
+
+`scripts/build.sh` 现在会在装完依赖后自动跑一次 `require.resolve` 预检，
+解析不到就打 `[FATAL]` 说明原因，不用再对着 TS2307 猜。
 
 ### Q: 网页访问慢？
 A: 在云托管控制台调整：
