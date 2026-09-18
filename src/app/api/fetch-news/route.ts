@@ -48,10 +48,18 @@ const RSS_SOURCES: RSSSource[] = [
   { name: 'Asia-Plus', url: 'https://asiaplustj.info/rss/', country: 'tj', language: 'ru' },
   { name: 'Avesta', url: 'https://avesta.tj/rss/', country: 'tj', language: 'ru' },
 
-  // 土库曼斯坦
-  { name: 'Turkmenistan Gov', url: 'https://www.turkmenistan.gov.tm/ru', country: 'tm', language: 'ru' },
-  { name: 'Orient.tm', url: 'https://orient.tm/ru', country: 'tm', language: 'ru' },
-  { name: 'Trend Kazakistan', url: 'https://www.trend.az/rss/', country: 'tm', language: 'en' },
+  // 阿塞拜疆
+  // 下面每个 URL 都逐个实测过（HTTP 200 且能解析出 item）。
+  // 注意一批常见的阿塞拜疆媒体被 Cloudflare 拦在外面，从本机返回 403，别往里加：
+  //   report.az / azernews.az / caliber.az / oxu.az / 1news.az / minval.az / news.day.az
+  // 另外 trend.az 是阿塞拜疆媒体（不是哈萨克斯坦），旧版把它挂在 tm 下，
+  // 于是阿塞拜疆的新闻一直被算进土库曼斯坦 —— 这次一并归位。
+  { name: 'AZERTAC', url: 'https://azertag.az/en/rss', country: 'az', language: 'en' },
+  { name: 'AZERTAC (ru)', url: 'https://azertag.az/ru/rss', country: 'az', language: 'ru' },
+  { name: 'Trend.az', url: 'https://www.trend.az/rss/', country: 'az', language: 'en' },
+  { name: 'Qafqazinfo', url: 'https://qafqazinfo.az/rss', country: 'az', language: 'az' },
+  { name: 'Modern.az', url: 'https://modern.az/rss', country: 'az', language: 'az' },
+  { name: 'Banker.az', url: 'https://banker.az/feed/', country: 'az', language: 'az' },
 
   // 区域综合媒体
   { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
@@ -79,8 +87,11 @@ const INVESTMENT_KEYWORDS = [
   'tax', 'legal', 'compliance', 'company law', 'commercial', 'corporate',
   'economy', 'gdp', 'trade', 'export', 'import', 'business', 'finance', 'bank',
   'president', 'parliament', 'government', 'minister', 'diplomat', 'bilateral', 'agreement',
-  // 中亚特定
-  'central asia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'turkmenistan', 'tajikistan',
+  // 中亚／里海特定
+  // 阿塞拜疆在地理上属南高加索，但在里海能源与「中间走廊」上和中亚是一条线，
+  // 所以关键词里同时带上 south caucasus / caspian。
+  'central asia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'azerbaijan', 'tajikistan',
+  'south caucasus', 'caspian',
   'silk road', 'belt and road', ' BRI',
 ];
 
@@ -349,7 +360,8 @@ async function processFetchNews(targetDate: string, minPerCountry: number, skipT
         'Kun.uz': 'uz', 'Daryo.uz': 'uz', 'Repost.uz': 'uz', 'Anhor.uz': 'uz',
         'AKIpress': 'kg', 'Kaktus.media': 'kg', 'Super.kg': 'kg',
         'Avesta': 'tj',
-        'TDH': 'tm', 'Turkmenportal': 'tm',
+        // 阿塞拜疆没有 HTML 抓取器（见 scraper.ts 的说明），只走 RSS 源，
+        // 所以这里没有 az 条目 —— RSS 已经在 RSS_SOURCES 里声明了 country。
       };
       const country = countryMap[scraperConfig.name] || 'intl';
 

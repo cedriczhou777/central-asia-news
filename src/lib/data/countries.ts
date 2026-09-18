@@ -25,13 +25,13 @@ export const countries: Record<CountryCode, Country> = {
     color: '#E8112B',
     flag: '🇰🇬',
   },
-  tm: {
-    code: 'tm',
-    name: '土库曼斯坦',
-    nameEn: 'Turkmenistan',
-    capital: '阿什哈巴德',
-    color: '#00843D',
-    flag: '🇹🇲',
+  az: {
+    code: 'az',
+    name: '阿塞拜疆',
+    nameEn: 'Azerbaijan',
+    capital: '巴库',
+    color: '#00AF66',
+    flag: '🇦🇿',
   },
   tj: {
     code: 'tj',

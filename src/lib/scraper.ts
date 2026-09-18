@@ -287,29 +287,11 @@ export const CENTRAL_ASIA_SCRAPERS: ScraperConfig[] = [
       date: '.news-date, time',
     },
   },
-  // 土库曼斯坦
-  {
-    name: 'TDH',
-    url: 'https://tdh.gov.tm/ru/news/',
-    baseUrl: 'https://tdh.gov.tm',
-    selectors: {
-      articles: '.news-item, .news-list-item',
-      title: '.news-title, h3',
-      link: 'a[href*="/news/"]',
-      date: '.news-date, time',
-    },
-  },
-  {
-    name: 'Turkmenportal',
-    url: 'https://turkmenportal.com/ru/news',
-    baseUrl: 'https://turkmenportal.com',
-    selectors: {
-      articles: '.news-item, .news-list-item',
-      title: '.news-title, h3',
-      link: 'a[href*="/news/"]',
-      date: '.news-date, time',
-    },
-  },
+  // 阿塞拜疆：这里**故意不配 HTML 抓取器**。
+  // fetch-news 里已有 6 个实测可用的阿塞拜疆 RSS 源（AZERTAC 英/俄、Trend.az、
+  // Qafqazinfo、Modern.az、Banker.az），日均可采集 200+ 条，够用。
+  // 上面的抓取器选择器都是通用猜测值（.news-item / h3 / a[href*="/news/"]），
+  // 对没验证过 DOM 的站点只会稳定返回 0 条并刷错误日志 —— 不如不加。
 ];
 
 /**
@@ -451,7 +433,6 @@ export const TELEGRAM_CHANNELS: Record<string, string> = {
   'super_kg': 'super_kg',
   // 塔吉克斯坦
   'avesta': 'avesta_tj',
-  // 土库曼斯坦
-  'tdh': 'tdh_gov_tm',
-  'turkmenportal': 'turkmenportal',
+  // 阿塞拜疆：暂无已验证的 Telegram 频道。宁可留空，也不要凭猜写一个频道名 ——
+  // 频道名写错时抓取只会静默返回空，看起来像「那天没新闻」。
 };

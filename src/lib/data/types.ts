@@ -1,4 +1,4 @@
-export type CountryCode = 'kz' | 'uz' | 'kg' | 'tm' | 'tj';
+export type CountryCode = 'kz' | 'uz' | 'kg' | 'az' | 'tj';
 
 export interface Country {
   code: CountryCode;
@@ -68,9 +68,12 @@ export type NewsSource =
   | 'khovar_tj'
   | 'asia_plus_tj'
   | 'avesta_tj'
-  // 土库曼斯坦
-  | 'tdh_tm'
-  | 'turkmenportal'
+  // 阿塞拜疆
+  | 'azertac'
+  | 'trend_az'
+  | 'qafqazinfo'
+  | 'modern_az'
+  | 'banker_az'
   // 区域综合媒体
   | 'times_central_asia'
   | 'eurasianet'

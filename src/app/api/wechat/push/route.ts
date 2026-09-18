@@ -20,7 +20,8 @@ const INVESTMENT_KEYWORDS = [
   'tax', 'legal', 'compliance', 'company law', 'commercial', 'corporate',
   'economy', 'gdp', 'trade', 'export', 'import', 'business', 'finance', 'bank',
   'president', 'parliament', 'government', 'minister', 'diplomat', 'bilateral', 'agreement',
-  'central asia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'turkmenistan', 'tajikistan',
+  'central asia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'azerbaijan', 'tajikistan',
+  'south caucasus', 'caspian',
   'silk road', 'belt and road', ' BRI',
 ];
 
@@ -59,7 +60,7 @@ function isCountryRelevant(title: string, summary: string, countryCode: string):
     kz: ['kazakhstan', 'kazakh', '哈萨克斯坦', '哈萨克', 'astana', '阿斯塔纳', 'almaty', '阿拉木图'],
     uz: ['uzbekistan', 'uzbek', '乌兹别克斯坦', '乌兹别克', 'tashkent', '塔什干', 'samarkand', '撒马尔罕'],
     kg: ['kyrgyzstan', 'kyrgyz', '吉尔吉斯斯坦', '吉尔吉斯', 'bishkek', '比什凯克'],
-    tm: ['turkmenistan', 'turkmen', '土库曼斯坦', '土库曼', 'ashgabat', '阿什哈巴德'],
+    az: ['azerbaijan', 'azeri', '阿塞拜疆', '巴库', 'baku'],
     tj: ['tajikistan', 'tajik', '塔吉克斯坦', '塔吉克', 'dushanbe', '杜尚别'],
   };
 

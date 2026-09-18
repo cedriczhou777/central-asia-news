@@ -189,17 +189,38 @@ export const sources: Record<NewsSource, SourceInfo> = {
     type: 'media',
   },
 
-  // ========== 土库曼斯坦 ==========
-  tdh_tm: {
-    id: 'tdh_tm',
-    name: 'TDH',
-    country: 'tm',
+  // ========== 阿塞拜疆 ==========
+  // 注意：这份目录目前没有任何地方引用（barrel 与 sources.ts 都无人 import），
+  // 真正生效的 RSS 源定义在 src/app/api/fetch-news/route.ts 的 RSS_SOURCES。
+  // 这里仅保持与 types.ts 的 NewsSource 联合类型一致，否则 tsc 会报错。
+  azertac: {
+    id: 'azertac',
+    name: 'AZERTAC',
+    country: 'az',
     type: 'official',
   },
-  turkmenportal: {
-    id: 'turkmenportal',
-    name: 'Turkmenportal',
-    country: 'tm',
+  trend_az: {
+    id: 'trend_az',
+    name: 'Trend.az',
+    country: 'az',
+    type: 'media',
+  },
+  qafqazinfo: {
+    id: 'qafqazinfo',
+    name: 'Qafqazinfo',
+    country: 'az',
+    type: 'media',
+  },
+  modern_az: {
+    id: 'modern_az',
+    name: 'Modern.az',
+    country: 'az',
+    type: 'media',
+  },
+  banker_az: {
+    id: 'banker_az',
+    name: 'Banker.az',
+    country: 'az',
     type: 'media',
   },
 
