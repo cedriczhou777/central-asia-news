@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
-import { extractFirstImage, isChineseText, isDuplicateContent } from '@/lib/utils';
+import { beijingDate, extractFirstImage, isChineseText, isDuplicateContent } from '@/lib/utils';
+import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
@@ -89,83 +90,155 @@ function imageFetchInit(): RequestInit {
   };
 }
 
-// 将外链图片上传到微信素材库，返回微信可访问的 URL（解决防盗链导致草稿无图的问题）
-async function uploadImageToWechat(imageUrl: string): Promise<string> {
+// ----- 图片上传到微信素材库 -----
+//
+// 背景（2026-09-18 那次「早上没推送」的根因）：
+// 公众号 draft/add 的 thumb_media_id 必须指向微信素材库里的图，所以推送前要先
+// material/add_material?type=image 传一张图换 media_id。旧实现直接把外链图的字节
+// 透传给微信，于是踩了三个坑：
+//   1) 微信只认 jpeg/png/gif/bmp，拒收 webp，报 "unsupported file type hint"。
+//      中亚媒体站（如 newtimes.kz）大量用 webp 出图 → 直接失败。
+//   2) 失败后的「兜底」重取的还是同一张失败的图，必然再失败一次。
+//   3) 兜底失败会 throw，把整轮推送打成 500，连一篇草稿都建不出来。
+// 现在：真实格式按魔数嗅探 → 微信不收的用 sharp 转 JPEG → 仍有问题就退到内置品牌图；
+// 全程不抛异常。封面拿不到只是「草稿没图」，不该让整轮推送失败。
+
+// 微信永久素材接口接受的图片格式
+const WECHAT_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/bmp', 'image/gif']);
+
+interface ImagePayload {
+  buf: ArrayBuffer;
+  mime: string;
+  ext: string;
+}
+
+interface MaterialResult {
+  mediaId: string;
+  url: string;
+}
+
+// 按魔数嗅探真实图片格式。
+// 不能信响应头的 content-type：源站经常标错（把 webp 标成 image/jpeg），
+// 而微信是按真实字节校验的，信了响应头就会在微信侧炸掉。
+function sniffImage(input: ArrayBuffer): { mime: string; ext: string } | null {
+  const b = new Uint8Array(input);
+  if (b.length < 12) return null;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { mime: 'image/gif', ext: 'gif' };
+  if (b[0] === 0x42 && b[1] === 0x4d) return { mime: 'image/bmp', ext: 'bmp' };
+  if (
+    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
+  ) {
+    return { mime: 'image/webp', ext: 'webp' };
+  }
+  return null;
+}
+
+// 把 Buffer 切出独立的 ArrayBuffer（Buffer 是共享池的视图，不能直接拿 .buffer）
+function toArrayBuffer(buf: Buffer): ArrayBuffer {
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+}
+
+// 整理成「微信能收」的格式：本来就是 jpeg/png/gif/bmp 就原样返回，
+// 其它（webp/avif/heif/认不出来的）用 sharp 转 JPEG。
+// sharp 是 next 的 optionalDependency，容器里不一定有，所以动态 import + 兜底。
+async function toWechatReadyImage(raw: ArrayBuffer): Promise<ImagePayload | null> {
+  const sniffed = sniffImage(raw);
+  if (sniffed && WECHAT_IMAGE_MIMES.has(sniffed.mime)) {
+    return { buf: raw, mime: sniffed.mime, ext: sniffed.ext };
+  }
+
+  const from = sniffed?.mime || '未知格式';
+  try {
+    const { default: sharp } = await import('sharp');
+    const jpeg = await sharp(Buffer.from(raw))
+      // webp 常带透明通道，JPEG 不支持，先压一层白底
+      .flatten({ background: '#FFFFFF' })
+      .jpeg({ quality: 88 })
+      .toBuffer();
+    console.log(`图片格式 ${from} 已转为 JPEG（${raw.byteLength} → ${jpeg.byteLength} 字节）`);
+    return { buf: toArrayBuffer(jpeg), mime: 'image/jpeg', ext: 'jpg' };
+  } catch (err) {
+    console.log(`图片格式 ${from} 转 JPEG 失败，放弃这张图：`, err);
+    return null;
+  }
+}
+
+// 上传一张图到微信永久素材库。失败返回空结果（不抛）。
+async function uploadMaterial(img: ImagePayload): Promise<MaterialResult> {
+  try {
+    const formData = new FormData();
+    // 文件名后缀和 Content-Type 都按嗅探出的真实格式给：微信两边都校验
+    formData.append(
+      'media',
+      new Blob([img.buf], { type: img.mime }),
+      `img_${Date.now()}.${img.ext}`
+    );
+    const res = await fetch(`${WECHAT_API_BASE}/material/add_material?type=image`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await res.json() as {
+      media_id?: string;
+      url?: string;
+      errcode?: number;
+      errmsg?: string;
+    };
+    if (data.errcode) {
+      console.log(`上传图片到微信失败：${data.errcode} ${data.errmsg}`);
+      return { mediaId: '', url: '' };
+    }
+    return { mediaId: data.media_id || '', url: data.url || '' };
+  } catch (err) {
+    console.log('上传图片到微信异常:', err);
+    return { mediaId: '', url: '' };
+  }
+}
+
+// 下载外链图 → 转码 → 上传。正文插图取 url，草稿封面取 mediaId。
+async function uploadRemoteImage(imageUrl: string): Promise<MaterialResult> {
   try {
     const res = await fetch(imageUrl, imageFetchInit());
     if (!res.ok) {
       console.log(`下载图片失败 ${imageUrl}: HTTP ${res.status}`);
-      return '';
+      return { mediaId: '', url: '' };
     }
-    const buf = await res.arrayBuffer();
-    const contentType = res.headers.get('content-type') || 'image/jpeg';
-
-    // 上传到微信永久图片素材
-    const url = `${WECHAT_API_BASE}/material/add_material?type=image`;
-    const formData = new FormData();
-    formData.append(
-      'media',
-      new Blob([buf], { type: contentType }),
-      `img_${Date.now()}.jpg`
-    );
-
-    const uploadRes = await fetch(url, { method: 'POST', body: formData });
-    const data = await uploadRes.json() as {
-      url?: string;
-      media_id?: string;
-      errcode?: number;
-      errmsg?: string;
-    };
-
-    if (data.errcode) {
-      console.log(`上传图片到微信失败 ${imageUrl}: ${data.errmsg}`);
-      return '';
-    }
-    // add_material 上传图片返回的 url 是微信 CDN 地址，可直接用于正文
-    return data.url || data.media_id || '';
+    const ready = await toWechatReadyImage(await res.arrayBuffer());
+    if (!ready) return { mediaId: '', url: '' };
+    return await uploadMaterial(ready);
   } catch (err) {
-    console.log(`上传图片到微信异常 ${imageUrl}:`, err);
-    return '';
+    console.log(`下载/上传图片异常 ${imageUrl}:`, err);
+    return { mediaId: '', url: '' };
   }
 }
 
+// 内置品牌图（不依赖网络和 sharp，必定可上传）
+function fallbackThumbPayload(): ImagePayload {
+  return {
+    buf: toArrayBuffer(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64')),
+    mime: 'image/jpeg',
+    ext: 'jpg',
+  };
+}
+
+// 上传草稿封面，返回 thumb_media_id。
+// 顺序：文章封面（外链）→ 内置品牌图。全程不抛异常。
 async function uploadThumb(imageUrl?: string): Promise<string> {
-  // 使用文章封面图或默认缩略图
-  const defaultThumbUrl = imageUrl || 'https://lf-coze-web-cdn.coze.cn/obj/eden-cn/lm-lgvj/ljhwZthlaukjlkulzlp/coze-coding/icon/coze-coding.gif';
-
-  // 封面必须是微信素材库里的图片（add_material 上传后返回 media_id）。
-  // 直接下载图片字节并上传为永久素材，返回 media_id。
-  try {
-    const imageRes = await fetch(defaultThumbUrl, imageFetchInit());
-    if (!imageRes.ok) throw new Error(`下载封面失败 HTTP ${imageRes.status}`);
-    const imageBuffer = await imageRes.arrayBuffer();
-    const contentType = imageRes.headers.get('content-type') || 'image/jpeg';
-    const url = `${WECHAT_API_BASE}/material/add_material?type=image`;
-    const formData = new FormData();
-    formData.append('media', new Blob([imageBuffer], { type: contentType }), `thumb_${Date.now()}.jpg`);
-    const res = await fetch(url, { method: 'POST', body: formData });
-    const data = await res.json() as { media_id?: string; errcode?: number; errmsg?: string };
-    if (data.errcode) {
-      throw new Error(`上传封面失败：${data.errmsg}`);
-    }
-    return data.media_id || '';
-  } catch (err) {
-    console.log('上传封面缩略图失败，使用默认图:', err);
+  if (imageUrl) {
+    const fromArticle = await uploadRemoteImage(imageUrl);
+    if (fromArticle.mediaId) return fromArticle.mediaId;
+    console.log(`文章封面不可用，退回内置品牌图：${imageUrl}`);
   }
 
-  // 兜底：默认图
-  const imageRes = await fetch(defaultThumbUrl);
-  const imageBuffer = await imageRes.arrayBuffer();
-  const url = `${WECHAT_API_BASE}/material/add_material?type=image`;
-  const formData = new FormData();
-  formData.append('media', new Blob([imageBuffer], { type: 'image/jpeg' }), 'thumb.jpg');
-  const res = await fetch(url, { method: 'POST', body: formData });
-  const data = await res.json() as { media_id?: string; errcode?: number; errmsg?: string };
-  console.log('上传缩略图返回:', JSON.stringify(data));
-  if (data.errcode) {
-    throw new Error(`上传缩略图失败：${data.errmsg}`);
+  const fallback = await uploadMaterial(fallbackThumbPayload());
+  if (!fallback.mediaId) {
+    console.log(
+      '内置品牌图也上传失败 —— 检查微信云调用的接口白名单是否包含 /cgi-bin/material/add_material'
+    );
   }
-  return data.media_id || '';
+  return fallback.mediaId;
 }
 
 interface DraftArticle {
@@ -200,19 +273,6 @@ async function addDraft(articles: DraftArticle[]): Promise<string> {
     throw new Error(`创建草稿失败：${data.errmsg}`);
   }
   return data.media_id;
-}
-
-// 当天日期（北京时间）。
-// 旧版用的是 `new Date().toISOString().split('T')[0]`，取的是 UTC 日期：
-// 北京 08:00 与 19:00 都落在同一个 UTC 日，于是同一天两次推送生成同名草稿。
-// 这里统一按 Asia/Shanghai 出 YYYY-MM-DD。
-function beijingDate(d: Date = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
 }
 
 // 时段标记：由调度器传入，只用来区分同一天的早报/晚报。
@@ -340,11 +400,22 @@ export async function POST(request: NextRequest) {
     );
 
     const results = [];
+    // 失败的国家单独记账，最后一起返回 —— 排查「今天怎么没推」时能一眼看出卡在哪一国
+    const failures: Array<{ country_code: string; country_name: string; error: string }> = [];
 
     // 按国别分组推送
     for (const country of countryList) {
-      // 获取该国家过去 N 小时的文章
-      const articles = await getArticlesByDateRange(startDate, endDate, country.code);
+      // 获取该国家过去 N 小时的文章。
+      // 单国读取失败（DB 抖动）不该拖垮整轮：跳过这一国，其余国家照常出草稿。
+      let articles: Awaited<ReturnType<typeof getArticlesByDateRange>>;
+      try {
+        articles = await getArticlesByDateRange(startDate, endDate, country.code);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[${country.name}] 读取新闻失败，跳过该国：`, err);
+        failures.push({ country_code: country.code, country_name: country.name, error: `读取新闻失败：${msg}` });
+        continue;
+      }
       
       if (articles.length === 0) {
         console.log(`${country.name}过去${hours}小时无文章，跳过`);
@@ -407,8 +478,9 @@ export async function POST(request: NextRequest) {
           // 每个 URL 并行上传，替换成微信 CDN url
           const replacements = await Promise.all(
             urls.map(async (u) => {
-              const wxUrl = await uploadImageToWechat(u);
-              return { from: u, to: wxUrl || u };
+              const uploaded = await uploadRemoteImage(u);
+              // 正文插图优先用微信 CDN url，退回 media_id，都拿不到就保留原图
+              return { from: u, to: uploaded.url || uploaded.mediaId || u };
             })
           );
           for (const r of replacements) {
@@ -445,15 +517,25 @@ export async function POST(request: NextRequest) {
       // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
       // 标题带「早报 / 晚报」：同一天两次推送的草稿标题必须不同，
       // 否则草稿箱里会出现两份一模一样的标题，分不清哪份是哪份。
-      const mediaId = await addDraft([{
-        title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
-        author: '中亚投资资讯',
-        content: htmlContent,
-        digest: `${country.name}${suffix || '今日'}精选${selectedArticles.length}条投资资讯`,
-        thumbMediaId: thumbMediaId,
-        needOpenComment: 0,
-        onlyFansCanComment: 0,
-      }]);
+      // 关键：建草稿失败只跳过这一国。旧实现在这里 throw，首个国家一失败就把
+      // 整轮打成 500，后面四个国家一篇草稿都建不出来（2026-09-18 早报的实际情况）。
+      let mediaId: string;
+      try {
+        mediaId = await addDraft([{
+          title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
+          author: '中亚投资资讯',
+          content: htmlContent,
+          digest: `${country.name}${suffix || '今日'}精选${selectedArticles.length}条投资资讯`,
+          thumbMediaId: thumbMediaId,
+          needOpenComment: 0,
+          onlyFansCanComment: 0,
+        }]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[${country.name}] 创建草稿失败，跳过该国：`, err);
+        failures.push({ country_code: country.code, country_name: country.name, error: msg });
+        continue;
+      }
 
       results.push({
         country_code: country.code,
@@ -464,9 +546,12 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      success: true,
-      message: `成功创建 ${results.length} 个草稿`,
+      success: failures.length === 0,
+      message: failures.length === 0
+        ? `成功创建 ${results.length} 个草稿`
+        : `成功创建 ${results.length} 个草稿，${failures.length} 个国家失败`,
       drafts: results,
+      failures,
     });
   } catch (error) {
     console.error('微信推送失败:', error);
