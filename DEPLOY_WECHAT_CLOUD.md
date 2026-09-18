@@ -84,9 +84,23 @@
 **方式二：本地上传**
 1. 在项目根目录执行：
 ```bash
-# 打包代码
-tar -czf deploy.tar.gz --exclude=node_modules --exclude=.next --exclude=.git .
+# 打包代码（正常约 280KB / 139 个文件）
+tar -czf deploy.tar.gz \
+  --exclude=node_modules --exclude=.next --exclude=.git \
+  --exclude=deploy.tar.gz --exclude=assets --exclude=dist \
+  --exclude=tsconfig.tsbuildinfo .
+```
 
+> **`--exclude=assets` 不能省**：`assets/` 里是 49MB 的聊天截图和导出日志，
+> 跟应用运行毫无关系，但它在 `.gitignore` 里**却已经被历史提交跟踪过**
+> （gitignore 不会让已跟踪的文件失效），所以 tar 默认会把它全打进去 ——
+> 打出来的包会是 **42MB** 而不是 280KB，上传和构建都白等。
+> 打完顺手校验一下大小：`ls -lh deploy.tar.gz`。
+>
+> （另：`--exclude=deploy.tar.gz` 也必须加，否则 tar 会把上一次的包打进新包里，
+> 报 `Can't add archive to itself` 并产生一个 42MB 的怪物包。）
+
+```bash
 # 在云托管控制台上传 deploy.tar.gz
 ```
 
