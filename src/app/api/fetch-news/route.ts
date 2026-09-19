@@ -687,7 +687,9 @@ async function processFetchNews(
 
         // 提取图片：优先从内容中提取，其次从文章原始 URL 获取 og:image
         let imageUrls = extractImagesFromHtml(originalContent);
-        if (imageUrls.length === 0 && item.link) {
+        // 干跑模式不取 og:image —— 那是一次外网请求/篇，而干跑只看采集量，
+        // 图片既不入库也不用推送。跳过它能让「信息源体检」从十几分钟压到一两分钟。
+        if (imageUrls.length === 0 && item.link && !skipTranslation) {
           const ogImage = await fetchOgImage(item.link);
           if (ogImage) imageUrls = [ogImage];
         }
@@ -782,8 +784,18 @@ async function processFetchNews(
     console.log(`内容级去重剔除 ${newArticles.length - contentDeduped.length} 篇重复内容，剩余 ${contentDeduped.length} 篇`);
   }
 
+  // skipTranslation（干跑模式）**只统计、不入库**。
+  //
+  // 为什么必须在这里拦住：这个模式跳过了翻译，走到这一步的 title / content 还是原文
+  // （俄语、哈萨克语、阿塞拜疆语…），直接 insertArticles 会把整批非中文内容写进生产库，
+  // 而推送端会照单全收、把它们推给读者。
+  // 旧版这里没有判断 —— 也就是 `skipTranslation: true` 实际是「把未翻译内容灌进生产库」，
+  // 完全不是它名字暗示的「安全试跑」。现在它是一次**信息源体检**：
+  // 跑完看 summary.sourceCounts / sourceErrors 就能知道每个源通不通、抓到几条。
   let savedCount = 0;
-  if (contentDeduped.length > 0) {
+  if (skipTranslation) {
+    console.log(`skipTranslation=true：干跑模式，跳过入库（本可入库 ${contentDeduped.length} 篇）`);
+  } else if (contentDeduped.length > 0) {
     try {
       await insertArticles(contentDeduped);
       savedCount = contentDeduped.length;
@@ -837,6 +849,10 @@ export async function GET() {
   return NextResponse.json({
     message: '新闻采集接口',
     usage: 'POST /api/fetch-news with optional { date: "YYYY-MM-DD", minPerCountry: 10, skipTranslation: true }',
+    // skipTranslation=true 是**信息源体检的干跑模式**：只采集、不入库、不调用翻译，
+    // 跑完读下面的 lastRun.summary.sourceCounts / sourceErrors 就知道每个源通不通。
+    // 想确认 Telegram 通没通、某个 RSS 源是不是死了，用这个模式，几分钟出结果且零成本。
+    dryRunHint: 'POST {"skipTranslation": true} 可做零成本的信息源体检（只采集不入库）',
     sources: RSS_SOURCES.map((s) => ({ name: s.name, country: s.country })),
     // 上一轮抓取的状态。调度器靠 running / finishedAt 判断「抓完了没」；
     // 人工排查时 summary 里有各源采集量与最终入库数，error 是失败原因。
