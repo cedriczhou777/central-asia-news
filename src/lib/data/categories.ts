@@ -31,6 +31,11 @@ export const categories: Record<Category, CategoryInfo> = {
     label: '人文',
     color: '#9333EA',
   },
+  sports: {
+    id: 'sports',
+    label: '体育',
+    color: '#0EA5E9',
+  },
   healthcare: {
     id: 'healthcare',
     label: '医疗卫生',
@@ -40,6 +45,16 @@ export const categories: Record<Category, CategoryInfo> = {
     id: 'energy',
     label: '能源',
     color: '#DC2626',
+  },
+  oil_gas: {
+    id: 'oil_gas',
+    label: '油气',
+    color: '#B45309',
+  },
+  renewable_energy: {
+    id: 'renewable_energy',
+    label: '新能源',
+    color: '#16A34A',
   },
   chemicals: {
     id: 'chemicals',

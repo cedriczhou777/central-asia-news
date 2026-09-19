@@ -40,10 +40,39 @@
 
 | 变量名 | 说明 |
 |--------|------|
-| `TELEGRAM_WORKER_URL` | Cloudflare Worker 代理地址；不配则不抓 Telegram |
+| `TELEGRAM_WORKER_URL` | Cloudflare Worker 代理地址；不配则不抓 Telegram。部署见下方「Telegram 接入」 |
 | `TELEGRAM_CHANNELS` | 频道配置，格式 `国家:频道[@频道...]`，逗号分隔。留空用内置默认值 |
 | `ZHIPU_MODEL` | 覆盖翻译型号，留空即用默认值 `glm-4.7-flash` |
 | `DEEPSEEK_MODEL` | 覆盖降级型号，留空即用代码默认值 |
+
+#### 翻译走了哪个通道、花了谁的钱？（一轮抓取后必看）
+
+`GET /api/fetch-news` 的 `lastRun.summary.translation` 里有：
+
+| 字段 | 含义 |
+|------|------|
+| `providerCounts` | 每个通道成功翻了几篇，如 `{"zhipu": 40, "deepseek": 126}` —— **deepseek 的数字就是花钱的篇数** |
+| `errors` | 每个失败通道的第一个报错（如 `zhipu: HTTP 401: invalid key`），智谱免费档为什么没生效看这里 |
+
+如果 `zhipu` 计数为 0 而 `errors` 里有它的报错：按报错处理——
+401 = Key 错；`model not found` = 型号代号过期（去智谱控制台「模型与价格」页核对，
+用 `ZHIPU_MODEL` 覆盖）；429 = 免费档限流（检查是否有并发）。
+
+#### Telegram 接入（约 5 分钟）
+
+微信云托管在大陆网络连不上 `t.me`，代码里已经留好了 **Cloudflare Worker 转发桥** 的接口，
+仓库里 `telegram-worker/worker.js` 就是现成的 Worker 源码（读 t.me 公开预览页，
+**不需要 Bot Token**，任何公开频道都能读）：
+
+1. 登录 [dash.cloudflare.com](https://dash.cloudflare.com) → Workers & Pages → Create Worker
+2. 把 `telegram-worker/worker.js` 的内容整个贴进在线编辑器 → Deploy
+3. 拿到形如 `https://xxx.yyy.workers.dev` 的地址
+4. 云托管控制台加环境变量 `TELEGRAM_WORKER_URL = https://xxx.yyy.workers.dev`
+5. 验证：`curl "https://xxx.yyy.workers.dev/?channel=@tengrinews"` 应返回 `{"posts":[...]}`
+
+频道表用 `TELEGRAM_CHANNELS` 覆盖（默认值在 `src/lib/telegram-channels.ts`）。
+**Instagram 没有等价的免认证公开接口**，不做伪造接入；需要的话走
+Meta Graph API + 商业账号授权，另议。
 
 #### 型号代号会过期（加凭据配置时必查）
 
@@ -318,6 +347,20 @@ curl -s https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api
 标题形如 `哈萨克斯坦 - 2026-09-18 早报 投资资讯`，晚报是 `... 晚报 ...`。
 
 ## 常见问题
+
+### Q: 某个国家今天没推送？
+A: 按顺序查三样（都能用 `GET` 拿到，不用进控制台）：
+
+1. **该国有多少篇入库**：`GET /api/articles?country=<kz|uz|kg|tj|az>&date=<YYYY-MM-DD>&limit=200`。
+   `count=0` → 问题在采集，看第 2 步；有文章 → 问题在推送，看第 3 步。
+2. **该国的源死了没有**：`GET /api/fetch-news` 的 `lastRun.sourceCounts` / `sourceErrors`。
+   RSS 源会死（404/410 是常态，媒体改版就断）—— 2026-09-19 吉尔吉斯两个源同时 410/404，
+   断流 9 天才被发现。发现死源：找个活的 RSS 替换 `src/app/api/fetch-news/route.ts` 里
+   `RSS_SOURCES` 的对应条目（先 curl 确认 200 且解析得出 item）。
+3. **推送那一轮的失败记录**：`GET /api/wechat/push` 的 `lastRun.summary.failures`。
+
+另外注意**时序**：调度器是「先抓取（实测 40 分钟）→ 再推送」。如果等抓取超时
+（60 分钟上限），推送会用当时的库硬推 —— 库还没填满时就表现为「该国没推」。
 
 ### Q: 草稿箱里同一个国家出现两份标题相同的草稿？
 A: 这是修复前的旧行为，两个成因已一并修掉：

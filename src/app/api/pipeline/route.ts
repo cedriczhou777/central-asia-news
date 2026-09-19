@@ -7,8 +7,9 @@ import { beijingDate } from '@/lib/utils';
 const API_BASE = resolveSelfBaseUrl();
 
 const POLL_INTERVAL_MS = 5_000;
-// 链路上限给足：抓取一轮实测十几分钟，推送几分钟，日报要调 LLM。
-const STEP_TIMEOUT_MS = 25 * 60_000;
+// 链路上限给足：2026-09-19 实测抓取一轮（含翻译）要 40 分钟，旧值 25 分钟
+// 会在抓取中途就超时，后面的步骤等于在用半空的库跑。
+const STEP_TIMEOUT_MS = 60 * 60_000;
 
 interface StepRunState {
   running?: boolean;

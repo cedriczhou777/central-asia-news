@@ -64,12 +64,13 @@ async function main() {
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
 
   console.log(`\n──────── 结果（耗时 ${elapsed}s）────────`);
-  console.log(`translated : ${result.translated}`);
-  console.log(`provider   : ${result.provider}`);
-  console.log(`投资相关   : ${result.isInvestmentRelated}`);
-  console.log(`标题       : ${result.titleZh}`);
-  console.log(`摘要       : ${result.summaryZh}`);
-  console.log(`正文       : ${result.contentZh}`);
+  console.log(`translated   : ${result.translated}`);
+  console.log(`provider     : ${result.provider}`);
+  console.log(`分类         : ${result.category ?? '（LLM 未给出合法枚举值）'}`);
+  console.log(`投资者相关   : ${result.investorRelevant}`);
+  console.log(`标题         : ${result.titleZh}`);
+  console.log(`摘要         : ${result.summaryZh}`);
+  console.log(`正文         : ${result.contentZh}`);
 
   if (!result.translated) {
     console.error('\n✗ 翻译失败：所有通道都没能返回合格的中文。请看上面的错误日志定位原因。');

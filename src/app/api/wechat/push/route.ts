@@ -293,6 +293,18 @@ function periodSuffix(period: unknown): string {
   return '';
 }
 
+// 投资者优先级：数字越大越靠前。
+// 用户（2026-09-19）明确要求：与投资者最相关的（经济形势、行业动态、外汇储备、
+// 国家政策、政治变动）放最前面，文体类放最后。
+// 未知分类兜底 30（低于正经投资主题，高于文体）。
+const CATEGORY_PRIORITY: Record<string, number> = {
+  economy: 100, policy: 95, oil_gas: 90, renewable_energy: 90, energy: 88,
+  minerals: 88, politics: 85, transport: 80, infrastructure: 80, manufacturing: 78,
+  chemicals: 75, housing: 70, law: 65, security: 60, livelihood: 55,
+  healthcare: 50, society: 40,
+  culture: 20, sports: 10,
+};
+
 // 生成微信公众号排版 HTML
 function generateWechatHtml(
   countryName: string,
@@ -314,15 +326,18 @@ function generateWechatHtml(
     law: '法律',
     society: '社会',
     culture: '人文',
+    sports: '体育',
     healthcare: '医疗卫生',
     energy: '能源',
+    oil_gas: '油气',
+    renewable_energy: '新能源',
     chemicals: '化工',
     minerals: '矿产',
     infrastructure: '基建',
-    housing: '住建',
+    housing: '房地产',
     manufacturing: '制造业',
     livelihood: '民生',
-    security: '国安',
+    security: '治安',
     transport: '交通',
   };
 
@@ -574,22 +589,40 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         ...a,
         relevanceScore: scoreInvestmentRelevance(a.title, a.summary),
       }));
-      
-      scoredArticles.sort((a, b) => b.relevanceScore - a.relevanceScore);
-      
+
+      // 排序 = 分类优先级 + 关键词评分。
+      // 2026-09-19 起分类由 LLM 判定（不再是清一色的 economy），优先级才有意义：
+      // 经济/政策/能源/矿产/政治在前，文体在后；同类内按评分排。
+      scoredArticles.sort((a, b) => {
+        const pa = CATEGORY_PRIORITY[a.category] ?? 30;
+        const pb = CATEGORY_PRIORITY[b.category] ?? 30;
+        if (pa !== pb) return pb - pa;
+        return b.relevanceScore - a.relevanceScore;
+      });
+
       // 内容级去重：确保每篇新闻讲不同的事情（标题+正文语义相似即视为重复）
+      // 同时限制文体类（culture/sports）每国最多 3 篇 —— 受众是国际投资者，
+      // 文体新闻「少一些」而不是完全没有（2026-09-19 用户明确要求）。
+      const MAX_SOFT_ARTICLES = 3;
+      let softCount = 0;
       const selectedArticles: typeof scoredArticles = [];
-      
+
       for (const article of scoredArticles) {
         // 今日精选：只设宽松上限防文章过长，不写死篇数
         if (selectedArticles.length >= maxPerCountry) break;
-        
+
+        // 文体类限量
+        const isSoft = article.category === 'culture' || article.category === 'sports';
+        if (isSoft && softCount >= MAX_SOFT_ARTICLES) {
+          continue;
+        }
+
         // 国家相关性（智能判定：明确指向其它国家才排除）
         if (!isCountryRelevant(article.title, article.summary, country.code)) {
           console.log(`跳过与${country.name}无关的新闻：${article.title}`);
           continue;
         }
-        
+
         // 内容级去重：与已选文章做语义相似度比对
         const isDup = selectedArticles.some(
           pre => isDuplicateContent(pre.title, pre.content, article.title, article.content)
@@ -598,7 +631,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           console.log(`跳过重复内容：${article.title}`);
           continue;
         }
-        
+
+        if (isSoft) softCount++;
         selectedArticles.push(article);
       }
 
@@ -673,7 +707,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
           author: '中亚投资资讯',
           content: htmlContent,
-          digest: `${country.name}${suffix || '今日'}精选${selectedArticles.length}条投资资讯`,
+          // 摘要不带篇数统计（2026-09-19 用户要求：标题/摘要里不要出现"30条"这类数字）
+          digest: `${country.name}${suffix || '今日'}投资资讯精选`,
           thumbMediaId: thumbMediaId,
           needOpenComment: 0,
           onlyFansCanComment: 0,
