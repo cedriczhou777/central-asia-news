@@ -70,7 +70,36 @@
 4. 云托管控制台加环境变量 `TELEGRAM_WORKER_URL = https://xxx.yyy.workers.dev`
 5. 验证：`curl "https://xxx.yyy.workers.dev/?channel=@tengrinews"` 应返回 `{"posts":[...]}`
 
-频道表用 `TELEGRAM_CHANNELS` 覆盖（默认值在 `src/lib/telegram-channels.ts`）。
+> **只需要配 `TELEGRAM_WORKER_URL` 这一个变量。** 频道表在 `src/lib/telegram-channels.ts`
+> 的 `DEFAULT_TELEGRAM_CHANNELS` 里已经有 12 个**实测可用**的频道（见下表），
+> `TELEGRAM_CHANNELS` 只在要临时改名单时才需要写。
+>
+> 本环境已有一个现成的 Worker：`https://telegram-proxy.cedriczhou777.workers.dev`
+> （页面上的 `worker.js` 就是上面第 2 步贴的代码，已实测可返回文章）。
+
+##### 已验证的频道名单（2026-09-19 逐个实测）
+
+| 国家 | 可用频道 | 说明 |
+|------|---------|------|
+| kz | `@tengrinews` | 最大民营新闻社 |
+| uz | `@kunuzofficial` `@gazetauz` `@spotuz` | Spot.uz 是商业财经口径 |
+| kg | `@akipress` `@economist_kg` `@sputnik_kyrgyzstan` | Economist.kg 偏商业 |
+| tj | `@asiaplus` `@sputnik_tajikistan` | Khovar 通讯社无公开频道 |
+| az | `@apa_az` `@qafqazinfo` `@banker_az` | Banker.az 是金融财经 |
+
+**实测拿不到内容的频道，别再往里加**（返回 `{"posts":[]}`）：
+`@kabar_kg`、`@tazabek`、`@vesti_kg`、`@24kgnews`、`@khovar`、`@ozodi_org`、
+`@tajikistan_news`、`@azertac`、`@trend_az`、`@modernaz`、`@haqqinaz`。
+加进去不会报错，只会让 `sourceErrors` 里常年挂一条「Worker 返回 0 条」的噪音。
+
+**每个频道只取最新 8 条**（`TELEGRAM_MAX_PER_CHANNEL`，见 `fetch-news/route.ts`）：
+Worker 一次返回预览页最近 ~20 条，而且抓取端**不做截断**（每篇候选都要单独跑一次
+LLM 翻译），不限量的话 12 个频道 = ~240 条原文进去，翻译费和一整轮耗时会翻几倍。
+
+配好后怎么确认它真的在跑：`GET /api/fetch-news` 的 `lastRun.summary.sourceCounts` 里
+会出现 `Telegram/@tengrinews(kz)` 这类源名；没配 Worker 时 `sourceErrors` 里会有一条
+`Telegram（未启用）`。**不需要进控制台翻日志。**
+
 **Instagram 没有等价的免认证公开接口**，不做伪造接入；需要的话走
 Meta Graph API + 商业账号授权，另议。
 

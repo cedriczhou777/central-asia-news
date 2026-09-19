@@ -17,9 +17,30 @@
  * 抽成纯函数后可以用 scripts/test-telegram-channels.ts 直接跑用例锁住行为。
  */
 
-/** 默认频道。这些频道 id 均经 t.me/s/<id> 公开预览验证可读。 */
+/**
+ * 默认频道。
+ *
+ * **每一个 id 都在 2026-09-19 用 `https://<worker>/?channel=<id>` 实测过**
+ * （返回非空 posts 且最新一条是当日/前一日）。加频道前必须这样验一次 ——
+ * 频道名写错时 Worker 只会返回 `{posts:[]}`，静默得像「那天没新闻」。
+ *
+ * 实测**不可用**的候选（别再往里加）：@kabar_kg、@tazabek、@vesti_kg、@24kgnews、
+ * @khovar、@ozodi_org、@tajikistan_news、@azertac、@trend_az、@modernaz、@haqqinaz。
+ * 死频道写进来只会白白多跑一轮 Worker 请求，而且让 sourceErrors 里常年挂着噪音。
+ */
 export const DEFAULT_TELEGRAM_CHANNELS =
-  'kz:@tengrinews, uz:@kunuzofficial@gazetauz, kg:@akipress, tj:@asiaplus';
+  // 哈萨克斯坦：Tengrinews（最大民营新闻社）
+  'kz:@tengrinews, ' +
+  // 乌兹别克斯坦：Kun.uz（最大新闻站）、Gazeta.uz（独立媒体）、Spot.uz（商业财经）
+  'uz:@kunuzofficial@gazetauz@spotuz, ' +
+  // 吉尔吉斯斯坦：AKIpress（通讯社）、Economist.kg（商业财经）、Sputnik 吉语台
+  'kg:@akipress@economist_kg@sputnik_kyrgyzstan, ' +
+  // 塔吉克斯坦：Asia-Plus（主要独立媒体）、Sputnik 塔语台
+  // （Khovar 国家通讯社没有可读的公开频道，只能靠 RSS）
+  'tj:@asiaplus@sputnik_tajikistan, ' +
+  // 阿塞拜疆：APA（通讯社）、Qafqazinfo（新闻门户）、Banker.az（金融财经，对投资者最直接）
+  // （AZERTAC / Trend.az 官方台都没有公开预览频道，只能靠 RSS）
+  'az:@apa_az@qafqazinfo@banker_az';
 
 export interface TelegramChannelEntry {
   country: string;

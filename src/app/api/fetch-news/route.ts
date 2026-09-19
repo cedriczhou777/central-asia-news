@@ -102,10 +102,13 @@ const RSS_SOURCES: RSSSource[] = [
   // 阿塞拜疆
   // 下面每个 URL 都逐个实测过（HTTP 200 且能解析出 item）。
   // 注意一批常见的阿塞拜疆媒体被 Cloudflare 拦在外面，从本机返回 403，别往里加：
-  //   report.az / azernews.az / caliber.az / oxu.az / 1news.az / minval.az / news.day.az
+  //   azernews.az / oxu.az / 1news.az / minval.az / news.day.az / musavat.com / report.az
+  // （2026-09-19 补测：abc.az / turan.az / news.az / sfera.az 均 404；interfax.az / aze.media 不可达）
   { name: 'AZERTAC', url: 'https://azertag.az/en/rss', country: 'az', language: 'en' },
   { name: 'AZERTAC (ru)', url: 'https://azertag.az/ru/rss', country: 'az', language: 'ru' },
   { name: 'Trend.az', url: 'https://www.trend.az/rss/', country: 'az', language: 'en' },
+  { name: 'APA', url: 'https://apa.az/rss', country: 'az', language: 'az' },
+  { name: 'Haqqin.az', url: 'https://haqqin.az/rss', country: 'az', language: 'ru' },
   { name: 'Qafqazinfo', url: 'https://qafqazinfo.az/rss', country: 'az', language: 'az' },
   { name: 'Modern.az', url: 'https://modern.az/rss', country: 'az', language: 'az' },
   { name: 'Banker.az', url: 'https://banker.az/feed/', country: 'az', language: 'az' },
@@ -216,6 +219,16 @@ const JUNK_TITLE_KEYWORDS = [
   'чемпионат', 'турнир', 'концерт', 'фестивал', 'свадьба', 'мода',
   'футбол', 'спорт', 'матч',
 ];
+
+/**
+ * 每个 Telegram 频道只取**最新**的多少条。
+ *
+ * Worker 返回的是 t.me 预览页上的最近 ~20 条（旧 → 新排序），不去限量的话
+ * 12 个频道就是 ~240 条原文进候选池 —— 而抓取端**不做截断**（每篇候选都要
+ * 单独跑一次 LLM 翻译，见下方 `const selected = selectedCandidates;` 处的说明），
+ * 翻译费和一整轮耗时都会跟着翻几倍。取最新 8 条足够覆盖一天的增量。
+ */
+const TELEGRAM_MAX_PER_CHANNEL = 8;
 
 // 判断新闻是否属于目标国家：
 // 1. 标题/正文提到目标国（任何语言形态）→ 相关（含「本国+第三国」的复合新闻）；
@@ -527,9 +540,21 @@ async function processFetchNews(
       );
     }
     for (const { country, channel } of channelEntries) {
+      // Telegram 的采集结果也记进 results，这样 sourceCounts / sourceErrors 里能看到它 ——
+      // 否则「Telegram 到底通没通」只能去控制台翻日志，配完了从外面根本验证不了。
+      const result = { source: `Telegram/${channel}(${country})`, fetched: 0, errors: [] as string[] };
       try {
-        const articles = await fetchTelegramRSS(channel);
-        if (articles.length === 0) continue;
+        const fetchedPosts = await fetchTelegramRSS(channel);
+        result.fetched = fetchedPosts.length;
+        if (fetchedPosts.length === 0) {
+          // 频道名写错、Worker 没配好、或该频道当天没内容，都会落到这里，如实记录
+          result.errors.push('Worker 返回 0 条（检查频道名是否存在 / Worker 是否可访问）');
+          results.push(result);
+          continue;
+        }
+        // Worker 返回「旧 → 新」，取尾部 = 最新几条。见 TELEGRAM_MAX_PER_CHANNEL 的说明。
+        const articles = fetchedPosts.slice(-TELEGRAM_MAX_PER_CHANNEL);
+        const before = getCandidates(country).length;
         for (const article of articles) {
           const title = article.title || '';
           const description = article.summary || '';
@@ -547,13 +572,26 @@ async function processFetchNews(
             relevanceScore: scoreInvestmentRelevance(title, description),
           });
         }
-        console.log(`[Telegram Worker] ${channel}(${country}) 补充 ${articles.length} 篇，投资相关 ${getCandidates(country).length} 篇`);
+        console.log(
+          `[Telegram Worker] ${channel}(${country}) 拉到 ${fetchedPosts.length} 篇、取最新 ${articles.length} 篇，其中投资相关 ${getCandidates(country).length - before} 篇`
+        );
       } catch (error) {
-        console.error(`[Telegram Worker] ${channel} 处理失败:`, error instanceof Error ? error.message : String(error));
+        const msg = error instanceof Error ? error.message : String(error);
+        result.errors.push(`Telegram 抓取失败：${msg}`);
+        console.error(`[Telegram Worker] ${channel} 处理失败:`, msg);
       }
+      results.push(result);
     }
   } else if (telegramChannelsRaw) {
+    // 未配置 TELEGRAM_WORKER_URL：Telegram 通道不启用。
+    // 也写进 sourceErrors —— 这样「Telegram 到底跑没跑」从 GET 就能看出来，
+    // 不用去控制台翻日志（频道清单已在代码里有默认值，所以这条会一直出现直到配好 Worker）。
     console.log('检测到 TELEGRAM_CHANNELS 但未配置 TELEGRAM_WORKER_URL，跳过 Telegram 抓取');
+    results.push({
+      source: 'Telegram（未启用）',
+      fetched: 0,
+      errors: ['未配置 TELEGRAM_WORKER_URL，Telegram 频道未抓取。部署见 DEPLOY_WECHAT_CLOUD.md 的「Telegram 接入」'],
+    });
   }
 
   // 第二步：每个国家精选至少 minPerCountry 篇新闻（见下方 for 的说明）

@@ -40,6 +40,14 @@ interface ChatProvider {
   modelEnv: string;
   defaultModel: string;
   endpoint: string;
+  /**
+   * 合并进请求体的额外参数（跟 model / messages / temperature 平级）。
+   *
+   * 为什么要按 provider 配而不是全局配：各家对「未知参数」的容忍度不一样 ——
+   * 往 DeepSeek 的请求里塞智谱专有的 `thinking` 字段，轻则 400、重则静默忽略，
+   * 而两种失败都只会在日志里留一行，很难看出是参数串台导致的。
+   */
+  extraBody?: Record<string, unknown>;
 }
 
 /**
@@ -57,6 +65,20 @@ export const PROVIDERS: ChatProvider[] = [
     modelEnv: 'ZHIPU_MODEL',
     defaultModel: 'glm-4.7-flash',
     endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    // ⚠️ 这一行是 2026-09-19 花 3.42 元买来的教训，删之前先读完：
+    //
+    // GLM-4.7 系列（含 glm-4.7-flash）**默认 thinking.type = "enabled"**，
+    // 这跟 GLM-4.6 的「混合 thinking（自动开关）」不一样。翻译这种任务压根不需要推理，
+    // 开着 thinking 的后果是每个请求都要先生成一大段思维链：
+    //   1. 单篇耗时从几秒涨到几十秒 → 很容易撞上本文件的 60s AbortSignal 超时；
+    //   2. 超时 → 判为失败 → 重试 3 次 → 全部失败 → **降级到付费的 DeepSeek**。
+    // 结果就是「智谱的 Key 明明配了、型号也是对的免费档，钱却全花在 DeepSeek 上」，
+    // 而且从界面上完全看不出异常（只在日志里留几行超时）。
+    //
+    // 官方文档：https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode
+    // 「GLM-4.7 系列默认开启 Thinking…… 如果您想关闭 thinking，请使用
+    //   "thinking": { "type": "disabled" }」
+    extraBody: { thinking: { type: 'disabled' } },
   },
   {
     // DeepSeek：按量付费，作为降级通道。
@@ -259,14 +281,43 @@ function resolveModel(provider: ChatProvider): string {
 }
 
 /**
- * 调用一个 OpenAI 兼容的 chat/completions 接口，返回模型输出的原始文本。
- * 任何失败（未配置 Key / 网络错误 / 非 2xx / 空响应）都返回 null，由调用方决定是否重试。
+ * 单次调用模型的结果。`retryable` 决定调用方要不要再试一次。
+ *
+ * 为什么要区分「值不值得重试」：旧版对所有失败一律重试 3 次。对于「Key 配错了」
+ * 这种失败，重试不可能变好，只是把同一份错误报 3 遍、把整个批次拖慢，最后照样
+ * 降级到付费通道 —— 这正是 2026-09-19 那 3.42 元的成因之一。
  */
-async function callChatProvider(provider: ChatProvider, prompt: string): Promise<string | null> {
+interface ChatCallResult {
+  text: string | null;
+  /** 失败是否值得重试：429 / 5xx / 空响应 = 值得；鉴权、型号、参数类错误和超时 = 不值得 */
+  retryable: boolean;
+}
+
+/** 单次模型调用的超时上限。 */
+const CALL_TIMEOUT_MS = 60000;
+
+/**
+ * 调用一个 OpenAI 兼容的 chat/completions 接口。
+ * 失败时返回 `{ text: null, retryable }`，由调用方决定重试还是换通道。
+ */
+async function callChatProvider(
+  provider: ChatProvider,
+  prompt: string,
+  /** 可选：把原始错误交给调用方（体检接口用它把报错原样返回，不依赖全局统计） */
+  onError?: (err: string) => void,
+): Promise<ChatCallResult> {
   const apiKey = process.env[provider.keyEnv];
-  if (!apiKey) return null;
+  if (!apiKey) return { text: null, retryable: false };
 
   const model = resolveModel(provider);
+
+  /** 统一的失败出口：记日志 + 记统计 + 通知调用方，三处都别漏 */
+  const fail = (err: string, retryable: boolean): ChatCallResult => {
+    console.error(`[${provider.name}/${model}] ${err}`);
+    recordProviderError(provider.name, model, err);
+    onError?.(err);
+    return { text: null, retryable };
+  };
 
   try {
     const response = await fetch(provider.endpoint, {
@@ -279,31 +330,40 @@ async function callChatProvider(provider: ChatProvider, prompt: string): Promise
         model,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
+        // provider 专属参数（如智谱的 thinking 开关）在这里展开，
+        // 见 ChatProvider.extraBody 的说明 —— 不能全局写死，否则会串到别的厂商。
+        ...(provider.extraBody || {}),
       }),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
 
     if (!response.ok) {
       const body = await response.text();
-      const err = `HTTP ${response.status}: ${body.substring(0, 200)}`;
-      console.error(`[${provider.name}/${model}] 请求失败 ${err}`);
-      recordProviderError(provider.name, model, err);
-      return null;
+      // 429（限流）和 5xx（服务端抖动）值得重试；
+      // 其余 4xx（401 Key 无效 / 404 型号不存在 / 400 参数非法）是配置问题，重试无意义。
+      return fail(
+        `HTTP ${response.status}: ${body.substring(0, 200)}`,
+        response.status === 429 || response.status >= 500,
+      );
     }
 
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
+    };
     const llmContent = data.choices?.[0]?.message?.content || '';
     if (!llmContent) {
-      console.error(`[${provider.name}/${model}] 返回内容为空`);
-      recordProviderError(provider.name, model, '返回内容为空');
-      return null;
+      // 兼容「思考型模型把内容全放进 reasoning_content、content 为空」的情况，
+      // 报错时把这点写清楚，省得对着空响应猜。
+      const hadReasoning = Boolean(data.choices?.[0]?.message?.reasoning_content);
+      return fail(hadReasoning ? '返回内容为空（只有 reasoning_content）' : '返回内容为空', true);
     }
-    return llmContent;
+    return { text: llmContent, retryable: false };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[${provider.name}/${model}] 调用异常:`, message);
-    recordProviderError(provider.name, model, message);
-    return null;
+    // 超时 / 网络异常一律不重试：说明这个通道**当前不可用**，不是「再试一次就好」。
+    // 旧版在这里硬重试 3 次（最坏 3 分钟/篇），166 篇就是几个小时，而且最后照样
+    // 降级到付费通道。直接换下一个通道，让降级链干它该干的事。
+    return fail(`调用异常: ${message}`, false);
   }
 }
 
@@ -333,9 +393,9 @@ export async function translateNews(
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       console.log(`[translate] ${provider.name}/${model} 第 ${attempt}/${MAX_ATTEMPTS} 次尝试...`);
 
-      const raw = await callChatProvider(provider, prompt);
-      if (raw) {
-        const parsed = parseLlmJson(raw);
+      const call = await callChatProvider(provider, prompt);
+      if (call.text) {
+        const parsed = parseLlmJson(call.text);
         if (parsed) {
           const result = normalizeResult(parsed, title, content, provider.name);
           if (result.translated && result.contentZh !== content) {
@@ -347,6 +407,11 @@ export async function translateNews(
         } else {
           console.log(`[translate] ${provider.name} 返回内容不是合法 JSON，继续重试`);
         }
+      } else if (!call.retryable) {
+        // 不可重试的失败（Key 无效 / 型号不存在 / 超时 / 网络异常）：
+        // 立刻换下一个通道，不再浪费 2 次重试和退避等待。理由见 callChatProvider。
+        console.log(`[translate] ${provider.name} 的失败不可重试，直接切换下一个通道`);
+        break;
       }
 
       // 指数退避：800ms / 1600ms。限流（429）时给服务端一点恢复时间。
@@ -376,4 +441,75 @@ export async function translateNews(
     translated: false,
     provider: 'none',
   };
+}
+
+/** 单个翻译通道的体检结果。 */
+export interface ProviderProbe {
+  provider: string;
+  model: string;
+  /** Key 对应的环境变量有没有值 */
+  keyConfigured: boolean;
+  ok: boolean;
+  /** 成功时是模型回显；失败时是**原始报错**（HTTP 状态码 + 响应体片段） */
+  detail: string;
+  latencyMs: number;
+}
+
+/** 体检用的极短提示词：只求「这条链路通不通」，不关心内容质量。 */
+const PROBE_PROMPT = '只回复两个字：正常';
+
+/**
+ * 逐通道体检：对每个配置了 Key 的通道真实打一次极小的请求，把「通不通、通了多快、
+ * 不通是为什么」原样返回。
+ *
+ * 存在的理由（血泪）：翻译通道挂了时，线上只有两个症状 —— 「文章不入库」或
+ * 「钱全花在付费通道上」，而且**都不报错到界面**。原来要定位得跑完一整轮抓取
+ * （实测 40–60 分钟）才在 `lastRun.summary.translation` 里看到一行报错。
+ * 这个函数把同样的信息压成一次 GET，2026-09-19 就是这么发现
+ * 「GLM-4.7 默认开 thinking → 单篇超时 → 降级到 DeepSeek」的。
+ *
+ * `latencyMs` 是判断 thinking 有没有真关掉的关键指标：关掉后应当是几秒级，
+ * 如果还是几十秒，说明 extraBody 没生效或型号变了。
+ *
+ * 注意它**不污染也不读取**全局统计（错误走 onError 回调），所以可以在抓取跑着的时候调。
+ */
+export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
+  const results: ProviderProbe[] = [];
+
+  for (const provider of PROVIDERS) {
+    const model = resolveModel(provider);
+    const keyConfigured = Boolean(process.env[provider.keyEnv]);
+
+    if (!keyConfigured) {
+      results.push({
+        provider: provider.name,
+        model,
+        keyConfigured: false,
+        ok: false,
+        detail: `未配置环境变量 ${provider.keyEnv}，该通道会被整条跳过`,
+        latencyMs: 0,
+      });
+      continue;
+    }
+
+    let firstError = '';
+    const startedAt = Date.now();
+    const call = await callChatProvider(provider, PROBE_PROMPT, (e) => {
+      if (!firstError) firstError = e;
+    });
+    const latencyMs = Date.now() - startedAt;
+
+    results.push({
+      provider: provider.name,
+      model,
+      keyConfigured: true,
+      ok: Boolean(call.text),
+      detail: call.text
+        ? `正常，模型回显：${call.text.slice(0, 60)}`
+        : firstError || '失败，但没有拿到具体报错',
+      latencyMs,
+    });
+  }
+
+  return results;
 }
