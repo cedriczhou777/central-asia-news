@@ -42,7 +42,8 @@
 |--------|------|
 | `TELEGRAM_WORKER_URL` | Cloudflare Worker 代理地址；不配则不抓 Telegram。部署见下方「Telegram 接入」 |
 | `TELEGRAM_CHANNELS` | 频道配置，格式 `国家:频道[@频道...]`，逗号分隔。留空用内置默认值 |
-| `ZHIPU_MODEL` | 覆盖翻译型号，留空即用默认值 `glm-4.7-flash` |
+| `ZHIPU_MODEL` | 覆盖第一优先的免费型号，留空即用默认值 `glm-4.7-flash` |
+| `ZHIPU_FALLBACK_MODEL` | 覆盖**第二个**免费型号，留空即用默认值 `glm-4-flash-250414`。它排在付费通道之前，专门用来接住 `glm-4.7-flash` 的 1305（按型号计的拥挤）。**厂商换代号时只改这个变量，不用改代码** |
 | `DEEPSEEK_MODEL` | 覆盖降级型号，留空即用代码默认值 |
 
 #### 翻译走了哪个通道、花了谁的钱？（一轮抓取后必看）
@@ -51,8 +52,8 @@
 
 | 字段 | 含义 |
 |------|------|
-| `providerCounts` | 每个通道成功翻了几篇，如 `{"zhipu": 40, "deepseek": 126}` —— **deepseek 的数字就是花钱的篇数** |
-| `errors` | 每个失败通道的第一个报错（如 `zhipu: HTTP 401: invalid key`），智谱免费档为什么没生效看这里 |
+| `providerCounts` | 每个通道成功翻了几篇，如 `{"zhipu": 40, "zhipu-flash": 30, "deepseek": 96}` —— **只有 `deepseek` 那一项是花钱的篇数**，两个 zhipu 都是免费档 |
+| `errors` | 每个失败通道的第一个报错（如 `zhipu: HTTP 429 ... code 1305`），免费档为什么没生效看这里 |
 
 如果 `zhipu` 计数为 0 而 `errors` 里有它的报错：按报错处理——
 401 = Key 错；`model not found` = 型号代号过期（去智谱控制台「模型与价格」页核对，
