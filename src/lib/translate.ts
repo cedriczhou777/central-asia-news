@@ -291,10 +291,33 @@ interface ChatCallResult {
   text: string | null;
   /** 失败是否值得重试：429 / 5xx / 空响应 = 值得；鉴权、型号、参数类错误和超时 = 不值得 */
   retryable: boolean;
+  /**
+   * 本次响应里 `reasoning_content` 的字符数（0 表示没有）。
+   *
+   * 这是判断「thinking 到底关掉了没有」的**直接证据**：
+   * 请求里带了 `thinking: {type:'disabled'}` 却依然返回一大段 reasoning_content，
+   * 就说明那个参数没被受理（型号变了 / 字段名变了），
+   * 而症状只是「慢」（单篇从几秒涨到十几秒），不看这个字段根本发现不了。
+   */
+  reasoningChars?: number;
 }
 
 /** 单次模型调用的超时上限。 */
 const CALL_TIMEOUT_MS = 60000;
+
+/** `callChatProvider` 的可选开关（翻译主链路只用默认值，体检接口会用到全部三个）。 */
+interface ChatCallOptions {
+  /** 把原始错误交给调用方（体检接口用它把报错原样返回，不依赖全局统计） */
+  onError?: (err: string) => void;
+  /**
+   * 体检用：覆盖 provider.extraBody。
+   * 传 `{}` 就是「不关 thinking」的对照组 —— 只有和它比过，才能证明
+   * `thinking: {type:'disabled'}` 是真的起了作用，而不是「本来就这么慢」。
+   */
+  extraOverride?: Record<string, unknown>;
+  /** 覆盖超时。体检要连打两次，必须比主链路短，否则两次加起来会超过网关 65 秒上限。 */
+  timeoutMs?: number;
+}
 
 /**
  * 调用一个 OpenAI 兼容的 chat/completions 接口。
@@ -303,9 +326,9 @@ const CALL_TIMEOUT_MS = 60000;
 async function callChatProvider(
   provider: ChatProvider,
   prompt: string,
-  /** 可选：把原始错误交给调用方（体检接口用它把报错原样返回，不依赖全局统计） */
-  onError?: (err: string) => void,
+  options: ChatCallOptions = {},
 ): Promise<ChatCallResult> {
+  const { onError, extraOverride, timeoutMs = CALL_TIMEOUT_MS } = options;
   const apiKey = process.env[provider.keyEnv];
   if (!apiKey) return { text: null, retryable: false };
 
@@ -332,9 +355,9 @@ async function callChatProvider(
         temperature: 0.3,
         // provider 专属参数（如智谱的 thinking 开关）在这里展开，
         // 见 ChatProvider.extraBody 的说明 —— 不能全局写死，否则会串到别的厂商。
-        ...(provider.extraBody || {}),
+        ...(extraOverride ?? provider.extraBody ?? {}),
       }),
-      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!response.ok) {
@@ -350,14 +373,15 @@ async function callChatProvider(
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
     };
-    const llmContent = data.choices?.[0]?.message?.content || '';
+    const message = data.choices?.[0]?.message;
+    const llmContent = message?.content || '';
+    const reasoningChars = (message?.reasoning_content || '').length;
     if (!llmContent) {
       // 兼容「思考型模型把内容全放进 reasoning_content、content 为空」的情况，
       // 报错时把这点写清楚，省得对着空响应猜。
-      const hadReasoning = Boolean(data.choices?.[0]?.message?.reasoning_content);
-      return fail(hadReasoning ? '返回内容为空（只有 reasoning_content）' : '返回内容为空', true);
+      return fail(reasoningChars > 0 ? '返回内容为空（只有 reasoning_content）' : '返回内容为空', true);
     }
-    return { text: llmContent, retryable: false };
+    return { text: llmContent, retryable: false, reasoningChars };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // 超时 / 网络异常一律不重试：说明这个通道**当前不可用**，不是「再试一次就好」。
@@ -453,10 +477,36 @@ export interface ProviderProbe {
   /** 成功时是模型回显；失败时是**原始报错**（HTTP 状态码 + 响应体片段） */
   detail: string;
   latencyMs: number;
+  /** 这次请求实际带的 provider 专属参数（证明 extraBody 真发出去了，而不是被漏掉） */
+  requestExtra?: Record<string, unknown>;
+  /** 响应里 reasoning_content 的字符数。>0 = 这次调用真的「思考」了（哪怕传了 disabled） */
+  reasoningChars?: number;
+  /**
+   * 对照组：把 extraBody 去掉再打一次（只对有 extraBody 的通道做）。
+   *
+   * 为什么必须比：只看 `latencyMs` 无法区分两种完全不同的情况 ——
+   *   ① 「thinking 关掉了，但这家通道本身就慢」；
+   *   ② 「thinking 没关掉，参数被无视了」。
+   * 两者的处置完全不同（前者忍、后者要改参数或换型号），
+   * 所以体检必须给出「关掉 vs 不关」的实测差值。
+   */
+  control?: {
+    latencyMs: number;
+    reasoningChars: number;
+    ok: boolean;
+    detail: string;
+  } | null;
 }
 
 /** 体检用的极短提示词：只求「这条链路通不通」，不关心内容质量。 */
 const PROBE_PROMPT = '只回复两个字：正常';
+
+/**
+ * 体检单次调用的超时。必须明显小于网关的 65 秒：
+ * 体检要连打两次（正测 + 去掉 thinking 的对照），留足余量才不会出现
+ * 「体检本身 504、什么结论都拿不到」（那才是最尴尬的失败）。
+ */
+const PROBE_TIMEOUT_MS = 25_000;
 
 /**
  * 逐通道体检：对每个配置了 Key 的通道真实打一次极小的请求，把「通不通、通了多快、
@@ -468,11 +518,13 @@ const PROBE_PROMPT = '只回复两个字：正常';
  * 这个函数把同样的信息压成一次 GET，2026-09-19 就是这么发现
  * 「GLM-4.7 默认开 thinking → 单篇超时 → 降级到 DeepSeek」的。
  *
- * `latencyMs` 是判断 thinking 有没有真关掉的关键指标：关掉后应当是几秒级，
- * 如果还是几十秒，说明 extraBody 没生效或型号变了。
+ * `latencyMs` 能看出「慢不慢」，但**判不出慢在谁身上** ——
+ * 所以对配了 `extraBody` 的通道会再打一次**对照组**（去掉 extraBody），
+ * 并结合响应里的 `reasoningChars` 给出结论：是 thinking 没关掉，还是通道本身排队。
  *
  * 注意它**不污染也不读取**全局统计（错误走 onError 回调），所以可以在抓取跑着的时候调。
  */
+
 export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
   const results: ProviderProbe[] = [];
 
@@ -494,10 +546,34 @@ export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
 
     let firstError = '';
     const startedAt = Date.now();
-    const call = await callChatProvider(provider, PROBE_PROMPT, (e) => {
-      if (!firstError) firstError = e;
+    const call = await callChatProvider(provider, PROBE_PROMPT, {
+      onError: (e) => {
+        if (!firstError) firstError = e;
+      },
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
     const latencyMs = Date.now() - startedAt;
+
+    // 对照组：只有配了 extraBody 的通道（本项目是智谱的 thinking 开关）才需要，
+    // 用同一个极短提示词、去掉 extraBody 再打一次，把两次的耗时和 reasoning 长度摆在一起。
+    let control: ProviderProbe['control'] = null;
+    if (provider.extraBody) {
+      let controlError = '';
+      const controlStart = Date.now();
+      const controlCall = await callChatProvider(provider, PROBE_PROMPT, {
+        extraOverride: {},
+        onError: (e) => {
+          if (!controlError) controlError = e;
+        },
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+      control = {
+        latencyMs: Date.now() - controlStart,
+        reasoningChars: controlCall.reasoningChars ?? 0,
+        ok: Boolean(controlCall.text),
+        detail: controlCall.text ? '正常' : controlError || '失败',
+      };
+    }
 
     results.push({
       provider: provider.name,
@@ -508,6 +584,9 @@ export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
         ? `正常，模型回显：${call.text.slice(0, 60)}`
         : firstError || '失败，但没有拿到具体报错',
       latencyMs,
+      requestExtra: provider.extraBody ?? {},
+      reasoningChars: call.reasoningChars ?? 0,
+      control,
     });
   }
 
