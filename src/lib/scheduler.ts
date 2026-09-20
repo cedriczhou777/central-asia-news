@@ -16,8 +16,9 @@ import { resolveSelfBaseUrl } from './runtime';
 //
 // 代价（知情选择）：某一时段整体失败（例如容器没被预热唤醒）时，这一段窗口的新闻
 // 不会被下一次推送自动补上。人工补齐的办法是手动调一次
-//   POST /api/wechat/push  {"hours": 24}
-// 它不传 period，不走增量窗口，按老口径汇总过去 24 小时。
+//   POST /api/wechat/push  {"hours": 24, "period": "manual"}
+// 它不走增量窗口，按指定小时数汇总；period=manual 让标题带「补报」后缀，
+// 从而与当天自动跑的早报/晚报区分开（不传 period 会和上一次人工补跑同名 → 草稿箱出现同名草稿）。
 //
 // ⚠️ 推送接口是**异步**的（和抓取一样）：POST 只代表任务已启动，立刻返回 200。
 // 结果要 GET 同一个地址、读 lastRun（summary.drafts 是建成功的草稿，

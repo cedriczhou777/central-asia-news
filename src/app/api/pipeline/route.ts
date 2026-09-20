@@ -134,12 +134,13 @@ async function processPipeline(
     log.push(`[${now()}] 日报生成失败：${err instanceof Error ? err.message : '未知错误'}`);
   }
 
-  // Step 3: 推送微信公众号草稿（可选）。不传 period → 按老口径汇总过去 N 小时，
-  // 标题不带「早报/晚报」后缀，供人工补跑使用。
+  // Step 3: 推送微信公众号草稿（可选）。period 固定为 manual —— 流水线是人工补跑入口，
+  // 草稿标题带「补报」后缀，才和当天自动跑的早报/晚报区分得开（不带后缀会和上一次
+  // 人工补跑完全同名，草稿箱里出现两份同名草稿）。
   if (pushToWechat) {
     log.push(`[${now()}] 开始推送微信公众号草稿（按国别分组）...`);
     try {
-      await runStep('公众号推送', '/api/wechat/push', { hours }, log);
+      await runStep('公众号推送', '/api/wechat/push', { hours, period: 'manual' }, log);
     } catch (err) {
       log.push(`[${now()}] 公众号推送失败：${err instanceof Error ? err.message : '未知错误'}`);
     }

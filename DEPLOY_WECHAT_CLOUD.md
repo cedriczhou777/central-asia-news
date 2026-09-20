@@ -58,7 +58,91 @@
 401 = Key 错；`model not found` = 型号代号过期（去智谱控制台「模型与价格」页核对，
 用 `ZHIPU_MODEL` 覆盖）；429 = 免费档限流（检查是否有并发）。
 
-#### Telegram 接入（约 5 分钟）
+##### ⚠️ 已实测：微信云托管**到不了** `*.workers.dev`（2026-09-20）
+
+**这一段是结论，不要再重复排查。**
+
+`GET /api/telegram-check` 的实测结果（部署于微信云托管的容器内发起）：
+
+| 检查项 | 结果 |
+|--------|------|
+| `TELEGRAM_WORKER_URL` 是否配上 | ✅ 已配，值 `https://telegram-proxy.cedriczhou777.workers.dev` |
+| 容器能不能上外网 | ✅ 能，`https://www.baidu.com` → HTTP 200（40ms） |
+| 12 个频道请求 Worker | ❌ 全部 `fetch failed`，约 250ms 内失败，`status=null`（**网络层就没通**） |
+
+**结论：容器有外网，但解析/连接不了 `workers.dev` 这个域名。**
+微信云托管在大陆网络访问 Cloudflare 的 `*.workers.dev` 默认域名不可达。
+这**不是**频道名写错，也不是环境变量配错 —— 改 `TELEGRAM_CHANNELS` 没有任何用。
+
+**想真正打通 Telegram，只有两条路**（都要额外资源，见下）：
+
+1. **给 Worker 绑一个自定义域名**（Cloudflare 后台 → Worker → Settings → Domains & Routes
+   → Add Custom Domain）。需要一个托管在 Cloudflare 的域名。把 `TELEGRAM_WORKER_URL`
+   换成该域名后再跑一次 `GET /api/telegram-check` 验证 —— 能通就通了。
+   ⚠️ 仍走 Cloudflare 边缘，不保证一定可达，必须用 telegram-check 实测过才算数。
+2. **换一个大陆可达的转发地址**（境外小服务器 / 云函数 + 自定义域名），
+   返回结构必须与 `telegram-worker/worker.js` 一致（`{ posts: [{title,url,date,summary}] }`）。
+
+**替代方案（推荐）**：这条链路不通**不影响内容覆盖**。目前 26 个 RSS 源全部可用
+（2026-09-20 干跑实测：单轮采集 910 条，含吉尔吉斯 5 源与阿塞拜疆 6 源），
+Telegram 只是"再多一路社交媒体来源"，不是唯一来源。代码侧的桥已经就位且已验证，
+等有了可达域名，改一个环境变量就能开通，不必改代码。
+
+#### 翻译通道体检（配好凭据后必跑一次）
+
+```bash
+curl -s "$URL/api/translate-check" | python3 -m json.tool
+```
+
+逐通道真实打一次极小请求，返回型号、通/不通、**原始报错**、单次耗时。怎么读：
+
+| 现象 | 含义 |
+|------|------|
+| `zhipu.ok=false` + `HTTP 401` | Key 无效或复制时被截断 |
+| `zhipu.ok=false` + `404` / `model not found` | 型号代号过期，用 `ZHIPU_MODEL` 覆盖 |
+| `zhipu.ok=false` + `429` / `code 1302/1305` | 免费档限流或模型整体拥挤 —— **Key 和型号都是对的**，不是配置问题 |
+| `zhipu.latencyMs` 几十秒 | thinking 没关掉（本项目已在 PROVIDERS 里显式传 `thinking: disabled`） |
+| `deepseek.ok=true` | 降级通道可用，文章仍能入库，只是这条要花钱 |
+
+**2026-09-20 实测**：`ZHIPU_API_KEY` 配的是对的、`glm-4.7-flash` 也是当前免费档，
+但智谱持续返回 `429 / code 1302「您的账户已达到速率限制」`与 `1305「该模型当前访问量过大」`
+（间隔 15 秒连测 8 次全部 429）。所以那段时间翻译大部分走了付费的 DeepSeek。
+遇到这种情况：去智谱控制台看「用量/速率限制」页确认免费额度与账号权益，
+或等一段时间再跑 `translate-check` 复测。**这不是代码问题，改代码没用。**
+
+#### 信息源体检（零成本干跑，不写库不翻译）
+
+```bash
+curl -X POST "$URL/api/fetch-news" -H 'Content-Type: application/json' \
+  -d '{"skipTranslation": true}'
+```
+
+`skipTranslation=true` 现在是**只采集、不入库、不调翻译**的干跑模式，
+跑完 `GET /api/fetch-news` 读 `lastRun.summary.sourceCounts` / `sourceErrors`，
+几分钟就能知道每个源（含 `Telegram/@xxx`）通不通。新增/替换信息源后先跑这个。
+
+> 历史坑：这个参数以前**不是**干跑 —— 翻译块被跳过后，入库代码没有同步判断，
+> 于是未翻译的原文（俄语、阿塞拜疆语…）会被直接写进生产库，并可能被下一轮推送出去。
+
+#### 抓取耗时与等待上限（改了源就要重估）
+
+2026-09-20 实测构成：纯采集（26 RSS + 12 Telegram）**156 秒**；翻译顺序执行、
+一次一篇，约 300 篇 × 17 秒 ≈ **85 分钟**；逐篇取封面约 4 分钟。**一轮 80–90 分钟**。
+
+所以 `src/lib/scheduler.ts` 的 `FETCH_WAIT_TIMEOUT_MS` 已提到 **100 分钟**。
+这个值**必须显著高于实测耗时**：等待超时后调度器会「硬推」，而此时抓取是**末尾批量入库**、
+库还空着 → 推送建出 0 个草稿（2026-09-20 早报就是这样整轮空推的）。
+
+#### Telegram 接入（原步骤，保留备查）
+
+Telegram（t.me / api.telegram.org）在大陆网络不可达（本项目部署于微信云托管），
+代码里已经留好了 **Cloudflare Worker 转发桥** 的接口，仓库里 `telegram-worker/worker.js`
+就是现成的 Worker 源码（读 t.me 公开预览页，**不需要 Bot Token**，任何公开频道都能读）。
+步骤、频道白名单、以及上面那条「workers.dev 不可达」的实测结论，见本节的说明。
+
+> **只需要配 `TELEGRAM_WORKER_URL` 这一个变量。** 频道表在 `src/lib/telegram-channels.ts`
+> 的 `DEFAULT_TELEGRAM_CHANNELS` 里已经有 12 个**实测可用**的频道，`TELEGRAM_CHANNELS`
+> 只在要临时改名单时才需要写。配好后用 `GET /api/telegram-check` 验证，不要靠猜。
 
 微信云托管在大陆网络连不上 `t.me`，代码里已经留好了 **Cloudflare Worker 转发桥** 的接口，
 仓库里 `telegram-worker/worker.js` 就是现成的 Worker 源码（读 t.me 公开预览页，
@@ -415,8 +499,11 @@ A: 按顺序检查：
 2. 有这行但到点没动 = 看有没有 `触发公众号推送任务` 这行，再看后续报错。
 3. 嫌预热不可靠，把 `container.config.json` 的 `minNum` 改成 `1` 让实例常驻。
 4. 某一时段失败导致那一段新闻没推：手动补一次
-   `curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push -H 'Content-Type: application/json' -d '{"hours": 24}'`
+   `curl -X POST https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com/api/wechat/push -H 'Content-Type: application/json' -d '{"hours": 24, "period": "manual"}'`
    —— 这个接口是异步的，curl 很可能报 504，**别当成失败**，结果用 `GET` 读 `lastRun`（见 6.4）。
+   ⚠️ `"period": "manual"` 不是装饰：它让草稿标题带「补报」后缀
+   （`哈萨克斯坦 - 2026-09-20 补报 投资资讯`），从而与当天自动跑的早报/晚报区分开。
+   **不传 period 的旧写法会和上一次人工补跑完全同名**，草稿箱里就是两份同名草稿。
 
 ### Q: 手动调推送/流水线返回 `504 Gateway Time-out`，是失败了吗？
 A: **不一定是。** 微信云托管的网关（nginx）在 **65 秒**时切断连接，而推送一轮要在

@@ -286,10 +286,17 @@ async function addDraft(articles: DraftArticle[]): Promise<string> {
 }
 
 // 时段标记：由调度器传入，只用来区分同一天的早报/晚报。
-// 手动调用（不带 period）时返回空串，标题退回原来的格式。
+//
+// 'manual' 专给「人工补跑」用（对应文档里的
+//   POST /api/wechat/push {"hours": 24, "period": "manual"}）。
+// 补跑必须带这个标记，否则标题退回「X - 日期 投资资讯」这种不带时段的形式，
+// 和当天任何一次人工补跑都完全同名 —— 草稿箱里就会出现两份标题一模一样的草稿，
+// 正是 2026-09-19 用户投诉过的那个观感。
+// 不带 period（历史写法）仍返回空串，保持向后兼容。
 function periodSuffix(period: unknown): string {
   if (period === 'morning') return '早报';
   if (period === 'evening') return '晚报';
+  if (period === 'manual') return '补报';
   return '';
 }
 
@@ -525,7 +532,7 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   return NextResponse.json({
     message: '微信公众号推送接口',
-    usage: 'POST /api/wechat/push with optional { hours: 24, period: "morning" | "evening" }',
+    usage: 'POST /api/wechat/push with optional { hours: 24, period: "morning" | "evening" | "manual" }',
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿，summary.failures 是哪些国家失败、为什么。
     lastRun: pushRunState,
