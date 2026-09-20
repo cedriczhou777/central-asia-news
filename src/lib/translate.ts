@@ -41,6 +41,16 @@ interface ChatProvider {
   defaultModel: string;
   endpoint: string;
   /**
+   * 这条通道是不是**免费档**（单价 0 元）。
+   *
+   * 为什么要显式标出来：`translate-check` 的结论句原来是写死
+   * 「usable[0] === 'zhipu' ? 免费 : 付费」的，一旦免费档多了一条
+   * （比如智谱的第二个免费型号），只写上「zhipu」这条规则就会把
+   * **免费通道误报成付费**，直接误导「这个月要花多少钱」的判断。
+   * 判据放在通道定义里，就不会再和结论句脱节。
+   */
+  free?: boolean;
+  /**
    * 合并进请求体的额外参数（跟 model / messages / temperature 平级）。
    *
    * 为什么要按 provider 配而不是全局配：各家对「未知参数」的容忍度不一样 ——
@@ -65,6 +75,7 @@ export const PROVIDERS: ChatProvider[] = [
     modelEnv: 'ZHIPU_MODEL',
     defaultModel: 'glm-4.7-flash',
     endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    free: true,
     // ⚠️ 这一行是 2026-09-19 花 3.42 元买来的教训，删之前先读完：
     //
     // GLM-4.7 系列（含 glm-4.7-flash）**默认 thinking.type = "enabled"**，
@@ -79,6 +90,28 @@ export const PROVIDERS: ChatProvider[] = [
     // 「GLM-4.7 系列默认开启 Thinking…… 如果您想关闭 thinking，请使用
     //   "thinking": { "type": "disabled" }」
     extraBody: { thinking: { type: 'disabled' } },
+  },
+  {
+    // 智谱的**第二个**免费型号。同一个 Key、同一个账号、单价同样是 0 元。
+    //
+    // 存在的唯一理由（2026-09-20 实测）：报错 `1305 该模型当前访问量过大` 是**按模型**计的，
+    // 不是按账号。也就是说 glm-4.7-flash 被挤爆的那一刻，`glm-4-flash-250414`
+    // 很可能还是通的 —— 而它同为官方免费档（官方原文称它是「智谱AI首个免费大模型API」）。
+    // 把它排在付费通道**之前**，就多了一次「不花钱」的机会：
+    // 命中 → 省钱且内容不丢；没命中 → 只是多花几百毫秒，然后照旧降级到付费通道，
+    // 属于**行为超集，不会比现在更差**（这是当初敢直接上线、不用灰度验证的理由）。
+    //
+    // ⚠️ 故意**不配 extraBody**：这个型号不是 thinking 系，塞 `thinking: {type:'disabled'}`
+    // 有可能换来一个 400（未知参数），那就是白丢一次机会。智谱对未知字段的容忍度按型号而异，
+    // 没必要赌。
+    //
+    // 型号代号若哪天变了，改 ZHIPU_FALLBACK_MODEL 环境变量即可，不必改代码。
+    name: 'zhipu-flash',
+    keyEnv: 'ZHIPU_API_KEY',
+    modelEnv: 'ZHIPU_FALLBACK_MODEL',
+    defaultModel: 'glm-4-flash-250414',
+    endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    free: true,
   },
   {
     // DeepSeek：按量付费，作为降级通道。
@@ -97,6 +130,7 @@ export const PROVIDERS: ChatProvider[] = [
     modelEnv: 'DEEPSEEK_MODEL',
     defaultModel: 'deepseek-flash',
     endpoint: 'https://api.deepseek.com/v1/chat/completions',
+    free: false,
   },
 ];
 
@@ -471,6 +505,8 @@ export async function translateNews(
 export interface ProviderProbe {
   provider: string;
   model: string;
+  /** 免费档还是付费档。结论句靠它判断「这次翻译到底花不花钱」，不再写死通道名。 */
+  cost: 'free' | 'paid';
   /** Key 对应的环境变量有没有值 */
   keyConfigured: boolean;
   ok: boolean;
@@ -509,6 +545,17 @@ const PROBE_PROMPT = '只回复两个字：正常';
 const PROBE_TIMEOUT_MS = 25_000;
 
 /**
+ * 整次体检的**总预算**。必须明显小于网关的 65 秒。
+ *
+ * 为什么要有它：单次 25 秒 × 通道数（还要算对照组）就是最坏耗时 ——
+ * 3 条通道时已经是 75 秒，**本身就超了网关**，等于体检自己 504、什么结论都拿不到。
+ * 通道只会越加越多，所以不能靠「数一数够不够」来保平安，
+ * 改成每打一次就从剩余预算里扣。预算耗尽时剩余通道标为「跳过」而不是假装成功，
+ * 这样结论句不会把「没测」误读成「不可用」。
+ */
+const PROBE_DEADLINE_MS = 55_000;
+
+/**
  * 逐通道体检：对每个配置了 Key 的通道真实打一次极小的请求，把「通不通、通了多快、
  * 不通是为什么」原样返回。
  *
@@ -527,18 +574,38 @@ const PROBE_TIMEOUT_MS = 25_000;
 
 export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
   const results: ProviderProbe[] = [];
+  const probeStart = Date.now();
+  /** 打完这一发还剩多少预算（至少留 PROBE_TIMEOUT_MS，否则说明该收手了） */
+  const budgetLeft = () => PROBE_DEADLINE_MS - (Date.now() - probeStart);
 
   for (const provider of PROVIDERS) {
     const model = resolveModel(provider);
+    const cost: ProviderProbe['cost'] = provider.free ? 'free' : 'paid';
     const keyConfigured = Boolean(process.env[provider.keyEnv]);
 
     if (!keyConfigured) {
       results.push({
         provider: provider.name,
         model,
+        cost,
         keyConfigured: false,
         ok: false,
         detail: `未配置环境变量 ${provider.keyEnv}，该通道会被整条跳过`,
+        latencyMs: 0,
+      });
+      continue;
+    }
+
+    // 预算见底就跳过，别让体检自己撞网关 65 秒。ok 保持 false，
+    // detail 写明是「没测」而不是「测了不行」—— 两者结论完全不同。
+    if (budgetLeft() < 3_000) {
+      results.push({
+        provider: provider.name,
+        model,
+        cost,
+        keyConfigured: true,
+        ok: false,
+        detail: `总预算 ${PROBE_DEADLINE_MS}ms 已耗尽，本次未体检（前面的通道太慢，不代表这条不通）`,
         latencyMs: 0,
       });
       continue;
@@ -550,14 +617,14 @@ export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
       onError: (e) => {
         if (!firstError) firstError = e;
       },
-      timeoutMs: PROBE_TIMEOUT_MS,
+      timeoutMs: Math.min(PROBE_TIMEOUT_MS, budgetLeft()),
     });
     const latencyMs = Date.now() - startedAt;
 
     // 对照组：只有配了 extraBody 的通道（本项目是智谱的 thinking 开关）才需要，
     // 用同一个极短提示词、去掉 extraBody 再打一次，把两次的耗时和 reasoning 长度摆在一起。
     let control: ProviderProbe['control'] = null;
-    if (provider.extraBody) {
+    if (provider.extraBody && budgetLeft() > 3_000) {
       let controlError = '';
       const controlStart = Date.now();
       const controlCall = await callChatProvider(provider, PROBE_PROMPT, {
@@ -565,7 +632,7 @@ export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
         onError: (e) => {
           if (!controlError) controlError = e;
         },
-        timeoutMs: PROBE_TIMEOUT_MS,
+        timeoutMs: Math.min(PROBE_TIMEOUT_MS, budgetLeft()),
       });
       control = {
         latencyMs: Date.now() - controlStart,
@@ -578,6 +645,7 @@ export async function probeTranslationProviders(): Promise<ProviderProbe[]> {
     results.push({
       provider: provider.name,
       model,
+      cost,
       keyConfigured: true,
       ok: Boolean(call.text),
       detail: call.text

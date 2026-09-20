@@ -167,3 +167,8 @@ Desktop.ini
 .coze-logs
 .codegraph/
 assets/
+
+# pnpm/corepack 探测 store 路径时在项目根留下的 0 字节探针文件（形如 _tmp_<pid>_<hash>）。
+# 它们不属于源码，但会因为不在忽略名单里而冒进提交列表 —— 而且名字每次都变，
+# 靠人工挑文件名迟早会漏。统一忽略。
+_tmp_*

@@ -38,7 +38,8 @@ async function main() {
   // 通道与型号全部从 translate.ts 的 PROVIDERS 推导，不在脚本里重复写死。
   // 之前这里各写了一份默认型号，translate.ts 换型号后脚本还打着旧名字。
   const configured = PROVIDERS.filter((p) => process.env[p.keyEnv]).map(
-    (p) => `${p.name}（模型 ${process.env[p.modelEnv] || p.defaultModel}）`
+    // 标出免费/付费：本地跑一次就能看出「降级链里谁是花钱的」，不用去翻 translate.ts
+    (p) => `${p.name}（模型 ${process.env[p.modelEnv] || p.defaultModel}，${p.free ? '免费' : '付费'}）`
   );
   const unconfigured = PROVIDERS.filter((p) => !process.env[p.keyEnv]);
 

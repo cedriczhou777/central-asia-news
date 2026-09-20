@@ -49,28 +49,40 @@ function thinkingNote(p: ProviderProbe): string | null {
  * 怎么读结果：
  *   - `zhipu.ok=false` + `HTTP 401` → Key 无效或复制时截断了
  *   - `zhipu.ok=false` + `404` / `model not found` → 型号代号过期，用 `ZHIPU_MODEL` 覆盖
- *   - `zhipu.ok=false` + `429` → 免费档限流（确认没有并发在跑）
+ *   - `zhipu.ok=false` + `429` 且 `code 1305` → 该**型号**被挤爆（平台侧，不是你的账号问题）：
+ *     看 `zhipu-flash` 那条通不通，通的话这一轮翻译照样免费
  *   - `notes` 里出现「传了 disabled 仍有 reasoning_content」→ thinking 没关掉，
  *     这就是翻译慢/贵的原因
  *   - `latencyMs` 只有几秒 = 正常；几十秒 = 该通道慢（再看 notes 定位是谁的锅）
+ *   - 有通道显示「总预算已耗尽，本次未体检」→ 前面有通道太慢吃光了预算，
+ *     **不代表这条不通**，单独再调一次即可
  *
  * 它不写库、不改全局统计，所以**抓取正在跑的时候也可以调**。
- * 注意每条通道会打**两次**（正测 + 对照），单次上限 25 秒，最坏 50 秒 ——
- * 刻意压在网关 65 秒之内。
+ * 注意每条通道最多打**两次**（正测 + 对照），单次上限 25 秒 ——
+ * 但整次体检有 55 秒总预算（见 `PROBE_DEADLINE_MS`），所以通道加多了也不会撞网关 65 秒。
  */
 export async function GET() {
   const startedAt = Date.now();
   const providers = await probeTranslationProviders();
   const okCount = providers.filter((p) => p.ok).length;
 
-  const usable = providers.filter((p) => p.ok).map((p) => p.provider);
-  // 把结论直接写成一句话，省得每次都要自己对照上面那张表
+  const usable = providers.filter((p) => p.ok);
+  const usableFree = usable.filter((p) => p.cost === 'free');
+  const usablePaid = usable.filter((p) => p.cost === 'paid');
+
+  // 把结论直接写成一句话，省得每次都要自己对照上面那张表。
+  // ⚠️ 判据必须是通道自带的 `cost`，**不能**再写死通道名 —— 免费档多了一条之后，
+  // 写死「usable[0] === 'zhipu'」会把免费通道误报成付费，直接把「这个月花多少钱」说错。
   const verdict =
     okCount === 0
       ? '没有任何可用的翻译通道 —— 抓到的文章会在入库前被全部丢弃。先修 Key / 型号。'
-      : usable[0] === 'zhipu'
-        ? '智谱（免费档）可用，翻译不会花钱。'
-        : `智谱不可用，实际会走 ${usable.join('、')}（付费）。以上面 providers[].detail 里的报错为准去修。`;
+      : usableFree.length > 0
+        ? `${usableFree.map((p) => p.provider).join('、')}（免费档）可用，翻译不会花钱。`
+          + (usablePaid.length > 0
+            ? `（另有 ${usablePaid.map((p) => p.provider).join('、')} 可用，本次用不到）`
+            : '')
+        : `免费档全部不可用，实际会走 ${usablePaid.map((p) => p.provider).join('、')}（付费）。`
+          + '以上面 providers[].detail 里的报错为准去修。';
 
   const notes = providers.map(thinkingNote).filter((n): n is string => Boolean(n));
 
