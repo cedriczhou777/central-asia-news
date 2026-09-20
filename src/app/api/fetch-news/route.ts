@@ -39,6 +39,8 @@ interface FetchSummary {
   afterContentDedup: number;
   /** 实际写入数据库的条数 */
   saved: number;
+  /** 入库失败的原因。saved=0 时先看这个 —— 空数组才是「确实没有可入库内容」。 */
+  insertErrors: string[];
   sourceCounts: Array<{ source: string; fetched: number }>;
   sourceErrors: Array<{ source: string; errors: string[] }>;
   /** 翻译通道用量：哪个通道翻了几篇、失败通道的具体报错。
@@ -115,7 +117,10 @@ const RSS_SOURCES: RSSSource[] = [
 
   // 区域综合媒体
   { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
-  { name: 'Central Asia News', url: 'https://centralasia.news/feed/', country: 'intl', language: 'en' },
+  // 曾经的 'Central Asia News'（centralasia.news/feed/）已于 2026-09-20 移除：
+  // 该地址返回的 Content-Type 是 text/html（47KB 的网页，不是 feed），
+  // rss-parser 每次都会报「Attribute without value」解析失败、稳定产出 0 条。
+  // 判断一个源是不是真 RSS，看 Content-Type 比看能不能 curl 到 200 靠谱得多。
 ];
 
 // 投资相关关键词（用于精选新闻）
@@ -229,6 +234,20 @@ const JUNK_TITLE_KEYWORDS = [
  * 翻译费和一整轮耗时都会跟着翻几倍。取最新 8 条足够覆盖一天的增量。
  */
 const TELEGRAM_MAX_PER_CHANNEL = 8;
+
+/**
+ * 把可能脏的日期字符串转成 Postgres **一定**接受的 ISO 串；解析不出来就用当前时间。
+ *
+ * 为什么必须有这层：published_at 直接来自各站的 pubDate 原文，格式五花八门。
+ * 只要有一行的值 Postgres 不认，PostgREST 那条多行 INSERT **整条语句**失败，
+ * 一批 100+ 篇全丢（2026-09-20 早报空推就是这个链路）。与其在入库失败后回退定位，
+ * 不如在构造阶段就保证值一定合法 —— 日期不那么准，也比整批丢光强。
+ */
+function toSafeIso(value: string | undefined): string {
+  if (!value) return new Date().toISOString();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
 
 // 判断新闻是否属于目标国家：
 // 1. 标题/正文提到目标国（任何语言形态）→ 相关（含「本国+第三国」的复合新闻）；
@@ -481,7 +500,17 @@ async function processFetchNews(
       // 筛选目标日期（放宽：目标日期及前 1 天，即最多回溯 2 天）的新闻
       const targetItems = feed.items.filter((item) => {
         if (!item.pubDate) return true;
-        const itemDate = new Date(item.pubDate).toISOString().split('T')[0];
+        const parsed = new Date(item.pubDate);
+        // 日期脏（俄语/中亚站点格式不规范很常见）不能让整个源挂掉。
+        // 旧版这里直接 .toISOString()：遇到 Invalid Date 抛 "Invalid time value"，
+        // 被外层 catch 记成「RSS 解析失败」，**整个源的新闻全丢**，而实际只是个别条目日期脏。
+        if (Number.isNaN(parsed.getTime())) {
+          // 顺手把脏日期清掉再放行：不清的话它会一路带到下面的 published_at，
+          // Postgres 拒收非法时间戳会让**整批**入库失败 —— 比丢一篇严重得多。
+          item.pubDate = undefined;
+          return true;
+        }
+        const itemDate = parsed.toISOString().split('T')[0];
         return itemDate === targetDate || itemDate === targetDateMinusOne;
       });
 
@@ -544,11 +573,14 @@ async function processFetchNews(
       // 否则「Telegram 到底通没通」只能去控制台翻日志，配完了从外面根本验证不了。
       const result = { source: `Telegram/${channel}(${country})`, fetched: 0, errors: [] as string[] };
       try {
-        const fetchedPosts = await fetchTelegramRSS(channel);
+        const outcome = await fetchTelegramRSS(channel);
+        const fetchedPosts = outcome.articles;
         result.fetched = fetchedPosts.length;
         if (fetchedPosts.length === 0) {
-          // 频道名写错、Worker 没配好、或该频道当天没内容，都会落到这里，如实记录
-          result.errors.push('Worker 返回 0 条（检查频道名是否存在 / Worker 是否可访问）');
+          // 原样带出**真实原因**（HTTP 状态码 / 网络异常 / 频道不存在）。
+          // 旧版这里写的是固定文案「Worker 返回 0 条」，把三种完全不同的故障
+          // 说成同一件事，排查时只能靠猜 —— 2026-09-20 就因此多绕了一轮。
+          result.errors.push(outcome.error || 'Telegram 未返回内容（原因未知）');
           results.push(result);
           continue;
         }
@@ -737,7 +769,7 @@ async function processFetchNews(
           original_title: originalTitle,
           original_content: originalContent,
           original_language: source.language,
-          published_at: item.pubDate || new Date().toISOString(),
+          published_at: toSafeIso(item.pubDate),
           tags,
           is_featured: true, // 精选新闻都标记为 featured
           cover_image: coverImage,
@@ -793,15 +825,24 @@ async function processFetchNews(
   // 完全不是它名字暗示的「安全试跑」。现在它是一次**信息源体检**：
   // 跑完看 summary.sourceCounts / sourceErrors 就能知道每个源通不通、抓到几条。
   let savedCount = 0;
+  let insertErrors: string[] = [];
   if (skipTranslation) {
     console.log(`skipTranslation=true：干跑模式，跳过入库（本可入库 ${contentDeduped.length} 篇）`);
   } else if (contentDeduped.length > 0) {
     try {
-      await insertArticles(contentDeduped);
-      savedCount = contentDeduped.length;
-      console.log(`成功保存 ${savedCount} 篇到数据库`);
+      const insertResult = await insertArticles(contentDeduped);
+      savedCount = insertResult.inserted;
+      insertErrors = insertResult.errors;
+      console.log(`成功保存 ${savedCount}/${contentDeduped.length} 篇到数据库`);
+      if (insertErrors.length > 0) {
+        console.warn(`入库未全部成功，前几条原因：${insertErrors.slice(0, 3).join(' | ')}`);
+      }
     } catch (insertErr) {
-      console.error('插入数据库失败:', insertErr instanceof Error ? insertErr.message : insertErr);
+      // 不再只打日志：把原因写进 summary，否则接口返回的 saved=0 与
+      // 「本轮确实没有可入库内容」长得一模一样，排查只能靠猜（2026-09-20 踩过）。
+      const message = insertErr instanceof Error ? insertErr.message : String(insertErr);
+      insertErrors = [message];
+      console.error('插入数据库失败:', message);
     }
   }
 
@@ -836,6 +877,7 @@ async function processFetchNews(
     afterUrlDedup: newArticles.length,
     afterContentDedup: contentDeduped.length,
     saved: savedCount,
+    insertErrors,
     sourceCounts: results.map((r) => ({ source: r.source, fetched: r.fetched })),
     sourceErrors: failedSources.map((r) => ({ source: r.source, errors: r.errors })),
     translation: {

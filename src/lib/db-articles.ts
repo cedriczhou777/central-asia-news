@@ -104,54 +104,91 @@ export async function insertArticle(article: {
   return data as ArticleRow;
 }
 
-export async function insertArticles(
-  articles: Array<{
-    title: string;
-    summary: string;
-    content: string;
-    country_code: string;
-    category: string;
-    source_name: string;
-    source_url?: string;
-    original_title?: string;
-    original_content?: string;
-    original_language?: string;
-    published_at: string;
-    tags?: string[];
-    is_featured?: boolean;
-    cover_image?: string;
-    image_urls?: string[];
-  }>
-): Promise<void> {
-  if (articles.length === 0) return;
-  
+/** 待插入的一篇文章（cover_image / image_urls 会在插入前剔除，见下方说明）。 */
+export interface ArticleInsert {
+  title: string;
+  summary: string;
+  content: string;
+  country_code: string;
+  category: string;
+  source_name: string;
+  source_url?: string;
+  original_title?: string;
+  original_content?: string;
+  original_language?: string;
+  published_at: string;
+  tags?: string[];
+  is_featured?: boolean;
+  cover_image?: string;
+  image_urls?: string[];
+}
+
+/** 插入结果。必须把失败明细带出去 —— 详见 insertArticles 里的说明。 */
+export interface InsertResult {
+  /** 真正写进库的篇数 */
+  inserted: number;
+  /** 失败原因（首条是整批失败的原因，其余是逐行回退时定位到的坏行） */
+  errors: string[];
+}
+
+export async function insertArticles(articles: ArticleInsert[]): Promise<InsertResult> {
+  if (articles.length === 0) return { inserted: 0, errors: [] };
+
   // 直接使用 Supabase REST API 插入数据
   const supabaseUrl = process.env.SUPABASE_URL || process.env.COZE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.COZE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  
+
   if (!supabaseUrl || !supabaseKey) {
     throw new Error('Supabase 环境变量未配置');
   }
-  
+
   // 暂时移除 cover_image 和 image_urls 字段，避免 schema cache 问题
-  const articlesWithoutImages = articles.map(({ cover_image, image_urls, ...rest }) => rest);
-  
-  // 使用 Supabase REST API 直接插入
-  const response = await fetch(`${supabaseUrl}/rest/v1/articles`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': supabaseKey,
-      'Authorization': `Bearer ${supabaseKey}`,
-      'Prefer': 'return=minimal'
-    },
-    body: JSON.stringify(articlesWithoutImages)
-  });
-  
-  if (!response.ok) {
+  const rows = articles.map(({ cover_image, image_urls, ...rest }) => rest);
+
+  const post = async (batch: unknown[]): Promise<{ ok: true } | { ok: false; message: string }> => {
+    const response = await fetch(`${supabaseUrl}/rest/v1/articles`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(batch),
+    });
+    if (response.ok) return { ok: true };
     const errorText = await response.text();
-    throw new Error(`批量插入文章失败：${response.status} - ${errorText}`);
+    return { ok: false, message: `${response.status} - ${errorText.slice(0, 400)}` };
+  };
+
+  const whole = await post(rows);
+  if (whole.ok) return { inserted: rows.length, errors: [] };
+
+  // 整批失败 → 逐行回退，不让一行坏数据毁掉整批。
+  //
+  // 为什么必须这样：PostgREST 的多行插入是**一条 SQL 语句**，只要有一行不合法
+  // （典型是脏的 published_at 让 Postgres 拒收时间戳），整批 100+ 篇**全部**失败。
+  // 而调用方旧版把这个异常吞掉、把 saved 记成 0 ——
+  // 表现就是「采集 910 篇、翻译成功 295 篇、入库 0 篇，且整轮 error 为 null」，
+  // 2026-09-20 早报空推的根因就是这个。
+  // 逐行回退保证「坏一行不倒一片」，同时把坏行的标题和原因报出来，下次能直接定位。
+  console.error(
+    `[insertArticles] 整批插入失败（${rows.length} 行），回退为逐行插入。首条错误：${whole.message}`,
+  );
+
+  let inserted = 0;
+  const errors: string[] = [`整批插入失败（${rows.length} 行）：${whole.message}`];
+  for (const row of rows) {
+    const one = await post([row]);
+    if (one.ok) {
+      inserted++;
+    } else if (errors.length < 6) {
+      const title = String((row as { title?: string }).title || '').slice(0, 40);
+      errors.push(`单篇插入失败（${title}）：${one.message.slice(0, 220)}`);
+    }
   }
+  console.error(`[insertArticles] 逐行回退完成：成功 ${inserted}/${rows.length}，失败 ${rows.length - inserted}`);
+  return { inserted, errors };
 }
 
 export async function getArticlesByDateRange(

@@ -295,34 +295,77 @@ export const CENTRAL_ASIA_SCRAPERS: ScraperConfig[] = [
 ];
 
 /**
- * 通过 Cloudflare Worker 代理获取 Telegram 频道消息。
+ * Telegram 抓取结果：既有文章，也有「为什么没抓到」的**原始原因**。
  *
- * Telegram（t.me / api.telegram.org）在大陆网络不可达（本项目部署于微信云托管）。
- * 因此优先请求用户自建的境外 Cloudflare Worker（一个"转发桥"），由 Worker 就近
- * 访问 Telegram API 并把最近消息以 JSON 返回到本项目。Worker 地址来自环境变量
- * `TELEGRAM_WORKER_URL`（例如 https://your-worker.workers.dev）。
- *
- * 只有在配置了 `TELEGRAM_WORKER_URL` 时才启用；未配置或调用失败时如实记录并跳过，
- * 不会伪造返回假文章。
+ * 为什么要把 error 单独带出来：旧版三种完全不同的失败 ——
+ * HTTP 非 2xx / 网络层就没通（DNS、被墙、超时）/ Worker 正常但返回空 ——
+ * 全都 `return []`，调用方只能看到「0 条」。于是
+ * 「频道名写错」「TELEGRAM_WORKER_URL 配错」「容器根本连不上 workers.dev」
+ * 在日志和接口里长得一模一样。2026-09-20 排查这个盲区花了一整轮。
  */
-async function fetchTelegramByWorker(channelId: string): Promise<ScrapedArticle[]> {
-  const workerUrl = process.env.TELEGRAM_WORKER_URL;
+export interface TelegramFetchOutcome {
+  articles: ScrapedArticle[];
+  /** 失败原因（含 HTTP 状态码 / 网络异常原文）；成功时为 null。 */
+  error: string | null;
+}
+
+/** 单次 Worker 请求的底层结果，诊断接口直接用它。 */
+export interface TelegramWorkerProbe {
+  channel: string;
+  /** Worker 地址（未配置时为 null） */
+  workerUrl: string | null;
+  /** 实际请求的完整 URL —— 一眼核对 TELEGRAM_WORKER_URL 有没有多写/少写路径 */
+  requestUrl: string | null;
+  /** HTTP 状态码；网络层就没通时为 null */
+  status: number | null;
+  /** 解析出的消息条数 */
+  postCount: number;
+  /** 成功为 null；否则是原始错误说明 */
+  error: string | null;
+  latencyMs: number;
+}
+
+/**
+ * 向 Cloudflare Worker 要一个频道的消息（底层实现，不做 RSSHub 兜底）。
+ */
+async function requestTelegramByWorker(
+  channelId: string,
+): Promise<{ probe: TelegramWorkerProbe; articles: ScrapedArticle[] }> {
+  const workerUrl = process.env.TELEGRAM_WORKER_URL || null;
+  const startedAt = Date.now();
+  const base: TelegramWorkerProbe = {
+    channel: channelId,
+    workerUrl,
+    requestUrl: null,
+    status: null,
+    postCount: 0,
+    error: null,
+    latencyMs: 0,
+  };
+
   if (!workerUrl) {
-    console.log(`[Telegram ${channelId}] 未配置 TELEGRAM_WORKER_URL，跳过 Worker 代理抓取`);
-    return [];
+    return {
+      probe: { ...base, error: '未配置环境变量 TELEGRAM_WORKER_URL' },
+      articles: [],
+    };
   }
 
+  const requestUrl = `${workerUrl.replace(/\/+$/, '')}/?channel=${encodeURIComponent(channelId)}`;
+  base.requestUrl = requestUrl;
+
   try {
-    const url = `${workerUrl.replace(/\/+$/, '')}/?channel=${encodeURIComponent(channelId)}`;
-    const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    const response = await fetch(requestUrl, { signal: AbortSignal.timeout(20000) });
+    base.status = response.status;
 
     if (!response.ok) {
-      console.error(`[Telegram ${channelId}] Worker 返回 ${response.status}`);
-      return [];
+      const body = await response.text().catch(() => '');
+      const error = `Worker 返回 HTTP ${response.status}${body ? `：${body.slice(0, 150)}` : ''}`;
+      return { probe: { ...base, error, latencyMs: Date.now() - startedAt }, articles: [] };
     }
 
     const data = (await response.json()) as {
       posts?: Array<{ title?: string; url?: string; date?: string | number; summary?: string }>;
+      error?: string;
     };
 
     const posts = Array.isArray(data?.posts) ? data.posts : [];
@@ -335,14 +378,46 @@ async function fetchTelegramByWorker(channelId: string): Promise<ScrapedArticle[
         summary: p.summary ? String(p.summary).trim() : undefined,
       }));
 
+    // Worker 自己也会回 `{ posts: [], error: "..." }`（t.me 非 2xx / 频道不存在），
+    // 把这个原因透传上来，别吞掉。
+    const error =
+      articles.length === 0 ? data?.error || 'Worker 返回 0 条（频道不存在或该频道当日无内容）' : null;
+
     if (articles.length > 0) {
       console.log(`[Telegram ${channelId}] 经 Worker 获取 ${articles.length} 篇文章`);
     }
-    return articles;
-  } catch (error) {
-    console.error(`[Telegram ${channelId}] Worker 代理抓取失败:`, error instanceof Error ? error.message : String(error));
-    return [];
+    return {
+      probe: { ...base, postCount: articles.length, error, latencyMs: Date.now() - startedAt },
+      articles,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[Telegram ${channelId}] Worker 代理抓取失败:`, message);
+    // 这里最常见的两种：TimeoutError（20s 没连上）和 fetch failed（DNS / 网络不可达）。
+    // 都指向「容器出不去这个域名」，而不是频道名写错。
+    return {
+      probe: {
+        ...base,
+        error: `请求 Worker 失败：${message}（常见于容器访问不了 ${workerUrl} 这个域名）`,
+        latencyMs: Date.now() - startedAt,
+      },
+      articles: [],
+    };
   }
+}
+
+async function fetchTelegramByWorker(channelId: string): Promise<TelegramFetchOutcome> {
+  const { probe, articles } = await requestTelegramByWorker(channelId);
+  return { articles, error: probe.error };
+}
+
+/**
+ * 诊断用：只探测，返回原始结果（不做任何兜底、不改状态）。
+ * 给 GET /api/telegram-check 用。
+ */
+export async function probeTelegramChannel(channelId: string): Promise<TelegramWorkerProbe> {
+  const { probe } = await requestTelegramByWorker(channelId);
+  return probe;
 }
 
 /**
@@ -399,13 +474,22 @@ async function fetchTelegramByRSSHub(channelId: string): Promise<ScrapedArticle[
 
 /**
  * 获取 Telegram 频道内容：优先 Cloudflare Worker 代理，其次 RSSHub 兜底。
+ *
+ * 两条都拿不到时，**把 Worker 那条路的原始报错带出去** —— 它才是真正配置的链路，
+ * RSSHub 只是理论上存在、大陆基本连不上的兜底。旧版这里恒返回 []，
+ * 于是「Worker 地址配错」和「频道名写错」在调用方看来完全一样。
  */
-export async function fetchTelegramRSS(channelId: string): Promise<ScrapedArticle[]> {
+export async function fetchTelegramRSS(channelId: string): Promise<TelegramFetchOutcome> {
   const viaWorker = await fetchTelegramByWorker(channelId);
-  if (viaWorker.length > 0) return viaWorker;
+  if (viaWorker.articles.length > 0) return viaWorker;
 
   const viaRSSHub = await fetchTelegramByRSSHub(channelId);
-  return viaRSSHub;
+  if (viaRSSHub.length > 0) return { articles: viaRSSHub, error: null };
+
+  return {
+    articles: [],
+    error: viaWorker.error || 'Worker 与 RSSHub 兜底均未返回内容',
+  };
 }
 
 /**
