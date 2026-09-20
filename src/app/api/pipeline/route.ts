@@ -7,9 +7,10 @@ import { beijingDate } from '@/lib/utils';
 const API_BASE = resolveSelfBaseUrl();
 
 const POLL_INTERVAL_MS = 5_000;
-// 链路上限给足：2026-09-19 实测抓取一轮（含翻译）要 40 分钟，旧值 25 分钟
-// 会在抓取中途就超时，后面的步骤等于在用半空的库跑。
-const STEP_TIMEOUT_MS = 60 * 60_000;
+// 链路上限给足。2026-09-20 实测：抓取一轮（含翻译）要 **75 分钟**，
+// 旧值 60 分钟会在抓取还没跑完时就超时，后面几步等于拿着半空的库往下走。
+// 和 lib/scheduler.ts 的 FETCH_WAIT_TIMEOUT_MS 保持同一个口径（100 分钟）。
+const STEP_TIMEOUT_MS = 100 * 60_000;
 
 interface StepRunState {
   running?: boolean;
@@ -65,10 +66,22 @@ async function runStep(
   body: Record<string, unknown>,
   log: string[],
 ): Promise<void> {
+  // 读一次步骤状态。
+  //
+  // ⚠️ 必须取 body.lastRun，不能拿整个响应体当状态用：
+  // `/api/fetch-news` 和 `/api/wechat/push` 的 GET 返回的是信封
+  // `{ message, usage, sources, lastRun }`，直接当状态用会让
+  // `state.running` / `state.finishedAt` 恒为 undefined，完成判据永远为假 ——
+  // 表现为「每一步都干等到 60 分钟超时」，日志里只有一行「已触发」，然后就没了。
+  // 同一处 bug 在 lib/scheduler.ts 里也踩过（那边表现是定时那轮一直不推）。
   const readState = async (): Promise<StepRunState | null> => {
     try {
-      const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
-      return await res.json() as StepRunState;
+      const res = await fetch(`${API_BASE}${path}?cb=${Date.now()}`, { cache: 'no-store' });
+      const body = await res.json() as { lastRun?: StepRunState | null };
+      if (body && typeof body === 'object' && 'lastRun' in body) {
+        return body.lastRun ?? {};
+      }
+      return (body as unknown as StepRunState) ?? null;
     } catch {
       return null;
     }
@@ -85,21 +98,36 @@ async function runStep(
   log.push(`[${now()}] ${label}已触发：${JSON.stringify(await triggerRes.json())}`);
 
   const deadline = Date.now() + STEP_TIMEOUT_MS;
+  const startedWaitingAt = Date.now();
+  let polls = 0;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     const state = await readState();
     if (!state) continue;
 
+    polls += 1;
     const finishedNow = state.finishedAt ?? null;
+
+    // 哨兵日志：拿不到 running 说明状态又读错了（信封没拆），必须在日志里看得见。
+    if (polls % 24 === 0) {
+      log.push(
+        `[${now()}] 仍在等待${label}（已等 ${Math.round((Date.now() - startedWaitingAt) / 60_000)} 分钟）：`
+        + `running=${state.running} finishedAt=${finishedNow}`,
+      );
+    }
+
     if (!state.running && finishedNow && finishedNow !== finishedBefore) {
       log.push(
-        `[${now()}] ${label}完成：${JSON.stringify(state.summary ?? state.error ?? state)}`,
+        `[${now()}] ${label}完成（等了 ${Math.round((Date.now() - startedWaitingAt) / 60_000)} 分钟）：${JSON.stringify(state.summary ?? state.error ?? state)}`,
       );
       return;
     }
   }
 
-  log.push(`[${now()}] 等待${label}超过 ${STEP_TIMEOUT_MS / 60_000} 分钟仍未结束，不再等待`);
+  log.push(
+    `[${now()}] 等待${label}超过 ${STEP_TIMEOUT_MS / 60_000} 分钟仍未结束，不再等待`
+    + `（最后一轮观测：running=${(await readState())?.running}）`,
+  );
 }
 
 async function processPipeline(

@@ -62,6 +62,7 @@ const PUSH_WAIT_TIMEOUT_MS = 20 * 60_000;
 // 两个接口的 GET 都返回同样形状的 lastRun，这里只声明调度器真正用到的字段。
 interface RunStateLite {
   running?: boolean;
+  startedAt?: string | null;
   finishedAt?: string | null;
   summary?: unknown;
   error?: string | null;
@@ -71,11 +72,37 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// 读一次任务状态。失败返回 null，由调用方决定忽略还是继续等。
+/**
+ * 读一次任务状态。
+ *
+ * ⚠️ 这里曾经有一个**静默了整整两天**的 bug，改动之前先看懂它：
+ * `GET /api/fetch-news` 和 `GET /api/wechat/push` 返回的不是 lastRun 本身，
+ * 而是一个信封：`{ message, usage, dryRunHint, sources, lastRun }`。
+ * 旧代码直接 `return await res.json()`，于是 `state.running` / `state.finishedAt`
+ * **永远是 undefined** —— 轮询循环里的完成判据
+ * `!state.running && finishedNow && finishedNow !== finishedBefore` 永远为假。
+ *
+ * 后果不是报错，而是「每一轮都干等到超时上限」：
+ *   抓取等待固定 100 分钟、推送等待固定 20 分钟、流水线每一步固定 60 分钟。
+ * 表现：19:00 触发的那一轮，到 20:19（79 分钟后）还停在抓取等待里，
+ * **推送那一步根本没开始** —— 用户看到的就是「到点了草稿箱还是空的」。
+ * 抓取其实早就跑完了（19:00→20:13），只是没人往下走。
+ *
+ * 所以：必须取 body.lastRun。留一个兜底 —— 若将来某个接口直接返回状态本身，
+ * 也不会又退化成「永远拿不到状态」。
+ */
 async function readRunState(path: string): Promise<RunStateLite | null> {
   try {
-    const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
-    return await res.json() as RunStateLite;
+    // 带 cb 破坏缓存：状态查询必须每次都拿到最新值，被任何一层缓存住就等于没等。
+    const res = await fetch(`${API_BASE}${path}?cb=${Date.now()}`, { cache: 'no-store' });
+    const body = await res.json() as { lastRun?: RunStateLite | null };
+    // 有 lastRun 这个键 → 取它；lastRun 为 null 表示「还没跑过」，给个空对象
+    // （running/finishedAt 都是 undefined/null，循环会继续等，正是想要的）。
+    if (body && typeof body === 'object' && 'lastRun' in body) {
+      return body.lastRun ?? {};
+    }
+    // 兜底：万一某个接口直接返回状态本身（没有信封），也照样能用。
+    return (body as unknown as RunStateLite) ?? null;
   } catch (error) {
     console.log(`[${new Date().toISOString()}] 读取 ${path} 状态失败（忽略，继续等）:`, error);
     return null;
@@ -92,6 +119,11 @@ async function readRunState(path: string): Promise<RunStateLite | null> {
 //
 // 判据必须是「running === false 且 finishedAt 与触发前不同」：
 // 只判 running === false 会立刻命中上一轮留下的终态，等于没等。
+//
+// 另有一条哨兵日志（每 8 轮 ≈ 2 分钟打一次）：把「当前观测到的状态」和
+// 「已等了多久」写进日志。旧版整段等待期间一行都不打，于是「状态读错了 →
+// 一直等到超时」这件事在日志里表现为「触发之后就没了」，只能靠事后猜。
+// 现在拿不到 running / finishedAt 会直接打 `running=undefined`，一眼可见。
 async function triggerAndWait(
   label: string,
   path: string,
@@ -108,17 +140,30 @@ async function triggerAndWait(
     return;
   }
 
-  const deadline = Date.now() + timeoutMs;
+  const startedWaitingAt = Date.now();
+  const deadline = startedWaitingAt + timeoutMs;
+  let polls = 0;
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
     const state = await readRunState(path);
     if (!state) continue;
 
+    polls += 1;
     const finishedNow = state.finishedAt ?? null;
+
+    // 哨兵：拿不到布尔/时间戳说明状态读错了（信封没拆），必须能在日志里看见。
+    if (polls % 8 === 0) {
+      console.log(
+        `[${new Date().toISOString()}] 仍在等待${label}` +
+        `（已等 ${Math.round((Date.now() - startedWaitingAt) / 60_000)} 分钟）:` +
+        ` running=${state.running} startedAt=${state.startedAt ?? null} finishedAt=${finishedNow}`
+      );
+    }
+
     if (!state.running && finishedNow && finishedNow !== finishedBefore) {
       // summary 是各源采集量与最终入库数，或本轮建的草稿与失败国家；失败时这里是 error
       console.log(
-        `[${new Date().toISOString()}] ${label}完成:`,
+        `[${new Date().toISOString()}] ${label}完成（等了 ${Math.round((Date.now() - startedWaitingAt) / 60_000)} 分钟）:`,
         JSON.stringify(state.summary ?? state.error ?? state)
       );
       return;
@@ -128,7 +173,8 @@ async function triggerAndWait(
   // 超时也继续往下走：宁可推稍旧的数据 / 少一条日志，也不要整轮什么都不做。
   // 但打 warn，方便从日志看出「这轮是超时后硬走的」。
   console.warn(
-    `[${new Date().toISOString()}] 等待${label}超过 ${timeoutMs / 60_000} 分钟仍未结束，不再等待`
+    `[${new Date().toISOString()}] 等待${label}超过 ${timeoutMs / 60_000} 分钟仍未结束，不再等待` +
+    `（最后一轮观测：running=${(await readRunState(path))?.running}）`
   );
 }
 
