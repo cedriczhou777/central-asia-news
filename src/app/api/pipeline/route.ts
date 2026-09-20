@@ -7,10 +7,11 @@ import { beijingDate } from '@/lib/utils';
 const API_BASE = resolveSelfBaseUrl();
 
 const POLL_INTERVAL_MS = 5_000;
-// 链路上限给足。2026-09-20 实测：抓取一轮（含翻译）要 **75 分钟**，
+// 链路上限给足。2026-09-20 实测：抓取一轮（含翻译）**73–89.5 分钟**，
+// 且随「篇数 × 单篇耗时」线性增长（见 lib/scheduler.ts 里 FETCH_WAIT_TIMEOUT_MS 的推导）。
 // 旧值 60 分钟会在抓取还没跑完时就超时，后面几步等于拿着半空的库往下走。
-// 和 lib/scheduler.ts 的 FETCH_WAIT_TIMEOUT_MS 保持同一个口径（100 分钟）。
-const STEP_TIMEOUT_MS = 100 * 60_000;
+// 这里与调度器的 150 分钟保持同一口径。
+const STEP_TIMEOUT_MS = 150 * 60_000;
 
 interface StepRunState {
   running?: boolean;
