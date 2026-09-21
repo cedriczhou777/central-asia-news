@@ -20,7 +20,7 @@
  *    土耳其/以色列大使馆的**不同事件**却能达到 avg≈0.32 ——
  *    也就是说这个判据既抓不到该抓的，又（在阈值附近）可能误伤。
  *    单纯调阈值解决不了：正负样本的分数区间是**重叠**的。
- *    → 实测打分器确实做不到「理解」，所以这里引入模型判组（见 `judgeSameEventGroups`）。
+ *    → 实测打分器确实做不到「理解」，所以这里引入模型判定（见 `judgeSameEventPairs`）。
  *
  * ## 三层机制（按可靠性从高到低）
  *
@@ -69,8 +69,29 @@ export interface DedupDrop<T> {
 export interface DedupResult<T> {
   kept: T[];
   drops: DedupDrop<T>[];
-  /** L2 的执行情况。`ran=false` 表示本次没跑模型（没配 Key 或条数不足）。 */
-  llm: { ran: boolean; ok: boolean; groups: number[][]; error?: string; raw?: string[] };
+  /**
+   * L2 的执行情况。`ran=false` 表示本次没跑模型（没配 Key 或条数不足）。
+   *
+   * `groups` 是**采信结果**（下标分组，每组 ≥2 条，组内保留第 0 条）。
+   * pair 形态下它由模型判出的**对**合并而来，所以额外带上 `pairs` / `candidateCount` ——
+   * 体检时「模型被问了几对、答了哪几对」比「最后合成了几个组」更能说明问题：
+   * 前者能看出模型是否在乱答，后者经过合并/熔断后可能已经看不出原始行为了。
+   */
+  llm: {
+    ran: boolean;
+    ok: boolean;
+    /** 本次实际用的任务形态（`pair` = 逐对二选一，`group` = 长串找组，已停用） */
+    mode: JudgeMode;
+    groups: number[][];
+    /** pair 形态：模型判为「同一件事」的下标对（原样保留，未做合并） */
+    pairs?: Array<{ a: number; b: number }>;
+    /** pair 形态：本轮问了多少个候选对 */
+    candidateCount?: number;
+    /** pair 形态：被确定性判据（反向极性）拦下、没问模型的对 */
+    vetoed?: Array<{ a: number; b: number; sim: number }>;
+    error?: string;
+    raw?: string[];
+  };
 }
 
 // ----- 字段读取（兼容 snake_case / camelCase 两种来源）-----
@@ -184,6 +205,30 @@ export function dedupeStoriesDeterministic<T extends StoryLike>(items: T[]): {
 
 // ----- L2：模型判组（「理解机制」本体）-----
 
+/**
+ * L2 的两种任务形态。
+ *
+ * **`group`（让模型在一长串里找组）实测不可用**，两次都失败：
+ *   - 关 thinking：模型把**所有下标**都列进 `groups`（含大量单元素组），
+ *     根本没在做判重 —— 看起来像把任务理解成「列出这些条目」。
+ *   - 开 thinking：格式修好了（返回干净的 JSON），但**语义仍是错的**：
+ *     它按**话题**归并，不按事件 ——
+ *     哈萨克把「聚乙烯工厂」与「节水灌溉面积」并成一组，
+ *     塔吉克把「独立 35 周年国际会议」与「桑搏世锦赛」并成一组。
+ *
+ * **`pair`（只让模型对一对标题做二选一）**是据此改的形态。理由：
+ *   1. 每个判断对象只有两条，模型不需要维护「跨 20 条的一致性」；
+ *   2. 模型的权力被限制成**否决权** —— 候选对由确定性判据（标题相似度）先筛，
+ *      模型只能说「这两条不是同一件事」。误判的后果从「误删」变成「漏合并」，
+ *      方向是安全的（漏合并只是留下重复，误合并是丢信息）。
+ *   3. 输出是一个短数组，解析简单，模型不容易跑偏。
+ *
+ * **生产链路只用 `pair`**。`group` 形态的功能（`judgeSameEventGroups` / `parseEventGroups`）
+ * 仅为 `GET /api/dedupe-check?mode=group` 的对照实验保留 —— 想复核「长串找组为什么不行」时
+ * 能原地重现，不必回滚代码。若要清理，删掉这两处 + 体检接口的 `mode` 分支即可。
+ */
+export type JudgeMode = 'pair' | 'group';
+
 /** 单次交给模型的条目上限。超了就分块，块间不重叠。 */
 const LLM_BLOCK_SIZE = 60;
 
@@ -201,9 +246,159 @@ const LLM_BLOCK_SIZE = 60;
  */
 const MAX_GROUP_SIZE = 4;
 
+/**
+ * pair 形态：候选对的标题相似度下限。低于它的对不值得问模型。
+ *
+ * 0.35 是**召回下限**，故意放低 —— 这一步只要「不漏」，判得准不准是模型的职责。
+ * 用线上 1000 篇真实数据核过（`pnpm tsx scripts/peek-pairs.ts`）：
+ * 下限上面的候选对里，真正同一件事的都在，包括几类最难的 ——
+ * 人名音译差异（「奥伦巴耶夫」/「奥里姆巴耶夫」0.37）、
+ * 数字有出入（「75亿美元」/「76亿美元」0.43）、
+ * 同一政策的两种译法（「17.5%降至12%」/「17.5%下调至12%」0.75）、
+ * 以及提示词里那对「团结的力量」/「团结之力」0.71。
+ */
+const PAIR_CANDIDATE_MIN_SIM = 0.35;
+
+/** pair 形态：单轮最多问多少对（控制提示词长度与延迟）。 */
+const PAIR_MAX_CANDIDATES = 12;
+
+/*
+ * ## 为什么这里**没有**「判是比例过高就熔断」这条护栏
+ *
+ * 2026-09-21 曾按直觉加过一条：判「是」的比例超过候选数一半就整轮不采信。
+ * 随后拿线上 1000 篇真实数据算了一遍接受率，发现它必然误伤：
+ *
+ * 因为候选是**按相似度降序截断**的（`PAIR_MAX_CANDIDATES = 12`），
+ * 留下来的天然就是最像的那些对，真重复占多数是**正常现象**，不是模型退化。
+ * 实测乌兹别克斯坦单轮 12 对里 11 对确实讲同一件事（接受率 0.92）——
+ * 按 0.5 熔断会把这一整轮的**正确**判定全部丢掉。
+ *
+ * 结论：接受率**无法**区分「模型全答是」和「这个国家当天真的重复很多」，
+ * 任何基于比例的阈值都会在某一侧失效。因此这条护栏被撤掉，
+ * 改为两条**不依赖比例**的护栏：
+ *   1. 「反向极性」对的确定性否决（见 `hasOppositePolarity`）——
+ *      拦掉「金价下跌 vs 上涨」这类字面极像但语义相反的对，不花 token 也不给模型犯错机会；
+ *   2. 「簇过大整簇丢弃」（见 `MAX_GROUP_SIZE`）——
+ *      全答是会让所有条目连成一个簇，直接撞上限被丢弃。
+ * 另外把接受率**报出来**（`judgeSameEventPairs` 的返回 + 体检接口），
+ * 让「模型到底是不是在乱答」由人看着原始对判断，而不是交给一个拍出来的阈值。
+ */
+
 /** 标题/摘要截断长度，防止个别超长正文把单次请求撑爆。 */
 const TITLE_MAX = 80;
 const SUMMARY_MAX = 60;
+
+/** 只有「方向明确、且不会在无关语境里出现」的词才收。宁可少收，也不要误判。 */
+const UP_WORDS = ['上涨', '上升', '增长', '增加', '提高', '提升', '上调', '增至', '攀升', '升值', '创新高', '新高'];
+const DOWN_WORDS = ['下跌', '下降', '减少', '降低', '下调', '降至', '下滑', '贬值', '回落', '缩水', '创新低', '新低'];
+
+/** 上行 / 下行 / 无方向。同一标题里同时出现两个方向 → 无方向（太含糊，不参与判定）。 */
+function polarityOf(title: string): 'up' | 'down' | 'none' {
+  const up = UP_WORDS.some((w) => title.includes(w));
+  const down = DOWN_WORDS.some((w) => title.includes(w));
+  if (up && down) return 'none';
+  if (up) return 'up';
+  if (down) return 'down';
+  return 'none';
+}
+
+/**
+ * 「反向极性」对的**确定性**否决 —— 在问模型之前就拦掉。
+ *
+ * 这类对是字面相似度最高的假阳性：两条标题几乎逐字一样，只有一个方向词相反。
+ * 「全球市场黄金和白银价格**下跌**」与「……**上涨**」实测相似度 0.71，
+ * 排在候选表最前面，几乎必然会被问给模型；而它们讲的是两条相反的消息。
+ *
+ * 为什么该由确定性代码判、而不是交给模型：
+ *   - 方向词是**封闭集合**，不涉及语义推断，没有理由用概率模型去猜；
+ *   - 假阴性（漏拦）的代价是「合并了一条利多和一条利空」= 直接删掉一条相反的事实；
+ *   - 拦掉它不花 token，还能把 12 个候选名额留给真正需要判断的对。
+ *
+ * 判定口径：只有「一条纯上行、另一条纯下行」才算冲突。含糊的一律放行 ——
+ * 两条都提到「提升」（同一件事的两种译法）不算冲突；一条不带方向词也不算
+ * （如「特许权使用费收入将达92.4亿」vs「销售税收入增至415亿」，
+ * 这条该判「否」，但理由是「两种税」而非方向相反，不在本函数的职责内）。
+ *
+ * **被否决的对必须报出来**（`judgeSameEventPairs` 的 `vetoed`），
+ * 否则「否决了什么」会变成新的黑盒。
+ */
+export function hasOppositePolarity(a: string, b: string): boolean {
+  return polarityOf(a) !== 'none' && polarityOf(b) !== 'none' && polarityOf(a) !== polarityOf(b);
+}
+
+/**
+ * 生成「值得让模型看两眼」的候选对（下标对，按相似度降序）。
+ *
+ * 这一步是**召回**，不是判定：门槛刻意放低（默认 0.35），
+ * 宁可多问几对，也不要把真正同一件事的两条漏在候选之外。
+ * 判定交给模型（precision），职责分离。
+ */
+export function candidatePairs<T extends StoryLike>(
+  items: T[],
+  minSim = PAIR_CANDIDATE_MIN_SIM,
+  maxPairs = PAIR_MAX_CANDIDATES,
+): Array<{ a: number; b: number; sim: number }> {
+  const out: Array<{ a: number; b: number; sim: number }> = [];
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const sim = similarity(items[i].title || '', items[j].title || '');
+      if (sim >= minSim) out.push({ a: i, b: j, sim });
+    }
+  }
+  out.sort((x, y) => y.sim - x.sim);
+  return out.slice(0, maxPairs);
+}
+
+/** pair 形态的提示词：每行一对，逐对二选一。 */
+function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLike[]): string {
+  const lines = pairs.map((p, idx) => {
+    const t1 = (items[p.a].title || '').slice(0, TITLE_MAX);
+    const t2 = (items[p.b].title || '').slice(0, TITLE_MAX);
+    return `${idx} | ${t1} || ${t2}`;
+  });
+  return [
+    '下面是若干对新闻标题（每对一行，行首是编号）。请**逐对**判断：这一对讲的是不是同一件事。',
+    '',
+    '算同一件事：同一次会议 / 同一次签约 / 同一份公告 / 同一条政策 / 同一个项目的重复报道。',
+    '即使来源不同、措辞不同、详略不同、细节数字有出入，也算同一件事。',
+    '',
+    '不算同一件事（务必判「否」）：',
+    '  · 不同主体做同类事：「土耳其大使馆祝贺主权日」与「以色列大使馆祝贺主权日」',
+    '  · 方向相反：「金价下跌」与「金价上涨」',
+    '  · 不同地点/不同项目：「东哈萨克斯坦州建桥」与「阿斯塔纳建桥」',
+    '  · 不同人物：「运动员甲夺金」与「运动员乙夺金」',
+    '  · 只是同属一个话题、同一类机构、同一个州/部委 —— 话题相同不等于同一件事',
+    '  · 两条讲的是同一主题但各自独立发生的不同事件',
+    '',
+    '只输出 JSON，不要解释。把**判为是同一件事**的编号列出来：',
+    '{"same": [1, 4]}',
+    '若一对都不是，输出 {"same": []}。',
+    '',
+    '# | 标题A || 标题B',
+    ...lines,
+  ].join('\n');
+}
+
+/**
+ * pair 形态的解析。越界编号丢掉，返回去重后的编号数组；
+ * 不是合法 JSON 或字段不对 → null（调用方按「一对都不合并」处理）。
+ */
+export function parsePairVerdict(text: string, total: number): number[] | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  const raw = (parsed as { same?: unknown })?.same;
+  if (!Array.isArray(raw)) return null;
+  return [...new Set(
+    raw.filter((v): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) < total),
+  )].sort((a, b) => a - b);
+}
 
 /**
  * 提示词里的判据。**这段是这套机制的核心资产**，改动前先跑
@@ -299,6 +494,130 @@ export interface JudgeOptions {
   extraBody?: Record<string, unknown>;
   /** 每次调用都带上原始返回文本（只给体检接口用，用于看清模型到底吐了什么）。 */
   collectRaw?: boolean;
+  /** 任务形态，默认 `pair`。见 {@link JudgeMode}。 */
+  mode?: JudgeMode;
+}
+
+/**
+ * pair 形态：只让模型对候选对做二选一，返回「判为同一件事」的下标对。
+ *
+ * 无候选对、调用失败、返回不合法 —— 一律返回空数组（= 不合并），
+ * 并带上 `error` 说明原因。**默认不合并**是这条链路的既定方向。
+ *
+ * `vetoed` 是**没问模型**就被确定性判据拦下的对（当前只有反向极性，见
+ * {@link hasOppositePolarity}）。把它单独报出来有两个作用：
+ * 一是体检时能确认「该拦的确实拦住了」，二是它的数量能反映候选里的噪声水平 ——
+ * 如果某些国家每轮都否决一堆，说明召回下限可能该往上调。
+ *
+ * 返回 `accepted/candidateCount` 就是**接受率**。它**不参与任何自动判定**，
+ * 只是报出来给人看（见文件里「为什么没有比例熔断」的说明）。
+ */
+export async function judgeSameEventPairs<
+  T extends StoryLike & { category?: string | null; summary?: string | null },
+>(
+  items: T[],
+  options: JudgeOptions = {},
+): Promise<{
+  pairs: Array<{ a: number; b: number }>;
+  candidateCount: number;
+  vetoed: Array<{ a: number; b: number; sim: number }>;
+  error?: string;
+  raw?: string[];
+}> {
+  const all = candidatePairs(items);
+  // 反向极性对在问模型之前就拦掉（确定性判据，不让概率模型碰）
+  const asked: typeof all = [];
+  const vetoed: typeof all = [];
+  for (const c of all) {
+    if (hasOppositePolarity(items[c.a].title || '', items[c.b].title || '')) vetoed.push(c);
+    else asked.push(c);
+  }
+  if (asked.length === 0) return { pairs: [], candidateCount: all.length, vetoed };
+
+  const res = await askLlmJson(buildPairPrompt(asked, items), {
+    timeoutMs: 45000,
+    ...(options.extraBody ? { extraBody: options.extraBody } : {}),
+  });
+  const raw = options.collectRaw ? [res.ok ? res.text : `调用失败：${'error' in res ? res.error : '未知'}`] : undefined;
+  if (!res.ok) {
+    return {
+      pairs: [],
+      candidateCount: all.length,
+      vetoed,
+      error: 'error' in res ? res.error : '模型调用失败（无错误详情）',
+      raw,
+    };
+  }
+
+  const verdict = parsePairVerdict(res.text, asked.length);
+  if (!verdict) {
+    return {
+      pairs: [],
+      candidateCount: all.length,
+      vetoed,
+      error: '模型返回不是合法 JSON（已按「一对都不合并」处理）',
+      raw,
+    };
+  }
+
+  // 注意下标口径：verdict 是相对 `asked` 的，必须映射回原数组下标，
+  // 否则被否决的对会让后面每一对的下标都错位一格 —— 那会静默删错新闻。
+  return {
+    pairs: verdict.map((i) => ({ a: asked[i].a, b: asked[i].b })),
+    candidateCount: all.length,
+    vetoed,
+    raw,
+  };
+}
+
+/**
+ * 把模型判出的**对**并成**组**（并查集）。
+ *
+ * 为什么要合并而不是「每对独立丢一条」：三源报道同一次签约时，
+ * 模型会答出 `(0,1)` 和 `(0,2)` 两对。若逐对独立处理，两条都会以
+ * 「kept = 0」的身份成为各自的 drop —— 结果是对的（都丢掉），
+ * 但体检报告里会变成两组、看起来像两个不同的重复，
+ * 而且 `(1,2)` 若也被答出来会重复记账。并成 `[0,1,2]` 后语义更干净。
+ *
+ * **传递性是要防的风险**：`(0,1)` 与 `(1,2)` 都成立时，0 和 2 未必是同一件事
+ * （1 可能同时蹭到两个话题）。所以合并结果仍要过 `filterOversizedGroups` 的
+ * 大组护栏 —— 链条一旦长起来就整簇丢弃，宁可漏合并。
+ *
+ * 导出是为了能离线断言（`scripts/test-dedup.ts`）：这层「合并 + 保序」的逻辑
+ * 不该只能靠调模型才能验证。
+ */
+export function clusterPairs(pairs: Array<{ a: number; b: number }>): number[][] {
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r) as number;
+    // 路径压缩，避免长链退化成 O(n)
+    let cur = x;
+    while (parent.get(cur) !== r) {
+      const next = parent.get(cur) as number;
+      parent.set(cur, r);
+      cur = next;
+    }
+    return r;
+  };
+
+  for (const { a, b } of pairs) {
+    if (!parent.has(a)) parent.set(a, a);
+    if (!parent.has(b)) parent.set(b, b);
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb)); // 根取小下标，保证保序
+  }
+
+  const buckets = new Map<number, number[]>();
+  for (const idx of parent.keys()) {
+    const r = find(idx);
+    const g = buckets.get(r);
+    if (g) g.push(idx);
+    else buckets.set(r, [idx]);
+  }
+
+  return [...buckets.values()].map((g) => g.sort((x, y) => x - y)).sort((x, y) => x[0] - y[0]);
 }
 
 /**
@@ -398,39 +717,88 @@ export function isLlmJudgeEnabled(): boolean {
  * 顺序很关键：**先跑确定性去重，再让模型看剩下的**。
  * 一来省钱（同一条新闻的链接重复在第一层就没了，不用占提示词），
  * 二来更准（模型看到的列表更短、噪声更少）。
+ *
+ * L2 默认走 **`pair` 形态**（逐对二选一）；`mode: 'group'` 只为体检接口做对照保留，
+ * 生产链路不要用 —— 它实测会按话题乱合并，见 {@link JudgeMode} 的说明。
  */
 export async function dedupeStories<T extends StoryLike & { category?: string | null }>(
   items: T[],
   options: DedupOptions = {},
 ): Promise<DedupResult<T>> {
   const { useLlm = isLlmJudgeEnabled(), judge } = options;
+  const mode: JudgeMode = judge?.mode ?? 'pair';
 
   const { kept: keptAfterIdentity, drops: identityDrops } = dedupeStoriesDeterministic(items);
   const drops: DedupDrop<T>[] = [...identityDrops];
-  const llm: DedupResult<T>['llm'] = { ran: false, ok: false, groups: [] };
+  const llm: DedupResult<T>['llm'] = { ran: false, ok: false, mode, groups: [] };
 
   if (!useLlm || keptAfterIdentity.length < 2) {
     return { kept: keptAfterIdentity, drops, llm };
   }
 
   llm.ran = true;
-  const judged = await judgeSameEventGroups(keptAfterIdentity, judge);
-  if (judge?.collectRaw && judged.raw) llm.raw = judged.raw;
-  if (judged.error) {
-    llm.error = judged.error;
-    console.error(`[same-event] 模型判组未完全生效：${judged.error}`);
+
+  // ---- 取回模型判定：pair 形态取「对」，group 形态取「组」 ----
+  let judgedGroups: number[][] = [];
+  let judgedError: string | undefined;
+  let raws: string[] | undefined;
+
+  if (mode === 'pair') {
+    const res = await judgeSameEventPairs(keptAfterIdentity, judge);
+    raws = res.raw;
+    llm.pairs = res.pairs;
+    llm.candidateCount = res.candidateCount;
+    llm.vetoed = res.vetoed;
+    if (res.vetoed.length > 0) {
+      // 被确定性拦下的对要留痕：否则「否决了什么」就成了新的黑盒
+      console.info(
+        `[same-event] ${res.vetoed.length} 对因「方向相反」被拦下、未问模型。示例：` +
+          res.vetoed
+            .slice(0, 3)
+            .map((c) => `「${keptAfterIdentity[c.a]?.title}」↔「${keptAfterIdentity[c.b]?.title}」`)
+            .join(' / '),
+      );
+    }
+    if (res.error) judgedError = res.error;
+    if (res.pairs.length > 0) {
+      // 对 → 组（并查集），再过一次大组护栏：链条过长说明模型在借相似度传递
+      const clustered = clusterPairs(res.pairs);
+      const { kept, rejected } = filterOversizedGroups(clustered);
+      if (rejected > 0) {
+        const oversize = clustered.find((g) => g.length > MAX_GROUP_SIZE) || [];
+        console.warn(
+          `[same-event] pair 合并出 ${rejected} 个超过 ${MAX_GROUP_SIZE} 条的簇，整簇不采信。示例：${oversize
+            .slice(0, 6)
+            .map((i) => keptAfterIdentity[i]?.title)
+            .join(' | ')} …`,
+        );
+        judgedError = `有 ${rejected} 个簇因超过 ${MAX_GROUP_SIZE} 条被整簇丢弃（模型的判定在传递）`;
+      }
+      judgedGroups = kept;
+    }
+  } else {
+    const res = await judgeSameEventGroups(keptAfterIdentity, judge);
+    raws = res.raw;
+    if (res.error) judgedError = res.error;
+    judgedGroups = res.groups;
   }
-  if (judged.groups.length === 0) {
-    // 一组都没有（含调用失败）：确定性去重的结果照常返回
+
+  if (judge?.collectRaw && raws) llm.raw = raws;
+  if (judgedError) {
+    llm.error = judgedError;
+    console.error(`[same-event] 模型判组未完全生效：${judgedError}`);
+  }
+  if (judgedGroups.length === 0) {
+    // 一组都没有（含调用失败、返回不合法、簇超限被丢）：确定性去重的结果照常返回
     return { kept: keptAfterIdentity, drops, llm };
   }
 
   llm.ok = true;
-  llm.groups = judged.groups;
+  llm.groups = judgedGroups;
 
   // 组内保序保留第一条（传入前已按重要性排好），其余记为 llm_same_event
   const droppedIndexes = new Set<number>();
-  for (const g of judged.groups) {
+  for (const g of judgedGroups) {
     const first = g[0];
     for (const idx of g.slice(1)) {
       droppedIndexes.add(idx);

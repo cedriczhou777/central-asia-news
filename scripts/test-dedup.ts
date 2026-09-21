@@ -20,10 +20,15 @@ import {
   originalTitleKey,
 } from '../src/lib/utils';
 import {
+  candidatePairs,
+  clusterPairs,
+  dedupeStories,
   dedupeStoriesDeterministic,
   filterOversizedGroups,
+  hasOppositePolarity,
   identityKeys,
   parseEventGroups,
+  parsePairVerdict,
   type StoryLike,
 } from '../src/lib/same-event';
 
@@ -338,6 +343,156 @@ section('filterOversizedGroups · 模型乱合并的兜底');
 }
 
 // ============================================================
+// 四之二、pair 形态：逐对二选一的解析、召回、合并
+// ============================================================
+//
+// 为什么单独测这一层：`group` 形态（长串找组）2026-09-21 实测两次都失败 ——
+// 关 thinking 时把所有下标都列进 groups，开 thinking 时按**话题**而非事件归并
+// （哈萨克把「聚乙烯工厂」与「节水灌溉面积」并成一组）。改成 `pair` 之后，
+// 风险从「模型答错」转移到了「我们怎么解释模型的答案」：
+// 对→组的合并会不会借相似度传递出一个大簇、熔断在小样本上会不会误触发。
+// 这些都是纯代码，必须有不依赖模型的断言守着。
+
+section('parsePairVerdict · 只接受合法的对编号');
+
+ok('正常 JSON', JSON.stringify(parsePairVerdict('{"same": [1, 4]}', 6)) === '[1,4]');
+ok('空数组 = 一对都不合并', JSON.stringify(parsePairVerdict('{"same": []}', 6)) === '[]');
+ok('带 ```json 围栏', JSON.stringify(parsePairVerdict('```json\n{"same": [0]}\n```', 3)) === '[0]');
+ok('前后带解释文字', JSON.stringify(parsePairVerdict('判定如下：{"same": [2]} 完毕。', 3)) === '[2]');
+ok('越界编号被剔除', JSON.stringify(parsePairVerdict('{"same": [0, 99]}', 3)) === '[0]');
+ok('重复编号去重', JSON.stringify(parsePairVerdict('{"same": [1, 1, 1]}', 3)) === '[1]');
+ok('非整数被剔除', JSON.stringify(parsePairVerdict('{"same": [0, "1", 2.5]}', 3)) === '[0]');
+ok('不是 JSON → null（调用方按「不合并」处理）', parsePairVerdict('这几对都不是同一件事', 3) === null);
+ok('缺少 same 字段 → null', parsePairVerdict('{"pairs": [1]}', 3) === null);
+// 模型有时会抄提示词的示例格式但写错键名，绝不能因为「看起来有数组」就采信
+ok('same 不是数组 → null', parsePairVerdict('{"same": "1,4"}', 3) === null);
+
+section('candidatePairs · 召回（宁多问，不漏问）');
+
+{
+  const near = [
+    { title: '阿斯塔纳跨阿雷斯河新建桥梁将设八车道' },
+    { title: '阿斯塔纳跨阿雷斯河桥梁新建工程设七车道' },
+    { title: '塔吉克斯坦总统就独立日发表贺词' },
+  ];
+  const cands = candidatePairs(near);
+  ok('表述不同的同一件事进入候选', cands.some((c) => c.a === 0 && c.b === 1), JSON.stringify(cands));
+  ok('无关条目不进候选', !cands.some((c) => c.b === 2 || c.a === 2), JSON.stringify(cands));
+
+  // 召回是「宁可多问」：完全不相干的标题之间不该有形似对
+  const far = [{ title: '哈萨克斯坦聚乙烯工厂投产' }, { title: '塔吉克斯坦桑搏世锦赛开幕' }];
+  ok('完全无关的两条不产生候选对', candidatePairs(far).length === 0);
+
+  // 按相似度降序 —— 候选被截断时，留下的是最像的那几对
+  const mixed = [
+    { title: '哈萨克斯坦总统会见中国外长' },
+    { title: '哈萨克斯坦总统会见中国外交部长' }, // 与 0 很像
+    { title: '哈萨克斯坦总统会见俄罗斯外长' },   // 与 0 一般像
+  ];
+  const sorted = candidatePairs(mixed, 0.3, 10);
+  ok('候选按相似度降序', sorted.length === 0 || sorted.every((c, i) => i === 0 || sorted[i - 1].sim >= c.sim), JSON.stringify(sorted.map((c) => c.sim)));
+
+  // 上限：超过就截断，且截断后仍是最像的那些
+  const many = Array.from({ length: 30 }, (_, i) => ({ title: `哈萨克斯坦总统会见中国外长代表团${i}` }));
+  ok('候选数量受 maxPairs 限制', candidatePairs(many, 0.3, 5).length === 5);
+}
+
+section('hasOppositePolarity · 高相似度假阳性的确定性否决');
+
+// 全部取自线上真实数据（`pnpm tsx scripts/peek-pairs.ts /tmp/live.json` 的候选表），
+// 不是编的例子 —— 这里每一条的相似度都 ≥0.37，也就是说它们**都会**被问给模型。
+{
+  // 必须否决：相似度 0.71，候选表第一位。一条利多一条利空，合并等于删掉一条相反的事实。
+  ok(
+    '金价下跌 vs 金价上涨 → 否决',
+    hasOppositePolarity('全球市场黄金和白银价格下跌', '全球市场黄金和白银价格上涨'),
+  );
+
+  // 必须放行：下面每一条都是**同一件事的两种译法**，误否决就是漏合并（留下重复）
+  ok(
+    '贷款利率「降至」vs「下调至」→ 放行（同向）',
+    !hasOppositePolarity(
+      '乌兹别克斯坦卡拉卡尔帕克斯坦将家庭创业贷款利率从17.5%降至12%',
+      '乌兹别克斯坦卡拉卡尔帕克斯坦家庭创业贷款利率从17.5%下调至12%',
+    ),
+  );
+  ok(
+    '「提升医疗服务质量」两条 → 放行（同向）',
+    !hasOppositePolarity(
+      '哈萨克斯坦推进公共卫生系统现代化，数字技术助力提升医疗服务质量',
+      '哈萨克斯坦政府将改进公共卫生系统，提升医疗服务质量',
+    ),
+  );
+  ok(
+    '「增长」vs 无方向词 → 放行（不构成反向）',
+    !hasOppositePolarity('吉尔吉斯斯坦财政部预测2027年授权费收入将达92.4亿索姆', '吉尔吉斯斯坦财政部预测2027年销售税收入增至415.097亿索姆'),
+  );
+
+  // 明确**不在**本函数职责内的假阳性 —— 记在这里是为了避免以后把它当 bug 改：
+  // 「停供气」vs「停供水」是同一类动作用在不同对象上，不是方向相反，
+  // 只能靠模型看懂「气」和「水」不是一回事。这类必须由 L2 负责。
+  ok(
+    '停供气 vs 停供水 → 放行（交由模型判，不是极性冲突）',
+    !hasOppositePolarity('比什凯克部分区域将暂停供气', '比什凯克部分区域9月22日将暂停供水'),
+  );
+  ok(
+    '羊毛加工厂 vs 炼油厂 → 放行（交由模型判）',
+    !hasOppositePolarity(
+      '塔吉克斯坦总统拉赫蒙在戈罗诺-巴达赫尚自治州主持新羊毛加工厂投产仪式',
+      '塔吉克斯坦总统拉赫蒙在苏维州戈罗诺-巴达赫尚自治州主持炼油厂投产仪式',
+    ),
+  );
+
+  // 组合：这对**确实**会被召回（相似度超过下限），所以否决必须由极性判据接手 ——
+  // 这正是「在问模型之前拦掉」能成立的前提，不成立的话这道护栏就是空的。
+  const gold = [
+    { title: '全球市场黄金和白银价格下跌' },
+    { title: '全球市场黄金和白银价格上涨' },
+  ];
+  const goldPairs = candidatePairs(gold);
+  ok('金价对确实会被召回', goldPairs.length === 1, JSON.stringify(goldPairs));
+  ok(
+    '召回之后被极性判据拦下（模型不会看到它）',
+    goldPairs.every((c) => hasOppositePolarity(gold[c.a].title, gold[c.b].title)),
+  );
+}
+
+section('clusterPairs · 对 → 组（并查集）');
+
+ok('空输入', JSON.stringify(clusterPairs([])) === '[]');
+ok('单对', JSON.stringify(clusterPairs([{ a: 0, b: 1 }])) === '[[0,1]]');
+ok('不相交的两对各自成组', JSON.stringify(clusterPairs([{ a: 0, b: 1 }, { a: 2, b: 3 }])) === '[[0,1],[2,3]]');
+// 三源报道同一件事：模型会同时答出 (0,1) 和 (0,2)，合成一组才不重复记账
+ok('共享端点的两对并成一组', JSON.stringify(clusterPairs([{ a: 0, b: 1 }, { a: 0, b: 2 }])) === '[[0,1,2]]');
+ok('组内按下标升序（保序保留第一条）', JSON.stringify(clusterPairs([{ a: 3, b: 1 }])) === '[[1,3]]');
+ok('组间按下标升序', JSON.stringify(clusterPairs([{ a: 5, b: 6 }, { a: 1, b: 2 }])) === '[[1,2],[5,6]]');
+ok('重复的同一对不重复计', JSON.stringify(clusterPairs([{ a: 0, b: 1 }, { a: 0, b: 1 }])) === '[[0,1]]');
+
+// 关键护栏：链式传递会把 5 条串成一个簇。这不是「合并了 5 条重复」，
+// 而是「模型的判定在借中间条目传递」（0↔2 未必是同一件事），必须整簇丢弃。
+{
+  const chain = clusterPairs([{ a: 0, b: 1 }, { a: 1, b: 2 }, { a: 2, b: 3 }, { a: 3, b: 4 }]);
+  ok('传递性会把链条串成一个簇', JSON.stringify(chain) === '[[0,1,2,3,4]]', JSON.stringify(chain));
+  const guarded = filterOversizedGroups(chain);
+  ok('串成的 5 条簇被护栏整簇丢弃（宁可漏合并）', guarded.kept.length === 0 && guarded.rejected === 1, JSON.stringify(guarded));
+  // 4 条以内是真的多源重复，必须放行
+  const okChain = filterOversizedGroups(clusterPairs([{ a: 0, b: 1 }, { a: 1, b: 2 }, { a: 2, b: 3 }]));
+  ok('4 条以内的簇正常保留', okChain.kept.length === 1 && okChain.rejected === 0, JSON.stringify(okChain));
+}
+
+// 配置通路的断言：pair 是生产默认形态，group 只能在显式指定时启用。
+// 这是本文件里唯一需要 await 的检查（dedupeStories 是异步的），
+// 而 tsx 把本脚本按 CJS 跑（package.json 没有 "type": "module"），不支持顶层 await，
+// 所以单独成函数、在汇总前统一跑 —— 见文件末尾的调用。
+async function modeChecks(): Promise<void> {
+  const { llm } = await dedupeStories([{ title: '甲' }, { title: '乙' }], { useLlm: false });
+  ok('未开 L2 时不调模型', llm.ran === false);
+  ok('默认形态是 pair', llm.mode === 'pair', String(llm.mode));
+  const g = await dedupeStories([{ title: '甲' }, { title: '乙' }], { useLlm: false, judge: { mode: 'group' } });
+  ok('显式指定可为 group（仅供对照）', g.llm.mode === 'group', String(g.llm.mode));
+}
+
+// ============================================================
 // 五、可选：真实数据体检
 // ============================================================
 
@@ -408,12 +563,23 @@ if (dataPath) {
 
 // ----- 汇总 -----
 
-console.log(`\n${'='.repeat(60)}`);
-if (failures.length === 0) {
-  console.log(`✅ 全部通过：${passed} 项断言`);
-  process.exit(0);
-} else {
-  console.log(`❌ ${failures.length} 项失败 / 共 ${passed + failures.length} 项：`);
-  for (const f of failures) console.log(`   - ${f}`);
-  process.exit(1);
+function summarize() {
+  console.log(`\n${'='.repeat(60)}`);
+  if (failures.length === 0) {
+    console.log(`✅ 全部通过：${passed} 项断言`);
+    process.exit(0);
+  } else {
+    console.log(`❌ ${failures.length} 项失败 / 共 ${passed + failures.length} 项：`);
+    for (const f of failures) console.log(`   - ${f}`);
+    process.exit(1);
+  }
 }
+
+// modeChecks 是异步的（唯一的 await 来源），所以汇总挂在它后面，
+// 否则「未开 L2」「默认形态」这两项断言会在打印结果之后才跑，不计入总数。
+modeChecks()
+  .then(summarize)
+  .catch((err) => {
+    console.error('检查过程中抛错：', err);
+    process.exit(1);
+  });

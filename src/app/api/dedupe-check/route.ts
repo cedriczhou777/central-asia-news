@@ -3,10 +3,12 @@
  *
  * ## 两个入口，一个是只读的
  *
- * - `GET  /api/dedupe-check?days=7[&llm=1]`
+ * - `GET  /api/dedupe-check?days=7[&llm=1][&mode=pair|group][&judge=think|nothink][&debug=1]`
  *   只读体检。把时间窗内的文章按国家分组跑一遍「同一件事」判据，
  *   报告**哪些会被判为重复、原因是什么**，不写任何数据。
- *   `llm=1` 时会真的调用一次模型判组（每国 1 次），用来验证 L2 通道通不通。
+ *   `llm=1` 时会真的调用一次模型判定（每国 1 次），用来验证 L2 通道通不通；
+ *   此时会额外返回模型**逐对**的判定结果（`pairs`），那是判得准不准的直接证据。
+ *   `mode=group` 是已停用形态的对照实验入口，生产链路固定走 `pair`。
  *
  * - `POST /api/dedupe-check  { "apply": false, "days": 30 }`
  *   存量重复行清理。**默认 dry-run**，只有显式传 `apply: true` 才会真删。
@@ -31,7 +33,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getArticleIdentities, deleteArticlesByIds } from '@/lib/db-articles';
-import { canonicalUrl, originalTitleKey } from '@/lib/utils';
+import { canonicalUrl, originalTitleKey, similarity } from '@/lib/utils';
 import { dedupeStoriesDeterministic } from '@/lib/same-event';
 
 /** 时间窗上限，防止有人传个 3650 天把整库拉出来。 */
@@ -217,6 +219,9 @@ export async function GET(request: NextRequest) {
   // 翻译链路刻意关掉 thinking（GLM-4.7 默认开会拖慢到超时），但判组是推理型任务，
   // 2026-09-21 实测首次上线时模型把 18 条无关新闻并成一组，怀疑与关掉 thinking 有关。
   // 这个参数让两种配置**同一次部署里都能试**，不用每试一次等一轮构建。
+  //
+  // `mode=pair|group` 用来 A/B 任务形态：`group`（长串找组）实测按话题乱合并已停用，
+  // 生产走 `pair`（逐对二选一）。这里保留 `group` 是为了需要时能原地重现那次失败。
   // `debug=1` 会把模型的原始返回文本一并带回来 —— 判组出问题时，只有它说得清「模型到底吐了什么」。
   if (withLlm) {
     const { dedupeStories } = await import('@/lib/same-event');
@@ -227,6 +232,7 @@ export async function GET(request: NextRequest) {
         : judgeMode === 'nothink'
           ? ({ thinking: { type: 'disabled' } } as Record<string, unknown>)
           : undefined; // auto：沿用通道默认值
+    const taskMode = searchParams.get('mode') === 'group' ? 'group' : 'pair';
     const debug = searchParams.get('debug') === '1';
     const perCountryLimit = Math.min(Number(searchParams.get('limit')) || 60, 200);
 
@@ -234,10 +240,23 @@ export async function GET(request: NextRequest) {
       country: string;
       ran: boolean;
       ok: boolean;
+      /** 本轮问给模型的候选对数（pair 形态才有） */
+      candidatePairs?: number;
+      /** 模型判为「同一件事」的对数（pair 形态才有） */
+      judgedPairs?: number;
+      /** 被确定性判据（反向极性）拦下、**没问模型**的对数 */
+      vetoedPairs?: number;
       groups: number;
       error?: string;
       /** 每组的具体标题 —— 只报数量的话，误合并会静默藏起来，看不出来 */
       groupTitles?: Array<{ kept: string; dropped: string[] }>;
+      /**
+       * pair 形态：模型**逐对**的原话。这是判得准不准的唯一直接证据 ——
+       * `groupTitles` 只显示合并后的结果，看不出模型答了哪些对被簇护栏拦掉。
+       */
+      pairs?: Array<{ sim: number; a: string; b: string }>;
+      /** pair 形态：被极性判据拦下的对（模型看不到，答什么都无效） */
+      vetoed?: Array<{ sim: number; a: string; b: string }>;
       /** debug=1 时的模型原始返回（截断），判组离谱时看这个 */
       raw?: string[];
     }> = [];
@@ -247,23 +266,40 @@ export async function GET(request: NextRequest) {
       const { llm } = await dedupeStories(slice as never[], {
         // 显式打开：体检的目的就是验证 L2，不能受生产默认值（关闭）影响
         useLlm: true,
-        judge: { extraBody, collectRaw: debug },
+        judge: { extraBody, collectRaw: debug, mode: taskMode },
       });
+      // 候选对里被模型判为「是」的那些，配上相似度 —— 相似度是召回的排序依据，
+      // 把它和模型的判定并排看，才能分清「模型判错」与「候选没召回」。
+      const simOf = (a: number, b: number) =>
+        Math.round(similarity((slice[a] as Row).title || '', (slice[b] as Row).title || '') * 100) / 100;
       probe.push({
         country: cc,
         ran: llm.ran,
         ok: llm.ok,
+        candidatePairs: llm.candidateCount,
+        judgedPairs: llm.pairs?.length,
+        vetoedPairs: llm.vetoed?.length,
         groups: llm.groups.length,
         error: llm.error,
         groupTitles: llm.groups.map((g) => ({
           kept: (slice[g[0]] as Row).title,
           dropped: g.slice(1).map((i) => (slice[i] as Row).title),
         })),
+        pairs: llm.pairs?.map((p) => ({
+          sim: simOf(p.a, p.b),
+          a: (slice[p.a] as Row).title,
+          b: (slice[p.b] as Row).title,
+        })),
+        vetoed: llm.vetoed?.map((p) => ({
+          sim: simOf(p.a, p.b),
+          a: (slice[p.a] as Row).title,
+          b: (slice[p.b] as Row).title,
+        })),
         ...(debug && llm.raw ? { raw: llm.raw.map((t) => t.slice(0, 1500)) } : {}),
       });
     }
     result.llmJudge = probe;
-    result.llmJudgeParams = { judgeMode, perCountryLimit, debug };
+    result.llmJudgeParams = { mode: taskMode, judgeMode, perCountryLimit, debug };
   }
 
   return NextResponse.json(result);
