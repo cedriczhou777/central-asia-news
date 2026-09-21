@@ -3,6 +3,7 @@ import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { beijingDate, extractFirstImage, isChineseText } from '@/lib/utils';
 import { dedupeStories } from '@/lib/same-event';
+import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
   EXCLUDED_CATEGORIES,
   isCountryRelevant,
@@ -15,39 +16,14 @@ import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
 
-// 投资相关关键词（用于精选评分）
-const INVESTMENT_KEYWORDS = [
-  'invest', 'investment', 'investor', 'foreign investment', 'direct investment',
-  'oil', 'gas', 'energy', 'petroleum', 'fuel', 'pipeline', 'renewable', 'power', 'electricity',
-  'chemical', 'petrochemical', 'fertilizer', 'plastic', 'polymer',
-  'mining', 'mineral', 'copper', 'gold', 'uranium', 'ore', 'metal', 'resource', 'lithium',
-  'infrastructure', 'railway', 'road', 'bridge', 'construction', 'transport', 'logistics', 'highway',
-  'real estate', 'property', 'housing', 'building', 'development',
-  'manufacturing', 'factory', 'industrial', 'production', 'textile', 'automotive',
-  'policy', 'reform', 'regulation', 'law', 'legislation', 'decree', 'strategy',
-  'tax', 'legal', 'compliance', 'company law', 'commercial', 'corporate',
-  'economy', 'gdp', 'trade', 'export', 'import', 'business', 'finance', 'bank',
-  'president', 'parliament', 'government', 'minister', 'diplomat', 'bilateral', 'agreement',
-  'central asia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'azerbaijan', 'tajikistan',
-  'south caucasus', 'caspian',
-  'silk road', 'belt and road', ' BRI',
-];
-
+// 投资相关性评分（含中英文关键词、标题加权、分档权重）统一在
+// `@/lib/investment-score`。**不要再在本文件里重建关键词表** ——
+// 这里原先那张纯英文表在中文文本上永不命中，是 2026-09-21 那次
+// 「排序里看不出投资相关性」的直接原因。
+//
 // `cleanSummary` / `normalizeImages` / `generateWechatHtml` 已挪到
 // `@/lib/wechat-template`（2026-09-21）：排版模板改得最频繁，独立成文件后
 // 没有 Next 依赖，可以用 tsc 单独编译、拿真实文章渲染出 HTML 直接看，不用起服务。
-
-// 对新闻进行投资相关性评分
-function scoreInvestmentRelevance(title: string, summary: string): number {
-  const text = `${title} ${summary}`.toLowerCase();
-  let score = 0;
-  for (const kw of INVESTMENT_KEYWORDS) {
-    if (text.includes(kw)) {
-      score += kw.length; // 长关键词权重更高
-    }
-  }
-  return score;
-}
 
 // `isCountryRelevant` 已挪到 `@/lib/article-format`（2026-09-21）。
 // 旧实现在这里只列了 5 个目标国，导致「蒙古国…」「格鲁吉亚…」「也门胡塞…」
@@ -280,19 +256,16 @@ function periodSuffix(period: unknown): string {
   return '';
 }
 
-// 投资者优先级：数字越大越靠前。
-// 用户（2026-09-19）明确要求：与投资者最相关的（经济形势、行业动态、外汇储备、
-// 国家政策、政治变动）放最前面。
+// 分类优先级（`CATEGORY_PRIORITY`）与排序规则（`compareByInvestmentRelevance`）
+// 都在 `@/lib/investment-score`。挪过去的原因见那边的注释：
+// 排序规则必须能被回归脚本断言，不能只存在于路由文件里。
 //
-// 表里**刻意没有 culture / sports** —— 那两类现在在入库后就被
-// `EXCLUDED_CATEGORIES` 整类剔除（用户 2026-09-21：「演艺娱乐，体育类新闻全部取消」），
-// 根本走不到这里的排序。留着它们只会让人误以为还有「文体类排最后」这回事。
-const CATEGORY_PRIORITY: Record<string, number> = {
-  economy: 100, policy: 95, oil_gas: 90, renewable_energy: 90, energy: 88,
-  minerals: 88, politics: 85, transport: 80, infrastructure: 80, manufacturing: 78,
-  chemicals: 75, housing: 70, law: 65, security: 60, livelihood: 55,
-  healthcare: 50, society: 40,
-};
+// 这里保留一条**历史依据**（原注释，别丢）：
+// 用户 2026-09-19 明确要求「与投资者最相关的（经济形势、行业动态、外汇储备、
+// 国家政策、政治变动）放最前面」—— 当时是用**分类优先级**近似表达的；
+// 2026-09-21 又提出「与投资越相关的新闻越放在靠前」，
+// 于是把它细化到**文章级**（`investmentRelevanceOf`），分类降为第二键。
+// 两次要求方向一致，后者是前者的细化，不是替换。
 
 // `normalizeImages` / `generateWechatHtml` / `cleanSummary` 见 `@/lib/wechat-template`。
 
@@ -474,20 +447,24 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       }
 
       // 按投资相关性评分排序，今日精选（上限 maxPerCountry 篇）
+      //
+      // ⚠️ 这里的文本已经是**中文**（上游已翻译，且上面刚用 `isChineseText` 过滤过），
+      // 所以必须用跨语言评分器（`@/lib/investment-score`）。
+      // 2026-09-21 之前这里用的是一张**纯英文**关键词表，在中文标题上永不命中 ——
+      // 实测线上 1000 篇里只有 2.8% 能得分，且命中的是拉丁字母残留，
+      // 于是排序实际只剩「分类优先级」，用户要的「越与投资相关越靠前」根本没发生。
       const scoredArticles = chineseArticles.map(a => ({
         ...a,
-        relevanceScore: scoreInvestmentRelevance(a.title, a.summary),
+        relevanceScore: investmentRelevanceOf(a.title, a.summary),
       }));
 
-      // 排序 = 分类优先级 + 关键词评分。
-      // 2026-09-19 起分类由 LLM 判定（不再是清一色的 economy），优先级才有意义：
-      // 经济/政策/能源/矿产/政治在前，文体在后；同类内按评分排。
-      scoredArticles.sort((a, b) => {
-        const pa = CATEGORY_PRIORITY[a.category] ?? 30;
-        const pb = CATEGORY_PRIORITY[b.category] ?? 30;
-        if (pa !== pb) return pb - pa;
-        return b.relevanceScore - a.relevanceScore;
-      });
+      // 排序 = **投资相关性为主** + 分类优先级为辅 + 时间兜底。
+      //
+      // 2026-09-21 用户要求「与投资越相关的新闻越放在靠前」，所以把两个键的
+      // 主次**对调**了（原来是「分类优先级 → 相关性」）。
+      // 规则本体在 `@/lib/investment-score` 的 `compareByInvestmentRelevance`，
+      // 挪过去是为了让**排序规则本身**能被回归脚本断言，而不是只能在路由里读代码。
+      scoredArticles.sort(compareByInvestmentRelevance);
 
       // 选稿分两步：**先按内容无关性筛掉，再做「同一件事」去重，最后截取上限**。
       //

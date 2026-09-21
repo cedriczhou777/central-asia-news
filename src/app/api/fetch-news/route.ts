@@ -4,6 +4,7 @@ import { insertArticles, getRecentCanonicalUrls, getRecentOriginalTitleKeys } fr
 import { fetchTelegramRSS } from '@/lib/scraper';
 import { isChineseText, beijingDate, canonicalUrl, originalTitleKey } from '@/lib/utils';
 import { dedupeStories } from '@/lib/same-event';
+import { scoreInvestmentRelevance, isInvestmentTopic } from '@/lib/investment-score';
 import { countryList } from '@/lib/data/countries';
 import { translateNews, resetTranslationStats, getTranslationStats, fallbackCategory } from '@/lib/translate';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
@@ -143,34 +144,17 @@ const RSS_SOURCES: RSSSource[] = [
   // 判断一个源是不是真 RSS，看 Content-Type 比看能不能 curl 到 200 靠谱得多。
 ];
 
-// 投资相关关键词（用于精选新闻）
-const INVESTMENT_KEYWORDS = [
-  // 投资主题
-  'invest', 'investment', 'investor', 'foreign investment', 'direct investment',
-  // 能源
-  'oil', 'gas', 'energy', 'petroleum', 'fuel', 'pipeline', 'renewable', 'power', 'electricity',
-  // 化工
-  'chemical', 'petrochemical', 'fertilizer', 'plastic', 'polymer',
-  // 矿产
-  'mining', 'mineral', 'copper', 'gold', 'uranium', 'ore', 'metal', 'resource', 'lithium',
-  // 基建
-  'infrastructure', 'railway', 'road', 'bridge', 'construction', 'transport', 'logistics', 'highway',
-  // 房地产
-  'real estate', 'property', 'housing', 'building', 'development',
-  // 制造业
-  'manufacturing', 'factory', 'industrial', 'production', 'textile', 'automotive',
-  // 政治经济政策
-  'policy', 'reform', 'regulation', 'law', 'legislation', 'decree', 'strategy',
-  'tax', 'legal', 'compliance', 'company law', 'commercial', 'corporate',
-  'economy', 'gdp', 'trade', 'export', 'import', 'business', 'finance', 'bank',
-  'president', 'parliament', 'government', 'minister', 'diplomat', 'bilateral', 'agreement',
-  // 中亚／里海特定
-  // 阿塞拜疆在地理上属南高加索，但在里海能源与「中间走廊」上和中亚是一条线，
-  // 所以关键词里同时带上 south caucasus / caspian。
-  'central asia', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'azerbaijan', 'tajikistan',
-  'south caucasus', 'caspian',
-  'silk road', 'belt and road', ' BRI',
-];
+// 投资相关性关键词与评分统一在 `@/lib/investment-score`。
+//
+// 这里原有**另一份**英文关键词表 + `isInvestmentRelevant` / `scoreInvestmentRelevance`，
+// 与 `wechat/push` 里那份是同名同实现。当时两边都对，因为本文件跑在翻译**之前**
+// （文本是英文/俄文原文），英文表在这里是有效的。
+// 但 2026-09-21 发现 push 端那份在**中文**文本上完全失效 —— 同一个函数名落在
+// 语言不同的两个阶段，是个结构隐患。所以合并到一份**跨语言**实现里，
+// 两端共用，不再是「各写一套、碰巧一边对」。
+//
+// 迁移时行为不变：本阶段文本是英文，共用表里保留了全部原有拉丁词，
+// 中文词在这里基本不会命中（源稿不是中文），属于纯增量。
 
 // Telegram 频道的默认值与解析规则见 @/lib/telegram-channels：
 // 格式 `国家:频道[@频道...]`，可用环境变量 TELEGRAM_CHANNELS 整体覆盖。
@@ -301,22 +285,15 @@ function isJunkTitle(title: string): boolean {
   return JUNK_TITLE_KEYWORDS.some((kw) => t.includes(kw));
 }
 
-// 检查新闻是否与投资主题相关
+// 检查新闻是否与投资主题相关（**入库闸门**，宽松兜底）。
+//
+// ⚠️ 用的是 `isInvestmentTopic` 而不是 `scoreInvestmentRelevance(...) > 0`：
+// 后者用的是为**排序**精简过的加权词表（刻意去掉了 president/government/development
+// 这类无区分力的词）。拿它当闸门 = 悄悄收紧入库条件，
+// 而本项目历史上因判据过严出现过「每国不足 15 篇」。
+// 闸门词表把 2026-09-21 之前的旧表**逐字保留**、只增不减，语义与改动前完全一致。
 function isInvestmentRelevant(title: string, description: string): boolean {
-  const text = `${title} ${description}`.toLowerCase();
-  return INVESTMENT_KEYWORDS.some(kw => text.includes(kw));
-}
-
-// 对新闻进行投资相关性评分
-function scoreInvestmentRelevance(title: string, description: string): number {
-  const text = `${title} ${description}`.toLowerCase();
-  let score = 0;
-  for (const kw of INVESTMENT_KEYWORDS) {
-    if (text.includes(kw)) {
-      score += kw.length; // 长关键词权重更高
-    }
-  }
-  return score;
+  return isInvestmentTopic(`${title} ${description}`);
 }
 
 function extractTags(title: string, description: string): string[] {
@@ -554,7 +531,7 @@ async function processFetchNews(
         
         // 检查是否与投资主题相关
         if (isInvestmentRelevant(title, description)) {
-          const relevanceScore = scoreInvestmentRelevance(title, description);
+          const relevanceScore = scoreInvestmentRelevance(`${title} ${description}`);
           addCandidate(source.country, { item, source, relevanceScore });
         }
       }
@@ -621,7 +598,7 @@ async function processFetchNews(
               contentSnippet: article.summary || '',
             },
             source: { name: `Telegram/${channel}`, url: article.url, country, language: 'en' },
-            relevanceScore: scoreInvestmentRelevance(title, description),
+            relevanceScore: scoreInvestmentRelevance(`${title} ${description}`),
           });
         }
         console.log(
