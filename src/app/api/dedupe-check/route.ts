@@ -214,10 +214,29 @@ export async function GET(request: NextRequest) {
   // 可选：真的调一次模型，验证 L2 通道通不通（每国 1 次调用）
   if (withLlm) {
     const { dedupeStories } = await import('@/lib/same-event');
-    const probe: Array<{ country: string; ran: boolean; ok: boolean; groups: number; error?: string }> = [];
+    const probe: Array<{
+      country: string;
+      ran: boolean;
+      ok: boolean;
+      groups: number;
+      error?: string;
+      /** 每组的具体标题 —— 只报数量的话，误合并会静默藏起来，看不出来 */
+      groupTitles?: Array<{ kept: string; dropped: string[] }>;
+    }> = [];
     for (const [cc, list] of byCountry) {
-      const { llm } = await dedupeStories(list.slice(0, 60) as never[]);
-      probe.push({ country: cc, ran: llm.ran, ok: llm.ok, groups: llm.groups.length, error: llm.error });
+      const slice = list.slice(0, 60);
+      const { llm } = await dedupeStories(slice as never[]);
+      probe.push({
+        country: cc,
+        ran: llm.ran,
+        ok: llm.ok,
+        groups: llm.groups.length,
+        error: llm.error,
+        groupTitles: llm.groups.map((g) => ({
+          kept: (slice[g[0]] as Row).title,
+          dropped: g.slice(1).map((i) => (slice[i] as Row).title),
+        })),
+      });
     }
     result.llmJudge = probe;
   }
