@@ -70,7 +70,7 @@ export interface DedupResult<T> {
   kept: T[];
   drops: DedupDrop<T>[];
   /** L2 的执行情况。`ran=false` 表示本次没跑模型（没配 Key 或条数不足）。 */
-  llm: { ran: boolean; ok: boolean; groups: number[][]; error?: string };
+  llm: { ran: boolean; ok: boolean; groups: number[][]; error?: string; raw?: string[] };
 }
 
 // ----- 字段读取（兼容 snake_case / camelCase 两种来源）-----
@@ -187,6 +187,20 @@ export function dedupeStoriesDeterministic<T extends StoryLike>(items: T[]): {
 /** 单次交给模型的条目上限。超了就分块，块间不重叠。 */
 const LLM_BLOCK_SIZE = 60;
 
+/**
+ * 一个分组里最多允许几条。
+ *
+ * 超过就**整组丢弃**，不是截断。这条护栏是 2026-09-21 实测加上的：
+ * 首次上线后体检发现模型把**18 条毫不相关**的新闻（蒙古清洁行动、亚行羊绒贷款、
+ * 学校拆除、柔道选举…）并成了一组 —— 那不是「判得不够准」，是坏答案，
+ * 而且它会一次性删掉 17 条不同新闻。
+ *
+ * 为什么 4 是安全的：走到 L2 之前，`dedupeStories` 已经跑过 L0/L1 的链接与原文指纹去重，
+ * 所以**真正的重复簇早就不在 L2 的输入里了**；L2 只需要处理「不同链接、表述不同」的两三条。
+ * 线上实测的真实重复簇最大是 4 条。真出现更大的簇，说明模型在乱合并。
+ */
+const MAX_GROUP_SIZE = 4;
+
 /** 标题/摘要截断长度，防止个别超长正文把单次请求撑爆。 */
 const TITLE_MAX = 80;
 const SUMMARY_MAX = 60;
@@ -219,6 +233,21 @@ function buildJudgePrompt(rows: Array<{ i: number; title: string; summary: strin
     '# | 分类 | 标题 | 摘要',
     ...lines,
   ].join('\n');
+}
+
+/**
+ * 「大组整组丢弃」护栏的纯函数形式。
+ *
+ * 单独抽出来 + 导出，是为了能在 `scripts/test-dedup.ts` 里钉一条回归 ——
+ * 2026-09-21 首次上线时模型把 18 条无关新闻并成一组，
+ * 这类退化必须有一条不依赖模型的断言守着。
+ */
+export function filterOversizedGroups(
+  groups: number[][],
+  max: number = MAX_GROUP_SIZE,
+): { kept: number[][]; rejected: number } {
+  const kept = groups.filter((g) => g.length <= max);
+  return { kept, rejected: groups.length - kept.length };
 }
 
 /**
@@ -257,6 +286,22 @@ export function parseEventGroups(text: string, total: number): number[][] | null
 }
 
 /**
+ * 判组时给模型的额外请求体。
+ *
+ * **是否打开 thinking 由调用方决定，不要在这里写死**：翻译链路刻意关掉 thinking
+ * （GLM-4.7 默认开、会拖慢到超时），但「判组」是推理型任务，关掉 thinking
+ * 可能正是判得离谱的原因之一。2026-09-21 实测中这一点是用
+ * `GET /api/dedupe-check?judge=think|nothink` 做 A/B 定的，
+ * 结论写在本文件头的取舍说明里。
+ */
+export interface JudgeOptions {
+  /** 覆盖通道默认的 extraBody（例如 `{ thinking: { type: 'enabled' } }`）。 */
+  extraBody?: Record<string, unknown>;
+  /** 每次调用都带上原始返回文本（只给体检接口用，用于看清模型到底吐了什么）。 */
+  collectRaw?: boolean;
+}
+
+/**
  * 让模型判「哪些条目在讲同一件事」。
  *
  * 返回**下标分组**（相对传入数组）。任何一步失败都返回 `{ groups: [], error }`，
@@ -264,8 +309,13 @@ export function parseEventGroups(text: string, total: number): number[][] | null
  */
 export async function judgeSameEventGroups<
   T extends StoryLike & { category?: string | null; summary?: string | null },
->(items: T[]): Promise<{ groups: number[][]; error?: string }> {
+>(
+  items: T[],
+  options: JudgeOptions = {},
+): Promise<{ groups: number[][]; error?: string; raw?: string[] }> {
   const groups: number[][] = [];
+  const raw: string[] = [];
+  let rejectedBySize = 0;
 
   for (let base = 0; base < items.length; base += LLM_BLOCK_SIZE) {
     const block = items.slice(base, base + LLM_BLOCK_SIZE);
@@ -278,7 +328,11 @@ export async function judgeSameEventGroups<
       category: a.category || '-',
     }));
 
-    const res = await askLlmJson(buildJudgePrompt(rows), { timeoutMs: 45000 });
+    const res = await askLlmJson(buildJudgePrompt(rows), {
+      timeoutMs: 45000,
+      ...(options.extraBody ? { extraBody: options.extraBody } : {}),
+    });
+    if (options.collectRaw) raw.push(res.ok ? res.text : `调用失败：${'error' in res ? res.error : '未知'}`);
     // 用 `in` 而不是靠 `!res.ok` 的可辨识联合收窄：这里跨模块取值，
     // 收窄在不同 tsconfig（strict / 非 strict）下表现不一致，
     // 而这条路径**必须**在任何配置下都能编译通过（它是推送链路上的关键分支）。
@@ -289,24 +343,53 @@ export async function judgeSameEventGroups<
     if (!parsed) {
       return { groups: [], error: '模型返回不是合法 JSON（已按「不合并」处理）' };
     }
-    for (const g of parsed) {
-      // 还原成相对整体数组的下标
+    const { kept, rejected } = filterOversizedGroups(parsed);
+    if (rejected > 0) {
+      // 整组丢弃（见 MAX_GROUP_SIZE 的说明）。这里必须打日志：
+      // 静默丢弃的话，「模型退化成乱合并」这件事就看不出来了。
+      rejectedBySize += rejected;
+      const oversize = parsed.filter((g) => g.length > MAX_GROUP_SIZE);
+      console.warn(
+        `[same-event] ${rejected} 个分组超过上限 ${MAX_GROUP_SIZE} 条，整组不采信。示例：${oversize[0]
+          .slice(0, 6)
+          .map((i) => rows[i]?.title)
+          .join(' | ')} …`,
+      );
+    }
+    for (const g of kept) {
       groups.push(g.map((i) => i + base));
     }
   }
 
-  return { groups };
+  const result: { groups: number[][]; error?: string; raw?: string[] } = { groups };
+  if (options.collectRaw) result.raw = raw;
+  if (rejectedBySize > 0) {
+    result.error = `有 ${rejectedBySize} 个分组因超过 ${MAX_GROUP_SIZE} 条被整组丢弃（模型可能在乱合并）`;
+  }
+  return result;
 }
 
 // ----- 对外的统一入口 -----
 
-export interface DedupeOptions {
+export interface DedupOptions {
   /**
-   * 是否允许调用模型做 L2 判定。默认 true。
-   * 传 false 时只跑 L0/L1（例如离线回归脚本、或调用方已知自己处在
-   * 不能接受额外延迟的路径上）。
+   * 是否允许调用模型做 L2 判定。**默认取环境变量 `SAME_EVENT_JUDGE`**：
+   * 只有显式设成 `on` / `1` / `true` 才启用，其余（含未设置）一律关闭。
+   *
+   * 为什么默认**关**：2026-09-21 首次上线实测，L2 在关闭 thinking 的免费通道上
+   * 会把 18 条毫不相关的新闻并成一组 —— 采信它就等于一次性删掉 17 条不同新闻。
+   * 「误合并」是**丢信息且不可逆**的，所以这条链路的默认值必须是「不合并」，
+   * 等有把握了再显式打开。判断依据在 `GET /api/dedupe-check?llm=1&judge=think|nothink&debug=1`。
    */
   useLlm?: boolean;
+  /** 透传给判组调用的选项（thinking 开关、原始返回收集）。 */
+  judge?: JudgeOptions;
+}
+
+/** `SAME_EVENT_JUDGE` 是否把 L2 打开。默认关，见 `DedupOptions.useLlm` 的说明。 */
+export function isLlmJudgeEnabled(): boolean {
+  const v = (process.env.SAME_EVENT_JUDGE || '').trim().toLowerCase();
+  return v === 'on' || v === '1' || v === 'true';
 }
 
 /**
@@ -318,9 +401,9 @@ export interface DedupeOptions {
  */
 export async function dedupeStories<T extends StoryLike & { category?: string | null }>(
   items: T[],
-  options: DedupeOptions = {},
+  options: DedupOptions = {},
 ): Promise<DedupResult<T>> {
-  const { useLlm = true } = options;
+  const { useLlm = isLlmJudgeEnabled(), judge } = options;
 
   const { kept: keptAfterIdentity, drops: identityDrops } = dedupeStoriesDeterministic(items);
   const drops: DedupDrop<T>[] = [...identityDrops];
@@ -331,10 +414,14 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   }
 
   llm.ran = true;
-  const judged = await judgeSameEventGroups(keptAfterIdentity);
+  const judged = await judgeSameEventGroups(keptAfterIdentity, judge);
+  if (judge?.collectRaw && judged.raw) llm.raw = judged.raw;
   if (judged.error) {
     llm.error = judged.error;
-    console.error(`[same-event] 模型判组未生效，本轮降级为只做链接/原文去重：${judged.error}`);
+    console.error(`[same-event] 模型判组未完全生效：${judged.error}`);
+  }
+  if (judged.groups.length === 0) {
+    // 一组都没有（含调用失败）：确定性去重的结果照常返回
     return { kept: keptAfterIdentity, drops, llm };
   }
 

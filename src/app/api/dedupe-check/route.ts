@@ -212,8 +212,24 @@ export async function GET(request: NextRequest) {
   };
 
   // 可选：真的调一次模型，验证 L2 通道通不通（每国 1 次调用）
+  //
+  // `judge=think|nothink` 用来 A/B「判组要不要开 thinking」：
+  // 翻译链路刻意关掉 thinking（GLM-4.7 默认开会拖慢到超时），但判组是推理型任务，
+  // 2026-09-21 实测首次上线时模型把 18 条无关新闻并成一组，怀疑与关掉 thinking 有关。
+  // 这个参数让两种配置**同一次部署里都能试**，不用每试一次等一轮构建。
+  // `debug=1` 会把模型的原始返回文本一并带回来 —— 判组出问题时，只有它说得清「模型到底吐了什么」。
   if (withLlm) {
     const { dedupeStories } = await import('@/lib/same-event');
+    const judgeMode = searchParams.get('judge') || 'nothink';
+    const extraBody =
+      judgeMode === 'think'
+        ? ({ thinking: { type: 'enabled' } } as Record<string, unknown>)
+        : judgeMode === 'nothink'
+          ? ({ thinking: { type: 'disabled' } } as Record<string, unknown>)
+          : undefined; // auto：沿用通道默认值
+    const debug = searchParams.get('debug') === '1';
+    const perCountryLimit = Math.min(Number(searchParams.get('limit')) || 60, 200);
+
     const probe: Array<{
       country: string;
       ran: boolean;
@@ -222,10 +238,17 @@ export async function GET(request: NextRequest) {
       error?: string;
       /** 每组的具体标题 —— 只报数量的话，误合并会静默藏起来，看不出来 */
       groupTitles?: Array<{ kept: string; dropped: string[] }>;
+      /** debug=1 时的模型原始返回（截断），判组离谱时看这个 */
+      raw?: string[];
     }> = [];
+
     for (const [cc, list] of byCountry) {
-      const slice = list.slice(0, 60);
-      const { llm } = await dedupeStories(slice as never[]);
+      const slice = list.slice(0, perCountryLimit);
+      const { llm } = await dedupeStories(slice as never[], {
+        // 显式打开：体检的目的就是验证 L2，不能受生产默认值（关闭）影响
+        useLlm: true,
+        judge: { extraBody, collectRaw: debug },
+      });
       probe.push({
         country: cc,
         ran: llm.ran,
@@ -236,9 +259,11 @@ export async function GET(request: NextRequest) {
           kept: (slice[g[0]] as Row).title,
           dropped: g.slice(1).map((i) => (slice[i] as Row).title),
         })),
+        ...(debug && llm.raw ? { raw: llm.raw.map((t) => t.slice(0, 1500)) } : {}),
       });
     }
     result.llmJudge = probe;
+    result.llmJudgeParams = { judgeMode, perCountryLimit, debug };
   }
 
   return NextResponse.json(result);

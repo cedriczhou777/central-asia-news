@@ -21,6 +21,7 @@ import {
 } from '../src/lib/utils';
 import {
   dedupeStoriesDeterministic,
+  filterOversizedGroups,
   identityKeys,
   parseEventGroups,
   type StoryLike,
@@ -318,6 +319,23 @@ ok('单元素分组被丢弃', JSON.stringify(parseEventGroups('{"groups": [[0],
 ok('重复下标去重', JSON.stringify(parseEventGroups('{"groups": [[1,1,2]]}', 3)) === '[[1,2]]');
 ok('不是 JSON → null（调用方按「不合并」处理）', parseEventGroups('我觉得没有重复', 3) === null);
 ok('缺少 groups 字段 → null', parseEventGroups('{"result": 1}', 3) === null);
+
+// ----- 大组护栏：模型乱合并的兜底（2026-09-21 首次上线实测踩到）-----
+
+section('filterOversizedGroups · 模型乱合并的兜底');
+
+{
+  // 真实踩到的形状：kg 一天 20 条里 18 条被判成一组（蒙古清洁行动、亚行羊绒贷款、
+  // 学校拆除、柔道选举…），如果采信就是一次性删掉 17 条不同新闻。
+  const runaway = [Array.from({ length: 18 }, (_, i) => i)];
+  const g1 = filterOversizedGroups(runaway);
+  ok('18 条的大组被整组丢弃', g1.kept.length === 0 && g1.rejected === 1, JSON.stringify(g1));
+
+  // 线上真实重复簇最大 4 条 → 4 条必须放行，5 条必须丢
+  const boundary = [[[0, 1]], [[0, 1, 2, 3]], [[0, 1, 2, 3, 4]]];
+  const g2 = filterOversizedGroups(boundary.flat());
+  ok('2 条与 4 条的组保留', g2.kept.length === 2 && g2.rejected === 1, JSON.stringify(g2));
+}
 
 // ============================================================
 // 五、可选：真实数据体检

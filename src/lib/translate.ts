@@ -467,7 +467,7 @@ const RETRY_BASE_DELAY_MS = 800;
  */
 export async function askLlmJson(
   prompt: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; extraBody?: Record<string, unknown> } = {},
 ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   const { timeoutMs = CALL_TIMEOUT_MS } = options;
   const failures: string[] = [];
@@ -480,6 +480,9 @@ export async function askLlmJson(
     const call = await callChatProvider(provider, prompt, {
       timeoutMs,
       recordError: false,
+      // 传了就是覆盖该通道的默认 extraBody（例如给「判组」这类推理任务打开 thinking）。
+      // 不传则沿用通道默认值（翻译链路关掉 thinking 的那个设置）。
+      ...(options.extraBody ? { extraOverride: options.extraBody } : {}),
       onError: (err) => failures.push(`${provider.name}：${err}`),
     });
     if (call.text) return { ok: true, text: call.text };
