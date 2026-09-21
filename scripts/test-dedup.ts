@@ -27,6 +27,7 @@ import {
   filterOversizedGroups,
   hasOppositePolarity,
   identityKeys,
+  JUDGE_TEMPERATURE,
   parseEventGroups,
   parsePairVerdict,
   type StoryLike,
@@ -490,6 +491,19 @@ async function modeChecks(): Promise<void> {
   ok('默认形态是 pair', llm.mode === 'pair', String(llm.mode));
   const g = await dedupeStories([{ title: '甲' }, { title: '乙' }], { useLlm: false, judge: { mode: 'group' } });
   ok('显式指定可为 group（仅供对照）', g.llm.mode === 'group', String(g.llm.mode));
+
+  // L2 判定的采样温度必须是 0（贪心）。
+  //
+  // 这条断言没有别的用途，就是**防止有人把它改回去** —— 它的值不出现在任何
+  // 输出里，改错了不会报错，只会让「同一批候选对两次跑出不同结论」：
+  // 2026-09-21 实测同一份输入，两次分别判出 4 对 / 10 对是同一件事。
+  // 而下游是删除动作，不稳定本身就足以让这条链路不可用。
+  // `translate.ts` 的默认温度 0.3 是给翻译留用词变化用的，判定不能沿用它。
+  ok(
+    'L2 判定用贪心解码（temperature = 0），不吃翻译的 0.3',
+    JUDGE_TEMPERATURE === 0,
+    String(JUDGE_TEMPERATURE),
+  );
 }
 
 // ============================================================

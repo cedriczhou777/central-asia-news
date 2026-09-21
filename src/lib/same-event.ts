@@ -537,16 +537,36 @@ export type AskFn = (
 ) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
 
 /**
+ * L2 判定的采样温度，**必须是 0**。
+ *
+ * 这是一个实测出来的结论，不是「分类任务都该用 0」的教科书推理：
+ * 2026-09-21 拿同一份 15 个候选对、同一个提示词，连着跑两遍线上体检 ——
+ * 第一遍模型判 4 对是同一件事，第二遍判 10 对（某国从 2 对涨到 7 对）。
+ * 中间没改任何东西。而 `translate.ts` 的默认温度是 0.3（那是给**翻译**
+ * 留用词变化用的），判定类调用沿用它就等于给结论加了随机性。
+ *
+ * 判定链路的下游是**删除动作** —— 判错一次就少一条新闻，且不可逆。
+ * 所以这里要的不是「平均判得准」，而是「同样的输入给出同样的答案」：
+ * 不稳定本身就足以让这条链路不可用（今天合并、明天不合并，用户看到的是
+ * 同一批稿子在两次推送之间忽多忽少）。
+ *
+ * 同一条理由也适用于末尾的 `PairPrompt` 提示词约束和「默认不合并」的取向。
+ */
+export const JUDGE_TEMPERATURE = 0;
+
+/**
  * 取本次要用的模型调用出口。
  *
- * 真实出口把 `timeoutMs` / `extraBody` 在这里就绑好，调用点只传提示词 ——
- * 这样注入版本和真实版本在调用点看来完全一样，不会出现「测试走的路径和生产不同」。
+ * 真实出口把 `timeoutMs` / `temperature` / `extraBody` 在这里就绑好，
+ * 调用点只传提示词 —— 这样注入版本和真实版本在调用点看来完全一样，
+ * 不会出现「测试走的路径和生产不同」。
  */
 function resolveAsk(options: JudgeOptions): AskFn {
   if (options.ask) return options.ask;
   return (prompt) =>
     askLlmJson(prompt, {
       timeoutMs: 45000,
+      temperature: JUDGE_TEMPERATURE,
       ...(options.extraBody ? { extraBody: options.extraBody } : {}),
     });
 }

@@ -353,6 +353,20 @@ interface ChatCallResult {
 /** 单次模型调用的超时上限。 */
 const CALL_TIMEOUT_MS = 60000;
 
+/**
+ * 默认采样温度。
+ *
+ * 为什么是 0.3 而不是 0：**翻译**是生成任务，完全贪心会让同一批原文
+ * 反复产出逐字相同的译文，读起来像模板；0.3 保留一点用词变化。
+ *
+ * ⚠️ 但这个默认值**不适用于分类/判定类任务**。判「是不是同一件事」要求
+ * 同样的输入给出同样的答案，用 0.3 会直接导致结论不稳定 ——
+ * 2026-09-21 实测：同一份 15 个候选对跑两遍，模型第一遍判 4 对是同一件事、
+ * 第二遍判 10 对（某国从 2 对涨到 7 对）。判定本身不稳定，这条链路就没法上线。
+ * 所以判定类调用必须显式传 `temperature: 0`（见 `same-event.ts` 的 `JUDGE_TEMPERATURE`）。
+ */
+export const DEFAULT_TEMPERATURE = 0.3;
+
 /** `callChatProvider` 的可选开关（翻译主链路只用默认值，体检接口会用到全部三个）。 */
 interface ChatCallOptions {
   /** 把原始错误交给调用方（体检接口用它把报错原样返回，不依赖全局统计） */
@@ -365,6 +379,11 @@ interface ChatCallOptions {
   extraOverride?: Record<string, unknown>;
   /** 覆盖超时。体检要连打两次，必须比主链路短，否则两次加起来会超过网关 65 秒上限。 */
   timeoutMs?: number;
+  /**
+   * 覆盖采样温度，默认 {@link DEFAULT_TEMPERATURE}。
+   * **判定类任务必须传 0**，理由见 `DEFAULT_TEMPERATURE` 的说明。
+   */
+  temperature?: number;
   /**
    * 是否把失败计入 `translationStats.errors`。默认 true。
    *
@@ -386,7 +405,13 @@ async function callChatProvider(
   prompt: string,
   options: ChatCallOptions = {},
 ): Promise<ChatCallResult> {
-  const { onError, extraOverride, timeoutMs = CALL_TIMEOUT_MS, recordError = true } = options;
+  const {
+    onError,
+    extraOverride,
+    timeoutMs = CALL_TIMEOUT_MS,
+    temperature = DEFAULT_TEMPERATURE,
+    recordError = true,
+  } = options;
   const apiKey = process.env[provider.keyEnv];
   if (!apiKey) return { text: null, retryable: false };
 
@@ -410,9 +435,11 @@ async function callChatProvider(
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
+        temperature,
         // provider 专属参数（如智谱的 thinking 开关）在这里展开，
         // 见 ChatProvider.extraBody 的说明 —— 不能全局写死，否则会串到别的厂商。
+        // ⚠️ 展开在 `temperature` **之后**，所以 extraBody 里写了 temperature 会覆盖它 ——
+        // 这个顺序是故意的（判定类调用想强制贪心时，可以通过 extraBody 兜底）。
         ...(extraOverride ?? provider.extraBody ?? {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
@@ -467,7 +494,15 @@ const RETRY_BASE_DELAY_MS = 800;
  */
 export async function askLlmJson(
   prompt: string,
-  options: { timeoutMs?: number; extraBody?: Record<string, unknown> } = {},
+  options: {
+    timeoutMs?: number;
+    extraBody?: Record<string, unknown>;
+    /**
+     * 采样温度。**判定类任务必须传 0** —— 用默认的 0.3 会让同一份输入
+     * 两次得到不同答案（2026-09-21 实测：同一批候选对，两次分别判出 4 对 / 10 对）。
+     */
+    temperature?: number;
+  } = {},
 ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   const { timeoutMs = CALL_TIMEOUT_MS } = options;
   const failures: string[] = [];
@@ -480,6 +515,7 @@ export async function askLlmJson(
     const call = await callChatProvider(provider, prompt, {
       timeoutMs,
       recordError: false,
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       // 传了就是覆盖该通道的默认 extraBody（例如给「判组」这类推理任务打开 thinking）。
       // 不传则沿用通道默认值（翻译链路关掉 thinking 的那个设置）。
       ...(options.extraBody ? { extraOverride: options.extraBody } : {}),
