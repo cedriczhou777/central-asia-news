@@ -15,7 +15,8 @@
     "scheduler": "node scripts/scheduler.js",
     "test:translate": "tsx scripts/test-translate.ts",
     "test:channels": "tsx scripts/test-telegram-channels.ts",
-    "verify:local": "pnpm ts-check && pnpm test:channels"
+    "verify:local": "pnpm ts-check && pnpm test:channels && pnpm test:dedup",
+    "test:dedup": "tsx scripts/test-dedup.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

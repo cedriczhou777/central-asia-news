@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Parser from 'rss-parser';
-import { insertArticles, getExistingSourceUrls } from '@/lib/db-articles';
+import { insertArticles, getRecentCanonicalUrls, getRecentOriginalTitleKeys } from '@/lib/db-articles';
 import { fetchTelegramRSS } from '@/lib/scraper';
-import { isChineseText, isDuplicateContent, beijingDate } from '@/lib/utils';
+import { isChineseText, beijingDate, canonicalUrl, originalTitleKey } from '@/lib/utils';
+import { dedupeStories } from '@/lib/same-event';
 import { countryList } from '@/lib/data/countries';
 import { translateNews, resetTranslationStats, getTranslationStats, fallbackCategory } from '@/lib/translate';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
@@ -37,6 +38,25 @@ interface FetchSummary {
   afterUrlDedup: number;
   /** 内容级去重后剩余 */
   afterContentDedup: number;
+  /**
+   * 去重分三段记账。**别再合成一个数字**：三段失败的排查方向完全不同
+   * （批内重复 = 抓取重复拉取；跨轮重复 = 库内判重失效；同事件 = 理解机制漏判），
+   * 合成之后就再也回答不了「今天为什么少了几篇」。
+   */
+  dedup: {
+    /** 批内链接/原文重复（同一轮里同一条被抓到两次） */
+    intraBatch: number;
+    /** 与库内近 3 天重复（跨轮重复，线上重复行的主要来源） */
+    againstDb: number;
+    /** 「同一件事」判组剔除（表述不同、事件相同） */
+    sameEvent: number;
+    /** 库内去重查询失败 → 本轮放弃入库时的原因；正常为 null */
+    dbCheckError: string | null;
+    /** 判组用的模型是否真的跑过。没跑说明本次只有链接/原文去重生效 */
+    llmJudge: { ran: boolean; ok: boolean; groups: number[][]; error?: string };
+    /** 逐条原因：丢了哪条、留下了哪条 */
+    drops: Array<{ country: string; kept: string; dropped: string; reason: string }>;
+  };
   /** 实际写入数据库的条数 */
   saved: number;
   /** 入库失败的原因。saved=0 时先看这个 —— 空数组才是「确实没有可入库内容」。 */
@@ -782,38 +802,114 @@ async function processFetchNews(
   }
 
   // 第三步：去重并入库
+  //
+  // 三道闸，顺序不能换（都由 `lib/same-event.ts` 提供同一套判据，
+  // 保证「入库时判重」与「选稿时判重」不会各自为政）：
+  //   闸 1 批内身份去重    —— 纯内存，不可能失败
+  //   闸 2 库内身份去重    —— 查询失败则**终止本轮入库**（见下方 fail-closed 说明）
+  //   闸 3 「同一件事」理解 —— 模型判组，失败自动降级为只做闸 1、2
+  //
+  // 为什么要拆这么细：用户 2026-09-21 在草稿预览里截到一对「阿斯塔纳跨阿雷斯河新桥」
+  // 的重复新闻，排查发现线上 200 篇里 4%（更早快照 22%）是 source_url 逐字相同的重复行。
+  // 根因有两个：旧版把整个去重查询失败**静默吞成空集合**（于是全部当新文章入库），
+  // 以及链接比较是逐字比较（`?from=rss`、末尾斜杠这类变形直接漏）。
+
+  // —— 闸 1：批内身份去重（链接归一化 + 原文标题指纹）——
+  const withinBatch: typeof articlesToInsert = [];
+  let intraBatchDropped = 0;
+  {
+    const seenUrl = new Set<string>();
+    const seenOrig = new Set<string>();
+    for (const a of articlesToInsert) {
+      const cu = canonicalUrl(a.source_url);
+      const ok = originalTitleKey(a.original_title);
+      if ((cu && seenUrl.has(cu)) || (ok && seenOrig.has(ok))) {
+        intraBatchDropped++;
+        continue;
+      }
+      if (cu) seenUrl.add(cu);
+      if (ok) seenOrig.add(ok);
+      withinBatch.push(a);
+    }
+  }
+  if (intraBatchDropped > 0) {
+    console.log(`批内去重剔除 ${intraBatchDropped} 篇（同一链接或同一篇原文）`);
+  }
+
+  // —— 闸 2：库内身份去重 ——
+  //
+  // 时间窗取 3 天，覆盖「同一条新闻今天和明天各被抓到一次」这个典型重复场景。
+  // 用**窗口查询**（两个时间界）而不是「拿本批几百条链接去反查」：
+  // 后者的 `.in()` 会拼出一条几十 KB 的请求行，越过网关上限后整个查询失败 ——
+  // 这正是线上重复入库的机制。
+  //
+  // **fail-closed**：库内去重查不出来时，本轮**不入库**。
+  // 这条规则是有意的取舍：漏入库一条新闻，下一轮抓取还能补回来（可恢复）；
+  // 而重复入库会直接进草稿推给读者，**不可撤销**。
   let existingUrls = new Set<string>();
-  if (articlesToInsert.length > 0) {
-    const urls = articlesToInsert.map(a => a.source_url).filter(Boolean) as string[];
-    console.log(`准备插入 ${articlesToInsert.length} 篇，去重检查 ${urls.length} 个 URL`);
-    if (urls.length > 0) {
-      try {
-        existingUrls = await getExistingSourceUrls(urls);
-        console.log(`数据库中已存在 ${existingUrls.size} 个 URL`);
-      } catch (dbErr) {
-        console.error('去重查询失败:', dbErr instanceof Error ? dbErr.message : dbErr);
-        existingUrls = new Set();
+  let existingOriginals = new Map<string, number>();
+  let dbCheckError: string | null = null;
+  try {
+    const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    existingUrls = await getRecentCanonicalUrls(since);
+    existingOriginals = await getRecentOriginalTitleKeys(since);
+    console.log(`库内近 3 天已有 ${existingUrls.size} 个链接、${existingOriginals.size} 个原文指纹`);
+  } catch (dbErr) {
+    dbCheckError = dbErr instanceof Error ? dbErr.message : String(dbErr);
+    console.error(`库内去重查询失败，本轮放弃入库（宁可漏采也不重复）：${dbCheckError}`);
+  }
+
+  let urlDropped = 0;
+  const newArticles = dbCheckError
+    ? []
+    : withinBatch.filter((a) => {
+        const cu = canonicalUrl(a.source_url);
+        const ok = originalTitleKey(a.original_title);
+        const dup = (cu && existingUrls.has(cu)) || (ok && existingOriginals.has(ok));
+        if (dup) urlDropped++;
+        return !dup;
+      });
+  console.log(`链接/原文去重后剩余 ${newArticles.length} 篇新文章（剔除 ${urlDropped} 篇）`);
+
+  // —— 闸 3：「同一件事」理解 ——
+  // 按国家分组，逐国判组。**不能跨国家合并**：推送是按国别生成草稿的，
+  // 同一件事出现在两个国家频道里是预期行为，不是重复。
+  const contentDeduped: typeof newArticles = [];
+  const eventDrops: Array<{ country: string; kept: string; dropped: string; reason: string }> = [];
+  const llmJudge: { ran: boolean; ok: boolean; groups: number[][]; error?: string } = {
+    ran: false, ok: false, groups: [],
+  };
+  {
+    const byCountry = new Map<string, typeof newArticles>();
+    for (const a of newArticles) {
+      const key = a.country_code || 'intl';
+      const list = byCountry.get(key);
+      if (list) list.push(a);
+      else byCountry.set(key, [a]);
+    }
+
+    for (const [cc, list] of byCountry) {
+      const { kept, drops, llm } = await dedupeStories(list);
+      contentDeduped.push(...kept);
+      if (llm.ran) {
+        llmJudge.ran = true;
+        llmJudge.ok = llm.ok;
+        llmJudge.error = llmJudge.error || llm.error;
+        llmJudge.groups.push(...llm.groups);
+      }
+      for (const d of drops) {
+        eventDrops.push({ country: cc, kept: d.kept.title, dropped: d.dropped.title, reason: d.reason });
       }
     }
   }
-
-  const newArticles = articlesToInsert.filter(a => !existingUrls.has(a.source_url));
-  console.log(`URL 去重后剩余 ${newArticles.length} 篇新文章`);
-
-  // 内容级去重：本批内同国家文章，若标题+正文语义相似则只保留最先出现的一篇
-  // （放宽时间窗至 2 天后，不同源可能报道同一事件，杜绝重复内容入库/推送）
-  const contentDeduped: typeof newArticles = [];
-  for (const article of newArticles) {
-    const isDup = contentDeduped.some(
-      pre => pre.country_code === article.country_code &&
-        isDuplicateContent(pre.title, pre.content, article.title, article.content)
+  if (eventDrops.length > 0) {
+    console.log(
+      `内容级去重剔除 ${eventDrops.length} 篇重复，剩余 ${contentDeduped.length} 篇｜逐条原因：\n` +
+        eventDrops.map((d) => `  [${d.country}][${d.reason}] 丢「${d.dropped}」← 保留「${d.kept}」`).join('\n'),
     );
-    if (!isDup) {
-      contentDeduped.push(article);
-    }
   }
-  if (contentDeduped.length < newArticles.length) {
-    console.log(`内容级去重剔除 ${newArticles.length - contentDeduped.length} 篇重复内容，剩余 ${contentDeduped.length} 篇`);
+  if (llmJudge.error) {
+    console.warn(`「同一件事」模型判组未生效，本轮只做了链接/原文去重：${llmJudge.error}`);
   }
 
   // skipTranslation（干跑模式）**只统计、不入库**。
@@ -828,6 +924,11 @@ async function processFetchNews(
   let insertErrors: string[] = [];
   if (skipTranslation) {
     console.log(`skipTranslation=true：干跑模式，跳过入库（本可入库 ${contentDeduped.length} 篇）`);
+  } else if (dbCheckError) {
+    // fail-closed 的落点：库内去重没查成，就不入库。
+    // 必须写进 insertErrors —— 否则接口返回的 saved=0 与「本轮确实没有可入库内容」
+    // 长得一模一样，排查只能靠猜（2026-09-20 已经踩过一次这个坑）。
+    insertErrors = [`库内去重查询失败，本轮放弃入库（宁可漏采也不重复入库）：${dbCheckError}`];
   } else if (contentDeduped.length > 0) {
     try {
       const insertResult = await insertArticles(contentDeduped);
@@ -851,8 +952,9 @@ async function processFetchNews(
 
   console.log(
     `新闻抓取完成：日期=${targetDate}｜原始采集 ${totalFetched} 篇 → 投资相关候选 ${articlesToInsert.length} 篇 ` +
-      `→ URL 去重剔除 ${articlesToInsert.length - newArticles.length} 篇 ` +
-      `→ 内容去重剔除 ${newArticles.length - contentDeduped.length} 篇 ` +
+      `→ 批内去重剔除 ${intraBatchDropped} 篇 ` +
+      `→ 链接/原文去重剔除 ${urlDropped} 篇 ` +
+      `→ 同事件去重剔除 ${eventDrops.length} 篇 ` +
       `→ 实际入库 ${savedCount} 篇`
   );
   console.log(`各源采集量：${results.map((r) => `${r.source}=${r.fetched}`).join(' | ')}`);
@@ -874,6 +976,22 @@ async function processFetchNews(
     date: targetDate,
     totalFetched,
     candidates: articlesToInsert.length,
+    // 去重分三段记账，别再合成一个数字：三段失败原因完全不同，
+    // 合成后「今天为什么少了几篇」就查不出来了。
+    dedup: {
+      /** 批内链接/原文重复（同一轮里同一条被抓到两次） */
+      intraBatch: intraBatchDropped,
+      /** 与库内近 3 天重复（跨轮重复，线上重复行的主要来源） */
+      againstDb: urlDropped,
+      /** 「同一件事」判组剔除（表述不同、事件相同） */
+      sameEvent: eventDrops.length,
+      /** 库内去重查询失败 → 本轮放弃入库时的原因，正常为 null */
+      dbCheckError,
+      /** 判组用的模型是否真的跑过；没跑说明只是链接/原文去重生效 */
+      llmJudge,
+      /** 逐条原因，便于直接看出「丢了哪条、留下了哪条」 */
+      drops: eventDrops.slice(0, 50),
+    },
     afterUrlDedup: newArticles.length,
     afterContentDedup: contentDeduped.length,
     saved: savedCount,

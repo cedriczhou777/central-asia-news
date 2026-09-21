@@ -180,7 +180,13 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 
 - **日期窗口**（`fetch-news/route.ts`）：`targetDate` 默认回溯最多 2 天（当天及前 1 天），放宽超时，不再严格限制当日。
 - **智能国家判定**：RSS 源自身按国别归属 `source.country`；正文缺失国名关键词时不再硬筛，仅过滤明确指向他国的内容（`isCountryRelevant` 放宽为"无明确他国指向即按源归属放行"）。
-- **内容级去重**：`src/lib/utils.ts` 的 `hasDuplicateContent` 对同国候选两两做标题规范化+正文相似度比对，防同一主题重复入库；推送端精选时同样对已选做两两去重（`isDuplicateContent`），确保每次推送内容不重复。
+- **内容级去重**：统一入口是 `src/lib/same-event.ts` 的 `dedupeStories()`，**入库端与推送端共用同一个**（不要各写一套）。三层判据：
+  1. `same_url` —— `utils.canonicalUrl()` 归一化后的链接相同（去掉 `?from=rss` / `utm_*` / 末尾斜杠 / `www.`）。**这是主力判据。**
+  2. `same_original` —— 原文标题指纹相同（`utils.originalTitleKey()`），用于「同一篇原文挂在两个不同链接下」。
+  3. `llm_same_event` —— 模型判组「表述不同、实际是同一件事」，每国 1 次调用，走 `translate.ts` 的免费优先降级链；不可用时自动降级为只做 1、2。
+  另有 `same_text` 兜底（标题+正文**几乎逐字相同**才成立，阈值 0.9/0.8）。
+  ⚠️ 历史上的 `utils.isDuplicateContent`（标题 0.8 / 平均 0.6）已**不再用于去重**：实测在 200 篇与 1000 篇两份线上快照上零触发，却会误合并「金价下跌」与「金价上涨」这类方向相反的新闻。函数保留在 `utils.ts` 里但无调用点，别再把它接回去。
+  回归：`pnpm test:dedup`（固定双向语料）、`pnpm test:dedup <线上数据.json>`（真实数据体检）、线上 `GET /api/dedupe-check`（只读报告）、`POST /api/dedupe-check {apply:true}`（清理存量重复行，默认 dry-run）。
 - **每国篇数**：抓取端下限默认 `minPerCountry=10`（保证有内容可推）；推送端**不固定篇数**，"今日精选"按实际可用量推送（上限宽松 30 篇），不硬凑。
 
 ## 信息源与社交网络（重要）

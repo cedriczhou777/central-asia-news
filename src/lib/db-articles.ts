@@ -1,4 +1,5 @@
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { canonicalUrl, originalTitleKey } from './utils';
 
 export interface ArticleRow {
   id: number;
@@ -66,15 +67,158 @@ export async function getArticleById(id: number): Promise<ArticleRow | null> {
   return data as ArticleRow | null;
 }
 
-export async function getExistingSourceUrls(urls: string[]): Promise<Set<string>> {
-  if (urls.length === 0) return new Set();
+/**
+ * 一次 `.in()` 查询里最多放多少个链接。
+ *
+ * 40 不是随手写的：PostgREST 的 `.in()` 是把值拼进 URL query 的，一条新闻链接
+ * 长度普遍 60~120 字符，几百条拼起来能到几十 KB，直接越过网关对请求行的上限
+ * （典型 8KB），结果是**整个去重查询失败**而不是「查到一部分」。
+ */
+const URL_QUERY_CHUNK = 40;
+
+/**
+ * 返回「这批链接里哪些已经在库里」，用**归一化后的链接**比对。
+ *
+ * 为什么要归一化：原实现直接 `.in('source_url', urls)` 做逐字比较，
+ * 而同一篇原文的链接在不同抓取路径下会带 `?from=rss`、末尾斜杠、`utm_*` 等变形，
+ * 逐字比对必然漏。线上实测（2026-09-21）：最新 200 篇里 4% 是
+ * source_url 逐字相同的重复行，更早的快照是 22%。
+ *
+ * 为什么要分批：见 {@link URL_QUERY_CHUNK}。旧版一次塞进全部链接，
+ * 查询失败后被调用方 `catch` 成空集合 → **全部文章都被当成新文章** →
+ * 同一批内容整体重复入库。这个「失败即放行」是重复入库的主要机制之一。
+ * 现在失败一律抛出，由调用方决定降级策略。
+ *
+ * 返回的是**归一化后的链接集合**；调用方要用 `canonicalUrl()` 处理自己那侧再比对。
+ */
+export async function findExistingCanonicalUrls(urls: string[]): Promise<Set<string>> {
+  const uniq = [...new Set(urls.map(canonicalUrl).filter(Boolean))];
+  if (uniq.length === 0) return new Set();
+
+  const client = getSupabaseClient();
+  const found = new Set<string>();
+
+  for (let i = 0; i < uniq.length; i += URL_QUERY_CHUNK) {
+    const chunk = uniq.slice(i, i + URL_QUERY_CHUNK);
+    const { data, error } = await client
+      .from('articles')
+      .select('source_url')
+      .in('source_url', chunk);
+    if (error) {
+      throw new Error(
+        `查询来源 URL 失败（第 ${Math.floor(i / URL_QUERY_CHUNK) + 1} 批，共 ${chunk.length} 条）：${error.message}`,
+      );
+    }
+    for (const row of (data || []) as Array<{ source_url: string | null }>) {
+      const c = canonicalUrl(row.source_url || '');
+      if (c) found.add(c);
+    }
+  }
+
+  return found;
+}
+
+/**
+ * 取某时间窗内已入库的全部链接（归一化后），作为入库去重的**主判据**。
+ *
+ * 相比「拿本批链接去库里反查」（{@link findExistingCanonicalUrls}），这条路径更稳：
+ *   - URL 很短（只有两个时间界），不存在请求行超限的风险；
+ *   - 结果条数由时间窗决定，与本次抓取多少篇无关，可预期。
+ *
+ * 两天的窗口足以覆盖「同一条新闻被两天分别抓到」的情形 —— 这也是重复入库的典型场景。
+ */
+export async function getRecentCanonicalUrls(sinceIso: string): Promise<Set<string>> {
   const client = getSupabaseClient();
   const { data, error } = await client
     .from('articles')
     .select('source_url')
-    .in('source_url', urls);
-  if (error) throw new Error(`查询来源 URL 失败：${error.message}`);
-  return new Set((data || []).map((d: { source_url: string }) => d.source_url).filter(Boolean));
+    .gte('published_at', sinceIso)
+    .limit(5000);
+  if (error) throw new Error(`查询近窗口来源 URL 失败：${error.message}`);
+
+  const out = new Set<string>();
+  for (const row of (data || []) as Array<{ source_url: string | null }>) {
+    const c = canonicalUrl(row.source_url || '');
+    if (c) out.add(c);
+  }
+  return out;
+}
+
+/**
+ * 取某时间窗内的「身份字段」全量（分页），供去重体检 / 存量清理使用。
+ *
+ * 为什么要分页：PostgREST 单次返回有条数上限（常见 1000），
+ * 一次取「近 30 天」很容易超限，**超限时不会报错，只是悄悄少给** ——
+ * 拿这样的结果去判重会漏掉重复行，拿去删更是不可接受。
+ */
+export async function getArticleIdentities(
+  sinceIso: string,
+  untilIso?: string,
+): Promise<Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at'>>> {
+  const client = getSupabaseClient();
+  const PAGE = 1000;
+  const out: Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at'>> = [];
+
+  for (let from = 0; ; from += PAGE) {
+    let q = client
+      .from('articles')
+      .select('id, title, summary, content, country_code, source_url, original_title, published_at')
+      .gte('published_at', sinceIso)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (untilIso) q = q.lte('published_at', untilIso);
+
+    const { data, error } = await q;
+    if (error) throw new Error(`查询文章身份字段失败（offset ${from}）：${error.message}`);
+    const rows = (data || []) as typeof out;
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+
+  return out;
+}
+
+/**
+ * 按 id 删除文章（存量重复行清理用）。
+ *
+ * 只接受显式 id 列表 —— 不提供「按条件批量删」的口子，
+ * 避免哪天有人顺手写出一个「删掉所有满足某条件的行」的调用。
+ */
+export async function deleteArticlesByIds(ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const client = getSupabaseClient();
+  let deleted = 0;
+  // 分批：`.in()` 的值同样拼在 URL 上，一次几百个 id 会撞上请求行长度上限。
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const { error } = await client.from('articles').delete().in('id', chunk);
+    if (error) throw new Error(`删除文章失败（第 ${i} 起共 ${chunk.length} 条）：${error.message}`);
+    deleted += chunk.length;
+  }
+  return deleted;
+}
+
+/**
+ * 取某时间窗内已入库的「原文标题」指纹，用于识别**同一篇原文挂在两个不同链接下**
+ * （同稿多链 / 聚合站转载）。键与 `same-event.ts` 的 `original_title` 归一化必须一致。
+ */
+export async function getRecentOriginalTitleKeys(
+  sinceIso: string,
+): Promise<Map<string, number>> {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('articles')
+    .select('id, original_title')
+    .gte('published_at', sinceIso)
+    .limit(5000);
+  if (error) throw new Error(`查询近窗口原文标题失败：${error.message}`);
+
+  const out = new Map<string, number>();
+  for (const row of (data || []) as Array<{ id: number; original_title: string | null }>) {
+    const key = originalTitleKey(row.original_title || '');
+    if (key && !out.has(key)) out.set(key, row.id);
+  }
+  return out;
 }
 
 export async function insertArticle(article: {
@@ -199,7 +343,10 @@ export async function getArticlesByDateRange(
   const client = getSupabaseClient();
   let query = client
     .from('articles')
-    .select('id, title, summary, content, country_code, category, source_name, published_at, tags')
+    // `source_url` / `original_title` 是选稿端「同一件事」去重的身份字段，
+    // 必须一起取出来 —— 少了它们，推送端只能用中文标题猜，链接和原文两条
+    // 确定性判据全部失效（2026-09-21 之前就是这个状态）。
+    .select('id, title, summary, content, country_code, category, source_name, source_url, original_title, published_at, tags')
     .gte('published_at', startDate)
     .lte('published_at', endDate)
     .order('published_at', { ascending: false });

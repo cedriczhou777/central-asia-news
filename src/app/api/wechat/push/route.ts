@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
-import { beijingDate, extractFirstImage, isChineseText, isDuplicateContent } from '@/lib/utils';
+import { beijingDate, extractFirstImage, isChineseText } from '@/lib/utils';
+import { dedupeStories } from '@/lib/same-event';
 import {
   EXCLUDED_CATEGORIES,
   isCountryRelevant,
@@ -488,49 +489,55 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         return b.relevanceScore - a.relevanceScore;
       });
 
-      // 内容级去重：确保每篇新闻讲不同的事情（标题+正文语义相似即视为重复）。
-      const selectedArticles: typeof scoredArticles = [];
-
-      for (const article of scoredArticles) {
-        // 今日精选：只设宽松上限防文章过长，不写死篇数
-        if (selectedArticles.length >= maxPerCountry) break;
-
+      // 选稿分两步：**先按内容无关性筛掉，再做「同一件事」去重，最后截取上限**。
+      //
+      // 旧版是一趟循环边筛边去重（只跟「已选中的」比），有两个毛病：
+      //   1. 顺序敏感 —— 谁排在前面谁被保留，而排序键里含分类优先级，
+      //      于是「哪一条被留下」取决于分类而不是内容质量；
+      //   2. 判组看不到全量候选 —— 模型/判据一次只能看到前面已选的那几条，
+      //      同一件事的第二条刚好排在后面时更容易漏。
+      // 拆成两步后，去重看的是「本国全部合格候选」，截取上限放在最后。
+      const eligible = scoredArticles.filter((article) => {
         // 演艺娱乐 / 体育整类剔除。
         // 用户 2026-09-19 的要求是「少一些」（当时每国限量 3 篇），
         // 2026-09-21 改成「全部取消」—— 是**全删**。原来那套 `MAX_SOFT_ARTICLES`
         // 计数逻辑已随之删掉，别再按「限量」去理解这段。
-        // 闸放在最前面：连国家相关性都不用判。
         if (EXCLUDED_CATEGORIES.has(article.category)) {
           console.log(`跳过文体类新闻（${article.category}）：${article.title}`);
-          continue;
+          return false;
         }
-
         // 源正文缺失的空壳文（「原文正文缺失，数据无法提取」）—— 通篇没有信息，
         // 清洗救不回来，只能在这里丢。判据只看标题（详见 article-format.ts）。
         if (hasMissingSource(article.title)) {
           console.log(`跳过源正文缺失的新闻：${article.title}`);
-          continue;
+          return false;
         }
-
         // 国家相关性
         if (!isCountryRelevant(article.title, article.summary, country.code)) {
           console.log(`跳过与${country.name}无关的新闻：${article.title}`);
-          continue;
+          return false;
         }
+        return true;
+      });
 
-        // 内容级去重：与已选文章做语义相似度比对
-        const isDup = selectedArticles.some(
-          pre => isDuplicateContent(pre.title, pre.content, article.title, article.content)
-        );
-        if (isDup) {
-          console.log(`跳过重复内容：${article.title}`);
-          continue;
-        }
-
-        selectedArticles.push(article);
+      // 「同一件事」去重：链接 / 原文指纹（确定性）+ 模型判组（每国 1 次调用）。
+      // 判据与入库端**完全同源**（同一个 `dedupeStories`），不另起一套。
+      const { kept: dedupedArticles, drops: eventDrops, llm: llmJudge } =
+        await dedupeStories(eligible);
+      for (const d of eventDrops) {
+        console.log(`[${country.code}][${d.reason}] 跳过重复：${d.dropped.title} ← 保留：${d.kept.title}`);
+      }
+      if (llmJudge.error) {
+        console.warn(`[${country.name}] 「同一件事」模型判组未生效，本轮只做了链接/原文去重：${llmJudge.error}`);
       }
 
-      console.log(`为${country.name}精选${selectedArticles.length}篇投资相关新闻`);
+      // 今日精选：取完去重后的前 N 篇（宽松上限，只防文章过长，不写死篇数）
+      const selectedArticles = dedupedArticles.slice(0, maxPerCountry);
+
+      console.log(
+        `为${country.name}精选${selectedArticles.length}篇投资相关新闻` +
+          `（合格候选 ${eligible.length} 篇，去重剔除 ${eventDrops.length} 篇）`,
+      );
 
       // 一国新闻被全部过滤掉（典型情况：该国当天只有「讲别国」的新闻，
       // 被上面的 isCountryRelevant 判为无关）→ 这一国本轮没有可推送内容。

@@ -365,6 +365,16 @@ interface ChatCallOptions {
   extraOverride?: Record<string, unknown>;
   /** 覆盖超时。体检要连打两次，必须比主链路短，否则两次加起来会超过网关 65 秒上限。 */
   timeoutMs?: number;
+  /**
+   * 是否把失败计入 `translationStats.errors`。默认 true。
+   *
+   * 为什么要有这个开关：`translationStats` 的用途是**翻译成本体检**
+   * （「免费档到底用上了没有、钱花在哪」）。去重判组这类**非翻译**调用
+   * 如果也往里写，`providerCounts` 就会混进不属于翻译的数字，
+   * 以后再拿它算单价就会被带偏。非翻译调用方传 `recordError: false`，
+   * 自己收错误信息。
+   */
+  recordError?: boolean;
 }
 
 /**
@@ -376,7 +386,7 @@ async function callChatProvider(
   prompt: string,
   options: ChatCallOptions = {},
 ): Promise<ChatCallResult> {
-  const { onError, extraOverride, timeoutMs = CALL_TIMEOUT_MS } = options;
+  const { onError, extraOverride, timeoutMs = CALL_TIMEOUT_MS, recordError = true } = options;
   const apiKey = process.env[provider.keyEnv];
   if (!apiKey) return { text: null, retryable: false };
 
@@ -385,7 +395,7 @@ async function callChatProvider(
   /** 统一的失败出口：记日志 + 记统计 + 通知调用方，三处都别漏 */
   const fail = (err: string, retryable: boolean): ChatCallResult => {
     console.error(`[${provider.name}/${model}] ${err}`);
-    recordProviderError(provider.name, model, err);
+    if (recordError) recordProviderError(provider.name, model, err);
     onError?.(err);
     return { text: null, retryable };
   };
@@ -441,6 +451,42 @@ async function callChatProvider(
 
 const MAX_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 800;
+
+/**
+ * 「问一次模型、要一段文本」的通用出口，复用翻译那条降级链
+ * （免费通道优先 → 免费备用 → 付费兜底，且沿用各通道的 thinking 开关）。
+ *
+ * 与 `translateNews` 的区别，别混用：
+ *   - **不重试**。调用方是非翻译任务（当前只有「同一件事」判组），
+ *     它们对延迟敏感、且失败有降级路径；在这个场景下重试 3 次只会把整轮流水线拖慢。
+ *   - **不写 `translationStats`**（`recordError: false`）。那份统计是翻译成本体检的口径，
+ *     混进别的调用会让「免费档有没有生效」这个判断失真。
+ *
+ * 全部通道都失败时返回 `{ ok: false, error }`，错误信息聚合了每个通道的原因，
+ * 便于一眼看出是「没配 Key」还是「Key 无效」还是「全被限流」。
+ */
+export async function askLlmJson(
+  prompt: string,
+  options: { timeoutMs?: number } = {},
+): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const { timeoutMs = CALL_TIMEOUT_MS } = options;
+  const failures: string[] = [];
+
+  for (const provider of PROVIDERS) {
+    if (!process.env[provider.keyEnv]) {
+      failures.push(`${provider.name}：未配置 ${provider.keyEnv}`);
+      continue;
+    }
+    const call = await callChatProvider(provider, prompt, {
+      timeoutMs,
+      recordError: false,
+      onError: (err) => failures.push(`${provider.name}：${err}`),
+    });
+    if (call.text) return { ok: true, text: call.text };
+  }
+
+  return { ok: false, error: failures.join('；') || '没有任何可用的模型通道' };
+}
 
 /**
  * 多模型翻译主入口：按 PROVIDERS 顺序依次尝试，中途成功即返回。

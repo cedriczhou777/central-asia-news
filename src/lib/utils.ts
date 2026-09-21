@@ -84,6 +84,76 @@ export function isDuplicateContent(
   return (tSim + cSim) / 2 >= threshold;
 }
 
+// ----- 链接归一化（「同一原文」的唯一指纹）-----
+
+/** 已知的追踪类查询参数：只影响统计，不影响指向哪篇文章。 */
+const TRACKING_PARAM = /^(?:utm_[a-z0-9_]*|from|ref|referrer|referer|fbclid|gclid|yclid|_ga|_gl|spm|share_[a-z0-9_]*|source|src|sharer|s|si)$/i;
+
+/**
+ * 把指向同一篇原文的不同链接形式归一到同一个字符串。
+ *
+ * 为什么必须有这个函数：原项目的去重是对 `source_url` 做**精确字符串比较**，
+ * 而同一个源站的同一条新闻在不同抓取路径下链接会变形 ——
+ * RSS 里带 `?from=rss`、带末尾斜杠、带 `#anchor`、带 `utm_*` 追踪参数、
+ * 带或不带 `www.`。这些形式字符串不相等，去重就漏过去了，
+ * 结果是**同一条新闻被翻译两次、入库两次、在公众号草稿里连着出现两遍**
+ * （2026-09-21 用户在预览里截到的那对阿斯塔纳桥梁新闻就是这么来的：
+ * 两篇的 source_url 逐字相同，却都在库里）。
+ *
+ * 归一化规则（只做「显然指向同一篇」的等价变换，不做任何猜测）：
+ *   - 去掉协议与 `www.`（http/https、有无 www 不改变指向）
+ *   - 去掉 fragment（`#...`）
+ *   - 去掉已知追踪参数，保留其余查询参数并排序
+ *     （**不能**粗暴删掉整个 query：Tazabek 这类站的 query 里可能带文章号）
+ *   - 去掉末尾斜杠，host/path 小写
+ *
+ * 非法 URL（相对路径、脏数据）退化为「去 fragment、去末尾斜杠的小写串」，
+ * 至少还能做到大小写/末尾斜杠的等价合并。
+ */
+export function canonicalUrl(url: string): string {
+  const raw = (url || '').trim();
+  if (!raw) return '';
+
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return raw.toLowerCase().replace(/[#?].*$/, '').replace(/\/+$/, '');
+  }
+
+  const params = [...u.searchParams.entries()]
+    .filter(([k]) => !TRACKING_PARAM.test(k))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const host = u.host.toLowerCase().replace(/^www\./, '');
+  const path = u.pathname.replace(/\/+$/, '');
+  const query = params.map(([k, v]) => `${k}=${v}`).join('&');
+  return `${host}${path}${query ? '?' + query : ''}`;
+}
+
+// ----- 「同一篇原文」的指纹 -----
+
+/**
+ * 原文标题归一化后作为「同一篇原文」的指纹（`''` 表示没有可用指纹）。
+ *
+ * 用途：同一条 feed 项在同一站点可能有多个链接（聚合页 / 带参链接 / 转载），
+ * 链接归一化挡不住「不同链接指向同一篇原文」，但**原文标题是逐字相同的**，
+ * 所以它比中文译名可靠得多 —— 译名会因翻译波动而不同，原文标题不会。
+ *
+ * 只保留字母/数字/汉字（丢掉标点与空白：不同轮次抓取可能套上不同空白或零宽字符），
+ * 长度不足 10 的直接返回空 —— 短标题极易撞车（「新闻」「摘要」之类），
+ * 宁可放过不要错并（把两条不同新闻合成一条是**丢信息**，比留重复更糟）。
+ *
+ * 注意：`db-articles.ts` 与 `same-event.ts` 必须用**同一个**指纹函数，
+ * 否则「入库时判重」与「选稿时判重」会各自为政。
+ */
+export function originalTitleKey(title: string): string {
+  const cleaned = (title || '')
+    .replace(/<[^>]*>/g, ' ')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+  return cleaned.length >= 10 ? cleaned : '';
+}
+
 // ----- 日期口径（唯一出口）-----
 
 /**
