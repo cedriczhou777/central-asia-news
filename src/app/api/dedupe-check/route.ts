@@ -99,21 +99,27 @@ function groupIdentical(rows: Row[]): {
   remaining.push(...orphans);
 
   // 第二级：不同链接、同一篇原文（同稿多链）
+  //
+  // ⚠️ key 必须带国家，与 `same-event.ts` 的 `identityKeys`（`orig:国家:指纹`）保持一致。
+  // 早期这里只用了指纹，会**跨国家**合并：一条通讯社通稿同时进了 kz 和 uz 两个国家的流、
+  // 原文标题相同 → 被判成同一组 → 删掉其中一个国家那条，等于**削掉那个国家的篇数**。
+  // 判重口径分裂是这套机制反复踩过的坑，存量清理必须和入库/选稿用同一把尺子。
   const byOrig = new Map<string, Row[]>();
   for (const r of remaining) {
     const k = originalTitleKey(r.original_title || '');
     if (!k) continue;
-    const g = byOrig.get(k);
+    const ck = `${r.country_code || 'intl'}:${k}`;
+    const g = byOrig.get(ck);
     if (g) g.push(r);
-    else byOrig.set(k, [r]);
+    else byOrig.set(ck, [r]);
   }
-  for (const [k, list] of byOrig) {
+  for (const [ck, list] of byOrig) {
     if (list.length < 2) continue;
     const sorted = [...list].sort((a, b) => a.id - b.id);
     groups.push({
       keepId: sorted[0].id,
       dropIds: sorted.slice(1).map((r) => r.id),
-      key: `orig:${k.slice(0, 60)}`,
+      key: `orig:${ck.slice(0, 60)}`,
       reason: 'same_original',
       title: sorted[0].title,
     });
@@ -246,6 +252,8 @@ export async function GET(request: NextRequest) {
       judgedPairs?: number;
       /** 被确定性判据（反向极性）拦下、**没问模型**的对数 */
       vetoedPairs?: number;
+      /** 问了模型、但模型判「否」的对数 —— 用来发现**漏合并** */
+      declinedPairs?: number;
       groups: number;
       error?: string;
       /** 每组的具体标题 —— 只报数量的话，误合并会静默藏起来，看不出来 */
@@ -257,6 +265,12 @@ export async function GET(request: NextRequest) {
       pairs?: Array<{ sim: number; a: string; b: string }>;
       /** pair 形态：被极性判据拦下的对（模型看不到，答什么都无效） */
       vetoed?: Array<{ sim: number; a: string; b: string }>;
+      /**
+       * pair 形态：模型判「否」的对。
+       * **这是「漏合并」的唯一可见窗口** —— 只盯 `pairs`（判是的）会让人误以为
+       * 剩下的都判对了，实际上真重复被否掉就永久留成两条，没人会知道。
+       */
+      declined?: Array<{ sim: number; a: string; b: string }>;
       /** debug=1 时的模型原始返回（截断），判组离谱时看这个 */
       raw?: string[];
     }> = [];
@@ -279,6 +293,7 @@ export async function GET(request: NextRequest) {
         candidatePairs: llm.candidateCount,
         judgedPairs: llm.pairs?.length,
         vetoedPairs: llm.vetoed?.length,
+        declinedPairs: llm.declined?.length,
         groups: llm.groups.length,
         error: llm.error,
         groupTitles: llm.groups.map((g) => ({
@@ -291,6 +306,11 @@ export async function GET(request: NextRequest) {
           b: (slice[p.b] as Row).title,
         })),
         vetoed: llm.vetoed?.map((p) => ({
+          sim: simOf(p.a, p.b),
+          a: (slice[p.a] as Row).title,
+          b: (slice[p.b] as Row).title,
+        })),
+        declined: llm.declined?.map((p) => ({
           sim: simOf(p.a, p.b),
           a: (slice[p.a] as Row).title,
           b: (slice[p.b] as Row).title,

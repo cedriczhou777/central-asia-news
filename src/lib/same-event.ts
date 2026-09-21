@@ -89,6 +89,8 @@ export interface DedupResult<T> {
     candidateCount?: number;
     /** pair 形态：被确定性判据（反向极性）拦下、没问模型的对 */
     vetoed?: Array<{ a: number; b: number; sim: number }>;
+    /** pair 形态：问了模型、但模型判「否」的对（用来发现**漏合并**） */
+    declined?: Array<{ a: number; b: number; sim: number }>;
     error?: string;
     raw?: string[];
   };
@@ -349,7 +351,20 @@ export function candidatePairs<T extends StoryLike>(
   return out.slice(0, maxPairs);
 }
 
-/** pair 形态的提示词：每行一对，逐对二选一。 */
+/**
+ * pair 形态的提示词：每行一对，逐对二选一。
+ *
+ * ⚠️ **反例清单是拿线上真实误判喂出来的，不是编的。** 改之前先想清楚
+ * 「新加的例子会不会和已有的例子冲突」，然后跑 `/api/dedupe-check?llm=1&debug=1` 复测。
+ * 已收录的反例（都对应一次实测踩坑或实测高危）：
+ *   - 「土耳其大使馆」vs「以色列大使馆」—— 同类机构、不同主体（相似度 0.55）
+ *   - 「金价下跌」vs「金价上涨」—— 方向相反（0.71，但已由 `hasOppositePolarity` 确定性拦掉，
+ *     留在提示词里是为了双保险）
+ *   - 「上合组织反垄断机构负责人会议」vs「上合组织经贸部长会议」—— **同一个组织、
+ *     同一个城市的两场不同会议**（0.38）。这一条是 2026-09-21 pair 形态首次上线后
+ *     实测出现的**唯一一类误判**：group 形态那种「大面积乱合并」已经没有了，
+ *     剩下的系统性错误就是这种「同话题、同主办方、不同活动」。
+ */
 function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLike[]): string {
   const lines = pairs.map((p, idx) => {
     const t1 = (items[p.a].title || '').slice(0, TITLE_MAX);
@@ -362,13 +377,20 @@ function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLik
     '算同一件事：同一次会议 / 同一次签约 / 同一份公告 / 同一条政策 / 同一个项目的重复报道。',
     '即使来源不同、措辞不同、详略不同、细节数字有出入，也算同一件事。',
     '',
+    '判断方法：先在心里把两条各自概括成「谁 + 做了什么 + 在哪」，',
+    '只有当两次概括指的是**同一次具体活动**时才判「是」。',
+    '',
     '不算同一件事（务必判「否」）：',
+    '  · 同一个组织 / 同一个城市办的**不同活动**：「上合组织反垄断机构负责人会议在杜尚别举行」',
+    '    与「上合组织经贸部长会议在杜尚别举行」—— 主办方和地点都一样，但这是两场不同的会议',
     '  · 不同主体做同类事：「土耳其大使馆祝贺主权日」与「以色列大使馆祝贺主权日」',
     '  · 方向相反：「金价下跌」与「金价上涨」',
     '  · 不同地点/不同项目：「东哈萨克斯坦州建桥」与「阿斯塔纳建桥」',
     '  · 不同人物：「运动员甲夺金」与「运动员乙夺金」',
     '  · 只是同属一个话题、同一类机构、同一个州/部委 —— 话题相同不等于同一件事',
     '  · 两条讲的是同一主题但各自独立发生的不同事件',
+    '',
+    '拿不准就判「否」：把两条不同的新闻合成一条是**丢信息**，比留下重复更糟。',
     '',
     '只输出 JSON，不要解释。把**判为是同一件事**的编号列出来：',
     '{"same": [1, 4]}',
@@ -496,6 +518,37 @@ export interface JudgeOptions {
   collectRaw?: boolean;
   /** 任务形态，默认 `pair`。见 {@link JudgeMode}。 */
   mode?: JudgeMode;
+  /**
+   * 注入模型调用出口。**只给测试用**，不传就走真实降级链（`askLlmJson`）。
+   *
+   * 为什么必须留这个口子：这套判据是**「删除类」规则** —— 判错了不报错，
+   * 只是在成品里少一条新闻。而整条链路有四次「可能悄悄什么都不做」的降级
+   * （没候选 / 调用失败 / 返回不合法 / 簇超限），只靠「跑一遍真实模型看看」
+   * 是没法把「解析结果如何变成删除动作」钉住的。
+   * 有了它，`scripts/test-dedup.ts` 才能在不联网、不配 Key 的情况下断言：
+   * 判为「是」的对**确实**删对了条目、被极性拦下的对**确实**一条都没删。
+   */
+  ask?: AskFn;
+}
+
+/** 模型调用出口的签名：只吃提示词，返回文本或错误（与 `askLlmJson` 的返回同形）。 */
+export type AskFn = (
+  prompt: string,
+) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+
+/**
+ * 取本次要用的模型调用出口。
+ *
+ * 真实出口把 `timeoutMs` / `extraBody` 在这里就绑好，调用点只传提示词 ——
+ * 这样注入版本和真实版本在调用点看来完全一样，不会出现「测试走的路径和生产不同」。
+ */
+function resolveAsk(options: JudgeOptions): AskFn {
+  if (options.ask) return options.ask;
+  return (prompt) =>
+    askLlmJson(prompt, {
+      timeoutMs: 45000,
+      ...(options.extraBody ? { extraBody: options.extraBody } : {}),
+    });
 }
 
 /**
@@ -521,6 +574,7 @@ export async function judgeSameEventPairs<
   pairs: Array<{ a: number; b: number }>;
   candidateCount: number;
   vetoed: Array<{ a: number; b: number; sim: number }>;
+  declined: Array<{ a: number; b: number; sim: number }>;
   error?: string;
   raw?: string[];
 }> {
@@ -532,18 +586,16 @@ export async function judgeSameEventPairs<
     if (hasOppositePolarity(items[c.a].title || '', items[c.b].title || '')) vetoed.push(c);
     else asked.push(c);
   }
-  if (asked.length === 0) return { pairs: [], candidateCount: all.length, vetoed };
+  if (asked.length === 0) return { pairs: [], candidateCount: all.length, vetoed, declined: [] };
 
-  const res = await askLlmJson(buildPairPrompt(asked, items), {
-    timeoutMs: 45000,
-    ...(options.extraBody ? { extraBody: options.extraBody } : {}),
-  });
+  const res = await resolveAsk(options)(buildPairPrompt(asked, items));
   const raw = options.collectRaw ? [res.ok ? res.text : `调用失败：${'error' in res ? res.error : '未知'}`] : undefined;
   if (!res.ok) {
     return {
       pairs: [],
       candidateCount: all.length,
       vetoed,
+      declined: [],
       error: 'error' in res ? res.error : '模型调用失败（无错误详情）',
       raw,
     };
@@ -555,6 +607,7 @@ export async function judgeSameEventPairs<
       pairs: [],
       candidateCount: all.length,
       vetoed,
+      declined: [],
       error: '模型返回不是合法 JSON（已按「一对都不合并」处理）',
       raw,
     };
@@ -562,10 +615,14 @@ export async function judgeSameEventPairs<
 
   // 注意下标口径：verdict 是相对 `asked` 的，必须映射回原数组下标，
   // 否则被否决的对会让后面每一对的下标都错位一格 —— 那会静默删错新闻。
+  const accepted = new Set(verdict);
   return {
     pairs: verdict.map((i) => ({ a: asked[i].a, b: asked[i].b })),
     candidateCount: all.length,
     vetoed,
+    // 被模型判「否」的对也要报出来：只看「判是的」没法发现**漏合并**，
+    // 而漏合并和误合并是这套机制的两个相反方向的失效，必须都能看见。
+    declined: asked.filter((_, i) => !accepted.has(i)).map((c) => ({ a: c.a, b: c.b, sim: c.sim })),
     raw,
   };
 }
@@ -647,10 +704,7 @@ export async function judgeSameEventGroups<
       category: a.category || '-',
     }));
 
-    const res = await askLlmJson(buildJudgePrompt(rows), {
-      timeoutMs: 45000,
-      ...(options.extraBody ? { extraBody: options.extraBody } : {}),
-    });
+    const res = await resolveAsk(options)(buildJudgePrompt(rows));
     if (options.collectRaw) raw.push(res.ok ? res.text : `调用失败：${'error' in res ? res.error : '未知'}`);
     // 用 `in` 而不是靠 `!res.ok` 的可辨识联合收窄：这里跨模块取值，
     // 收窄在不同 tsconfig（strict / 非 strict）下表现不一致，
@@ -749,6 +803,7 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
     llm.pairs = res.pairs;
     llm.candidateCount = res.candidateCount;
     llm.vetoed = res.vetoed;
+    llm.declined = res.declined;
     if (res.vetoed.length > 0) {
       // 被确定性拦下的对要留痕：否则「否决了什么」就成了新的黑盒
       console.info(

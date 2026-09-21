@@ -493,6 +493,150 @@ async function modeChecks(): Promise<void> {
 }
 
 // ============================================================
+// 四之三、整条 L2 链路的端到端断言（注入假模型，不联网、不需要 Key）
+// ============================================================
+//
+// 前面几节测的都是**零件**（解析、召回、极性、合并）。这一节测**装配**：
+// 模型的答案怎么一步步变成「删掉哪一条」。中间有四次「可能悄悄什么都不做」的
+// 降级（没候选 / 调用失败 / 返回不合法 / 簇超限），一旦接错，
+// 表现是**不报错地少删或多删**，只有把整条链路跑通才能发现。
+//
+// 用 `judge.ask` 注入假模型：调用点拿到的出口和真实版本同形，
+// 所以这里测的就是生产路径，不是「另一条测试专用分支」。
+
+/** 假模型：按提示词决定答案，同时记录收到的提示词（用来断言「什么被送出去了」）。 */
+function fakeAsk(reply: (prompt: string) => string) {
+  const seen: string[] = [];
+  return {
+    seen,
+    ask: async (prompt: string) => {
+      seen.push(prompt);
+      return { ok: true as const, text: reply(prompt) };
+    },
+  };
+}
+
+async function llmPipelineChecks(): Promise<void> {
+  // --- ① 模型判「是」的对，必须真的删掉那一条 ---
+  {
+    // 候选（按相似度降序）：金价对 0.71（会被极性拦下）、总统项目对 0.48
+    const items = [
+      { title: '乌兹别克斯坦总统在卡拉卡尔帕克斯坦启动总额75亿美元项目' },
+      { title: '乌兹别克斯坦总统启动卡拉卡尔帕克斯坦76亿美元投资项目' },
+      { title: '全球市场黄金和白银价格下跌' },
+      { title: '全球市场黄金和白银价格上涨' },
+    ];
+    const { seen, ask } = fakeAsk(() => '{"same": [0]}');
+    const res = await dedupeStories(items, { useLlm: true, judge: { ask } });
+
+    ok('L2 确实跑了并判定成功', res.llm.ran && res.llm.ok, JSON.stringify(res.llm).slice(0, 160));
+    ok('候选对数是 2（金价对 + 项目对）', res.llm.candidateCount === 2, String(res.llm.candidateCount));
+    ok('金价对被记为 vetoed', res.llm.vetoed?.length === 1, JSON.stringify(res.llm.vetoed));
+    ok('判「是」的对映射回原下标 0,1', JSON.stringify(res.llm.pairs) === '[{"a":0,"b":1}]', JSON.stringify(res.llm.pairs));
+
+    // ★ 整套护栏的核心断言：被极性拦下的对**根本没有进入提示词**，
+    //   模型连看到它的机会都没有 —— 所以「答什么都无效」是结构上成立的，
+    //   不是依赖它自觉。这条如果挂了，极性护栏就只是装饰。
+    //
+    //   ⚠️ 只能检查**数据行**（`# | 标题A || 标题B` 之后），不能检查整份提示词：
+    //   反例清单里本来就写着「方向相反：「金价下跌」与「金价上涨」」，
+    //   在整份文本里搜「下跌」会永远命中 —— 这个坑第一版就踩了。
+    const prompt = seen.join('\n');
+    const marker = '# | 标题A || 标题B';
+    const dataPart = prompt.includes(marker) ? prompt.slice(prompt.indexOf(marker) + marker.length) : '';
+    ok('数据行里没有金价那对', !dataPart.includes('上涨') && !dataPart.includes('下跌'), dataPart);
+    ok('数据行里有项目那对', dataPart.includes('75亿美元') && dataPart.includes('76亿美元'), dataPart);
+    ok('数据行恰好 1 行（2 个候选对里拦掉 1 对）', dataPart.trim().split('\n').length === 1, dataPart);
+
+    ok('模型判是 → 确实删掉 1 条', res.drops.length === 1, JSON.stringify(res.drops.map((d) => d.reason)));
+    ok('丢弃原因是 llm_same_event', res.drops[0]?.reason === 'llm_same_event', String(res.drops[0]?.reason));
+    ok('保留组内第一条', (res.drops[0]?.kept as { title: string })?.title === items[0].title);
+    ok('丢掉第二条', (res.drops[0]?.dropped as { title: string })?.title === items[1].title);
+    ok('最终保留 3 条（4 − 1）', res.kept.length === 3, String(res.kept.length));
+  }
+
+  // --- ② 模型「全答是」时，簇护栏必须整簇丢弃（一条都不删）---
+  {
+    // 5 条几乎同题 → 两两都成候选 → 全答是会连成一个 5 条的簇
+    const items = [
+      '哈萨克斯坦总统会见中国外交部长讨论经贸合作',
+      '哈萨克斯坦总统会见中国外交部长商讨经贸合作',
+      '哈萨克斯坦总统会见中国外交部长洽谈经贸合作',
+      '哈萨克斯坦总统会见中国外交部长商议经贸合作',
+      '哈萨克斯坦总统会见中国外交部长研究经贸合作',
+    ].map((title) => ({ title }));
+    const { seen, ask } = fakeAsk((p) => {
+      // 把提示词里出现的每个编号都判成「是」
+      const idx = [...p.matchAll(/^(\d+) \|/gm)].map((m) => Number(m[1]));
+      return JSON.stringify({ same: idx });
+    });
+    const res = await dedupeStories(items, { useLlm: true, judge: { ask } });
+
+    ok('确实问了模型，且是逐对格式', seen.length === 1 && seen[0].includes('# | 标题A || 标题B'), seen[0].slice(0, 60));
+    ok('全答是 → 一条都没删（簇超限整簇丢弃）', res.drops.length === 0, JSON.stringify(res.drops.map((d) => d.reason)));
+    ok('保留了全部 5 条', res.kept.length === 5, String(res.kept.length));
+    ok('error 说明是簇超限', Boolean(res.llm.error && res.llm.error.includes('簇')), String(res.llm.error));
+  }
+
+  // --- ③ 模型返回不是合法 JSON：不合并，并留下 error（不能静默）---
+  {
+    const items = [
+      { title: '塔吉克斯坦总统主持新羊毛加工厂投产仪式' },
+      { title: '塔吉克斯坦总统主持新羊毛加工厂开工仪式' },
+    ];
+    const { ask } = fakeAsk(() => '这两条看起来是同一件事。');
+    const res = await dedupeStories(items, { useLlm: true, judge: { ask } });
+    ok('返回不合法 → 不合并', res.drops.length === 0, String(res.drops.length));
+    ok('并且留下了 error', Boolean(res.llm.error), String(res.llm.error));
+  }
+
+  // --- ④ 模型调用失败：不合并，error 带上通道报错 ---
+  {
+    const items = [
+      { title: '吉尔吉斯斯坦总统赴美参加联合国大会' },
+      { title: '吉尔吉斯斯坦总统将赴纽约参加联合国大会' },
+    ];
+    const res = await dedupeStories(items, {
+      useLlm: true,
+      judge: { ask: async () => ({ ok: false as const, error: 'zhipu：HTTP 429 code 1305' }) },
+    });
+    ok('调用失败 → 不合并', res.drops.length === 0);
+    ok('error 带上了通道报错', Boolean(res.llm.error?.includes('1305')), String(res.llm.error));
+  }
+
+  // --- ⑤ 没有候选对时不该调模型（省一次 token）---
+  {
+    const items = [{ title: '哈萨克斯坦聚乙烯工厂投产' }, { title: '塔吉克斯坦桑搏世锦赛开幕' }];
+    let called = 0;
+    const res = await dedupeStories(items, {
+      useLlm: true,
+      judge: {
+        ask: async () => {
+          called++;
+          return { ok: true as const, text: '{"same": []}' };
+        },
+      },
+    });
+    ok('无候选对 → 不调模型', called === 0, String(called));
+    ok('无候选对 → 不删任何条目', res.drops.length === 0);
+    ok('无候选对时 ran=true 但 ok=false（表示没实际判定）', res.llm.ran && !res.llm.ok, JSON.stringify(res.llm).slice(0, 120));
+  }
+
+  // --- ⑥ 被模型判「否」的对要出现在 declined 里（否则漏合并看不见）---
+  {
+    const items = [
+      { title: '阿塞拜疆航空与国立音乐学院联合举办音乐比赛 庆祝国家音乐日' },
+      { title: '阿塞拜疆航空与阿塞拜疆国立音乐学院举办国家音乐日竞赛' },
+    ];
+    const { ask } = fakeAsk(() => '{"same": []}');
+    const res = await dedupeStories(items, { useLlm: true, judge: { ask } });
+    ok('判否 → 不删任何条目', res.drops.length === 0);
+    ok('判否 → 进入 declined 供人复核', res.llm.declined?.length === 1, JSON.stringify(res.llm.declined));
+    ok('判否时 groups 为空', res.llm.groups.length === 0, JSON.stringify(res.llm.groups));
+  }
+}
+
+// ============================================================
 // 五、可选：真实数据体检
 // ============================================================
 
@@ -575,9 +719,11 @@ function summarize() {
   }
 }
 
-// modeChecks 是异步的（唯一的 await 来源），所以汇总挂在它后面，
-// 否则「未开 L2」「默认形态」这两项断言会在打印结果之后才跑，不计入总数。
-modeChecks()
+// 异步检查（modeChecks + llmPipelineChecks）必须跑完再汇总，
+// 否则这些断言会在打印结果之后才执行、不计入总数。
+// 顺序：先测装配（端到端），再测配置通路 —— 端到端挂了的话更该先看到。
+llmPipelineChecks()
+  .then(modeChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);
