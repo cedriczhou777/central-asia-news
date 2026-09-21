@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { beijingDate, extractFirstImage, isChineseText, isDuplicateContent } from '@/lib/utils';
+import {
+  EXCLUDED_CATEGORIES,
+  isCountryRelevant,
+  hasMissingSource,
+  sanitizeArticleContent,
+} from '@/lib/article-format';
+import { generateWechatHtml } from '@/lib/wechat-template';
 import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
@@ -25,17 +32,9 @@ const INVESTMENT_KEYWORDS = [
   'silk road', 'belt and road', ' BRI',
 ];
 
-// 清理正文末尾的省略号：以省略号/多个省略符收尾时替换为句号，确保以完整语句收尾
-function cleanSummary(text: string): string {
-  let t = (text || '').trim();
-  // 剥离末尾的省略号（全角/半角），若其后无其它文字则补一个句号
-  if (/(?:…|\.\.\.|\.\.)+[\s，,、；;：:]?$/.test(t)) {
-    t = t.replace(/(?:…|\.\.\.|\.\.)+[\s，,、；;：:]*$/g, '。');
-  }
-  // 去除结尾的多余标点，保留句号/感叹号/问号收尾
-  t = t.replace(/([，,、；;：:（\s])+$/g, '');
-  return t.trim();
-}
+// `cleanSummary` / `normalizeImages` / `generateWechatHtml` 已挪到
+// `@/lib/wechat-template`（2026-09-21）：排版模板改得最频繁，独立成文件后
+// 没有 Next 依赖，可以用 tsc 单独编译、拿真实文章渲染出 HTML 直接看，不用起服务。
 
 // 对新闻进行投资相关性评分
 function scoreInvestmentRelevance(title: string, summary: string): number {
@@ -49,34 +48,14 @@ function scoreInvestmentRelevance(title: string, summary: string): number {
   return score;
 }
 
-// 检查新闻是否与目标国家相关（智能判定）：
-// - 标题/正文明确提到目标国（中文或外文）→ 相关
-// - 明确提到其它国家 → 排除
-// - 均未提及具体国家（区域/泛指投资新闻）→ 放行（按入库国别归属）
-function isCountryRelevant(title: string, summary: string, countryCode: string): boolean {
-  const text = `${title} ${summary}`.toLowerCase();
-  
-  const countryKeywords: Record<string, string[]> = {
-    kz: ['kazakhstan', 'kazakh', '哈萨克斯坦', '哈萨克', 'astana', '阿斯塔纳', 'almaty', '阿拉木图'],
-    uz: ['uzbekistan', 'uzbek', '乌兹别克斯坦', '乌兹别克', 'tashkent', '塔什干', 'samarkand', '撒马尔罕'],
-    kg: ['kyrgyzstan', 'kyrgyz', '吉尔吉斯斯坦', '吉尔吉斯', 'bishkek', '比什凯克'],
-    az: ['azerbaijan', 'azeri', '阿塞拜疆', '巴库', 'baku'],
-    tj: ['tajikistan', 'tajik', '塔吉克斯坦', '塔吉克', 'dushanbe', '杜尚别'],
-  };
-
-  const target = countryKeywords[countryCode] || [];
-  // 明确提到目标国 → 相关
-  if (target.some(kw => text.includes(kw.toLowerCase()))) return true;
-
-  // 明确提到其它单个国家 → 排除
-  for (const [code, keywords] of Object.entries(countryKeywords)) {
-    if (code === countryCode) continue;
-    if (keywords.some(kw => text.includes(kw.toLowerCase()))) return false;
-  }
-
-  // 均未明确指向具体国家：按入库国别归属放行
-  return true;
-}
+// `isCountryRelevant` 已挪到 `@/lib/article-format`（2026-09-21）。
+// 旧实现在这里只列了 5 个目标国，导致「蒙古国…」「格鲁吉亚…」「也门胡塞…」
+// 这类明确讲别国的新闻全部走到「均未提及具体国家 → 放行」的兜底而混进推送。
+// 现在那份名单覆盖主要国家和城市，并且**本国城市名也进了名单**
+// （否则 `中国投资者在卡拉卡尔帕克斯坦发现4吨黄金` 这种本国地方新闻会被误杀）。
+//
+// 提醒：别在 `generateWechatHtml` 里用 `referrerpolicy` 之外的属性做判断 ——
+// 正文图片的规范化统一在 `normalizeImages` 里做，只有一处。
 
 // 下载外链图片的请求头：加浏览器 UA + 无 referrer，规避目标站防盗链/默认 UA 拦截
 function imageFetchInit(): RequestInit {
@@ -302,117 +281,19 @@ function periodSuffix(period: unknown): string {
 
 // 投资者优先级：数字越大越靠前。
 // 用户（2026-09-19）明确要求：与投资者最相关的（经济形势、行业动态、外汇储备、
-// 国家政策、政治变动）放最前面，文体类放最后。
-// 未知分类兜底 30（低于正经投资主题，高于文体）。
+// 国家政策、政治变动）放最前面。
+//
+// 表里**刻意没有 culture / sports** —— 那两类现在在入库后就被
+// `EXCLUDED_CATEGORIES` 整类剔除（用户 2026-09-21：「演艺娱乐，体育类新闻全部取消」），
+// 根本走不到这里的排序。留着它们只会让人误以为还有「文体类排最后」这回事。
 const CATEGORY_PRIORITY: Record<string, number> = {
   economy: 100, policy: 95, oil_gas: 90, renewable_energy: 90, energy: 88,
   minerals: 88, politics: 85, transport: 80, infrastructure: 80, manufacturing: 78,
   chemicals: 75, housing: 70, law: 65, security: 60, livelihood: 55,
   healthcare: 50, society: 40,
-  culture: 20, sports: 10,
 };
 
-// 生成微信公众号排版 HTML
-function generateWechatHtml(
-  countryName: string,
-  countryFlag: string,
-  date: string,
-  articles: Array<{
-    title: string;
-    summary: string;
-    content: string;
-    category: string;
-    source_name: string;
-    cover_image?: string;
-  }>
-): string {
-  const categoryLabels: Record<string, string> = {
-    politics: '政治',
-    economy: '经济',
-    policy: '政策',
-    law: '法律',
-    society: '社会',
-    culture: '人文',
-    sports: '体育',
-    healthcare: '医疗卫生',
-    energy: '能源',
-    oil_gas: '油气',
-    renewable_energy: '新能源',
-    chemicals: '化工',
-    minerals: '矿产',
-    infrastructure: '基建',
-    housing: '房地产',
-    manufacturing: '制造业',
-    livelihood: '民生',
-    security: '治安',
-    transport: '交通',
-  };
-
-  const articlesHtml = articles.map((article, index) => {
-    const categoryLabel = categoryLabels[article.category] || article.category;
-    const imgSrc = article.cover_image
-      ? article.cover_image
-      : (article.content.match(/<img[^>]*?\ssrc=["']([^"']+)["']/i)?.[1]) || '';
-
-    // 正文里的 `<img>` 标签直接保留（promise 过程中已替换为微信 CDN 图），仅去掉 referrerpolicy
-    const contentHtml = article.content
-      .replace(/referrerpolicy="[^"]*"/gi, '')
-      .replace(/\[IMAGE:([^\]]+)\]/g, `<div style="margin: 15px 0;"><img src="$1" style="width: 100%; border-radius: 8px;" /></div>`);
-    // 去掉正文末尾的省略号，确保以完整语句收尾
-    const bodyHtml = cleanSummary(contentHtml);
-
-    // 若正文 content 已经自带 `<img>` 首图，就不再重复输出独立封面，避免同一张图出现两次
-    const bodyHasImg = /<img[^>]*\ssrc=/i.test(contentHtml);
-    const coverBlock = (!bodyHasImg && imgSrc)
-      ? `<div style="margin: 15px 0;"><img src="${imgSrc}" style="width: 100%; border-radius: 8px;" referrerpolicy="no-referrer" /></div>`
-      : '';
-
-    return `
-      <div style="margin-bottom: 40px; padding-bottom: 30px; border-bottom: 1px solid #E8E8E8;">
-        <div style="display: flex; align-items: center; margin-bottom: 15px;">
-          <div style="background: #C8A45C; color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px;">${index + 1}</div>
-          <div style="flex: 1;">
-            <div style="font-size: 12px; color: #C8A45C; margin-bottom: 4px;">${categoryLabel}</div>
-            <h3 style="font-size: 18px; color: #0F1B2D; margin: 0; line-height: 1.4;">${article.title}</h3>
-          </div>
-        </div>
-        
-        ${coverBlock}
-
-        <div style="font-size: 16px; color: #333; line-height: 2;">
-          ${bodyHtml}
-        </div>
-        
-        <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #E8E8E8; font-size: 12px; color: #999;">
-          来源：${article.source_name}
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  return `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; padding: 8px; background: #F8F6F1;">
-      <!-- 头部 -->
-      <div style="text-align: center; padding: 24px 16px; background: linear-gradient(135deg, #0F1B2D 0%, #1a2d4a 100%); border-radius: 10px; margin-bottom: 20px;">
-        <div style="font-size: 48px; margin-bottom: 10px;">${countryFlag}</div>
-        <h1 style="color: #C8A45C; font-size: 26px; margin: 0 0 10px 0; font-weight: bold;">${countryName}</h1>
-        <h2 style="color: white; font-size: 20px; margin: 0 0 15px 0; font-weight: normal;">今日精选投资资讯</h2>
-        <div style="color: rgba(255,255,255,0.7); font-size: 14px;">${date}</div>
-      </div>
-      
-      <!-- 新闻列表 -->
-      <div style="background: white; border-radius: 10px; padding: 18px 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.06);">
-        ${articlesHtml}
-      </div>
-      
-      <!-- 底部 -->
-      <div style="text-align: center; margin-top: 20px; padding: 16px; color: #999; font-size: 12px;">
-        <div style="margin-bottom: 8px;">中亚投资资讯 | Central Asia Investment Daily</div>
-        <div>数据来源：各国主流媒体</div>
-      </div>
-    </div>
-  `;
-}
+// `normalizeImages` / `generateWechatHtml` / `cleanSummary` 见 `@/lib/wechat-template`。
 
 interface PushFailure {
   country_code: string;
@@ -607,24 +488,31 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         return b.relevanceScore - a.relevanceScore;
       });
 
-      // 内容级去重：确保每篇新闻讲不同的事情（标题+正文语义相似即视为重复）
-      // 同时限制文体类（culture/sports）每国最多 3 篇 —— 受众是国际投资者，
-      // 文体新闻「少一些」而不是完全没有（2026-09-19 用户明确要求）。
-      const MAX_SOFT_ARTICLES = 3;
-      let softCount = 0;
+      // 内容级去重：确保每篇新闻讲不同的事情（标题+正文语义相似即视为重复）。
       const selectedArticles: typeof scoredArticles = [];
 
       for (const article of scoredArticles) {
         // 今日精选：只设宽松上限防文章过长，不写死篇数
         if (selectedArticles.length >= maxPerCountry) break;
 
-        // 文体类限量
-        const isSoft = article.category === 'culture' || article.category === 'sports';
-        if (isSoft && softCount >= MAX_SOFT_ARTICLES) {
+        // 演艺娱乐 / 体育整类剔除。
+        // 用户 2026-09-19 的要求是「少一些」（当时每国限量 3 篇），
+        // 2026-09-21 改成「全部取消」—— 是**全删**。原来那套 `MAX_SOFT_ARTICLES`
+        // 计数逻辑已随之删掉，别再按「限量」去理解这段。
+        // 闸放在最前面：连国家相关性都不用判。
+        if (EXCLUDED_CATEGORIES.has(article.category)) {
+          console.log(`跳过文体类新闻（${article.category}）：${article.title}`);
           continue;
         }
 
-        // 国家相关性（智能判定：明确指向其它国家才排除）
+        // 源正文缺失的空壳文（「原文正文缺失，数据无法提取」）—— 通篇没有信息，
+        // 清洗救不回来，只能在这里丢。判据只看标题（详见 article-format.ts）。
+        if (hasMissingSource(article.title)) {
+          console.log(`跳过源正文缺失的新闻：${article.title}`);
+          continue;
+        }
+
+        // 国家相关性
         if (!isCountryRelevant(article.title, article.summary, country.code)) {
           console.log(`跳过与${country.name}无关的新闻：${article.title}`);
           continue;
@@ -639,7 +527,6 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           continue;
         }
 
-        if (isSoft) softCount++;
         selectedArticles.push(article);
       }
 
@@ -659,8 +546,10 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
       const wechatArticles = [];
       for (const a of selectedArticles) {
+        // 先清洗再上传图片：清洗会删掉模型自己编的图（占位图 / example.com / picsum 之类），
+        // 放在上传之前能省掉一批注定失败的网络请求，也避免把破图放进草稿。
         const imgRegex = /<img[^>]*?\ssrc=["']([^"']+)["'][^>]*>/gi;
-        let content = a.content;
+        let content = sanitizeArticleContent(a.content);
         const urls = [...content.matchAll(imgRegex)].map(m => m[1]);
         if (urls.length > 0) {
           // 每个 URL 并行上传，替换成微信 CDN url
@@ -681,8 +570,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           content,
           category: a.category,
           source_name: a.source_name,
-          // 封面优先取已替换成微信 CDN 的正文首图，保证微信可访问
-          cover_image: content.match(/<img[^>]*?\ssrc=["']([^"']+)["']/i)?.[1] || extractFirstImage(a.content) || undefined,
+          // 封面优先取已替换成微信 CDN 的正文首图，保证微信可访问。
+          // 兜底也从**清洗后**的正文里取 —— 用原始 a.content 会取到刚被删掉的编造图。
+          cover_image: content.match(/<img[^>]*?\ssrc=["']([^"']+)["']/i)?.[1] || extractFirstImage(content) || undefined,
         });
       }
 
@@ -699,7 +589,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       const thumbUrl =
         wechatArticles[0]?.cover_image ||
         selectedArticles[0]?.cover_image ||
-        extractFirstImage(selectedArticles[0]?.content || '') ||
+        // 同样从清洗后的正文取，避免把模型编造的图片地址当成草稿封面去下载
+        extractFirstImage(sanitizeArticleContent(selectedArticles[0]?.content || '')) ||
         undefined;
       const thumbMediaId = await uploadThumb(thumbUrl);
 
