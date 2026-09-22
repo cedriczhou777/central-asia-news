@@ -96,6 +96,14 @@ interface FetchSummary {
     droppedCountry: number;
     droppedTopic: number;
     candidates: number;
+    /**
+     * 归属国被改判的条数（`intl` 源的稿子被分给 5 国）。见 `resolveArticleCountry`。
+     *
+     * 口径：**判得出归属国**就 +1，因此它计入的是 `afterDate`，不是 `candidates` ——
+     * 改判后仍可能在 `droppedTopic` 被丢掉。判不出归属国的那些进了 `droppedCountry`。
+     * 目的：让「intl 那笔翻译钱花出去之后，稿子到底有没有流进 5 国」在 summary 里直接可见。
+     */
+    reassigned: number;
   }>;
   /**
    * 按国别汇总的采集漏斗 —— 回答「某国今天为什么只有 N 篇」看这里。
@@ -111,6 +119,15 @@ interface FetchSummary {
     droppedCountry: number;
     droppedTopic: number;
     candidates: number;
+    /**
+     * 同上；**只在本行（`intl`）有非零意义**。
+     *
+     * ⚠️ 这里按 `r.country`（= **源**的国别）分组，所以 intl 稿子改判到 uz 之后，
+     * 那几条仍算在 `intl` 这一行里，**不会**出现在 `uz` 行。看「uz 今天为什么多/少了几条」
+     * 时别忘了 intl 这行的贡献 —— 要拆到 5 国只能查库
+     * （`country_code='uz'` 且 `source_name` 是 Times of Central Asia）。
+     */
+    reassigned: number;
   }>;
   sourceErrors: Array<{ source: string; errors: string[] }>;
   /** 翻译通道用量：哪个通道翻了几篇、失败通道的具体报错。
@@ -267,6 +284,64 @@ function isCountryRelevant(title: string, description: string, countryCode: stri
   //    （它没有「本国」可兜底 —— 区域综合源里不提任何本地区国家的全球新闻，对本项目无意义）
   if (sourceCountry === countryCode && countryCode !== 'intl') return true;
   return false;
+}
+
+/**
+ * 可推送的国家清单 —— **「哪些国家会被推送」的唯一口径**，派生自 `countryList`，不要手写。
+ *
+ * ⚠️ 手写过一次，代价是**静默丢数据**：把 tm 换成 az 时漏改一份写死的清单，
+ * 于是候选进了一个永远不被遍历的桶（见 `candidatesByCountry` 附近那段注释）。
+ * 凡是「哪些国家会被推送」的判断，都必须派生自这里。
+ */
+const PUSHABLE_COUNTRY_CODES = countryList.map((c) => c.code);
+
+/**
+ * 判定一篇文章的**归属国**。
+ *
+ * - **非 `intl` 源**：归属国就是源自己的国家 —— 原样返回，行为逐字不变。
+ * - **`intl` 源**（区域综合源，目前只有 The Times of Central Asia）：源本身没有「本国」，
+ *   所以拿 `COUNTRY_KEYWORDS` 里**可推送国家**的词表扫正文，命中词数最多的那个就是归属。
+ *   返回 `null` 表示判不出来（纯区域级泛新闻，如「中亚水资源危机」）。
+ *
+ * ## 为什么必须判，而不是沿用 `'intl'`
+ *
+ * `push` 是按 `countryList` 遍历、并按 `country_code` 列筛库的，
+ * 所以 `country_code = 'intl'` 的稿子**永远推不出去** —— 翻译的钱照花，
+ * 中文稿进库躺着没人看。2026-09-22 实测库里已积了 15 篇这种稿子，且仍在每天新增
+ * （约 2–3 篇/轮 × 2 轮）。
+ *
+ * ## 为什么返回 `null` 时应当丢弃（而不是留成 intl）
+ *
+ * 本项目的产物是**5 份按国的报告**，没有「区域报告」这个出口。留成 `'intl'`
+ * 等于把「白花钱」继续做下去。丢弃是诚实的：它会以 `droppedCountry` 的形式
+ * 出现在 `funnelByCountry` 里，看得见、可归因。
+ *
+ * ⚠️ **只能在 `PUSHABLE_COUNTRY_CODES` 里选，不能拿 `COUNTRY_KEYWORDS` 的键当候选**——
+ * 那张表里有 `tm`，而 tm 不在 `countryList` 里；判成 tm 会进一个不被遍历的桶、静默消失。
+ * （这正是上面那段注释记的那次事故的同一形态。）
+ */
+function resolveArticleCountry(
+  title: string,
+  description: string,
+  sourceCountry: string,
+): string | null {
+  if (sourceCountry !== 'intl') return sourceCountry;
+
+  const text = `${title} ${description}`.toLowerCase();
+  let best: string | null = null;
+  let bestHits = 0;
+  for (const code of PUSHABLE_COUNTRY_CODES) {
+    const keywords = COUNTRY_KEYWORDS[code];
+    if (!keywords) continue;
+    // 命中词数最多的国家胜出；并列时按 PUSHABLE_COUNTRY_CODES 的顺序取先者
+    // （顺序来自 countryList，是稳定顺序，所以同一篇稿子的判定可复现）。
+    const hits = keywords.filter((kw) => text.includes(kw.toLowerCase())).length;
+    if (hits > bestHits) {
+      bestHits = hits;
+      best = code;
+    }
+  }
+  return bestHits > 0 ? best : null;
 }
 
 // 标题是否明显是文体/生活类垃圾（不值得花翻译钱）
@@ -467,6 +542,15 @@ async function processFetchNews(
     droppedCountry: number;
     /** 被 isInvestmentRelevant 丢掉的（与投资主题无关） */
     droppedTopic: number;
+    /**
+     * 归属国被**改判**的条数 —— 目前只可能来自 `intl` 源（见 `resolveArticleCountry`）。
+     *
+     * 不放进 `dropped*`：改判后的稿子是合格候选，只是换了国家。
+     * 单列出来是为了回答「intl 源（The Times of Central Asia）的稿子最后流去了哪」——
+     * 没有这个计数时，该源的 funnel 会显示 `candidates > 0`，
+     * 而库里搜不到任何 `country_code='intl'` 的行，只能靠翻日志。
+     */
+    reassigned: number;
     errors: string[];
   }[] = [];
 
@@ -485,6 +569,8 @@ async function processFetchNews(
       droppedJunk: 0,
       droppedCountry: 0,
       droppedTopic: 0,
+      /** 归属国被改判的条数（仅 intl 源可能非零）—— 口径见 `results` 上的类型注释。 */
+      reassigned: 0,
       errors: [] as string[],
     };
   }
@@ -551,6 +637,7 @@ async function processFetchNews(
       }
 
       // 对每篇新闻进行投资相关性评分和国家相关性检查
+      let sourceCandidateCount = 0;
       for (const item of targetItems) {
         const title = item.title || '';
         const description = item.contentSnippet || item.content || '';
@@ -561,22 +648,37 @@ async function processFetchNews(
           continue;
         }
 
+        // 归属国：**非 intl 源恒等于 `source.country`，行为逐字不变**；
+        // intl 源按正文判（见 resolveArticleCountry）。
+        // 判不出来 ⇒ 与任何一份报告都无关，丢弃 —— 计进 droppedCountry，让它在漏斗里看得见。
+        const resolvedCountry = resolveArticleCountry(title, description, source.country);
+        if (!resolvedCountry) {
+          result.droppedCountry++;
+          continue;
+        }
+        if (resolvedCountry !== source.country) result.reassigned++;
+
         // 检查是否与目标国家相关（含「其它主要国家」的排除逻辑）
-        if (!isCountryRelevant(title, description, source.country, source.country)) {
+        // ⚠️ 用**改判后的**国家来判，而不是 source.country —— 否则「一篇讲乌兹别克斯坦的
+        //    intl 稿子」会拿 intl 的规则去评（intl 没有本国、规则 3 直接拒），等于白拿。
+        if (!isCountryRelevant(title, description, resolvedCountry, source.country)) {
           result.droppedCountry++;
           continue; // 跳过与该国无关的新闻
         }
-        
+
         // 检查是否与投资主题相关
         if (isInvestmentRelevant(title, description)) {
           const relevanceScore = scoreInvestmentRelevance(`${title} ${description}`);
-          addCandidate(source.country, { item, source, relevanceScore });
+          addCandidate(resolvedCountry, { item, source, relevanceScore });
+          sourceCandidateCount++;
         } else {
           result.droppedTopic++;
         }
       }
 
-      console.log(`从 ${source.name} 采集 ${targetItems.length} 篇，其中投资相关 ${getCandidates(source.country).length} 篇`);
+      // 分母是「这个源贡献了多少候选」，所以不能再用 getCandidates(source.country) ——
+      // intl 源的候选全部改判到 5 国去了，用源国别查恒为 0，会把日志误导成「一篇都没进」。
+      console.log(`从 ${source.name} 采集 ${targetItems.length} 篇，其中投资相关 ${sourceCandidateCount} 篇`);
     } catch (err) {
       // `FeedFetchError` 的消息里已经带着 Content-Type / 状态码 / 逐 UA 尝试记录，
       // 直接透传即可 —— **不要再包一层只说「解析失败」的话**，那会把
@@ -694,8 +796,14 @@ async function processFetchNews(
   // 因为候选是按需建键的，某个国家一篇候选都没有时它压根不会有键 ——
   // 若按 Object.entries 遍历，这些国家会被整段跳过，连「用最新新闻兜底补充」
   // 都轮不到（kg / tj 常年就是靠兜底才有的文章，实测踩到过）。
-  // 'intl' 是区域综合源的归属，不属于 countries 表，单独补上。
-  for (const country of [...countryList.map((c) => c.code), 'intl']) {
+  //
+  // ⚠️ 2026-09-22 起这里**不再补 `'intl'`**。原因：intl 源的稿子已经在采集段按正文
+  // 改判到 5 国之一（见 resolveArticleCountry），`'intl'` 不再是合法归属。
+  // 留着它有两个坏处：① 这一轮会为空的 intl 桶再抓一遍 intl 源（白跑一次外网请求）；
+  // ② 更糟的是兜底把结果推回 intl 桶、最后以 `country_code='intl'` 插进库 ——
+  // 等于把刚修掉的「翻译了却永远推不出去」原样做回来。
+  // 清单口径统一走 PUSHABLE_COUNTRY_CODES（派生自 countryList，见那个常量的注释）。
+  for (const country of PUSHABLE_COUNTRY_CODES) {
     const candidates = getCandidates(country);
     // 如果投资相关新闻不足 minPerCountry 篇，用最新新闻补充
     const selectedCandidates = candidates;
@@ -719,6 +827,11 @@ async function processFetchNews(
             const t = item.title || '';
             const d = item.contentSnippet || item.content || '';
             if (isJunkTitle(t)) continue;
+            // ⚠️ 上面的 filter 保证 `source.country === country`（两者都在可推送清单里），
+            // 所以这一行目前恒成立、属于防御性写法。留着是为了万一以后有人把 intl 源
+            // 也放进兜底来源：那条路会让 intl 稿子以 `'intl'` 入库，
+            // 而 `'intl'` 永远推不出去 —— 正是这次要修掉的问题（见 resolveArticleCountry）。
+            if (resolveArticleCountry(t, d, source.country) !== country) continue;
             if (!isCountryRelevant(t, d, country, source.country)) continue;
 
             selectedCandidates.push({
@@ -812,7 +925,11 @@ async function processFetchNews(
           title: titleZh || '无标题',
           summary: summaryZh,
           content: contentZh,
-          country_code: source.country,
+          // ⚠️ 用**桶的** `country`，不是 `source.country`。
+          // 两者对 25 个普通源恒等（桶就是源国别），但 intl 源的稿子是被改判到 5 国的，
+          // 写 `source.country` 会把它们全部落成 `'intl'` —— 而 `'intl'` 永远推不出去。
+          // 这里写错是**静默**的：采集、翻译、入库、推送全都成功，只是那几篇没人看。
+          country_code: country,
           category,
           source_name: source.name,
           source_url: item.link || '',
@@ -1070,6 +1187,8 @@ async function processFetchNews(
       droppedTopic: r.droppedTopic,
       /** 进入候选池的条数（= afterDate − 三个丢弃原因） */
       candidates: r.afterDate - r.droppedJunk - r.droppedCountry - r.droppedTopic,
+      /** 归属国被改判的条数（仅 intl 源可能非零，见 `resolveArticleCountry`） */
+      reassigned: r.reassigned,
     })),
     /**
      * 按国别汇总的漏斗 —— **回答「某国今天为什么只有 N 篇」看这里，不要看 sourceCounts**。
@@ -1095,6 +1214,7 @@ async function processFetchNews(
         const droppedJunk = rs.reduce((a, r) => a + r.droppedJunk, 0);
         const droppedCountry = rs.reduce((a, r) => a + r.droppedCountry, 0);
         const droppedTopic = rs.reduce((a, r) => a + r.droppedTopic, 0);
+        const reassigned = rs.reduce((a, r) => a + r.reassigned, 0);
         return {
           country: cc,
           sources: rs.length,
@@ -1106,6 +1226,7 @@ async function processFetchNews(
           droppedCountry,
           droppedTopic,
           candidates: afterDate - droppedJunk - droppedCountry - droppedTopic,
+          reassigned,
         };
       }),
     sourceErrors: failedSources.map((r) => ({ source: r.source, errors: r.errors })),
