@@ -6,6 +6,7 @@ import { isChineseText, beijingDate, canonicalUrl, originalTitleKey } from '@/li
 import { dedupeStories } from '@/lib/same-event';
 import { scoreInvestmentRelevance, isInvestmentTopic } from '@/lib/investment-score';
 import { countryList } from '@/lib/data/countries';
+import { RSS_SOURCES, type RSSSource } from '@/lib/data/rss-sources';
 import { translateNews, resetTranslationStats, getTranslationStats, fallbackCategory } from '@/lib/translate';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
@@ -34,12 +35,8 @@ const parser = new Parser({
  */
 const DB_DEDUP_WINDOW_DAYS = 3;
 
-interface RSSSource {
-  name: string;
-  url: string;
-  country: string;
-  language: string;
-}
+// RSS 源清单已移到 `@/lib/data/rss-sources`（脚本要读它，Route Handler 导出不了）。
+// 加源/换源的纪律与已死源黑名单都记在那个文件里。
 
 /** 一条待入库的候选新闻。RSS / 网页爬虫 / Telegram 三条采集路径共用这个结构。 */
 interface Candidate {
@@ -136,65 +133,6 @@ interface FetchRunState {
   targetDate: string | null;
 }
 
-// RSS 源配置（可用源）
-// 说明：优先收录大陆网络可达的源。Telegram(api.telegram.org / t.me) 与 Instagram
-// 在国内网络不可达（本项目部署于微信云托管/大陆服务器），无法作为自动信息源接入；
-// 如需读取 Telegram 频道，请自建境外 RSSHub 桥并在 RSS_SOURCES 中声明其 telegram 镜像。
-//
-// ⚠️ 源的健康状况要定期用 GET /api/fetch-news 的 lastRun.sourceCounts 复查：
-// 2026-09-19 实测死源（404/410，已从清单移除，别加回来）：
-//   kabar.kg/rus/rss（410）、24.kg/rss/all（404）、24.kz/rss（404）、
-//   tengrinews.kz/rss_news/all.xml（404）、inform.kz 的 english rss（404）、
-//   kun.uz（无 RSS 接口）、daryo.uz（feed 空壳）
-// KG 已换成 kabar.kg/rss（吉语主源）、AKIpress、Vesti.kg、Tazabek（商业财经）、
-// Economist.kg（商业财经）；KZ 补了 Inbusiness.kz、Total.kz。
-const RSS_SOURCES: RSSSource[] = [
-  // 哈萨克斯坦
-  { name: 'The Astana Times', url: 'https://astanatimes.com/feed/', country: 'kz', language: 'en' },
-  { name: 'Egemen Qazaqstan', url: 'https://egemen.kz/rss/', country: 'kz', language: 'kk' },
-  { name: 'Newtimes.kz', url: 'https://newtimes.kz/rss/', country: 'kz', language: 'ru' },
-  { name: 'Inbusiness.kz', url: 'https://inbusiness.kz/rss', country: 'kz', language: 'ru' },
-  { name: 'Total.kz', url: 'https://total.kz/rss', country: 'kz', language: 'ru' },
-
-  // 乌兹别克斯坦
-  { name: 'UzA', url: 'https://uza.uz/rss/', country: 'uz', language: 'ru' },
-  { name: 'Gazeta.uz', url: 'https://www.gazeta.uz/rss', country: 'uz', language: 'ru' },
-  { name: 'Spot.uz', url: 'https://spot.uz/rss/', country: 'uz', language: 'ru' },
-  { name: 'Uznews.uz', url: 'https://uznews.uz/rss/', country: 'uz', language: 'ru' },
-
-  // 吉尔吉斯斯坦（2026-09-19 换血：旧的两个源 410/404 已死）
-  { name: 'Kabar', url: 'https://kabar.kg/rss', country: 'kg', language: 'ky' },
-  { name: 'AKIpress', url: 'https://kg.akipress.org/rss', country: 'kg', language: 'ru' },
-  { name: 'Vesti.kg', url: 'https://vesti.kg/rss', country: 'kg', language: 'ru' },
-  { name: 'Tazabek', url: 'https://tazabek.kg/rss', country: 'kg', language: 'ru' },
-  { name: 'Economist.kg', url: 'https://economist.kg/rss', country: 'kg', language: 'ru' },
-
-  // 塔吉克斯坦
-  { name: 'Khovar', url: 'https://khovar.tj/rss/', country: 'tj', language: 'ru' },
-  { name: 'Asia-Plus', url: 'https://asiaplustj.info/rss/', country: 'tj', language: 'ru' },
-  { name: 'Avesta', url: 'https://avesta.tj/rss/', country: 'tj', language: 'ru' },
-
-  // 阿塞拜疆
-  // 下面每个 URL 都逐个实测过（HTTP 200 且能解析出 item）。
-  // 注意一批常见的阿塞拜疆媒体被 Cloudflare 拦在外面，从本机返回 403，别往里加：
-  //   azernews.az / oxu.az / 1news.az / minval.az / news.day.az / musavat.com / report.az
-  // （2026-09-19 补测：abc.az / turan.az / news.az / sfera.az 均 404；interfax.az / aze.media 不可达）
-  { name: 'AZERTAC', url: 'https://azertag.az/en/rss', country: 'az', language: 'en' },
-  { name: 'AZERTAC (ru)', url: 'https://azertag.az/ru/rss', country: 'az', language: 'ru' },
-  { name: 'Trend.az', url: 'https://www.trend.az/rss/', country: 'az', language: 'en' },
-  { name: 'APA', url: 'https://apa.az/rss', country: 'az', language: 'az' },
-  { name: 'Haqqin.az', url: 'https://haqqin.az/rss', country: 'az', language: 'ru' },
-  { name: 'Qafqazinfo', url: 'https://qafqazinfo.az/rss', country: 'az', language: 'az' },
-  { name: 'Modern.az', url: 'https://modern.az/rss', country: 'az', language: 'az' },
-  { name: 'Banker.az', url: 'https://banker.az/feed/', country: 'az', language: 'az' },
-
-  // 区域综合媒体
-  { name: 'The Times of Central Asia', url: 'https://timesca.com/feed/', country: 'intl', language: 'en' },
-  // 曾经的 'Central Asia News'（centralasia.news/feed/）已于 2026-09-20 移除：
-  // 该地址返回的 Content-Type 是 text/html（47KB 的网页，不是 feed），
-  // rss-parser 每次都会报「Attribute without value」解析失败、稳定产出 0 条。
-  // 判断一个源是不是真 RSS，看 Content-Type 比看能不能 curl 到 200 靠谱得多。
-];
 
 // 投资相关性关键词与评分统一在 `@/lib/investment-score`。
 //

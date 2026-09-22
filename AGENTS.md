@@ -82,9 +82,14 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 
 | 命令 | 作用 | 需要 Key |
 | --- | --- | --- |
-| `pnpm verify:local` | 类型检查 + 频道解析用例，**提交前先跑这个** | 否 |
+| `pnpm verify:local` | 类型检查 + 全部离线回归用例，**提交前先跑这个** | 否 |
 | `pnpm ts-check` | 全量 TypeScript 类型检查 | 否 |
 | `pnpm test:channels` | `TELEGRAM_CHANNELS` 解析用例（12 条） | 否 |
+| `pnpm test:format` | 选稿判据 / 排版用例（25 条） | 否 |
+| `pnpm test:investment-score` | 投资评分 + **入库闸门语言覆盖**双向语料（83 条） | 否 |
+| `pnpm test:translate-prompt` | 翻译提示词的**产品口径**用例（30 条） | 否 |
+| `pnpm test:dedup` | 内容去重双向语料（99 条） | 否 |
+| `pnpm analyze:source-language` | **只读**：按国别跑闸门，看真实 feed 通过率 / 逐词误命中 | 否 |
 | `pnpm test:translate` | 真实调一次翻译模型 | **是** |
 | `pnpm lint:build` | ESLint | 否 |
 
@@ -147,7 +152,8 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 - `src/lib/data/types.ts` - 类型定义
 - `src/lib/data/countries.ts` - 国家数据
 - `src/lib/data/categories.ts` - 分类数据
-- `src/lib/data/sources.ts` - 新闻来源
+- `src/lib/data/sources.ts` - 新闻来源目录（⚠️ **无任何引用**，改源别改它）
+- `src/lib/data/rss-sources.ts` - **真正生效的** RSS 源定义（`RSS_SOURCES`，抓取端与离线脚本共用）
 
 ### 设计风格（公众号排版配色）
 - 主色：深藏青 #0F1B2D（权威、信任）
@@ -164,6 +170,26 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 
 ## 翻译保中文（重要）
 
+- **两条由产品口径决定、不是模型自由发挥的规则**（2026-09-22 定，都写在 `TRANSLATE_PROMPT` 里，
+  由 `pnpm test:translate-prompt` 逐条钉住）：
+  1. **相关性口径 = 政经 / 外资 / 工商税法 / 行业项目 / 社会民生**（提示词第 5 条）。
+     旧口径把「社会民生」整类漏在正向清单之外，而负向清单里的「日常生活琐事」又很容易把它一起扫掉 ——
+     结果物价、工资、就业、补贴、税费、住房、公用事业这类**没有金额、但直接决定消费能力与劳动力成本**
+     的稿子在入库阶段就没了。现在正向清单显式列出这一类，并**去掉了旧口径里的「宁可从严」**。
+     ⚠️ 口径只在这一处定义。`article-format.ts` 的 `EXCLUDED_CATEGORIES` 只排除 `culture` / `sports`，
+     **没有**排除 `livelihood` —— 两处一致，改这里时记得核对那边（`test:format` 钉着）。
+  2. **人名保留拉丁字母，不音译成汉字**（提示词第 6 条）。中亚/高加索人名的汉字音译各家不统一、
+     常常不准，投资者按拉丁写法反而检索得到（Tokayev / Mirziyoyev / Aliyev / Rahmon）。
+     ⚠️ 这条**只针对人名** —— 机构名、公司名、地名、职务照常译成中文。
+     ⚠️ 它会**拉低标题的汉字占比**，而 `isChineseText`（阈值 0.4，拉丁字母计入分母）既是
+     「翻译是否成功」也是「能不能推送」的判据。2026-09-22 用线上 400 篇量过余量：标题汉字占比
+     min=0.405 / p1=0.464 / 中位=0.931（0 篇低于 0.4），正常标题加一两个人名不会掉下去，
+     但**余量只有 0.005 的那几条是贴线的** —— 改完上线要复查这个分布，别让「保留人名」变成静默丢稿。
+     （同时验证过一个「只按字母算、把数字排除出分母」的替代口径，最小值只从 0.405 提到 0.410，
+     收益太小、不值得动一个被 4 处调用的判据，故未改。）
+- **回归**：`pnpm test:translate-prompt` 离线读 `TRANSLATE_PROMPT` 断言上面两条口径 + 占位符完整性
+  （`{LANG}`/`{TITLE}`/`{CONTENT}`/`{CATEGORIES}`）+ `langLabel` 覆盖 `RSS_SOURCES` 里每个语言，
+  不调模型、不碰数据库。
 - **部分国家（哈萨克、吉尔吉斯等）曾推送英文原文**：根因是 LLM 翻译失败/JSON 解析失败后，抓取侧静默把原文入库，推送又被优选出去。
 - **翻译逻辑已抽到 `src/lib/translate.ts`（`translateNews`）**：多模型降级链，**按序**尝试
   `zhipu`（`glm-4.7-flash`，免费档，关 thinking）→ `zhipu-flash`（`glm-4-flash-250414`，**同为智谱免费档、同 Key**）→ `deepseek`（`deepseek-flash`，**付费兜底**）；
@@ -193,6 +219,40 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
   （见 `pushExclusionReason` 注释里的第三次事故）。体检响应现在按原因报 `excludedByReason`，
   可以直接核对口径有没有对齐。
 - 搭配工具：`src/lib/utils.ts` 的 `isChineseText(text, threshold=0.4)`，中文字符占比达到阈值即视为中文。
+
+## 入库闸门的语言偏置（重要，曾让 kz/tj/kg/uz 每天只剩个位数候选）
+
+- **症状**：2026-09-22 用户问「哈萨克今天为什么只有一篇」。结论：**不是上限的问题**，
+  是入库闸门 `isInvestmentTopic`（`src/lib/investment-score.ts`）在**按语言而不是按题材**筛选。
+- **根因**：闸门**故意跑在翻译之前**（为了省翻译钱），拿到的还是原文；
+  但它的关键词表当时只有**纯英文 + 纯中文**两张 → 西里尔/中亚语条目几乎全被判为「非投资」丢掉。
+  实测同一轮抓取：The Astana Times（英文源）闸门通过率 **82.6%**，
+  而 Newtimes.kz / Total.kz / Egemen（俄文源）只有 **4.1%**（57/60、38/40、48/50 篇都死在 `droppedTopic`）。
+  后果是 kz 的选稿实际变成了「**英文源里**最好的投资新闻」，而不是「kz 最好的投资新闻」。
+- **修法**：加两组词表（`GATE_CYRILLIC` 224 条 + `GATE_OTHER_LATIN` 45 条词干）——
+  俄语 `инвестиц`/`инвестор`/`налог`/`нефт`/`экономик`…；哈萨克语**民族词**
+  `өндіріс`/`баға`/`салық`/`құрылыс`/`кәсіп`；吉尔吉斯 `салык`/`курулуш`/`долбоор`；
+  塔吉克 `сармоя`/`андоз`/`буҷет`/`нарх`；乌兹别克西里尔 `солиқ`/`қурилиш`/`иш ҳақ`；
+  阿塞拜疆 / 乌兹别克拉丁 `iqtisad`/`sərmayə`/`vergi`/`sarmoya`/`soliq`/`budjet`。
+  - ⚠️ **必须用词干，不能只收原形**：这些语言屈折很重（`инвестиция` / `инвестиции` /
+    `инвестиционный` 是同一个词），只收原形等于没收。代价是词干会撞上无关词 ——
+    **这就是为什么必须逐词体检**（见下一条）。
+  - ⚠️ **别加国家名 / 城市名**：对「哪篇更相关」零区分力（某国的文章几乎篇篇都有），
+    只会给所有文章加同一个常数。这条规则在 `investment-score.ts` 头部也写着，别「顺手补上」。
+  - ⚠️ **加宽闸门是安全的**：它是「只放宽不放严」的前置粗筛，后面还有 LLM 的
+    `investorRelevant` 做真正的相关性判定（见 `translate.ts`）。放宽只多花翻译钱，不掉质量 ——
+    所以**放宽的方向可以大胆，收紧的方向才要谨慎**。
+- **逐词体检**（`pnpm analyze:source-language <国别> --words`）当场拦下 4 个**字面看不出、
+  但会误伤**的词干：`рудник`→`сотрудник`（员工）、`руда`/`руды`→`труда`（劳动）、
+  `аким`→`каким`（哪个）、`баа`→`баары`（所有，会让 Kabar 全站内容都通过闸门）。
+  另有两个已知碰撞**接受并写进注释**：`цены`→`сцены`、`пенси`→`компенси`、`золот`→体育金牌。
+  ⇒ **加词之后必须跑一次 `--words`**：聚合通过率只能看出「放宽了」，看不出「误命中了」。
+- **回归**：`pnpm test:investment-score` 的「二之二 闸门语言覆盖」段，用**真实线上标题+描述**做
+  双向语料（16 条必须通过 / 12 条必须拦住 / 4 条误命中护栏），该套用例共 83 项断言。
+  ⚠️ 语料必须用 `标题 + 描述`，因为生产闸门的输入就是 `` `${title} ${desc}` `` ——
+  只喂标题会误判（Stadler 那篇的哈萨克语信号 `көлік` 只出现在描述里）。
+- **上线后复查**：`GET /api/fetch-news` 看 `funnelByCountry[*].droppedTopic` 是否下降、
+  `candidates` 是否上升；本机可直接 `pnpm analyze:source-language kz --dump=5` 看真实 feed 逐条 ✓/✗。
 
 ## 抓取放宽与内容去重（重要，曾因过严导致每国不足15篇）
 
@@ -285,12 +345,18 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
   **`funnelByCountry` 是 2026-09-22 为回答「某国今天为什么只有一篇」补的**（在那之前只报每源 `fetched`，中间全不可见）。口径：`fetched`（feed 条目）→ `afterDate`（过日期窗）→ `droppedJunk` / `droppedCountry` / `droppedTopic`（三个丢弃原因）→ `candidates`（进候选池）。四个环节的修法完全不同，所以分开计数：
   - `afterDate` 偏小 → 源在这个时段没发稿，或 **feed 本身只保留很少条目**（实测 Astana Times 的 feed 只有 **10 条**，等于只覆盖最近一两天；对比 Newtimes.kz 有 100 条）
   - `droppedCountry` 偏大 → `isCountryRelevant` 里「标题/正文提到**任何一个其它目标国**就丢」这条互斥规则在该国身上过敏（中亚当地区新闻极易同时提到邻国）
-  - `droppedTopic` 偏大 → 入库闸门词表对该国**语言**覆盖不足（如哈萨克语/吉尔吉斯语源）
+  - `droppedTopic` 偏大 → 入库闸门词表对该国**语言**覆盖不足。**2026-09-22 已按此修过一轮**
+    （加西里尔 + 中亚语言词表，见上节「入库闸门的语言偏置」）。若仍偏大，
+    先 `pnpm analyze:source-language <国别> --words` 看是哪条词没覆盖，**别去动闸门之外的判据**。
   - `fetched=0` 且 `sourceErrors` 有值 → 源本身不通。**2026-09-22 实测这批**：`Inbusiness.kz` 与 `Economist.kg` 从容器侧 `Request timed out after 30000ms`（本机 curl 同 URL 正常拿到 65 条/714KB，**所以别用本机可达性判断容器可达性**）；`AKIpress` / `Tazabek` 报 `Unexpected close tag`（XML 畸形，rss-parser 直接放弃整个源）；**11 个 Telegram 源全部 `fetch failed`**，因为 `telegram-proxy.cedriczhou777.workers.dev` 在大陆容器里不可达 —— 即 Telegram 补充段**整体是死的**，与它「帮助凑齐每国篇数」的设计目的相悖，要么换掉 workers.dev 域名（自建反代/自有域名），要么删掉这段免得误以为有供给。
 
 ## 信息源与社交网络（重要）
 
-- **真正生效的** RSS 源定义在 `src/app/api/fetch-news/route.ts` 的 `RSS_SOURCES`（按 `country: kz/uz/kg/az/tj/intl` 分组）；已补充大陆可访问的真实媒体源。
+- **真正生效的** RSS 源定义在 `src/lib/data/rss-sources.ts` 的 `RSS_SOURCES`（按 `country: kz/uz/kg/az/tj/intl` 分组，共 26 个源）；已补充大陆可访问的真实媒体源。
+  **2026-09-22 从 `fetch-news/route.ts` 抽出来**，因为离线脚本（`analyze:source-language`）也要读同一份定义 ——
+  「一处定义、两处调用」，**别在脚本里再抄一份源列表**（抄了就会一边改了另一边没改，不报错、只在结论里体现）。
+  ⚠️ 每条源上的 `language` 字段是**声明值、不可靠**：实测有源声明 `ru` 实际发 `kk`，也有同一个源混发多语。
+  **别拿它做筛选依据**；要判语言请按实测文字系统（`analyze:source-language` 会打印按文字系统的分组统计）。
   `src/lib/data/sources.ts` 那份目录目前**没有任何地方引用**（barrel 也无人 import），改源不用碰它 —— 但 `types.ts` 的 `NewsSource` 联合类型必须与它对齐，否则 `tsc` 报错。
 - **Telegram / Instagram / 公共 RSSHub 在大陆网络不可达**（本项目部署在微信云托管，`t.me`、`api.telegram.org`、`instagram.com` 均 `000`），**不能伪造社交集成**。
 - **Telegram 通过 Cloudflare Worker 反向代理接入（已实现，配置驱动）**：
