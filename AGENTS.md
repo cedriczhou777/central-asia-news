@@ -381,9 +381,27 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
     （252–274ms 就快速失败 = 连接层就没通，不是超时），`verdict` 已写明：
     微信云托管在大陆访问不了 `*.workers.dev` ⇒ 要给 Worker **绑自有域名**，或换一个可达的转发地址。
     **改 `TELEGRAM_CHANNELS` 没有用**（频道名没写错）。
-    ⇒ **待定决策（产品向，二选一，2026-09-22 未拍板）**：
-    ① 给 Worker 绑自有域名，保留这段；② 删掉这段，免得多出 12 行噪声错误、看着像有供给。
-    参考：闸门修完后供给已经够（同日候选 kz 111 / kg 117 / az 99 / uz 38 / tj 15）。
+    ⇒ **2026-09-22 已定方案：给 Worker 绑自有域名，保留这一段。**（不要再走「删掉」那条路）
+    **为什么这条路可行（有证据，不是推测）**：被封的是 `*.workers.dev` 这个**域名**，
+    不是 Cloudflare 的网络 —— 容器**已经在抓通 7 个 Cloudflare 后面的源**：
+    `astanatimes.com` / `egemen.kz` / `asiaplustj.info` / `apa.az` / `haqqin.az` / `total.kz` / `vesti.kg`
+    （响应头 `server: cloudflare` + `cf-ray`，且 `sourceCounts` 里都有条目）。
+    ⇒ 同一条出口路径到 Cloudflare 是通的，换个域名即可。
+    **Worker 本身也是好的**（先用它自证，别一上手就绑域名）：
+    `curl -sS -m 25 'https://telegram-proxy.cedriczhou777.workers.dev/?channel=%40tengrinews'`
+    → 返回 `{"posts":[{title,url,date,summary}...]}`；裸打根路径返回 `{"error":"missing or invalid ?channel=@name"}`。
+    **这两个响应就证明 Worker 活着、上游 Telegram 也通，问题 100% 在域名可达性。**
+    操作步骤：
+    1. Cloudflare 控制台 → Workers & Pages → 选中该 Worker → Settings → **Domains & Routes** →
+       Add → **Custom Domain**，填一个**已托管在同一个 Cloudflare 账号下**的域名
+       （如 `tg.example.com`）。⚠️ 域名必须已把 NS 交给 Cloudflare，否则加不了 Custom Domain；
+       `*.workers.dev` 不能被 CNAME 指过去。
+    2. 微信云托管控制台 → 服务设置 → 环境变量 → 把 `TELEGRAM_WORKER_URL` 改成
+       `https://tg.example.com`（末尾带不带 `/` 都行，代码会 `replace(/\/+$/,'')` 再拼 `/?channel=`）。
+    3. 改环境变量会**重启容器**（等于换容器、`lastRun` 清空）⇒ **同样避开 08:00 / 19:00 的任务窗口**。
+    4. 验证：`curl -s "$BASE/api/telegram-check"` → 看 `okCount` 是否 **12**、
+       `egressControl.ok` 是否仍为 `true`、`verdict` 是否变成通过。
+       再打一次零成本体检，`sourceErrors` 应从 13 条降到 **1 条**。
     ⚠️ 频道数是 **12**（`channelCount=12`），**旧文写的「11 个」是错的**，以诊断接口为准。
     `tj` 是唯一「Telegram 本可加厚」的国家（它卡在 15 上限），但 `@asiaplus` 与已有的
     `Asia-Plus` RSS 源重复，实际增量只有 `@sputnik_tajikistan` 一个频道。
@@ -462,8 +480,9 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
     再逐频道报 `status / error / requestUrl / latencyMs`，并直接给出 `verdict`。
     实测结论是 `egressControl.ok=true` 而 12 个频道**全部 `status:null` + `fetch failed`**（252–274ms 快速失败）
     ⇒ 微信云托管在大陆**访问不了 `*.workers.dev`**，**改 `TELEGRAM_CHANNELS` 毫无用处**（频道名没写错）。
-    待定决策：给 Worker **绑自有域名**保留这一段，或**删掉这一段**（供给已够，详见上面
-    「`funnelByCountry`」一节里的候选数）。**在没人拍板前，别把这段当作有效供给。**
+    **2026-09-22 已定方案：给这个 Worker 绑自有域名**（容器能抓通其它 Cloudflare 源，所以这条路通）——
+    完整步骤与验证方法见上面「`funnelByCountry`」一节里那一条。
+    **在域名绑好、`GET /api/telegram-check` 的 `okCount=12` 之前，别把这段当作有效供给。**
   - Worker 脚本需在 Cloudflare 免费版部署，把请求转发到 `https://api.telegram.org` 的 `getUpdates`/`getChat`，按 channel 返回文本与日期（参考 scraper.ts 中 worker 期望的返回结构）。
 
 ## 定时任务
