@@ -348,7 +348,59 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
   - `droppedTopic` 偏大 → 入库闸门词表对该国**语言**覆盖不足。**2026-09-22 已按此修过一轮**
     （加西里尔 + 中亚语言词表，见上节「入库闸门的语言偏置」）。若仍偏大，
     先 `pnpm analyze:source-language <国别> --words` 看是哪条词没覆盖，**别去动闸门之外的判据**。
-  - `fetched=0` 且 `sourceErrors` 有值 → 源本身不通。**2026-09-22 实测这批**：`Inbusiness.kz` 与 `Economist.kg` 从容器侧 `Request timed out after 30000ms`（本机 curl 同 URL 正常拿到 65 条/714KB，**所以别用本机可达性判断容器可达性**）；`AKIpress` / `Tazabek` 报 `Unexpected close tag`（XML 畸形，rss-parser 直接放弃整个源）；**11 个 Telegram 源全部 `fetch failed`**，因为 `telegram-proxy.cedriczhou777.workers.dev` 在大陆容器里不可达 —— 即 Telegram 补充段**整体是死的**，与它「帮助凑齐每国篇数」的设计目的相悖，要么换掉 workers.dev 域名（自建反代/自有域名），要么删掉这段免得误以为有供给。
+  - `fetched=0` 且 `sourceErrors` 有值 → 源本身不通。**2026-09-22 实测这批**：
+    `Inbusiness.kz` 从容器侧 `Request timed out after 30000ms`（本机同 URL 正常拿到 65 条 ——
+    **别用本机可达性判断容器可达性**；真实原因是它的 feed 有 **642KB**，见「源取回层」一节）；
+    **11 个 Telegram 源全部 `fetch failed`**，因为 `telegram-proxy.cedriczhou777.workers.dev`
+    在大陆容器里不可达 —— 即 Telegram 补充段**整体是死的**，与它「帮助凑齐每国篇数」的
+    设计目的相悖，要么换掉 workers.dev 域名（自建反代/自有域名），要么删掉这段免得误以为有供给。
+    ⚠️ **这里原先还写着「`AKIpress` / `Tazabek` 报 `Unexpected close tag` = XML 畸形」——那条归因是错的**，
+    真实原因是**我们自己的 UA**，详见下面「源取回层」一节。**报错长什么样不等于病因是什么。**
+
+## 源取回层：`src/lib/feed-fetch.ts`（重要）
+
+- **所有 RSS 取回都必须走 `fetchFeed(url)`，不要直接 `new Parser().parseURL()`。**
+  两个调用点（首轮采集、以及候选不足时的兜底补充）都已改过来。
+- **它解决的是一类被误诊过的失效**：2026-09-22 排查发现 `kg.akipress.org/rss` 与
+  `tazabek.kg/rss` 在容器里报 `RSS 解析失败：Unexpected close tag Line: 38 Column: 7`，
+  当时的结论是「XML 畸形、rss-parser 放弃整个源」。**实际这两个站点是按 `User-Agent`
+  决定返回什么的** —— 认得的 feed 阅读器 UA 给真 XML，其它一律给 **SPA 首页 HTML**；
+  而首页 HTML 恰好能过 xml2js 的前几十行、再在第 38 行撞上不闭合标签，
+  抛出**和「XML 畸形」一模一样**的错误。**两个不同站点报出同一个位置**就是线索，当时没往这看。
+- **实测对照（同一 URL、同一时刻，只改 UA；5 轮重复 5/5 一致，不是缓存噪声）**：
+
+  | User-Agent | `tazabek.kg/rss` | `kg.akipress.org/rss` |
+  |---|---|---|
+  | `CentralAsiaNewsBot/1.0`（**改之前线上用的**） | HTML 8350B，**0 条** | HTML 8517B，**0 条** |
+  | `CentralAsiaNews/1.0 (+https://…)`（**现在的首选**） | **XML，30 条** | **XML，30 条** |
+  | `rss-parser`（库默认，**现在的兜底**） | XML，30 条 | XML，30 条 |
+  | `Mozilla/5.0` | HTML，0 条 | HTML，0 条 |
+
+  ⇒ **我们那个「礼貌的」自定义 UA 就是把这两个源搞死的原因**；
+  同时**否掉「伪装浏览器」这个反方向的修法**（`Mozilla/5.0` 两边都拿不到 feed）。
+- **⚠️ 别把结论写成「换个魔法 UA 就好」——那不可控。** 真正可控、也是这次真正要修的是
+  **「能不能看出来拿到的是网页」**：`fetchFeed` 在响应是 `text/html`（或正文以 `<!doctype html`/`<html` 开头）
+  时**直接报错**，错误信息里带 **Content-Type + 正文开头**，并附**逐 UA 的尝试记录**。
+  同时它**只在拿到网页时换 UA 重试一次**（HTTP 4xx/5xx、超时、空正文都直接定论，不重复打对方站点）。
+- **顺带白拿的两个改进**（都在同一个函数里，不需要额外配置）：
+  - **gzip**：`fetch`（undici）默认接受 gzip 并自动解压，而 rss-parser 的 `parseURL` 走 Node http、
+    **不带 `Accept-Encoding`**。`inbusiness.kz/rss` 明文 **641939B → gzip 154014B（小 4.2 倍）**，
+    这正是它超时的原因。
+  - **超时 30s → 60s**（`FEED_TIMEOUT_MS`，可用 `RSS_TIMEOUT_MS` 覆盖）。
+    600KB 级 feed 在大陆→中亚链路上 30s 不够；**「源超时」和「源坏了」修法完全不同，别混。**
+- **错误信息里不要丢掉原因**：`describeFetchError` 专门处理 `AbortSignal.timeout` 抛的
+  `TimeoutError`（**它的 `message` 常常是空的**）和只有 `cause.code` 的网络错误 ——
+  线上 `Asia-Plus` 当时报的就是 `RSS 解析失败：` 后面空空如也，等于没报。
+- **顺带补的观测**：兜底补充那一轮原来是空的 `catch {}`，于是「兜底整段都失败」在
+  summary 里完全看不出来；现在至少 `console.warn` 一行。
+- **回归与体检**：
+  - `pnpm test:feed-fetch`（24 项，**离线**）—— 用**当时真实抓下来的那两份首页 HTML**当语料，
+    钉死「必须判成网页」，并钉住「不能误判真 feed」（含 `Content-Type` 谎报、空 CT、BOM、
+    feed 正文里出现 `<html` 字样等边界）。
+  - `pnpm analyze:feeds [国别] [--only=<子串>]` —— 逐源报 状态 / **Content-Type** / 字节 / 耗时 /
+    条数 / 用了哪个 UA。⚠️ 这是**本机视角**；容器视角仍看 `funnelByCountry` 与 `sourceErrors`。
+- **排查口诀**：`sourceErrors` 里见到 `Unexpected close tag` / `Feed not recognized` 这类
+  **XML 报错时，先怀疑拿到的是网页**，跑 `analyze:feeds` 看 Content-Type，**不要去查对方的 XML**。
 
 ## 信息源与社交网络（重要）
 

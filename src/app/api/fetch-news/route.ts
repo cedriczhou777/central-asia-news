@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Parser from 'rss-parser';
 import { insertArticles, getRecentCanonicalUrls, getRecentOriginalTitleKeys } from '@/lib/db-articles';
 import { fetchTelegramRSS } from '@/lib/scraper';
 import { isChineseText, beijingDate, canonicalUrl, originalTitleKey } from '@/lib/utils';
@@ -7,13 +6,14 @@ import { dedupeStories } from '@/lib/same-event';
 import { scoreInvestmentRelevance, isInvestmentTopic } from '@/lib/investment-score';
 import { countryList } from '@/lib/data/countries';
 import { RSS_SOURCES, type RSSSource } from '@/lib/data/rss-sources';
+import { fetchFeed, FeedFetchError, type FeedItem } from '@/lib/feed-fetch';
 import { translateNews, resetTranslationStats, getTranslationStats, fallbackCategory } from '@/lib/translate';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
-const parser = new Parser({
-  timeout: 30000,
-  headers: { 'User-Agent': 'CentralAsiaNewsBot/1.0' },
-});
+// ⚠️ 不要在这里 new Parser / 直接调 parser.parseURL —— 用 `@/lib/feed-fetch` 的 `fetchFeed`。
+// 原因见那个文件的头部：直接 parseURL 时，「站点按 UA 返回网页」会被 xml2js 报成
+// `Unexpected close tag`，看起来像「XML 畸形」，实际是 UA 身份问题。
+// fetchFeed 会把 Content-Type 一起报出来，并且自带超时与 gzip。
 
 /**
  * 闸 2（库内身份去重）回溯的天数。
@@ -40,7 +40,7 @@ const DB_DEDUP_WINDOW_DAYS = 3;
 
 /** 一条待入库的候选新闻。RSS / 网页爬虫 / Telegram 三条采集路径共用这个结构。 */
 interface Candidate {
-  item: Parser.Item;
+  item: FeedItem;
   source: RSSSource;
   relevanceScore: number;
 }
@@ -521,8 +521,11 @@ async function processFetchNews(
   for (const source of RSS_SOURCES) {
     const result = emptySourceResult(source.name, source.country);
     try {
-      const feed = await parser.parseURL(source.url);
+      const { feed } = await fetchFeed(source.url);
       result.fetched = feed.items.length;
+      // 注意：「HTML 被当成 feed」这类问题现在由 fetchFeed 抛错（错误信息带 Content-Type），
+      // 所以走到这里 `fetched === 0` 只剩「feed 本身是空频道」这一种可能。
+      // 不把它记成 error —— `failedSources` 的语义是「不通」，混进「通了但没稿」会让这个信号失真。
 
       // 筛选目标日期（放宽：目标日期及前 1 天，即最多回溯 2 天）的新闻
       const targetItems = feed.items.filter((item) => {
@@ -575,7 +578,14 @@ async function processFetchNews(
 
       console.log(`从 ${source.name} 采集 ${targetItems.length} 篇，其中投资相关 ${getCandidates(source.country).length} 篇`);
     } catch (err) {
-      result.errors.push(`RSS 解析失败：${err instanceof Error ? err.message : '未知错误'}`);
+      // `FeedFetchError` 的消息里已经带着 Content-Type / 状态码 / 逐 UA 尝试记录，
+      // 直接透传即可 —— **不要再包一层只说「解析失败」的话**，那会把
+      // 「拿到网页」误报成「XML 畸形」（2026-09-22 就是这么误诊的）。
+      result.errors.push(
+        err instanceof FeedFetchError
+          ? `RSS 取回失败：${err.message}`
+          : `RSS 取回失败：${err instanceof Error ? err.message : '未知错误'}`,
+      );
     }
     results.push(result);
   }
@@ -698,7 +708,7 @@ async function processFetchNews(
       // 正是从这个口子混进库里的（它们没进第一轮候选，却被兜底捞了回来）。
       for (const source of RSS_SOURCES.filter(s => s.country === country)) {
         try {
-          const feed = await parser.parseURL(source.url);
+          const { feed } = await fetchFeed(source.url);
           const latestItems = feed.items.slice(0, minPerCountry * 2); // 多取一些作为候选
 
           for (const item of latestItems) {
@@ -717,8 +727,15 @@ async function processFetchNews(
               relevanceScore: 0, // 补充新闻评分为 0
             });
           }
-        } catch {
-          // 忽略错误
+        } catch (err) {
+          // ⚠️ 这里**故意不写进 sourceErrors**：同一批源在第一轮已经报过一次，
+          // 这里再记一次会把「同一批源报两遍」和「兜底这一轮才坏了」混在一起。
+          // 但也**不能不吭声** —— 旧版是空的 `catch {}`，
+          // 于是「兜底整段都失败」在 summary 里完全看不出来，只能靠人去数候选数。
+          console.warn(
+            `[兜底] ${country} 从 ${source.name} 补充抓取失败：`,
+            err instanceof Error ? err.message : err,
+          );
         }
       }
     }

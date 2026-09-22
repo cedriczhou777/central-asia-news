@@ -21,7 +21,9 @@
     "test:translate-prompt": "tsx scripts/test-translate-prompt.ts",
     "test:dedup-stability": "tsx scripts/analyze-judge-stability.ts",
     "analyze:source-language": "tsx scripts/analyze-source-language.ts",
-    "verify:local": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-prompt && pnpm test:dedup"
+    "verify:local": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-prompt && pnpm test:feed-fetch && pnpm test:dedup",
+    "test:feed-fetch": "tsx scripts/test-feed-fetch.ts",
+    "analyze:feeds": "tsx scripts/analyze-feeds.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

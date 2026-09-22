@@ -22,12 +22,18 @@
  * - 优先收录**大陆网络可达**的源。本项目部署在微信云托管（大陆），
  *   `api.telegram.org` / `t.me` / Instagram 都不可达 —— 见下面 Telegram 段的说明。
  * - 判断一个地址是不是真 RSS，**看 `Content-Type`，不要看能不能 curl 到 200**。
- *   已踩过：`centralasia.news/feed/` 返回 200 但是 47KB 的 HTML 网页，
- *   rss-parser 每次都报解析失败、稳定产出 0 条。
- * - **换源之后要复查健康度**：`GET /api/fetch-news` 的 `lastRun.sourceCounts`
- *   按源给出 `fetched / afterDate / droppedJunk / droppedCountry / droppedTopic /
- *   candidates`。`fetched=0` 是源不通；`droppedTopic` 接近 `fetched` 要警惕
- *   语言问题（见 `analyze-source-language.ts`）。
+ *   已踩过两次：
+ *   ① `centralasia.news/feed/` 返回 200 但是 47KB 的 HTML 网页（已移除）；
+ *   ②（2026-09-22）`kg.akipress.org/rss` 与 `tazabek.kg/rss` **也是 200 + 网页** ——
+ *   但成因不同：它们**按 `User-Agent` 返回**，认得 feed 阅读器 UA 才给真 XML。
+ *   当时因为报错长得像 `Unexpected close tag`，被误记成「XML 畸形」。
+ *   **现在取回统一走 `src/lib/feed-fetch.ts` 的 `fetchFeed`**，它会在拿到网页时报错并带上
+ *   Content-Type（详见那个文件的头部 + AGENTS.md「源取回层」）。**别再在别处 new Parser。**
+ * - **换源之后要复查健康度**：`pnpm analyze:feeds`（逐源报 Content-Type / 字节 / 条数 / UA）
+ *   是**本机视角**；**容器视角**看 `GET /api/fetch-news` 的 `lastRun.sourceCounts`
+ *   与 `sourceErrors`（按源给出 `fetched / afterDate / droppedJunk / droppedCountry /
+ *   droppedTopic / candidates`）。`fetched=0` 是源不通；`droppedTopic` 接近 `fetched`
+ *   要警惕语言问题（见 `analyze-source-language.ts`）。**两边都要看，两者实测会不一致。**
  * - 2026-09-19 实测死源（404/410，已移除，**别加回来**）：
  *   `kabar.kg/rus/rss`(410)、`24.kg/rss/all`(404)、`24.kz/rss`(404)、
  *   `tengrinews.kz/rss_news/all.xml`(404)、inform.kz 的 english rss(404)、
