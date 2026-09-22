@@ -495,14 +495,49 @@ async function modeChecks(): Promise<void> {
   // L2 判定的采样温度必须是 0（贪心）。
   //
   // 这条断言没有别的用途，就是**防止有人把它改回去** —— 它的值不出现在任何
-  // 输出里，改错了不会报错，只会让「同一批候选对两次跑出不同结论」：
-  // 2026-09-21 实测同一份输入，两次分别判出 4 对 / 10 对是同一件事。
-  // 而下游是删除动作，不稳定本身就足以让这条链路不可用。
+  // 输出里，改错了不会报错，只会让「同一批候选对两次跑出不同结论」。
+  //
+  // 为什么温度必须是 0：下游是**删除动作**，同一个输入两次跑出不同结论，
+  // 这条链路就没法信任。这是设计上的必要性，与「实测有多不稳」无关。
+  //
+  // ⚠️ 这里刻意**不写任何「不稳程度」的数字**：早先那句「两次分别判出 4 对 / 10 对」
+  // 是在**体检接口的错误输入**上测出来的（那批是亚运会体育新闻，而体育在推送前
+  // 就被 `pushExclusionReason` 整类排除，根本进不了 L2）。用生产不会遇到的输入
+  // 去给生产链路定性，是错的口径。真正的不稳程度至今**没有可信数字**。
   // `translate.ts` 的默认温度 0.3 是给翻译留用词变化用的，判定不能沿用它。
   ok(
     'L2 判定用贪心解码（temperature = 0），不吃翻译的 0.3',
     JUDGE_TEMPERATURE === 0,
     String(JUDGE_TEMPERATURE),
+  );
+
+  // 通道名必须被带出来（`llm.provider`）。
+  //
+  // 这个字段不改任何行为，所以**丢掉了不会有任何症状**，只会在排查
+  // 「两次结论不同」时让人无法区分「换了通道」和「模型本身不稳」——
+  // 2026-09-22 就因为缺它，只能停在「不稳定，原因未知」。
+  const asked = fakeAsk(() => '{"same":[]}');
+  const probe = await dedupeStories(
+    [{ title: '哈萨克斯坦与中方签署铀矿开发协议' }, { title: '哈萨克斯坦与中方签署铀矿开发协议，总投资12亿美元' }],
+    { useLlm: true, judge: { ask: asked.ask } },
+  );
+  ok('L2 结果带出回答通道名（丢了不会有症状，只能靠断言钉住）', probe.llm.provider === 'fake-model', String(probe.llm.provider));
+
+  // group 形态也必须带通道名。
+  //
+  // 曾经这里只修了 pair：`llm.provider` 在 group 形态下静默为空。
+  // 这正是本项目反复出现的「同一件事写两遍、只修一遍」——字段缺失没有症状，
+  // 只有把形态切到 group 之后排查稳定性时才会发现「谁答的」问不出来。
+  // 生产当前只用 pair，但护栏必须两种形态都在。
+  const grouped = fakeAsk(() => '{"groups":[[0,1]]}');
+  const gProbe = await dedupeStories(
+    [{ title: '哈萨克斯坦与中方签署铀矿开发协议' }, { title: '哈萨克斯坦与中方签署铀矿开发协议，总投资12亿美元' }],
+    { useLlm: true, judge: { mode: 'group', ask: grouped.ask } },
+  );
+  ok(
+    'group 形态同样带出回答通道名（只修 pair 会留下无症状的缺口）',
+    gProbe.llm.provider === 'fake-model',
+    String(gProbe.llm.provider),
   );
 }
 
@@ -525,7 +560,10 @@ function fakeAsk(reply: (prompt: string) => string) {
     seen,
     ask: async (prompt: string) => {
       seen.push(prompt);
-      return { ok: true as const, text: reply(prompt) };
+      // 带上 provider：真实出口（`askLlmJson`）成功时**必须**带通道名，
+      // 调用方靠它区分「换了通道」与「模型本身不稳」。假模型也带上，
+      // 才能断言这一路没有被丢掉（见 `llm.provider` 的断言）。
+      return { ok: true as const, text: reply(prompt), provider: 'fake-model' };
     },
   };
 }

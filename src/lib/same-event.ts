@@ -91,6 +91,18 @@ export interface DedupResult<T> {
     vetoed?: Array<{ a: number; b: number; sim: number }>;
     /** pair 形态：问了模型、但模型判「否」的对（用来发现**漏合并**） */
     declined?: Array<{ a: number; b: number; sim: number }>;
+    /**
+     * 这次判定**由哪条通道回答的**（`zhipu` / `zhipu-flash` / `deepseek`）。
+     *
+     * 为什么必须报出来：判定链路的随机源不止温度一个 ——
+     * `askLlmJson` 会按顺序在通道间降级，**不同型号给出不同答案**。
+     * 2026-09-22 实测三次同样的请求耗时 4.7s / 11.7s / 68.7s（差 15 倍），
+     * 高度提示中途换过通道；但当时没有这个字段，**无法把「换通道」与
+     * 「模型本身不稳」区分开**，只能停在「不稳定，原因未知」。
+     * 有了它，「两次结论不同」至少能立刻分成两类：
+     * 通道不同（可修：给判定链路钉一条固定通道）还是通道相同（不可修）。
+     */
+    provider?: string;
     error?: string;
     raw?: string[];
   };
@@ -534,7 +546,7 @@ export interface JudgeOptions {
 /** 模型调用出口的签名：只吃提示词，返回文本或错误（与 `askLlmJson` 的返回同形）。 */
 export type AskFn = (
   prompt: string,
-) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+) => Promise<{ ok: true; text: string; provider?: string } | { ok: false; error: string }>;
 
 /**
  * L2 判定的采样温度，**必须是 0**。
@@ -605,6 +617,8 @@ export async function judgeSameEventPairs<
   candidateCount: number;
   vetoed: Array<{ a: number; b: number; sim: number }>;
   declined: Array<{ a: number; b: number; sim: number }>;
+  /** 回答这次判定的通道名（见 `DedupResult.llm.provider` 的说明） */
+  provider?: string;
   error?: string;
   raw?: string[];
 }> {
@@ -653,6 +667,7 @@ export async function judgeSameEventPairs<
     // 被模型判「否」的对也要报出来：只看「判是的」没法发现**漏合并**，
     // 而漏合并和误合并是这套机制的两个相反方向的失效，必须都能看见。
     declined: asked.filter((_, i) => !accepted.has(i)).map((c) => ({ a: c.a, b: c.b, sim: c.sim })),
+    ...(res.provider ? { provider: res.provider } : {}),
     raw,
   };
 }
@@ -718,10 +733,14 @@ export async function judgeSameEventGroups<
 >(
   items: T[],
   options: JudgeOptions = {},
-): Promise<{ groups: number[][]; error?: string; raw?: string[] }> {
+): Promise<{ groups: number[][]; provider?: string; error?: string; raw?: string[] }> {
   const groups: number[][] = [];
   const raw: string[] = [];
   let rejectedBySize = 0;
+  // 本形态按块多次问模型，**最后一位答话的通道**才是「这次判定是谁做的」。
+  // 不取第一位：中途换过通道时，结论是混合的，报最后一位比报第一位更贴近
+  // 「最终那批组是谁给的」（与 pair 形态单次调用不同，这里天然可能不一致）。
+  let provider: string | undefined;
 
   for (let base = 0; base < items.length; base += LLM_BLOCK_SIZE) {
     const block = items.slice(base, base + LLM_BLOCK_SIZE);
@@ -742,6 +761,7 @@ export async function judgeSameEventGroups<
     if (!res.ok) {
       return { groups: [], error: 'error' in res ? res.error : '模型调用失败（无错误详情）' };
     }
+    if (res.provider) provider = res.provider;
     const parsed = parseEventGroups(res.text, block.length);
     if (!parsed) {
       return { groups: [], error: '模型返回不是合法 JSON（已按「不合并」处理）' };
@@ -764,7 +784,8 @@ export async function judgeSameEventGroups<
     }
   }
 
-  const result: { groups: number[][]; error?: string; raw?: string[] } = { groups };
+  const result: { groups: number[][]; provider?: string; error?: string; raw?: string[] } = { groups };
+  if (provider) result.provider = provider;
   if (options.collectRaw) result.raw = raw;
   if (rejectedBySize > 0) {
     result.error = `有 ${rejectedBySize} 个分组因超过 ${MAX_GROUP_SIZE} 条被整组丢弃（模型可能在乱合并）`;
@@ -826,10 +847,12 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   let judgedGroups: number[][] = [];
   let judgedError: string | undefined;
   let raws: string[] | undefined;
+  let judgedProvider: string | undefined;
 
   if (mode === 'pair') {
     const res = await judgeSameEventPairs(keptAfterIdentity, judge);
     raws = res.raw;
+    judgedProvider = res.provider;
     llm.pairs = res.pairs;
     llm.candidateCount = res.candidateCount;
     llm.vetoed = res.vetoed;
@@ -864,11 +887,15 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   } else {
     const res = await judgeSameEventGroups(keptAfterIdentity, judge);
     raws = res.raw;
+    judgedProvider = res.provider;
     if (res.error) judgedError = res.error;
     judgedGroups = res.groups;
   }
 
   if (judge?.collectRaw && raws) llm.raw = raws;
+  // 通道名无条件带出（不依赖 collectRaw）—— 「这次是谁答的」是判读稳定性的必要输入，
+  // 不能只在 debug 模式下才有。
+  if (judgedProvider) llm.provider = judgedProvider;
   if (judgedError) {
     llm.error = judgedError;
     console.error(`[same-event] 模型判组未完全生效：${judgedError}`);

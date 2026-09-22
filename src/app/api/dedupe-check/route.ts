@@ -333,6 +333,14 @@ export async function GET(request: NextRequest) {
       vetoedPairs?: number;
       /** 问了模型、但模型判「否」的对数 —— 用来发现**漏合并** */
       declinedPairs?: number;
+      /**
+       * 这次判定**由哪条通道回答的**（`zhipu` / `zhipu-flash` / `deepseek`）。
+       *
+       * 判读稳定性的必要输入：降级链会在通道间切换，**不同型号给出不同答案**。
+       * 连跑两次结论不同时，先看这个字段 —— 通道不同 = 可修（给判定钉一条固定通道）；
+       * 通道相同还不同 = 模型/服务端本身不稳，改不了。
+       */
+      provider?: string;
       groups: number;
       error?: string;
       /** 每组的具体标题 —— 只报数量的话，误合并会静默藏起来，看不出来 */
@@ -391,6 +399,7 @@ export async function GET(request: NextRequest) {
         judgedPairs: llm.pairs?.length,
         vetoedPairs: llm.vetoed?.length,
         declinedPairs: llm.declined?.length,
+        provider: llm.provider,
         groups: llm.groups.length,
         error: llm.error,
         groupTitles: llm.groups.map((g) => ({

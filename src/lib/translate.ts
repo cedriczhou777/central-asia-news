@@ -503,7 +503,7 @@ export async function askLlmJson(
      */
     temperature?: number;
   } = {},
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; text: string; provider: string } | { ok: false; error: string }> {
   const { timeoutMs = CALL_TIMEOUT_MS } = options;
   const failures: string[] = [];
 
@@ -521,7 +521,10 @@ export async function askLlmJson(
       ...(options.extraBody ? { extraOverride: options.extraBody } : {}),
       onError: (err) => failures.push(`${provider.name}：${err}`),
     });
-    if (call.text) return { ok: true, text: call.text };
+    // ⚠️ 成功时**必须带出通道名**：降级链会在通道间切换，
+    // 而不同型号对同一份输入可以给出不同答案 —— 调用方要判「两次结论不同」
+    // 是「换了通道」还是「模型本身不稳」，就靠这个字段。别把它丢掉。
+    if (call.text) return { ok: true, text: call.text, provider: provider.name };
   }
 
   return { ok: false, error: failures.join('；') || '没有任何可用的模型通道' };
