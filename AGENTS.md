@@ -185,7 +185,13 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 - **已移除扣子专属依赖 `coze-coding-dev-sdk`**（原豆包降级通道），备用模型不再绑定扣子平台。
 - **本地自测**：`pnpm tsx scripts/test-translate.ts`（在 `.env.local` 里配好 Key 后运行），只验证模型调用与中文解析，不碰数据库和微信接口。
 - **入库端**（`fetch-news/route.ts`）：翻译结果必须通过 `isChineseText` 校验（标题+正文中文字符占比达标才视为成功），否则 `translated=false` 且**跳过该篇不入库**（`continue`），绝不把原文写入 content。
-- **推送端**（`wechat/push/route.ts`）：精选前用 `isChineseText(a.title) && isChineseText(a.content)` 过滤非中文文章，历史英文数据也不会被推送。
+- **推送端**（`wechat/push/route.ts`）：精选前会挡掉非中文文章，历史英文数据也不会被推送。
+  ⚠️ 这条判据现在是 `@/lib/article-format` 的 **`isPushableText(title, content)`**，
+  并且**已经并进 `pushExclusionReason`**（原因名 `untranslated`）——
+  即「选稿资格」是一个函数、四条判据。**别在调用方再写 `isChineseText(a.title) && isChineseText(a.content)`**：
+  这个表达式曾与 `pushExclusionReason` 分家，导致体检接口把 31% 的非中文文章喂给模型判重
+  （见 `pushExclusionReason` 注释里的第三次事故）。体检响应现在按原因报 `excludedByReason`，
+  可以直接核对口径有没有对齐。
 - 搭配工具：`src/lib/utils.ts` 的 `isChineseText(text, threshold=0.4)`，中文字符占比达到阈值即视为中文。
 
 ## 抓取放宽与内容去重（重要，曾因过严导致每国不足15篇）

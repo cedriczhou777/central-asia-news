@@ -5,20 +5,25 @@
  *
  * ## 为什么必须有这个脚本
  *
- * 这三条判据（分类 / 空壳文 / 国家相关性）决定**一篇稿子能不能进推送**。
+ * 这几条判据（未翻译 / 分类 / 空壳文 / 国家相关性）决定**一篇稿子能不能进推送**。
  * 它们原本**内联写在 `POST /api/wechat/push` 里**，于是任何「想按生产口径跑一遍」
  * 的地方都得照着抄 —— 而 2026-09-22 实测就抄漏了一条，后果是结论整个反过来：
  *
  *   `GET /api/dedupe-check?llm=1` 用来自检 L2 模型判重稳不稳，
- *   但它的输入直接来自 `getArticleIdentities()`，**没套这三条判据**。
+ *   但它的输入直接来自 `getArticleIdentities()`，**没套这几条判据**。
  *   结果 kz 的 12 个候选对**全是体育新闻**（亚洲运动会乒乓球/自行车/举重），
  *   而体育类在 push 里被 `EXCLUDED_CATEGORIES` 整类剔掉、永远进不了生产。
  *   三次调用判出 4 / 6 / 2 对「同一件事」→ 被读成「L2 判定不稳定」，
  *   实际上测的是模型对**模板化体育标题**的判断，与生产无关。
  *
+ * 同日又发现**第三次**同形态的事故：把上面三条补齐后体检**仍然**不一致，
+ * 因为 push 在这三条之前还有一道 `isChineseText` 过滤（挡翻译失败、以原文入库的历史行）。
+ * 14 天窗口 29 个候选对里 **9 个（31%）标题是俄文/哈萨克文/英文**，全被喂给了模型。
+ * → 「补齐了」是错觉，**要把判据链当成一个整体核对**，所以本条也收进来了。
+ *
  * 所以本文件用**双向语料**钉住这个共享函数：
  *   - 该留的（五国各一条真实投资标题）必须返回 `null`；
- *   - 该剔的（文体类 / 空壳文 / 讲他国）必须返回对应的原因。
+ *   - 该剔的（非中文 / 文体类 / 空壳文 / 讲他国）必须返回对应的原因。
  * 只测一边一定会调歪：放宽了会把文体新闻推给读者，收紧了会复发「每国不足 15 篇」。
  *
  * ⚠️ **别在调用方再写一份过滤条件**。要加判据就加在这里，
@@ -49,10 +54,15 @@ type Case = {
   cc: string;
   category: string;
   title: string;
+  /** 正文。默认给一段中文；测「未翻译」时要显式传外文/空值。 */
+  content?: string | null;
   summary?: string;
   expect: PushExclusion | null;
   why: string;
 };
+
+/** 可用的中文正文（正文必须是中文才算「已翻译」）。 */
+const ZH = '据当地媒体报道，该项目总投资约1.2亿美元，计划于2027年建成投产，将带动当地就业。';
 
 // ============================================================
 // 一、必须保留：五国各一条真实标题（收紧判据会让它变红）
@@ -97,7 +107,10 @@ const KEEP: Case[] = [
 ];
 
 for (const c of KEEP) {
-  const got = pushExclusionReason({ title: c.title, summary: c.summary, category: c.category }, c.cc);
+  const got = pushExclusionReason(
+    { title: c.title, content: ZH, summary: c.summary, category: c.category },
+    c.cc,
+  );
   ok(`保留 ${c.cc}：${c.title.slice(0, 26)}…`, got === c.expect, `得到 ${JSON.stringify(got)}（${c.why}）`);
 }
 
@@ -142,8 +155,70 @@ const DROP: Case[] = [
 ];
 
 for (const c of DROP) {
-  const got = pushExclusionReason({ title: c.title, summary: c.summary, category: c.category }, c.cc);
+  const got = pushExclusionReason(
+    { title: c.title, content: c.content === undefined ? ZH : c.content, summary: c.summary, category: c.category },
+    c.cc,
+  );
   ok(`剔除 ${c.cc}：${c.title.slice(0, 26)}…`, got === c.expect, `得到 ${JSON.stringify(got)}，期望 ${JSON.stringify(c.expect)}（${c.why}）`);
+}
+
+// ============================================================
+// 二之二、必须剔除：未翻译（2026-09-22 第三次事故的那条判据）
+// ============================================================
+
+section('必须剔除：未翻译（原文没有变成中文）');
+
+const UNTRANSLATED: Case[] = [
+  {
+    // 实测样本（tj，14 天窗口）：这条与被判「否」/「是」的误判直接相关
+    cc: 'tj', category: 'economy',
+    title: 'Ҷашни 35-солагии Истиқлоли давлатиро дар шаҳру ноҳияҳои тобеи ҷумҳурӣ ба таври шукуҳманд таҷлил намуданд',
+    content: 'Дар ин давра беш аз 300 филм ба навор гирифта шудааст.',
+    expect: 'untranslated', why: '★ 标题塔吉克文、正文塔吉克文（翻译失败的历史行）',
+  },
+  {
+    cc: 'kz', category: 'sports',
+    title: 'Мемлекет басшысы теннисші Елена Рыбакинаны құттықтады',
+    content: 'Тарихи жетістік: қазақстандық теннисші әлемнің бірінші ракеткасы атанды',
+    expect: 'untranslated', why: '★ 实测样本：哈萨克文',
+  },
+  {
+    cc: 'kg', category: 'politics',
+    title: 'Sadyr Japarov urges Kyrgyzstanis not to turn disagreements into confrontation',
+    content: 'The president said the country\'s international standing has grown.',
+    expect: 'untranslated', why: '★ 实测样本：英文',
+  },
+  {
+    // 标题是中文但正文没翻过来 —— 只查标题会漏，所以两条都要查
+    cc: 'uz', category: 'economy',
+    title: '乌兹别克斯坦与塞尔维亚建立战略伙伴关系',
+    content: 'Uzbekistan and Serbia signed a joint statement on strategic partnership in Belgrade.',
+    expect: 'untranslated', why: '标题中文但正文是英文 → 只查标题会漏',
+  },
+  {
+    // 顺序：同时命中「未翻译」和「文体类」时报 untranslated（与 push 原先的实际顺序一致）
+    cc: 'kz', category: 'sports',
+    title: 'Спортшылар Азия ойындарында жеңіске жетті',
+    content: 'Жарыс қорытындысы бойынша қазақстандық спортшылар алтын медаль алды.',
+    expect: 'untranslated', why: '同时命中两条 → untranslated 优先（顺序决定日志原因）',
+  },
+  {
+    // 正文为空 → 也算「未翻译」。这里**不是**宽松，而是与 push 原行为一致：
+    // 原来那句 `isChineseText(a.content)` 在 content 为 '' 时返回 false，同样会挡掉。
+    // （我第一版断言把它写成 `null`，是照着自己的直觉写的，被这条测试当场抓住。）
+    cc: 'kz', category: 'economy',
+    title: '哈萨克斯坦与中方签署铀矿开发协议',
+    content: '',
+    expect: 'untranslated', why: '正文为空 → 与原 push 行为一致地挡掉（空正文推不出内容）',
+  },
+];
+
+for (const c of UNTRANSLATED) {
+  const got = pushExclusionReason(
+    { title: c.title, content: c.content === undefined ? ZH : c.content, summary: c.summary, category: c.category },
+    c.cc,
+  );
+  ok(`未翻译 ${c.cc}：${c.title.slice(0, 26)}…`, got === c.expect, `得到 ${JSON.stringify(got)}，期望 ${JSON.stringify(c.expect)}（${c.why}）`);
 }
 
 // ============================================================
@@ -160,7 +235,7 @@ section('intl 的两道防线：规则挡不住它，只能靠国家列表挡');
   // 所以「不推送 intl」必须由调用方（体检接口用 `PUSHED_COUNTRIES`）单独处理。
   // 两条机制都要有：只看规则会以为 intl 会被推送，只看国家列表会漏掉内容判据。
   const intl = pushExclusionReason(
-    { title: 'The Times of Central Asia: 区域投资动态', summary: '', category: 'economy' },
+    { title: '中亚时报：区域投资动态', content: ZH, summary: '', category: 'economy' },
     'intl',
   );
   ok('共享规则**不**拦截 intl（所以调用方必须自己按国家列表收窄）', intl === null, JSON.stringify(intl));
@@ -173,10 +248,11 @@ section('intl 的两道防线：规则挡不住它，只能靠国家列表挡');
 }
 
 {
-  // 缺字段不能崩（真实数据里 category / summary 都可能是 null）
-  ok('category 缺失时不崩且放行', pushExclusionReason({ title: '哈萨克斯坦铁路项目开工', category: null }, 'kz') === null);
-  ok('summary 缺失时不崩', pushExclusionReason({ title: '哈萨克斯坦铁路项目开工' }, 'kz') === null);
-  ok('title 为空时按国家相关性处理，不崩', typeof pushExclusionReason({ title: '', category: 'economy' }, 'kz') !== 'undefined');
+  // 缺字段不能崩（真实数据里 category / summary / content 都可能是 null）
+  ok('category 缺失时不崩且放行', pushExclusionReason({ title: '哈萨克斯坦铁路项目开工', content: ZH, category: null }, 'kz') === null);
+  ok('summary 缺失时不崩', pushExclusionReason({ title: '哈萨克斯坦铁路项目开工', content: ZH }, 'kz') === null);
+  ok('content 为 null 时按「未翻译」处理，不崩', pushExclusionReason({ title: '哈萨克斯坦铁路项目开工', content: null, category: 'economy' }, 'kz') === 'untranslated');
+  ok('title 为空时按国家相关性处理，不崩', typeof pushExclusionReason({ title: '', content: ZH, category: 'economy' }, 'kz') !== 'undefined');
 }
 
 // ----- 汇总 -----

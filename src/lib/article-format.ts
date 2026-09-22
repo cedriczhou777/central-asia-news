@@ -6,6 +6,8 @@
  * 一堆正则、看不到它为什么存在，很容易在「清理代码」时删掉。
  */
 
+import { isChineseText } from './utils';
+
 // ---------------------------------------------------------------------------
 // 一、正文清洗
 // ---------------------------------------------------------------------------
@@ -646,14 +648,28 @@ export function isCountryRelevant(title: string, summary: string, countryCode: s
 // ---------------------------------------------------------------------------
 
 /** 一篇稿子被挡在推送之外的原因。`null` = 合格。 */
-export type PushExclusion = 'category' | 'missing_source' | 'country';
+export type PushExclusion = 'untranslated' | 'category' | 'missing_source' | 'country';
+
+/**
+ * 这篇稿子的**文本**有没有资格被推送：标题和正文都必须是中文。
+ *
+ * 存在的意义是「一处定义、多处调用」—— 这个判据原先只内联写在 `push` 路由里，
+ * 于是体检接口没有它，把**永远进不了生产**的文章喂给了模型（详见下方
+ * `pushExclusionReason` 注释里的第三次事故）。
+ *
+ * ⚠️ 调用方请用本函数，**不要再写 `isChineseText(a.title) && isChineseText(a.content)`**
+ * —— 这个表达式曾经在两处各写一份，就是分叉的起点。
+ */
+export function isPushableText(title: string | null | undefined, content: string | null | undefined): boolean {
+  return isChineseText(title || '') && isChineseText(content || '');
+}
 
 /**
  * 这篇稿子有没有资格进「今日精选」？返回 `null` 表示合格。
  *
  * ## 为什么要抽成一个函数（这是一次真实的误判）
  *
- * 这三条判据原本是**内联写在 `POST /api/wechat/push` 里的**，
+ * 这几条判据原本是**内联写在 `POST /api/wechat/push` 里的**，
  * 于是任何「想按生产口径跑一遍」的地方（诊断接口、体检脚本）都得**照着抄一遍**。
  * 抄漏一条，结论就完全反过来 —— 2026-09-22 实测踩到：
  *
@@ -665,16 +681,40 @@ export type PushExclusion = 'category' | 'missing_source' | 'country';
  *   实际上测的是模型对**模板化体育标题**（「…在亚洲运动会中夺冠」vs「…夺得铜牌」）
  *   的判断，与生产无关。
  *
- * 这个坑和投资相关性评分那次是同一形态：**同一个判据在两处各写一份，
- * 一边对一边错**，而且不报错、只在结论里悄悄体现。所以判据必须共享。
+ *   这个坑和投资相关性评分那次是同一形态：**同一个判据在两处各写一份，
+ *   一边对一边错**，而且不报错、只在结论里悄悄体现。所以判据必须共享。
+ *
+ * ## 第三次：漏掉「未翻译」这条（2026-09-22 当天又踩到）
+ *
+ * 把上面三条补齐之后，体检**仍然**与 `push` 不一致 —— 因为 `push` 在套这三条
+ * 判据**之前**还有一道 `isChineseText` 过滤（挡掉翻译失败、以原文入库的历史行）。
+ * 实测 14 天窗口 29 个候选对里 **9 个（31%）的标题是俄文/哈萨克文/英文**，
+ * 这些对在生产里根本不会存在，却都进了模型判定。更糟的是非中文对**更容易误判**：
+ * 一对共享「35 сол / Истиқлол」（35 周年/独立）的**无关**文章被 13/14 次判成
+ * 「同一件事」（一个是新西伯利亚的庆祝活动、一个是「35 年拍了 300 部电影」）。
+ *
+ * 教训：**「补齐了」是错觉，要把判据链当成一个整体去核对**。
+ * 所以本函数现在把 `untranslated` 也收进来，成为唯一的资格判据；
+ * `push` 路由也改为调用它，不再自己写过滤表达式。
  *
  * ⚠️ 调用方**不要**再自己写过滤条件，也不要把这里的顺序换掉 ——
  * 顺序决定了「同一篇同时命中多条时报哪个原因」，日志里靠这个原因定位问题。
+ * `untranslated` 排在最前，与 `push` 原先「先滤非中文、再套三条判据」的实际顺序一致。
  */
 export function pushExclusionReason(
-  article: { title: string; summary?: string | null; category?: string | null },
+  article: {
+    title: string;
+    /**
+     * **必填**（可为 null）。刻意不给默认值：漏传会让「未翻译」这条判据静默失效，
+     * 而那正是第三次事故的形态 —— 让类型系统替我们挡住。
+     */
+    content: string | null;
+    summary?: string | null;
+    category?: string | null;
+  },
   countryCode: string,
 ): PushExclusion | null {
+  if (!isPushableText(article.title, article.content)) return 'untranslated';
   if (article.category && EXCLUDED_CATEGORIES.has(article.category)) return 'category';
   if (hasMissingSource(article.title || '')) return 'missing_source';
   if (!isCountryRelevant(article.title || '', article.summary || '', countryCode)) return 'country';

@@ -321,8 +321,17 @@ export async function GET(request: NextRequest) {
       ok: boolean;
       /** 该国窗口内的总行数（套选稿判据之前） */
       rowsInWindow?: number;
-      /** 被 `pushExclusionReason` 挡掉、没交给模型的行数（文体类/空壳文/与他国无关） */
+      /** 被 `pushExclusionReason` 挡掉、没交给模型的行数（未翻译/文体类/空壳文/与他国无关） */
       excludedByRules?: number;
+      /**
+       * 上面那些是**按什么原因**挡掉的（`untranslated` / `category` / `missing_source` / `country`）。
+       *
+       * 为什么要把明细报出来：判据链已经因为「只补一部分」栽过两次
+       * （漏了选稿三条判据、漏了 `isChineseText`）。只报总数时，
+       * 「补漏有没有补全」只能靠读代码相信；报了明细就能直接核对
+       * —— 比如 `untranslated` 为 0 而窗口里明明有外文稿，说明这条判据没生效。
+       */
+      excludedByReason?: Record<string, number>;
       /** 真正喂给模型的行数（= min(合格行数, limit)），也就是 `pairs`/`declined` 里标题的出处 */
       sampleSize?: number;
       /** 本轮问给模型的候选对数（pair 形态才有） */
@@ -376,7 +385,23 @@ export async function GET(request: NextRequest) {
       // （亚洲运动会乒乓球/自行车/举重），而体育类在 push 里被 `EXCLUDED_CATEGORIES`
       // 整类剔掉、永远进不了生产。三次调用判出 4 / 6 / 2 对「同一件事」，
       // 被读成「L2 判定不稳定」，实际上测的是模型对**模板化体育标题**的判断。
-      const eligible = list.filter((r) => !pushExclusionReason(r as never, cc));
+      // ⚠️ 判据链必须**整体**与 push 一致，只补一部分等于没补。
+      // 2026-09-22 同一天踩了两次：先发现没套选稿三条判据（kz 的 12 个候选对
+      // 全是亚洲运动会体育稿），补齐后又发现 push 在这三条**之前**还有一道
+      // `isChineseText` 过滤（挡翻译失败、以原文入库的历史行）——
+      // 14 天窗口 29 个候选对里 9 个（31%）标题是俄文/哈萨克文/英文，全被喂给了模型，
+      // 而且非中文对**更容易误判**：一对只共享「35 сол / Истиқлол」的无关文章
+      // 被 13/14 次判成「同一件事」。
+      // 现在四条判据都在 `pushExclusionReason` 里（`untranslated` 也收进来了），
+      // 并按原因分类报出来 —— 这样「体检口径是否真的等于 push 口径」是可核对的，
+      // 而不是靠读代码相信。
+      const excludedByReason: Record<string, number> = {};
+      const eligible = list.filter((r) => {
+        const why = pushExclusionReason(r as never, cc);
+        if (!why) return true;
+        excludedByReason[why] = (excludedByReason[why] || 0) + 1;
+        return false;
+      });
       const excludedByRules = list.length - eligible.length;
       const slice = eligible.slice(0, perCountryLimit);
       const { llm } = await dedupeStories(slice as never[], {
@@ -402,6 +427,7 @@ export async function GET(request: NextRequest) {
         ok: llm.ok,
         rowsInWindow: list.length,
         excludedByRules,
+        excludedByReason,
         sampleSize: slice.length,
         candidatePairs: llm.candidateCount,
         judgedPairs: llm.pairs?.length,

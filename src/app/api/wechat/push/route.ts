@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
-import { beijingDate, extractFirstImage, isChineseText } from '@/lib/utils';
+import { beijingDate, extractFirstImage } from '@/lib/utils';
 import { dedupeStories } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
   pushExclusionReason,
+  isPushableText,
   sanitizeArticleContent,
 } from '@/lib/article-format';
 import { generateWechatHtml } from '@/lib/wechat-template';
@@ -436,9 +437,13 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
 
       console.log(`${country.name}过去${hours}小时共${articles.length}篇文章`);
 
-      // 过滤未翻译为中文的原文：只推送中文内容，英文/俄文原文直接跳过
+      // 过滤未翻译为中文的原文：只推送中文内容，英文/俄文原文直接跳过。
+      //
+      // 判据本体在 `@/lib/article-format` 的 `isPushableText` —— **不要在这里内联重写**。
+      // 这个表达式曾经和 `pushExclusionReason` 分家，导致体检接口漏掉它、
+      // 把永远进不了生产的非中文文章喂给模型（见 `pushExclusionReason` 的注释）。
       const chineseArticles = articles.filter(
-        a => isChineseText(a.title) && isChineseText(a.content)
+        a => isPushableText(a.title, a.content)
       );
       if (chineseArticles.length < articles.length) {
         console.log(`[${country.name}] 过滤掉 ${articles.length - chineseArticles.length} 篇非中文文章，保留 ${chineseArticles.length} 篇`);
@@ -473,13 +478,17 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       //      同一件事的第二条刚好排在后面时更容易漏。
       // 拆成两步后，去重看的是「本国全部合格候选」，截取上限放在最后。
       const eligible = scoredArticles.filter((article) => {
-        // 三条判据本体在 `@/lib/article-format` 的 `pushExclusionReason` ——
+        // 四条判据本体在 `@/lib/article-format` 的 `pushExclusionReason` ——
         // **不要在这里内联重写**。原因见那个函数的注释：诊断接口一度因为
         // 自己抄了一份（还抄漏了 `EXCLUDED_CATEGORIES`）而得出相反结论。
         const reason = pushExclusionReason(article, country.code);
         if (!reason) return true;
         // 逐条打日志，便于事后回答「这篇为什么没进」
-        if (reason === 'category') {
+        if (reason === 'untranslated') {
+          // 正常不该走到这里（上面 `isPushableText` 已经滤过一轮）。
+          // 真出现说明两处判据又不一致了 —— 所以这条不是死代码，是哨兵。
+          console.warn(`[${country.name}] 未翻译的文章漏到选稿阶段（判据可能已分叉）：${article.title}`);
+        } else if (reason === 'category') {
           console.log(`跳过文体类新闻（${article.category}）：${article.title}`);
         } else if (reason === 'missing_source') {
           console.log(`跳过源正文缺失的新闻：${article.title}`);
