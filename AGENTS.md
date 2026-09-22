@@ -8,6 +8,55 @@
 - **UI 组件**: shadcn/ui (基于 Radix UI)
 - **Styling**: Tailwind CSS 4
 
+## 未结项（截至 2026-09-22）
+
+> 这份清单是**收敛索引**：每条都指向本文档里写细节的那一节，别在这里重复维护细节。
+> 有新发现先加到这里，解决了就把对应条目删掉。
+
+### A. 阻塞在用户侧的动作
+
+1. **Telegram 绑自有域名** —— 12 个频道全不可用，根因是容器到不了 `*.workers.dev`（不是配置问题）。
+   要做：Cloudflare 给 Worker 绑 Custom Domain → 云托管改 `TELEGRAM_WORKER_URL` → 验证 `GET /api/telegram-check` 的 `okCount=12`。
+   步骤见「信息源与社交网络」一节。**绑好之前别把这段当成有效供给。**
+2. **`intl` 源要不要收编（产品决策）** —— The Times of Central Asia 的文章会入库、会翻译，
+   但 `push` 只遍历 5 国 ⇒ **永远推不出去，翻译成本白花**。二选一：归到某个国家，或删掉这个源。
+   见「抓取放宽与内容去重」一节。
+
+### B. 等观测，**别提前动手**（触发条件已写明）
+
+3. **闸 2 的 3 天窗口缺口** —— 去重窗口筛的是 `published_at`（发布日期）而不是入库时间，
+   所以「发布日期距重抓 > 3 天」的稿子会绕过窗口、每重抓一次多一条重复行。
+   **尚未发生**；等真观测到再改（改动要动 `getRecentCanonicalUrls`）。见「抓取放宽与内容去重」。
+4. **L2 去重阈值 0.50 缺「独立一天」的验证** —— 现有数字全是在同一段数据上拟合的，
+   不能当验证结果用。见「抓取放宽与内容去重」里那张阈值表下面。
+5. **`Modern.az` 只在容器侧抖**（ETIMEDOUT；本机 1047ms 正常）—— 链路抖动，代码层面无事可做。
+   ⚠️ **反过来 `Banker.az` / `Newtimes.kz` / `Uznews.uz` 是本机不通、容器通** —— 别照着本机红叉去改源。
+   见「源取回层」。
+6. **`tj` 是唯一贴着每国上限的国家**（候选正好 15）。哪天掉到 10 以下先看 `funnelByCountry`，
+   别去动判据。见「抓取放宽与内容去重」。
+
+### C. 技术债 / 该清理（都已核对过是死的或过期的）
+
+7. **`DAILY_UPDATE.md` 整篇过期，会误导人** —— 时段写的是 08:00 / 12:30 / 15:00 / 21:00
+   （实际只有 **08:00 / 19:00**）；推荐的 GitHub Actions 方案**仓库里没有 `.github/`**；
+   给的 API 入参 `{limit, autoPush}` **代码不认识**（真实入参是 `{date, minPerCountry, hours, skipTranslation, push}`）。
+   ⚠️ 尤其是 `autoPush: true` —— 推送开关实际叫 `push`，所以照文档敲命令**会采集完什么都不推**，
+   这正是本项目反复踩的那类「不报错、看着像跑通了、其实什么都没做」。
+   要么重写，要么删掉并把有效信息并进 `AGENTS.md`。
+8. **`scripts/scheduler.js` + `scripts/daily-fetch.sh` 是遗留的本地调度器** —— 两者**零引用**，
+   内置时段同样是错的（08:00/12:30/15:00/21:00），`package.json` 里还留着 `pnpm scheduler`。
+   生产实际走的是应用内调度器 `src/lib/scheduler.ts`。**别照 `pnpm scheduler` 那套排查线上。**
+9. **两处已知死代码**（保留但无调用点，改的时候别顺手接回去）：
+   `src/lib/data/sources.ts`（0 引用）、`utils.isDuplicateContent`（实测零触发且会误合并反向新闻）。
+10. **`verify:local` 没包含 `test:translate` 与 `test:dedup-stability`** ——
+    它们要打真实 LLM 端点（会花钱），所以故意没进离线门禁，但也就意味着**改动翻译/去重时不会被门禁拦住**。
+
+### D. 到了时间点要做的验证
+
+11. **明早 08:00 那轮是「入库闸门修复 + 源取回修复」的第一次真实定时执行。**
+    要复核：`funnelByCountry[*].droppedTopic` 是否下降、`sourceErrors` 是否只剩 1 条（Modern.az）、
+    `saved` 与草稿箱篇数。**在那之前不要凭零成本体检的候选数当成入群结果。**
+
 ## 目录结构
 
 ```
