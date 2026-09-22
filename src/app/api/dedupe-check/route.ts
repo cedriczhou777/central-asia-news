@@ -391,6 +391,14 @@ export async function GET(request: NextRequest) {
       probe.push({
         country: cc,
         ran: llm.ran,
+        // ⚠️ `ok` 的语义是「**判出了可合并的组**」，**不是**「模型调用成功」。
+        // 别把它读成「这次体检失败了」：`ok: false` 常常只是「没有判出重复」——
+        // 例如 kg 有 3 个 declined 对（模型答得好好的、全判否）却报 `ok: false`。
+        // 调用是否真失败看 `error`；模型答了什么看 pairs / declined。
+        //
+        // 名字起得有歧义，但**不要改名**：它是 `DedupResult.llm.ok` 的直传值，
+        // 推送链路也在用同一字段；单改体检这一处会让两边口径再次分叉
+        // （本项目已经因为「同一判据两处各写一份」栽过两次）。
         ok: llm.ok,
         rowsInWindow: list.length,
         excludedByRules,
