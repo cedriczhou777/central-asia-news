@@ -14,6 +14,19 @@ const parser = new Parser({
   headers: { 'User-Agent': 'CentralAsiaNewsBot/1.0' },
 });
 
+/**
+ * 闸 2（库内身份去重）回溯的天数。
+ *
+ * ⚠️ 时间窗筛的是 **`published_at`（文章发布日期）**，不是「我们什么时候入库的」。
+ * 两者在「老新闻被重抓」时不等价：一篇 09-18 发布的稿子若 09-22 才被抓到，
+ * 它今天入库，但 `published_at` 落在 3 天窗口外 —— 窗口里查不到它，
+ * 于是同一链接**每被重抓一次就多一条重复行**。
+ * 闸 2 想表达的语义其实是后者，改列需要动 `getRecentCanonicalUrls`，
+ * 所以这里先把窗口天数提成常量并**把实际拿到的行数报进接口**（见 `dedup.window`），
+ * 用线上数据判断到底是不是这个原因，再决定改不改判据。
+ */
+const DB_DEDUP_WINDOW_DAYS = 3;
+
 interface RSSSource {
   name: string;
   url: string;
@@ -53,6 +66,14 @@ interface FetchSummary {
     sameEvent: number;
     /** 库内去重查询失败 → 本轮放弃入库时的原因；正常为 null */
     dbCheckError: string | null;
+    /**
+     * 闸 2 那次窗口查询**实际拿到多少行**（`rows` = 归一化后的链接数）。
+     *
+     * 报出来是为了让「窗口被静默截断」在线上可判断 —— 单次查询没有分页，
+     * 而 PostgREST 的条数上限超限时不报错、只是悄悄少给。
+     * 拿 `rows` 与 `GET /api/dedupe-check?days=3` 的 `totals.articles` 对照即可。
+     */
+    window: { days: number; rows: number };
     /** 判组用的模型是否真的跑过。没跑说明本次只有链接/原文去重生效 */
     llmJudge: { ran: boolean; ok: boolean; groups: number[][]; error?: string };
     /** 逐条原因：丢了哪条、留下了哪条 */
@@ -815,7 +836,10 @@ async function processFetchNews(
 
   // —— 闸 2：库内身份去重 ——
   //
-  // 时间窗取 3 天，覆盖「同一条新闻今天和明天各被抓到一次」这个典型重复场景。
+  // 时间窗取 `DB_DEDUP_WINDOW_DAYS`（3 天），覆盖「同一条新闻今天和明天各被抓到一次」。
+  // ⚠️ 这个窗口筛的是 `published_at`，**不是入库时间** ——
+  // 所以「发布日期早于窗口」的稿子被重抓时，窗口里查不到它，会重复入库。
+  // 这一点先不做改动，只用 `dedup.window.rows` 把窗口规模报出去，拿线上数据确认（见常量注释）。
   // 用**窗口查询**（两个时间界）而不是「拿本批几百条链接去反查」：
   // 后者的 `.in()` 会拼出一条几十 KB 的请求行，越过网关上限后整个查询失败 ——
   // 这正是线上重复入库的机制。
@@ -826,11 +850,16 @@ async function processFetchNews(
   let existingUrls = new Set<string>();
   let existingOriginals = new Map<string, number>();
   let dbCheckError: string | null = null;
+  /** 闸 2 窗口查询实际拿到的**行数**（= 窗口内去重前的规模，报给接口用于发现静默截断） */
+  let dbWindowRows = 0;
   try {
-    const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const since = new Date(Date.now() - DB_DEDUP_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     existingUrls = await getRecentCanonicalUrls(since);
     existingOriginals = await getRecentOriginalTitleKeys(since);
-    console.log(`库内近 3 天已有 ${existingUrls.size} 个链接、${existingOriginals.size} 个原文指纹`);
+    dbWindowRows = existingUrls.size;
+    console.log(
+      `库内近 ${DB_DEDUP_WINDOW_DAYS} 天已有 ${existingUrls.size} 个链接、${existingOriginals.size} 个原文指纹`,
+    );
   } catch (dbErr) {
     dbCheckError = dbErr instanceof Error ? dbErr.message : String(dbErr);
     console.error(`库内去重查询失败，本轮放弃入库（宁可漏采也不重复）：${dbCheckError}`);
@@ -964,6 +993,18 @@ async function processFetchNews(
       sameEvent: eventDrops.length,
       /** 库内去重查询失败 → 本轮放弃入库时的原因，正常为 null */
       dbCheckError,
+      /**
+       * 闸 2 那次窗口查询**实际拿到多少行**。
+       *
+       * 必须报出来，否则「窗口是不是被静默截断」在线上无法判断：
+       * `getRecentCanonicalUrls` 是单次 `.limit(5000)`、**没有分页**，
+       * 而 PostgREST 的返回条数上限通常是 1000（服务端配置），
+       * **超限时不报错、只是悄悄少给**（同一个坑 `getArticleIdentities` 的注释里已经写过）。
+       * 判读：拿 `window.rows` 和 `GET /api/dedupe-check?days=3` 的 `totals.articles` 对照 ——
+       * 两者应当接近；若 `window.rows` 恰好卡在某个整数上限（1000/5000）且明显偏小，
+       * 就是被截断了，此时闸 2 形同虚设。
+       */
+      window: { days: DB_DEDUP_WINDOW_DAYS, rows: dbWindowRows },
       /** 判组用的模型是否真的跑过；没跑说明只是链接/原文去重生效 */
       llmJudge,
       /** 逐条原因，便于直接看出「丢了哪条、留下了哪条」 */

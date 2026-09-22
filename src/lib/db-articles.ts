@@ -150,19 +150,25 @@ export async function getRecentCanonicalUrls(sinceIso: string): Promise<Set<stri
  * 为什么要分页：PostgREST 单次返回有条数上限（常见 1000），
  * 一次取「近 30 天」很容易超限，**超限时不会报错，只是悄悄少给** ——
  * 拿这样的结果去判重会漏掉重复行，拿去删更是不可接受。
+ *
+ * ⚠️ 窗口过滤的是 **`published_at`（文章发布日期）**，不是入库时间。
+ * 排查「重复行为什么还在产生」时这是关键区别：一篇 09-18 发布、09-22 才被抓到的稿子，
+ * 它的 `published_at` 落在窗口外，但它是**今天才入库**的。
+ * 所以体检结果同时返回 `created_at`，用来区分「存量」与「仍在产生」——
+ * 只看 `published_at` 是分不出来的。见 `dedupe-check` 的 `identicalGroups.dropInfo`。
  */
 export async function getArticleIdentities(
   sinceIso: string,
   untilIso?: string,
-): Promise<Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at'>>> {
+): Promise<Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at' | 'created_at'>>> {
   const client = getSupabaseClient();
   const PAGE = 1000;
-  const out: Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at'>> = [];
+  const out: Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at' | 'created_at'>> = [];
 
   for (let from = 0; ; from += PAGE) {
     let q = client
       .from('articles')
-      .select('id, title, summary, content, country_code, source_url, original_title, published_at')
+      .select('id, title, summary, content, country_code, source_url, original_title, published_at, created_at')
       .gte('published_at', sinceIso)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1);

@@ -52,6 +52,30 @@ interface Row {
   country_code: string;
   source_url: string | null;
   original_title: string | null;
+  /** 文章发布日期。窗口过滤用的就是它。 */
+  published_at?: string | null;
+  /** **入库时间**。与 `published_at` 不是一回事 —— 见下面 `dropInfo` 的说明。 */
+  created_at?: string | null;
+}
+
+/**
+ * 一行的时间画像。带上它，是为了让体检结果能自己回答
+ * 「这堆重复是**旧代码留下的存量**，还是**现在还在产生**」。
+ *
+ * 为什么光看 `published_at` 分不出来：窗口过滤的是**发布日期**，
+ * 而重复的成因恰恰可能是「发布日期很早、今天才被抓到」——
+ * 这类行的 `published_at` 和别的老行混在一起，看不出它是新插进来的。
+ * `createdAt` 才是「它什么时候进的库」。
+ *
+ * 判读方法：如果重复行的 `createdAt` 都早于上一次部署，就是存量，清掉即可；
+ * 如果还在出现**今天**的 `createdAt`，说明入库端的闸门仍在漏，得先修闸门再清存量。
+ */
+function stamp(r: Row) {
+  return {
+    id: r.id,
+    createdAt: r.created_at ?? null,
+    publishedAt: r.published_at ?? null,
+  };
 }
 
 /**
@@ -62,7 +86,17 @@ interface Row {
  * 弱判据留给只读体检去呈现。
  */
 function groupIdentical(rows: Row[]): {
-  groups: Array<{ keepId: number; dropIds: number[]; key: string; reason: 'same_url' | 'same_original'; title: string }>;
+  groups: Array<{
+    keepId: number;
+    dropIds: number[];
+    key: string;
+    reason: 'same_url' | 'same_original';
+    title: string;
+    /** 保留行的时间画像（见 {@link stamp}） */
+    keepInfo: ReturnType<typeof stamp>;
+    /** 待删行的时间画像，与 `dropIds` 同序 */
+    dropInfo: Array<ReturnType<typeof stamp>>;
+  }>;
 } {
   const canonicalOf = (r: Row) => canonicalUrl(r.source_url || '');
 
@@ -80,7 +114,15 @@ function groupIdentical(rows: Row[]): {
     else byUrl.set(cu, [r]);
   }
 
-  const groups: Array<{ keepId: number; dropIds: number[]; key: string; reason: 'same_url' | 'same_original'; title: string }> = [];
+  const groups: Array<{
+    keepId: number;
+    dropIds: number[];
+    key: string;
+    reason: 'same_url' | 'same_original';
+    title: string;
+    keepInfo: ReturnType<typeof stamp>;
+    dropInfo: Array<ReturnType<typeof stamp>>;
+  }> = [];
   const remaining: Row[] = [];
 
   for (const [cu, list] of byUrl) {
@@ -92,6 +134,8 @@ function groupIdentical(rows: Row[]): {
         key: cu,
         reason: 'same_url',
         title: sorted[0].title,
+        keepInfo: stamp(sorted[0]),
+        dropInfo: sorted.slice(1).map(stamp),
       });
     }
     remaining.push(sorted[0]);
@@ -122,6 +166,8 @@ function groupIdentical(rows: Row[]): {
       key: `orig:${ck.slice(0, 60)}`,
       reason: 'same_original',
       title: sorted[0].title,
+      keepInfo: stamp(sorted[0]),
+      dropInfo: sorted.slice(1).map(stamp),
     });
   }
 
