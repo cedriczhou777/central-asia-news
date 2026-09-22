@@ -19,15 +19,25 @@
  * ----
  * 1. 登录 Cloudflare Dashboard → Workers & Pages → Create application → Worker。
  * 2. 把本文件内容整体粘贴到 worker.js，Save and Deploy。
- * 3. 把 Worker 的 `.workers.dev` 域名填入微信云托管环境变量 TELEGRAM_WORKER_URL。
+ * 3. ⚠️ **必须再给这个 Worker 绑一个自有域名**（Settings > Domains & Routes > Add > Custom Domain），
+ *    然后把该域名填入微信云托管环境变量 TELEGRAM_WORKER_URL。
+ *
+ *    为什么不能直接用 `.workers.dev`（2026-09-22 实测）：微信云托管跑在大陆网络，
+ *    **访问不了 `*.workers.dev`**，12 个频道全部 `fetch failed`（连接层就没通，252–274ms 快速失败）。
+ *    而同一个容器**能正常抓通其它 Cloudflare 后面的站点**（astanatimes.com / apa.az / total.kz …），
+ *    所以换域名即可，**不是 Cloudflare 网络不可达，改频道名也没用**。
+ *    绑域名需要该域名已把 NS 交给 Cloudflare（active zone），且该 hostname 上没有已存在的 CNAME。
+ *    详见项目 AGENTS.md「信息源与社交网络」一节。
+ * 4. 验证要走**容器视角**，别看浏览器：
+ *    `curl -s "$BASE/api/telegram-check"` → `okCount` 应为 12、`egressControl.ok` 为 true。
  *
  * 接口契约（与本项目 src/lib/scraper.ts 的 fetchTelegramByWorker 严格一致）
  * ----------
- * 请求:  GET  https://<your-worker>.workers.dev/?channel=<频道post_id>
+ * 请求:  GET  https://<你绑的自有域名>/?channel=<频道名，带 @>
  * 返回:  { "posts": [ { "title": "...", "url": "...", "date": "ISO或时间戳", "summary": "..." } ] }
  *
- * 测试:  浏览器打开
- *        https://<your-worker>.workers.dev/?channel=breaking
+ * 测试:  curl -sS -m 25 'https://<你绑的自有域名>/?channel=%40tengrinews'
+ *        → 应返回真实帖子；裸打根路径会返回 {"error":"missing or invalid ?channel=@name"}
  *        应看到 {"posts": [...]}，而不是 Telegram 网页文档。
  */
 

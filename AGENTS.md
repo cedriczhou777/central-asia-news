@@ -19,7 +19,9 @@
    要做：Cloudflare 给 Worker 绑 Custom Domain → 云托管改 `TELEGRAM_WORKER_URL` → 验证 `GET /api/telegram-check` 的 `okCount=12`。
    步骤见「信息源与社交网络」一节。**绑好之前别把这段当成有效供给。**
 2. **`intl` 源要不要收编（产品决策）** —— The Times of Central Asia 的文章会入库、会翻译，
-   但 `push` 只遍历 5 国 ⇒ **永远推不出去，翻译成本白花**。二选一：归到某个国家，或删掉这个源。
+   但 `push` 只遍历 5 国 ⇒ **永远推不出去，翻译成本白花**（实测仍在持续产生，库里 15 篇、约 2–3 篇/天）。
+   二选一：归到某个国家，或删掉这个源。
+   ⚠️ 另有 `tm` 的 212 篇同样推不出去，但那是**历史存量、不再新增**，不产生持续成本，别混为一谈。
    见「抓取放宽与内容去重」一节。
 
 ### B. 等观测，**别提前动手**（触发条件已写明）
@@ -368,6 +370,17 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
      「**留出独立的一天做验证**」**仍未做** —— 上面所有数字都是同一段数据上的拟合，别当验证结果用。
      ⚠️ **体检接口的输入必须与 `push` 同口径，否则结论对生产无效。** 2026-09-22 踩到：`GET /api/dedupe-check?llm=1` 的输入直接来自 `getArticleIdentities()`，**没套选稿判据**，于是 kz 的 12 个候选对全是亚洲运动会体育稿 —— 而体育类在 `push` 里被 `EXCLUDED_CATEGORIES` 整类剔掉、永远进不了生产，测出来的「判定不稳」与生产无关。已修：体检的 L2 段现在套 `pushExclusionReason`，且只覆盖 `push` 会遍历的国家（kz/uz/kg/az/tj，**不含 intl**），并把口径报在 `llmJudgeParams.scope` 里。两处差异都补齐了 —— 以后加判据请加在 `pushExclusionReason` 里（`scripts/test-format.ts` 逐条钉住），**别在调用方再抄一份**：这个 bug 与投资评分那次是同一形态（同一判据两处各写一份，一边对一边错、不报错只在结论里体现）。
      ℹ️ **`intl` 的文章会入库但永远不会被推送**：`push` 只遍历 `countryList`（5 国），而 `RSS_SOURCES` 里有 1 个 `intl` 源（The Times of Central Asia）。也就是说这个源抓取+翻译的成本是白花的。要收编的话得决定「归到哪个国家」，属于产品决策，目前**未处理**。
+     **2026-09-22 用线上数据核过，链条完整**：
+     - 采集端按 `RSS_SOURCES` 逐个源遍历（`fetch-news/route.ts` 的 `for (const source of RSS_SOURCES)`），
+       **不按国别过滤** ⇒ `intl` 源照常走完 打分→闸门→精选→**翻译**→**入库**，`country_code` 落成 `'intl'`。
+     - 推送端按 `countryList` 遍历（`@/lib/data/countries` 里只有 kz/uz/kg/az/tj 五条），
+       每国调 `getArticlesByDateRange(start, end, country.code)` **按 `country_code` 筛库**
+       ⇒ `'intl'` 永远匹配不上。
+     - 实测：`GET /api/articles?country=intl` → **15 篇**（最新 ID 3894，09-22 当天），
+       即**现在仍在持续产生**，约 2–3 篇/天 × 2 轮 ≈ 每天 5 次左右白花的翻译。
+     ⚠️ 同类的还有一个 `tm`（土库曼斯坦）：库里有 **212 篇**，同样不在 `countryList` 里、同样推不出去
+     —— 但它是**历史存量**（最新一篇 ID 2672 / 发布于 09-18，来源 `Trend Kazakistan`，之后不再新增），
+     所以**它不产生持续成本**，别把它和 `intl` 混为一谈。要清也只是清库，不用改代码。
   另有 `same_text` 兜底（标题+正文**几乎逐字相同**才成立，阈值 0.9/0.8）。
   ⚠️ 历史上的 `utils.isDuplicateContent`（标题 0.8 / 平均 0.6）已**不再用于去重**：实测在 200 篇与 1000 篇两份线上快照上零触发，却会误合并「金价下跌」与「金价上涨」这类方向相反的新闻。函数保留在 `utils.ts` 里但无调用点，别再把它接回去。
   **反向极性对在问模型之前就被确定性拦掉**（`hasOppositePolarity`）：「金价下跌」vs「金价上涨」相似度 0.71、排在候选表第一位，是字面最像的假阳性，方向词是封闭集合没理由交给模型猜。⚠️ 这类对**没有**比例熔断兜底 —— 候选按相似度降序截断，真重复占多数是正常的（实测乌兹别克单轮 12 对里 11 对确实是同一件事），任何「判是比例过高就作废」的阈值都会误伤，别再加回来。
@@ -440,17 +453,31 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
     `curl -sS -m 25 'https://telegram-proxy.cedriczhou777.workers.dev/?channel=%40tengrinews'`
     → 返回 `{"posts":[{title,url,date,summary}...]}`；裸打根路径返回 `{"error":"missing or invalid ?channel=@name"}`。
     **这两个响应就证明 Worker 活着、上游 Telegram 也通，问题 100% 在域名可达性。**
-    操作步骤：
-    1. Cloudflare 控制台 → Workers & Pages → 选中该 Worker → Settings → **Domains & Routes** →
-       Add → **Custom Domain**，填一个**已托管在同一个 Cloudflare 账号下**的域名
-       （如 `tg.example.com`）。⚠️ 域名必须已把 NS 交给 Cloudflare，否则加不了 Custom Domain；
-       `*.workers.dev` 不能被 CNAME 指过去。
-    2. 微信云托管控制台 → 服务设置 → 环境变量 → 把 `TELEGRAM_WORKER_URL` 改成
-       `https://tg.example.com`（末尾带不带 `/` 都行，代码会 `replace(/\/+$/,'')` 再拼 `/?channel=`）。
-    3. 改环境变量会**重启容器**（等于换容器、`lastRun` 清空）⇒ **同样避开 08:00 / 19:00 的任务窗口**。
-    4. 验证：`curl -s "$BASE/api/telegram-check"` → 看 `okCount` 是否 **12**、
-       `egressControl.ok` 是否仍为 `true`、`verdict` 是否变成通过。
-       再打一次零成本体检，`sourceErrors` 应从 13 条降到 **1 条**。
+    操作步骤（**2026-09-22 已对官方文档核对**，doc 最后更新 2026-08-14）：
+    - **硬前提（先确认，不满足就白折腾）**：
+      ① 必须有一个 **active 的 Cloudflare zone** —— 也就是**域名必须已把 NS 交给 Cloudflare**
+      （Nameserver 已是 `xxx.ns.cloudflare.com`）。域名的 DNS、注册商在哪家都不重要，NS 在 CF 就行。
+      ② 该 hostname 上**不能已有 CNAME 记录**（Custom Domain 要自己建指向 Worker 的记录，
+      已占用的会建不上）。要先把那条 CNAME 删掉。
+      ③ **不支持通配符**：`*.example.com` 不行，必须逐个写具体 hostname（精确匹配，path/query 不参与）。
+      ⚠️ 如果**手上没有 CF 上的域名**，这一步是唯一要先花钱/花时间的地方：随便注册一个便宜域名，
+      再把它的 NS 改成 Cloudflare 给的两个。`*.workers.dev` **不能被 CNAME 指过去**（那不是 CF 的 zone）。
+    - 1. Cloudflare 控制台 → **Workers & Pages** → Overview → 选中该 Worker →
+      **Settings > Domains & Routes > Add > Custom Domain** → 填 hostname（如 `tg.example.com`）→
+      **Add Custom Domain**。CF 会**自动建好 DNS 记录并签发证书**，不用手工配 DNS。
+      （也可用 wrangler 配置：`routes: [{ pattern: "tg.example.com", custom_domain: true }]` 后 `wrangler deploy`；
+      ⚠️ 但这个 Worker 当初是**从控制台粘贴部署的**，仓库里没有 wrangler 配置 —— 控制台路径更省事。）
+    - 2. 微信云托管控制台 → 服务设置 → 环境变量 → 把 `TELEGRAM_WORKER_URL` 改成
+      `https://tg.example.com`（末尾带不带 `/` 都行，代码会 `replace(/\/+$/,'')` 再拼 `/?channel=`）。
+      ⚠️ 别删旧的 `.workers.dev` 值做「备份」—— 环境变量只有一份，改了就改了。
+    - 3. 改环境变量会**重启容器**（等于换容器、`lastRun` 清空）⇒ **同样避开 08:00 / 19:00 的任务窗口**。
+    - 4. 验证：`curl -s "$BASE/api/telegram-check"` → 看 `okCount` 是否 **12**、
+      `egressControl.ok` 是否仍为 `true`、`verdict` 是否变成通过。
+      再打一次零成本体检，`sourceErrors` 应从 13 条降到 **1 条**。
+    - ⚠️ **绑好域名后要顺手更新 `docs/telegram-worker.js` 部署段里的 `.workers.dev` 示例**
+      （那段是老写法，正是这批人下次会照着踩的地方）。
+    - ⚠️ 判断「域名生效」不要只看浏览器能打开 —— **必须在容器侧看**（就是第 4 步那个接口）。
+      本机/浏览器能打开而容器打不开，正是这次问题的形态。
     ⚠️ 频道数是 **12**（`channelCount=12`），**旧文写的「11 个」是错的**，以诊断接口为准。
     `tj` 是唯一「Telegram 本可加厚」的国家（它卡在 15 上限），但 `@asiaplus` 与已有的
     `Asia-Plus` RSS 源重复，实际增量只有 `@sputnik_tajikistan` 一个频道。
