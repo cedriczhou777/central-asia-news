@@ -401,7 +401,18 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
   try {
     const suffix = periodSuffix(period);
     const today = beijingDate();
-    const maxPerCountry = 30;
+    // 每国每份报告的篇数上限。
+    //
+    // 2026-09-22 由 30 收到 15：现在是**早晚报两段**（早报 13h / 晚报 11h），
+    // 每份报告每国 15 篇已经足够，30 篇只会把相关性靠后的稿子也塞进来、拉低整份报告的质量。
+    // 这是个**上限**不是配额 —— 候选不足 15 篇时按实际可用量推，不硬凑
+    // （硬凑就得放宽判据，而本项目历史上「判据过严/过松」都出过事）。
+    //
+    // ⚠️ 收这个数字会**改变「每国不足 15 篇」这个症状的出现面**：
+    // 以前要 30 篇才触发，现在 15 篇就可能不够。候选不足时先用
+    // `GET /api/fetch-news` 的 `funnelByCountry` 看漏斗里掉在哪一段，
+    // 不要去动 `pushExclusionReason` 或 `maxPerCountry`。
+    const maxPerCountry = 15;
 
     // 计算时间范围（过去 N 小时）
     const now = new Date();

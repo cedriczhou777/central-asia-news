@@ -90,7 +90,31 @@ interface FetchSummary {
   saved: number;
   /** 入库失败的原因。saved=0 时先看这个 —— 空数组才是「确实没有可入库内容」。 */
   insertErrors: string[];
-  sourceCounts: Array<{ source: string; fetched: number }>;
+  sourceCounts: Array<{
+    source: string;
+    country: string;
+    fetched: number;
+    afterDate: number;
+    droppedJunk: number;
+    droppedCountry: number;
+    droppedTopic: number;
+    candidates: number;
+  }>;
+  /**
+   * 按国别汇总的采集漏斗 —— 回答「某国今天为什么只有 N 篇」看这里。
+   * 逐字段含义见实现处的注释；要点是**四个环节分开计数**，因为修法互不相同。
+   */
+  funnelByCountry: Array<{
+    country: string;
+    sources: number;
+    failedSources: number;
+    fetched: number;
+    afterDate: number;
+    droppedJunk: number;
+    droppedCountry: number;
+    droppedTopic: number;
+    candidates: number;
+  }>;
   sourceErrors: Array<{ source: string; errors: string[] }>;
   /** 翻译通道用量：哪个通道翻了几篇、失败通道的具体报错。
    *  「智谱免费档为什么没生效、全在走 DeepSeek 花钱」这个问题靠它一个 GET 就能回答。 */
@@ -485,7 +509,47 @@ async function processFetchNews(
   // 每个源的采集情况。注意：这里只记录「取到多少 / 报了什么错」，
   // 真正的入库篇数在最后统一统计（旧版给每个源挂了 saved 字段但从不赋值，
   // 导致汇总日志永远打印「共保存0篇」，排查时严重误导）。
-  const results: { source: string; fetched: number; errors: string[] }[] = [];
+  //
+  // ⚠️ 2026-09-22 补上**漏斗中间层**：`fetched`（feed 有多少条）与
+  // `candidates`（真正进候选池几条）之间原来完全不可见，于是
+  // 「某国今天怎么只有一篇」只能靠猜。实测代价：哈萨克的 5 个源抓到 200 条原始条目，
+  // 但最后能进候选的极少，而接口只报 `fetched=200`，看不出是日期窗、文体垃圾、
+  // 还是「提到了别的国家」把它们挡掉的 —— 这三条的修法完全不同，
+  // 分不清就只能乱改判据（而本项目历史上「判据过严」已经导致过「每国不足 15 篇」）。
+  const results: {
+    source: string;
+    /** 源所属国别（聚合口径用；一个源只属于一个国家） */
+    country: string;
+    fetched: number;
+    /** 过了日期窗（目标日 ±1 天，UTC 日期）的条目数 */
+    afterDate: number;
+    /** 被 isJunkTitle 丢掉的（文体/生活类，不值得花翻译钱） */
+    droppedJunk: number;
+    /** 被 isCountryRelevant 丢掉的（在讲别的国家） */
+    droppedCountry: number;
+    /** 被 isInvestmentRelevant 丢掉的（与投资主题无关） */
+    droppedTopic: number;
+    errors: string[];
+  }[] = [];
+
+  /**
+   * 建一条空的源采集记录。
+   *
+   * 用工厂函数而不是在每个 push 点手写对象字面量：RSS / Telegram 两条路径各写一份时，
+   * 加字段必然漏一处 —— 而漏掉的那处会静默给出 0，看起来像「这个源没问题」。
+   */
+  function emptySourceResult(source: string, country: string) {
+    return {
+      source,
+      country,
+      fetched: 0,
+      afterDate: 0,
+      droppedJunk: 0,
+      droppedCountry: 0,
+      droppedTopic: 0,
+      errors: [] as string[],
+    };
+  }
   
   // 目标日期的前一天（用于放宽到最多 2 天时间窗）
   const targetDateMinusOne = new Date(new Date(`${targetDate}T00:00:00Z`).getTime() - 86400000)
@@ -517,7 +581,7 @@ async function processFetchNews(
 
   // 第一步：从所有 RSS 源采集候选新闻
   for (const source of RSS_SOURCES) {
-    const result = { source: source.name, fetched: 0, errors: [] as string[] };
+    const result = emptySourceResult(source.name, source.country);
     try {
       const feed = await parser.parseURL(source.url);
       result.fetched = feed.items.length;
@@ -538,6 +602,7 @@ async function processFetchNews(
         const itemDate = parsed.toISOString().split('T')[0];
         return itemDate === targetDate || itemDate === targetDateMinusOne;
       });
+      result.afterDate = targetItems.length;
 
       if (targetItems.length === 0) {
         results.push(result);
@@ -550,10 +615,14 @@ async function processFetchNews(
         const description = item.contentSnippet || item.content || '';
 
         // 文体/生活类标题直接丢弃 —— 翻译是要花钱的，垃圾不值得进 LLM
-        if (isJunkTitle(title)) continue;
+        if (isJunkTitle(title)) {
+          result.droppedJunk++;
+          continue;
+        }
 
         // 检查是否与目标国家相关（含「其它主要国家」的排除逻辑）
         if (!isCountryRelevant(title, description, source.country, source.country)) {
+          result.droppedCountry++;
           continue; // 跳过与该国无关的新闻
         }
         
@@ -561,6 +630,8 @@ async function processFetchNews(
         if (isInvestmentRelevant(title, description)) {
           const relevanceScore = scoreInvestmentRelevance(`${title} ${description}`);
           addCandidate(source.country, { item, source, relevanceScore });
+        } else {
+          result.droppedTopic++;
         }
       }
 
@@ -596,7 +667,7 @@ async function processFetchNews(
     for (const { country, channel } of channelEntries) {
       // Telegram 的采集结果也记进 results，这样 sourceCounts / sourceErrors 里能看到它 ——
       // 否则「Telegram 到底通没通」只能去控制台翻日志，配完了从外面根本验证不了。
-      const result = { source: `Telegram/${channel}(${country})`, fetched: 0, errors: [] as string[] };
+      const result = emptySourceResult(`Telegram/${channel}(${country})`, country);
       try {
         const outcome = await fetchTelegramRSS(channel);
         const fetchedPosts = outcome.articles;
@@ -645,8 +716,7 @@ async function processFetchNews(
     // 不用去控制台翻日志（频道清单已在代码里有默认值，所以这条会一直出现直到配好 Worker）。
     console.log('检测到 TELEGRAM_CHANNELS 但未配置 TELEGRAM_WORKER_URL，跳过 Telegram 抓取');
     results.push({
-      source: 'Telegram（未启用）',
-      fetched: 0,
+      ...emptySourceResult('Telegram（未启用）', ''),
       errors: ['未配置 TELEGRAM_WORKER_URL，Telegram 频道未抓取。部署见 DEPLOY_WECHAT_CLOUD.md 的「Telegram 接入」'],
     });
   }
@@ -971,6 +1041,20 @@ async function processFetchNews(
       `→ 实际入库 ${savedCount} 篇`
   );
   console.log(`各源采集量：${results.map((r) => `${r.source}=${r.fetched}`).join(' | ')}`);
+  // 按国别打一行漏斗 —— 排查「某国今天为什么只有 N 篇」时，先看这一行再看逐源明细。
+  console.log(
+    '各国采集漏斗（feed 条目 → 过日期窗 → 丢文体/丢别国/丢非投资 → 候选）：\n' +
+      [...new Set(results.map((r) => r.country).filter(Boolean))].sort().map((cc) => {
+        const rs = results.filter((r) => r.country === cc);
+        const s = (f: (r: (typeof rs)[number]) => number) => rs.reduce((a, r) => a + f(r), 0);
+        const fetched = s((r) => r.fetched);
+        const afterDate = s((r) => r.afterDate);
+        const j = s((r) => r.droppedJunk);
+        const c = s((r) => r.droppedCountry);
+        const t = s((r) => r.droppedTopic);
+        return `  [${cc}] ${fetched} → ${afterDate} → 丢文体 ${j} / 丢别国 ${c} / 丢非投资 ${t} → 候选 ${afterDate - j - c - t}`;
+      }).join('\n')
+  );
   if (failedSources.length > 0) {
     console.warn(`${failedSources.length} 个信息源采集失败：${failedSources.map((r) => r.source).join('、')}`);
   }
@@ -1021,7 +1105,54 @@ async function processFetchNews(
     afterContentDedup: contentDeduped.length,
     saved: savedCount,
     insertErrors,
-    sourceCounts: results.map((r) => ({ source: r.source, fetched: r.fetched })),
+    sourceCounts: results.map((r) => ({
+      source: r.source,
+      country: r.country,
+      fetched: r.fetched,
+      afterDate: r.afterDate,
+      droppedJunk: r.droppedJunk,
+      droppedCountry: r.droppedCountry,
+      droppedTopic: r.droppedTopic,
+      /** 进入候选池的条数（= afterDate − 三个丢弃原因） */
+      candidates: r.afterDate - r.droppedJunk - r.droppedCountry - r.droppedTopic,
+    })),
+    /**
+     * 按国别汇总的漏斗 —— **回答「某国今天为什么只有 N 篇」看这里，不要看 sourceCounts**。
+     *
+     * 口径：feed 条目 → 过日期窗 → 文体垃圾 / 讲别国 / 非投资 → 候选池。
+     * 四个环节的失败修法完全不同，所以必须分开计数（与 `dedup` 分三段记账同一个理由）：
+     *   · `afterDate` 偏小   → 源在这个时段本来就没发稿，或 feed 只保留很少条目
+     *     （Astana Times 的 feed 只有 10 条，等于只覆盖最近一两天；别的源有 100 条）
+     *   · `droppedCountry` 偏大 → `isCountryRelevant` 里「提到了任何一个其它目标国就丢」
+     *     这条互斥规则在该国身上过敏（中亚当地区新闻极易同时提到邻国）
+     *   · `droppedTopic` 偏大  → 入库闸门词表对该国**语言**覆盖不足（如哈萨克语源）
+     *   · `fetched=0` 且 `sourceErrors` 有值 → 源本身不通（网络超时 / XML 畸形）
+     *
+     * ⚠️ `candidates` 是**入库前**的候选数：不减去批内去重与库内重复，
+     * 也不等于最终入库数（那要看 `candidates` / `afterUrlDedup` / `saved` 三段）。
+     */
+    funnelByCountry: [...new Set(results.map((r) => r.country).filter(Boolean))]
+      .sort()
+      .map((cc) => {
+        const rs = results.filter((r) => r.country === cc);
+        const fetched = rs.reduce((a, r) => a + r.fetched, 0);
+        const afterDate = rs.reduce((a, r) => a + r.afterDate, 0);
+        const droppedJunk = rs.reduce((a, r) => a + r.droppedJunk, 0);
+        const droppedCountry = rs.reduce((a, r) => a + r.droppedCountry, 0);
+        const droppedTopic = rs.reduce((a, r) => a + r.droppedTopic, 0);
+        return {
+          country: cc,
+          sources: rs.length,
+          /** 采集失败的源数（带错误的那些）—— `fetched=0` 但不带错误的不算失败 */
+          failedSources: rs.filter((r) => r.errors.length > 0).length,
+          fetched,
+          afterDate,
+          droppedJunk,
+          droppedCountry,
+          droppedTopic,
+          candidates: afterDate - droppedJunk - droppedCountry - droppedTopic,
+        };
+      }),
     sourceErrors: failedSources.map((r) => ({ source: r.source, errors: r.errors })),
     translation: {
       providerCounts: translation.providerCounts,

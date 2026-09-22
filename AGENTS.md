@@ -279,7 +279,14 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
   ② 读线上数据定因；③ 再改判据。好处是**改了之后能归因**——否则改动一多，
   症状变了也不知道是哪个原因起了作用。本项目多处（`?llm=1&debug=1`、`format-check`、
   `peek-pairs`、`translate-check` 的对照组）都是同一套做法：**让机制自己把答案说出来**。
-- **每国篇数**：抓取端下限默认 `minPerCountry=10`（保证有内容可推）；推送端**不固定篇数**，"今日精选"按实际可用量推送（上限宽松 30 篇），不硬凑。
+- **每国篇数**：抓取端下限默认 `minPerCountry=10`（保证有内容可推）；推送端**不固定篇数**，"今日精选"按实际可用量推送。
+  **每国上限 15 篇**（`maxPerCountry`，2026-09-22 由 30 收到 15 —— 改成早晚报两段后，每份报告每国 15 篇足够，30 篇只会把相关性靠后的稿子也塞进来、拉低整份报告质量）。上限不是配额，候选不足**不硬凑**：硬凑就得放宽判据，而判据过严/过松都出过事。
+  ⚠️ 收上限会**扩大「每国不足 N 篇」的出现面**（以前要 30 篇才触发，现在 15 篇就可能不够）。候选不足时**先看 `GET /api/fetch-news` 的 `funnelByCountry`** 判断掉在哪一段，不要直接动 `pushExclusionReason` 或 `maxPerCountry`。
+  **`funnelByCountry` 是 2026-09-22 为回答「某国今天为什么只有一篇」补的**（在那之前只报每源 `fetched`，中间全不可见）。口径：`fetched`（feed 条目）→ `afterDate`（过日期窗）→ `droppedJunk` / `droppedCountry` / `droppedTopic`（三个丢弃原因）→ `candidates`（进候选池）。四个环节的修法完全不同，所以分开计数：
+  - `afterDate` 偏小 → 源在这个时段没发稿，或 **feed 本身只保留很少条目**（实测 Astana Times 的 feed 只有 **10 条**，等于只覆盖最近一两天；对比 Newtimes.kz 有 100 条）
+  - `droppedCountry` 偏大 → `isCountryRelevant` 里「标题/正文提到**任何一个其它目标国**就丢」这条互斥规则在该国身上过敏（中亚当地区新闻极易同时提到邻国）
+  - `droppedTopic` 偏大 → 入库闸门词表对该国**语言**覆盖不足（如哈萨克语/吉尔吉斯语源）
+  - `fetched=0` 且 `sourceErrors` 有值 → 源本身不通。**2026-09-22 实测这批**：`Inbusiness.kz` 与 `Economist.kg` 从容器侧 `Request timed out after 30000ms`（本机 curl 同 URL 正常拿到 65 条/714KB，**所以别用本机可达性判断容器可达性**）；`AKIpress` / `Tazabek` 报 `Unexpected close tag`（XML 畸形，rss-parser 直接放弃整个源）；**11 个 Telegram 源全部 `fetch failed`**，因为 `telegram-proxy.cedriczhou777.workers.dev` 在大陆容器里不可达 —— 即 Telegram 补充段**整体是死的**，与它「帮助凑齐每国篇数」的设计目的相悖，要么换掉 workers.dev 域名（自建反代/自有域名），要么删掉这段免得误以为有供给。
 
 ## 信息源与社交网络（重要）
 
