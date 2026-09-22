@@ -348,14 +348,45 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
   - `droppedTopic` 偏大 → 入库闸门词表对该国**语言**覆盖不足。**2026-09-22 已按此修过一轮**
     （加西里尔 + 中亚语言词表，见上节「入库闸门的语言偏置」）。若仍偏大，
     先 `pnpm analyze:source-language <国别> --words` 看是哪条词没覆盖，**别去动闸门之外的判据**。
-  - `fetched=0` 且 `sourceErrors` 有值 → 源本身不通。**2026-09-22 实测这批**：
-    `Inbusiness.kz` 从容器侧 `Request timed out after 30000ms`（本机同 URL 正常拿到 65 条 ——
-    **别用本机可达性判断容器可达性**；真实原因是它的 feed 有 **642KB**，见「源取回层」一节）；
-    **11 个 Telegram 源全部 `fetch failed`**，因为 `telegram-proxy.cedriczhou777.workers.dev`
-    在大陆容器里不可达 —— 即 Telegram 补充段**整体是死的**，与它「帮助凑齐每国篇数」的
-    设计目的相悖，要么换掉 workers.dev 域名（自建反代/自有域名），要么删掉这段免得误以为有供给。
-    ⚠️ **这里原先还写着「`AKIpress` / `Tazabek` 报 `Unexpected close tag` = XML 畸形」——那条归因是错的**，
+  - `fetched=0` 且 `sourceErrors` 有值 → 源本身不通。
+    ⚠️ **这里原先写着「`AKIpress` / `Tazabek` 报 `Unexpected close tag` = XML 畸形」——那条归因是错的**，
     真实原因是**我们自己的 UA**，详见下面「源取回层」一节。**报错长什么样不等于病因是什么。**
+  - **2026-09-22 修完后的线上复核**（`89c2054` 部署后，零成本体检同口径）：`sourceErrors` **16 → 13**，
+    26 个真实 RSS 源里只剩 `Modern.az` 一个不通。收益是可数出来的（候选池）：
+
+    | 源 | 修之前 | 修之后 |
+    |---|---|---|
+    | `AKIpress` (kg) | 0 | **12** |
+    | `Tazabek` (kg) | 0 | **20** |
+    | `Inbusiness.kz` (kz) | 0 | **22** |
+    | `Asia-Plus` (tj) | 0 | **5** |
+
+    合计 **+59 条候选**。`tj` 尤其靠这一条：修之前它只有 10 条候选（现在 15，正好是每国上限）。
+  - **★「本机失败」和「容器失败」会互为镜像 —— 两边都必须看，且别照着本机的红叉去改源。**
+    2026-09-22 同一天测到的四项，方向完全相反：
+
+    | 源 | 本机 `pnpm analyze:feeds` | 容器 `sourceCounts` |
+    |---|---|---|
+    | `Modern.az` | ✓ 1047ms / 30 条 | **✗ ETIMEDOUT → `fetched=0`** |
+    | `Banker.az` | ✗ ECONNRESET / 10372ms | ✓ 10 条 → 7 候选 |
+    | `Newtimes.kz` | ✗ ECONNRESET | ✓ 100 条 → 35 候选 |
+    | `Uznews.uz` | ✗ ECONNRESET | ✓ 19 条 → 5 候选 |
+
+    结论：**先看容器侧 `fetched` 是不是真的 0**；本机红叉只说明本机到那个站的路由不好。
+    `Modern.az` 目前只在容器侧抖，属链路抖动，**未做处理**（本地能拿到 30 条，代码层面无事可做）。
+  - **Telegram 段（12 个频道）整体不可用，而且是「域名不可达」，不是配置问题。**
+    容器侧专用诊断接口 **`GET /api/telegram-check`** 会直接给结论，**先打它再看代码**：
+    它先探 `baidu.com` 证明容器有外网，再逐频道报 `status / error / requestUrl / latencyMs`。
+    2026-09-22 结果：`egressControl.ok=true`（百度 200 / 61ms）而 **12/12 全是 `status:null` + `fetch failed`**
+    （252–274ms 就快速失败 = 连接层就没通，不是超时），`verdict` 已写明：
+    微信云托管在大陆访问不了 `*.workers.dev` ⇒ 要给 Worker **绑自有域名**，或换一个可达的转发地址。
+    **改 `TELEGRAM_CHANNELS` 没有用**（频道名没写错）。
+    ⇒ **待定决策（产品向，二选一，2026-09-22 未拍板）**：
+    ① 给 Worker 绑自有域名，保留这段；② 删掉这段，免得多出 12 行噪声错误、看着像有供给。
+    参考：闸门修完后供给已经够（同日候选 kz 111 / kg 117 / az 99 / uz 38 / tj 15）。
+    ⚠️ 频道数是 **12**（`channelCount=12`），**旧文写的「11 个」是错的**，以诊断接口为准。
+    `tj` 是唯一「Telegram 本可加厚」的国家（它卡在 15 上限），但 `@asiaplus` 与已有的
+    `Asia-Plus` RSS 源重复，实际增量只有 `@sputnik_tajikistan` 一个频道。
 
 ## 源取回层：`src/lib/feed-fetch.ts`（重要）
 
@@ -399,6 +430,15 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
     feed 正文里出现 `<html` 字样等边界）。
   - `pnpm analyze:feeds [国别] [--only=<子串>]` —— 逐源报 状态 / **Content-Type** / 字节 / 耗时 /
     条数 / 用了哪个 UA。⚠️ 这是**本机视角**；容器视角仍看 `funnelByCountry` 与 `sourceErrors`。
+  - **线上复核的固定动作（零成本、约 2 分钟）**：`POST /api/fetch-news {"skipTranslation": true}`
+    → 轮询 `GET /api/fetch-news` 到 `lastRun.running=false` → 读 `lastRun.summary` 的
+    `sourceErrors`（有几条、都是谁）和 `sourceCounts[*].candidates`（**修复是否真的出货**）。
+    实测耗时 **115.9s**（带翻译的一轮是 67–75 分钟，所以这个体检日常可以随便打）。
+    ⚠️ 判断「修好了」要看 `sourceCounts` 里那个源**有产出**，**不能只看 `sourceErrors` 里没它** ——
+    源不可达会被记进 `sourceErrors`，但源可达却一条都没解析出来是**另一回事**。
+    ⚠️ `lastRun` 在**模块作用域**：部署换容器就清空。体检完顺手记下**当前 build ID**
+    （`curl -s "$BASE/" | grep -oE '<!--[A-Za-z0-9_-]{8,}-->'`），否则下次分不清
+    「我这次体检的数据」和「上一轮遗留的」。
 - **排查口诀**：`sourceErrors` 里见到 `Unexpected close tag` / `Feed not recognized` 这类
   **XML 报错时，先怀疑拿到的是网页**，跑 `analyze:feeds` 看 Content-Type，**不要去查对方的 XML**。
 
@@ -417,6 +457,13 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
   - 本项目在 fetch-news 主流程（`src/app/api/fetch-news/route.ts`）**新增 Telegram 补充段**：读 `TELEGRAM_CHANNELS` 环境变量，**只有配置了 `TELEGRAM_WORKER_URL` 才启用**，抓到的文章走同样优选/翻译/入库链路，帮助凑齐每国篇数。
   - **频道配置格式**：`国家:频道[@频道...]`，多个国家用逗号分隔。例：`kz:@tengrinews, uz:@kunuzofficial@gazetauz` —— uz 会展开成 2 个频道；不带 `@` 的裸写法也支持。解析结果会打进日志（搜「Telegram 待抓取频道」），配错了一眼能看见。
   - 启用前提（微信云托管环境变量）：`TELEGRAM_WORKER_URL=<你的worker域名>` + `TELEGRAM_CHANNELS=kz:@xnxxx...` 等；未配置时自动跳过、不影响现有 RSS/爬虫链路。
+  - **⚠️ 当前状态：这一段整体是死的（2026-09-22 实测 12/12 频道失败），原因不是配置。**
+    排查**一定先打 `GET /api/telegram-check`**：它会先探 `baidu.com` 证明容器有外网，
+    再逐频道报 `status / error / requestUrl / latencyMs`，并直接给出 `verdict`。
+    实测结论是 `egressControl.ok=true` 而 12 个频道**全部 `status:null` + `fetch failed`**（252–274ms 快速失败）
+    ⇒ 微信云托管在大陆**访问不了 `*.workers.dev`**，**改 `TELEGRAM_CHANNELS` 毫无用处**（频道名没写错）。
+    待定决策：给 Worker **绑自有域名**保留这一段，或**删掉这一段**（供给已够，详见上面
+    「`funnelByCountry`」一节里的候选数）。**在没人拍板前，别把这段当作有效供给。**
   - Worker 脚本需在 Cloudflare 免费版部署，把请求转发到 `https://api.telegram.org` 的 `getUpdates`/`getChat`，按 channel 返回文本与日期（参考 scraper.ts 中 worker 期望的返回结构）。
 
 ## 定时任务
