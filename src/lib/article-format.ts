@@ -640,3 +640,43 @@ export function isCountryRelevant(title: string, summary: string, countryCode: s
 
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// 三之二、选稿资格：这三条判据必须**只有一份实现**
+// ---------------------------------------------------------------------------
+
+/** 一篇稿子被挡在推送之外的原因。`null` = 合格。 */
+export type PushExclusion = 'category' | 'missing_source' | 'country';
+
+/**
+ * 这篇稿子有没有资格进「今日精选」？返回 `null` 表示合格。
+ *
+ * ## 为什么要抽成一个函数（这是一次真实的误判）
+ *
+ * 这三条判据原本是**内联写在 `POST /api/wechat/push` 里的**，
+ * 于是任何「想按生产口径跑一遍」的地方（诊断接口、体检脚本）都得**照着抄一遍**。
+ * 抄漏一条，结论就完全反过来 —— 2026-09-22 实测踩到：
+ *
+ *   `GET /api/dedupe-check?llm=1` 用来验证 L2 模型判重稳不稳，
+ *   但它的输入直接来自 `getArticleIdentities()`，**没有套这三条判据**。
+ *   结果 kz 那 12 个候选对**全是体育新闻**（亚洲运动会乒乓球/自行车/举重），
+ *   而体育类在 `push` 里会被 `EXCLUDED_CATEGORIES` **整类剔掉、永远进不了生产**。
+ *   三次调用判出 4 / 6 / 2 对「同一件事」，于是被读成「L2 判定不稳定」——
+ *   实际上测的是模型对**模板化体育标题**（「…在亚洲运动会中夺冠」vs「…夺得铜牌」）
+ *   的判断，与生产无关。
+ *
+ * 这个坑和投资相关性评分那次是同一形态：**同一个判据在两处各写一份，
+ * 一边对一边错**，而且不报错、只在结论里悄悄体现。所以判据必须共享。
+ *
+ * ⚠️ 调用方**不要**再自己写过滤条件，也不要把这里的顺序换掉 ——
+ * 顺序决定了「同一篇同时命中多条时报哪个原因」，日志里靠这个原因定位问题。
+ */
+export function pushExclusionReason(
+  article: { title: string; summary?: string | null; category?: string | null },
+  countryCode: string,
+): PushExclusion | null {
+  if (article.category && EXCLUDED_CATEGORIES.has(article.category)) return 'category';
+  if (hasMissingSource(article.title || '')) return 'missing_source';
+  if (!isCountryRelevant(article.title || '', article.summary || '', countryCode)) return 'country';
+  return null;
+}

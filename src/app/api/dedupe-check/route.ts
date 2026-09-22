@@ -35,10 +35,25 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getArticleIdentities, deleteArticlesByIds } from '@/lib/db-articles';
 import { canonicalUrl, originalTitleKey, similarity } from '@/lib/utils';
 import { dedupeStoriesDeterministic } from '@/lib/same-event';
+import { pushExclusionReason } from '@/lib/article-format';
+import { countryList } from '@/lib/data/countries';
 
 /** 时间窗上限，防止有人传个 3650 天把整库拉出来。 */
 const MAX_DAYS = 90;
 const DEFAULT_DAYS = 30;
+
+/**
+ * `push` 会遍历的国家（`countryList` = kz/uz/kg/az/tj）。
+ *
+ * 入库时还存在 `intl` 这个源分组（The Times of Central Asia），
+ * 它们的文章会抓取、翻译、入库，但 **`push` 不遍历 intl，所以永远不会被推送**。
+ * 体检的 L2 段要看的是「生产里模型判得准不准」，拿永远不进生产的内容去测没有意义，
+ * 所以这里按 `push` 的口径收窄。
+ *
+ * ⚠️ 这与「确定性重复清理」（`POST {apply:true}`）**不是一回事**：
+ * 清理要覆盖整库（包括文体类和 intl），否则那些重复行会一直留在库里。
+ */
+const PUSHED_COUNTRIES: ReadonlySet<string> = new Set(countryList.map((c) => c.code));
 
 function windowStart(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -49,6 +64,8 @@ interface Row {
   title: string;
   summary?: string | null;
   content?: string | null;
+  /** 分类。用来套与 `push` 相同的选稿判据（见下面的 `withLlm` 段）。 */
+  category?: string | null;
   country_code: string;
   source_url: string | null;
   original_title: string | null;
@@ -295,10 +312,19 @@ export async function GET(request: NextRequest) {
     const debug = searchParams.get('debug') === '1';
     const perCountryLimit = Math.min(Number(searchParams.get('limit')) || 60, 200);
 
+    /** 因为「不会被推送」而没进体检的国家（当前只有 intl）—— 报出来，别让它静默消失 */
+    const skippedCountries: string[] = [];
+
     const probe: Array<{
       country: string;
       ran: boolean;
       ok: boolean;
+      /** 该国窗口内的总行数（套选稿判据之前） */
+      rowsInWindow?: number;
+      /** 被 `pushExclusionReason` 挡掉、没交给模型的行数（文体类/空壳文/与他国无关） */
+      excludedByRules?: number;
+      /** 真正喂给模型的行数（= min(合格行数, limit)），也就是 `pairs`/`declined` 里标题的出处 */
+      sampleSize?: number;
       /** 本轮问给模型的候选对数（pair 形态才有） */
       candidatePairs?: number;
       /** 模型判为「同一件事」的对数（pair 形态才有） */
@@ -329,7 +355,22 @@ export async function GET(request: NextRequest) {
     }> = [];
 
     for (const [cc, list] of byCountry) {
-      const slice = list.slice(0, perCountryLimit);
+      // 只体检**会被推送**的国家。`push` 遍历 `countryList`（kz/uz/kg/az/tj），
+      // 而入库时还存在 `intl` 这个源分组 —— 那些文章会入库但永远不会被推送，
+      // 拿它们做 L2 体检得出的结论对生产没有意义。跳过的国家会单独报出来。
+      if (!PUSHED_COUNTRIES.has(cc)) {
+        skippedCountries.push(cc);
+        continue;
+      }
+      // ⚠️ 口径必须与 `POST /api/wechat/push` **完全一致**，否则体检的结论对生产无效。
+      //
+      // 2026-09-22 实测踩到：不套判据时，kz 的 12 个候选对**全是体育新闻**
+      // （亚洲运动会乒乓球/自行车/举重），而体育类在 push 里被 `EXCLUDED_CATEGORIES`
+      // 整类剔掉、永远进不了生产。三次调用判出 4 / 6 / 2 对「同一件事」，
+      // 被读成「L2 判定不稳定」，实际上测的是模型对**模板化体育标题**的判断。
+      const eligible = list.filter((r) => !pushExclusionReason(r as never, cc));
+      const excludedByRules = list.length - eligible.length;
+      const slice = eligible.slice(0, perCountryLimit);
       const { llm } = await dedupeStories(slice as never[], {
         // 显式打开：体检的目的就是验证 L2，不能受生产默认值（关闭）影响
         useLlm: true,
@@ -343,6 +384,9 @@ export async function GET(request: NextRequest) {
         country: cc,
         ran: llm.ran,
         ok: llm.ok,
+        rowsInWindow: list.length,
+        excludedByRules,
+        sampleSize: slice.length,
         candidatePairs: llm.candidateCount,
         judgedPairs: llm.pairs?.length,
         vetoedPairs: llm.vetoed?.length,
@@ -372,7 +416,22 @@ export async function GET(request: NextRequest) {
       });
     }
     result.llmJudge = probe;
-    result.llmJudgeParams = { mode: taskMode, judgeMode, perCountryLimit, debug };
+    result.llmJudgeParams = {
+      mode: taskMode,
+      judgeMode,
+      perCountryLimit,
+      debug,
+      /**
+       * 体检口径说明：输入已套与 `push` 相同的选稿判据（分类/空壳文/国家相关性），
+       * 且只覆盖 `push` 会遍历的国家。**改这几条等于改体检结论的含义**，
+       * 报出来是为了让「这次的结论能不能代表生产」一眼可查。
+       */
+      scope: {
+        appliedPushEligibility: true,
+        pushedCountries: [...PUSHED_COUNTRIES],
+        skippedCountries,
+      },
+    };
   }
 
   return NextResponse.json(result);

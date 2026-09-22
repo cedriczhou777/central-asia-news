@@ -5,9 +5,7 @@ import { beijingDate, extractFirstImage, isChineseText } from '@/lib/utils';
 import { dedupeStories } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
-  EXCLUDED_CATEGORIES,
-  isCountryRelevant,
-  hasMissingSource,
+  pushExclusionReason,
   sanitizeArticleContent,
 } from '@/lib/article-format';
 import { generateWechatHtml } from '@/lib/wechat-template';
@@ -475,26 +473,20 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       //      同一件事的第二条刚好排在后面时更容易漏。
       // 拆成两步后，去重看的是「本国全部合格候选」，截取上限放在最后。
       const eligible = scoredArticles.filter((article) => {
-        // 演艺娱乐 / 体育整类剔除。
-        // 用户 2026-09-19 的要求是「少一些」（当时每国限量 3 篇），
-        // 2026-09-21 改成「全部取消」—— 是**全删**。原来那套 `MAX_SOFT_ARTICLES`
-        // 计数逻辑已随之删掉，别再按「限量」去理解这段。
-        if (EXCLUDED_CATEGORIES.has(article.category)) {
+        // 三条判据本体在 `@/lib/article-format` 的 `pushExclusionReason` ——
+        // **不要在这里内联重写**。原因见那个函数的注释：诊断接口一度因为
+        // 自己抄了一份（还抄漏了 `EXCLUDED_CATEGORIES`）而得出相反结论。
+        const reason = pushExclusionReason(article, country.code);
+        if (!reason) return true;
+        // 逐条打日志，便于事后回答「这篇为什么没进」
+        if (reason === 'category') {
           console.log(`跳过文体类新闻（${article.category}）：${article.title}`);
-          return false;
-        }
-        // 源正文缺失的空壳文（「原文正文缺失，数据无法提取」）—— 通篇没有信息，
-        // 清洗救不回来，只能在这里丢。判据只看标题（详见 article-format.ts）。
-        if (hasMissingSource(article.title)) {
+        } else if (reason === 'missing_source') {
           console.log(`跳过源正文缺失的新闻：${article.title}`);
-          return false;
-        }
-        // 国家相关性
-        if (!isCountryRelevant(article.title, article.summary, country.code)) {
+        } else {
           console.log(`跳过与${country.name}无关的新闻：${article.title}`);
-          return false;
         }
-        return true;
+        return false;
       });
 
       // 「同一件事」去重：链接 / 原文指纹（确定性）+ 模型判组（每国 1 次调用）。

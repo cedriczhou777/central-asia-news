@@ -160,15 +160,15 @@ export async function getRecentCanonicalUrls(sinceIso: string): Promise<Set<stri
 export async function getArticleIdentities(
   sinceIso: string,
   untilIso?: string,
-): Promise<Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at' | 'created_at'>>> {
+): Promise<Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'category' | 'country_code' | 'source_url' | 'original_title' | 'published_at' | 'created_at'>>> {
   const client = getSupabaseClient();
   const PAGE = 1000;
-  const out: Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'country_code' | 'source_url' | 'original_title' | 'published_at' | 'created_at'>> = [];
+  const out: Array<Pick<ArticleRow, 'id' | 'title' | 'summary' | 'content' | 'category' | 'country_code' | 'source_url' | 'original_title' | 'published_at' | 'created_at'>> = [];
 
   for (let from = 0; ; from += PAGE) {
     let q = client
       .from('articles')
-      .select('id, title, summary, content, country_code, source_url, original_title, published_at, created_at')
+      .select('id, title, summary, content, category, country_code, source_url, original_title, published_at, created_at')
       .gte('published_at', sinceIso)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
