@@ -24,7 +24,8 @@
     "verify:local": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:feed-fetch && pnpm test:dedup",
     "test:feed-fetch": "tsx scripts/test-feed-fetch.ts",
     "analyze:feeds": "tsx scripts/analyze-feeds.ts",
-    "test:zh-gate": "tsx scripts/test-zh-gate.ts"
+    "test:zh-gate": "tsx scripts/test-zh-gate.ts",
+    "analyze:nouns": "tsx scripts/analyze-proper-nouns.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",
