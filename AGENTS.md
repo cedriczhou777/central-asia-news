@@ -8,7 +8,7 @@
 - **UI 组件**: shadcn/ui (基于 Radix UI)
 - **Styling**: Tailwind CSS 4
 
-## 未结项（截至 2026-09-22）
+## 未结项（截至 2026-09-23）
 
 > 这份清单是**收敛索引**：每条都指向本文档里写细节的那一节，别在这里重复维护细节。
 > 有新发现先加到这里，解决了就把对应条目删掉。
@@ -18,46 +18,53 @@
 1. **Telegram 绑自有域名** —— 12 个频道全不可用，根因是容器到不了 `*.workers.dev`（不是配置问题）。
    要做：Cloudflare 给 Worker 绑 Custom Domain → 云托管改 `TELEGRAM_WORKER_URL` → 验证 `GET /api/telegram-check` 的 `okCount=12`。
    步骤见「信息源与社交网络」一节。**绑好之前别把这段当成有效供给。**
-2. **`intl` 源要不要收编（产品决策）** —— The Times of Central Asia 的文章会入库、会翻译，
-   但 `push` 只遍历 5 国 ⇒ **永远推不出去，翻译成本白花**（实测仍在持续产生，库里 15 篇、约 2–3 篇/天）。
-   二选一：归到某个国家，或删掉这个源。
-   ⚠️ 另有 `tm` 的 212 篇同样推不出去，但那是**历史存量、不再新增**，不产生持续成本，别混为一谈。
-   见「抓取放宽与内容去重」一节。
+   （2026-09-23 干跑复核：12 个频道**仍全部** `fetch failed`，这条没变。）
 
 ### B. 等观测，**别提前动手**（触发条件已写明）
 
-3. **闸 2 的 3 天窗口缺口** —— 去重窗口筛的是 `published_at`（发布日期）而不是入库时间，
+2. **闸 2 的 3 天窗口缺口** —— 去重窗口筛的是 `published_at`（发布日期）而不是入库时间，
    所以「发布日期距重抓 > 3 天」的稿子会绕过窗口、每重抓一次多一条重复行。
    **尚未发生**；等真观测到再改（改动要动 `getRecentCanonicalUrls`）。见「抓取放宽与内容去重」。
-4. **L2 去重阈值 0.50 缺「独立一天」的验证** —— 现有数字全是在同一段数据上拟合的，
+3. **L2 去重阈值 0.50 缺「独立一天」的验证** —— 现有数字全是在同一段数据上拟合的，
    不能当验证结果用。见「抓取放宽与内容去重」里那张阈值表下面。
-5. **`Modern.az` 只在容器侧抖**（ETIMEDOUT；本机 1047ms 正常）—— 链路抖动，代码层面无事可做。
+4. **`Modern.az` 只在容器侧抖**（ETIMEDOUT；本机 1047ms 正常）—— 链路抖动，代码层面无事可做。
    ⚠️ **反过来 `Banker.az` / `Newtimes.kz` / `Uznews.uz` 是本机不通、容器通** —— 别照着本机红叉去改源。
    见「源取回层」。
-6. **`tj` 是唯一贴着每国上限的国家**（候选正好 15）。哪天掉到 10 以下先看 `funnelByCountry`，
+   ▸ 同类（2026-09-23 新观测，待确认是否持续）：**`AKIpress` 容器侧超时 60s** ——
+   它在此前几轮是**能出货的**（实测 12 条候选），所以这一次要么是源临时慢、要么是又一条链路抖动。
+   **再看到一轮同样超时再去查源**，别凭一次就改代码。
+5. **`tj` 是唯一贴着每国上限的国家**（候选 13–15）。哪天掉到 10 以下先看 `funnelByCountry`，
    别去动判据。见「抓取放宽与内容去重」。
 
 ### C. 技术债 / 该清理（都已核对过是死的或过期的）
 
-7. **`DAILY_UPDATE.md` 整篇过期，会误导人** —— 时段写的是 08:00 / 12:30 / 15:00 / 21:00
+6. **`DAILY_UPDATE.md` 整篇过期，会误导人** —— 时段写的是 08:00 / 12:30 / 15:00 / 21:00
    （实际只有 **08:00 / 19:00**）；推荐的 GitHub Actions 方案**仓库里没有 `.github/`**；
    给的 API 入参 `{limit, autoPush}` **代码不认识**（真实入参是 `{date, minPerCountry, hours, skipTranslation, push}`）。
    ⚠️ 尤其是 `autoPush: true` —— 推送开关实际叫 `push`，所以照文档敲命令**会采集完什么都不推**，
    这正是本项目反复踩的那类「不报错、看着像跑通了、其实什么都没做」。
    要么重写，要么删掉并把有效信息并进 `AGENTS.md`。
-8. **`scripts/scheduler.js` + `scripts/daily-fetch.sh` 是遗留的本地调度器** —— 两者**零引用**，
+7. **`scripts/scheduler.js` + `scripts/daily-fetch.sh` 是遗留的本地调度器** —— 两者**零引用**，
    内置时段同样是错的（08:00/12:30/15:00/21:00），`package.json` 里还留着 `pnpm scheduler`。
    生产实际走的是应用内调度器 `src/lib/scheduler.ts`。**别照 `pnpm scheduler` 那套排查线上。**
-9. **两处已知死代码**（保留但无调用点，改的时候别顺手接回去）：
+8. **两处已知死代码**（保留但无调用点，改的时候别顺手接回去）：
    `src/lib/data/sources.ts`（0 引用）、`utils.isDuplicateContent`（实测零触发且会误合并反向新闻）。
-10. **`verify:local` 没包含 `test:translate` 与 `test:dedup-stability`** ——
-    它们要打真实 LLM 端点（会花钱），所以故意没进离线门禁，但也就意味着**改动翻译/去重时不会被门禁拦住**。
+9. **`verify:local` 没包含 `test:translate` 与 `test:dedup-stability`** ——
+   它们要打真实 LLM 端点（会花钱），所以故意没进离线门禁，但也就意味着**改动翻译/去重时不会被门禁拦住**。
+10. **库里「永远推不出去」的历史存量：`tm` 212 篇 + `intl` 16 篇**（2026-09-23 实测）。
+    两类都**不再新增**（`intl` 的新增已由 `9e82d33` 堵住），因此**不产生持续成本**，纯属库里的死行。
+    要清就清库（它们要么 `country_code` 不在 `countryList` 里，要么发布日期早已在推送的日期窗之外），不用改代码。
+    见「抓取放宽与内容去重」。
 
 ### D. 到了时间点要做的验证
 
-11. **明早 08:00 那轮是「入库闸门修复 + 源取回修复」的第一次真实定时执行。**
-    要复核：`funnelByCountry[*].droppedTopic` 是否下降、`sourceErrors` 是否只剩 1 条（Modern.az）、
-    `saved` 与草稿箱篇数。**在那之前不要凭零成本体检的候选数当成入群结果。**
+11. **2026-09-23 晚 19:00 那轮，是 intl 改判（`9e82d33`）的第一次真实入库执行。**
+    要复核两件：`GET /api/articles?country=intl` 是否**停止增长**（停在 16 篇），
+    以及库里有没有出现 `country_code` 属于 5 国的、来源是 Times of Central Asia 的新行。
+    ⚠️ 干跑已经证明**改判逻辑本身是对的**（见下），这一轮验的是**入库存的是不是改判后的国别**。
+    ⚠️ `lastRun` **不能**当「这轮跑没跑」的证据：2026-09-23 上午查 `lastRun` 是 null，
+    但库里确实有当天发布的 16 篇（kg 15 / az 1）—— 新版本接管容器会清空这个模块级状态。
+    判断「跑没跑」看**库里的产出**。
 
 ## 目录结构
 
@@ -369,18 +376,40 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
      ▸ 进展（2026-09-22）：「更宽窗口」**已做**（14 天 × 10–14 轮，干净口径，按通道拆分）；
      「**留出独立的一天做验证**」**仍未做** —— 上面所有数字都是同一段数据上的拟合，别当验证结果用。
      ⚠️ **体检接口的输入必须与 `push` 同口径，否则结论对生产无效。** 2026-09-22 踩到：`GET /api/dedupe-check?llm=1` 的输入直接来自 `getArticleIdentities()`，**没套选稿判据**，于是 kz 的 12 个候选对全是亚洲运动会体育稿 —— 而体育类在 `push` 里被 `EXCLUDED_CATEGORIES` 整类剔掉、永远进不了生产，测出来的「判定不稳」与生产无关。已修：体检的 L2 段现在套 `pushExclusionReason`，且只覆盖 `push` 会遍历的国家（kz/uz/kg/az/tj，**不含 intl**），并把口径报在 `llmJudgeParams.scope` 里。两处差异都补齐了 —— 以后加判据请加在 `pushExclusionReason` 里（`scripts/test-format.ts` 逐条钉住），**别在调用方再抄一份**：这个 bug 与投资评分那次是同一形态（同一判据两处各写一份，一边对一边错、不报错只在结论里体现）。
-     ℹ️ **`intl` 的文章会入库但永远不会被推送**：`push` 只遍历 `countryList`（5 国），而 `RSS_SOURCES` 里有 1 个 `intl` 源（The Times of Central Asia）。也就是说这个源抓取+翻译的成本是白花的。要收编的话得决定「归到哪个国家」，属于产品决策，目前**未处理**。
-     **2026-09-22 用线上数据核过，链条完整**：
-     - 采集端按 `RSS_SOURCES` 逐个源遍历（`fetch-news/route.ts` 的 `for (const source of RSS_SOURCES)`），
-       **不按国别过滤** ⇒ `intl` 源照常走完 打分→闸门→精选→**翻译**→**入库**，`country_code` 落成 `'intl'`。
-     - 推送端按 `countryList` 遍历（`@/lib/data/countries` 里只有 kz/uz/kg/az/tj 五条），
-       每国调 `getArticlesByDateRange(start, end, country.code)` **按 `country_code` 筛库**
-       ⇒ `'intl'` 永远匹配不上。
-     - 实测：`GET /api/articles?country=intl` → **15 篇**（最新 ID 3894，09-22 当天），
-       即**现在仍在持续产生**，约 2–3 篇/天 × 2 轮 ≈ 每天 5 次左右白花的翻译。
-     ⚠️ 同类的还有一个 `tm`（土库曼斯坦）：库里有 **212 篇**，同样不在 `countryList` 里、同样推不出去
-     —— 但它是**历史存量**（最新一篇 ID 2672 / 发布于 09-18，来源 `Trend Kazakistan`，之后不再新增），
-     所以**它不产生持续成本**，别把它和 `intl` 混为一谈。要清也只是清库，不用改代码。
+     ✅ **`intl` 源的「翻译了却永远推不出去」已于 2026-09-23 修复（`9e82d33`，方案 A）。**
+     原先的病灶：`push` 只遍历 `countryList`（5 国），而 `RSS_SOURCES` 里有 1 个 `intl` 源
+     （The Times of Central Asia），它的稿子照常走完 打分→闸门→精选→**翻译**→**入库**、
+     `country_code` 落成 `'intl'` ⇒ 推送端按 `country_code` 筛库，`'intl'` 永远匹配不上。
+     即**翻译的钱花掉、中文稿躺在库里没人看**（2026-09-22 实测库里 15 篇、仍在以 2–3 篇/轮 × 2 轮持续新增）。
+
+     **改法（不删源、不新增判据口径）**：新增 `resolveArticleCountry()`。
+     - 非 `intl` 源**原样返回源国别** ⇒ 25 个普通源行为逐字不变。
+     - `intl` 源用 `COUNTRY_KEYWORDS` 里**可推送国家**的词表扫正文，命中词数最多者即归属国；
+       并列时按 `countryList` 顺序取先者（顺序稳定 ⇒ 同一篇判定可复现）。
+     - 判不出来（纯区域泛新闻）返回 `null`，调用方计进 `droppedCountry` 丢弃 ——
+       本项目产物是**5 份按国报告**，没有「区域报告」这个出口，留成 `'intl'` 只是把白花钱继续做下去。
+     - ⚠️ 候选国只能取 `PUSHABLE_COUNTRY_CODES`（派生自 `countryList`），**不能拿 `COUNTRY_KEYWORDS` 的键**：
+       那张表里有 `tm` 而 tm 不在 `countryList` 里，判成 tm 会进一个不被遍历的桶、**静默消失**。
+
+     **连带三处，少改一处就修不干净**（都写在这段代码的注释里）：
+     ① 第二步遍历 `[...countryList, 'intl']` → `PUSHABLE_COUNTRY_CODES`（去掉 `'intl'`）；
+     ② 入库的 `country_code` 从 `source.country` 改成**桶的** `country`；
+     ③ `sourceCounts` / `funnelByCountry` 增加 `reassigned` 计数。
+     ①②的理由都是同一个：否则兜底会把稿子推回 intl 桶、最后以 `country_code='intl'` 入库，
+     等于把刚修掉的问题原样做回来。②写错是**静默**的（采集/翻译/入库/推送全成功，只是那几篇没人看）。
+
+     **2026-09-23 零成本干跑（`POST {"skipTranslation": true}`）复核通过**（新代码指纹 = `funnelByCountry` 里出现 `reassigned` 键）：
+     `intl` 行 = `fetched:10 afterDate:9 dJunk:0 dCountry:0 dTopic:0 candidates:9 reassigned:9`
+     —— **9 篇 intl 稿全部改判到 5 国**，没有一篇因为判不出来而丢；
+     其余 5 国的行 `reassigned` 全为 **0**，证明普通源行为未受影响。
+     （另：`sourceErrors` 仍 13 条 = AKIpress 超时 1 + Telegram 12，Telegram 那条见未结项 A-1。）
+
+     ⚠️ **还没验的是「入库阶段真的写对了国别」** —— 干跑不入库，所以这一条要等
+     2026-09-23 晚 19:00 的真实轮次：`GET /api/articles?country=intl` 应**停在 16 篇**不再增长，
+     且库里出现 `country_code` 属于 5 国、来源是 Times of Central Asia 的新行。
+     ⚠️ 同类的历史存量还有 `tm` **212 篇**（最新一篇 ID 2672 / 发布于 09-18，来源 `Trend Kazakistan`）
+     和 `intl` 的 **16 篇**：这两批都**不再新增**、推不出去、**不产生持续成本**，纯属库里的死行。
+     要清只是清库，不用改代码。见未结项 C-10。
   另有 `same_text` 兜底（标题+正文**几乎逐字相同**才成立，阈值 0.9/0.8）。
   ⚠️ 历史上的 `utils.isDuplicateContent`（标题 0.8 / 平均 0.6）已**不再用于去重**：实测在 200 篇与 1000 篇两份线上快照上零触发，却会误合并「金价下跌」与「金价上涨」这类方向相反的新闻。函数保留在 `utils.ts` 里但无调用点，别再把它接回去。
   **反向极性对在问模型之前就被确定性拦掉**（`hasOppositePolarity`）：「金价下跌」vs「金价上涨」相似度 0.71、排在候选表第一位，是字面最像的假阳性，方向词是封闭集合没理由交给模型猜。⚠️ 这类对**没有**比例熔断兜底 —— 候选按相似度降序截断，真重复占多数是正常的（实测乌兹别克单轮 12 对里 11 对确实是同一件事），任何「判是比例过高就作废」的阈值都会误伤，别再加回来。
@@ -405,6 +434,11 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
   **每国上限 15 篇**（`maxPerCountry`，2026-09-22 由 30 收到 15 —— 改成早晚报两段后，每份报告每国 15 篇足够，30 篇只会把相关性靠后的稿子也塞进来、拉低整份报告质量）。上限不是配额，候选不足**不硬凑**：硬凑就得放宽判据，而判据过严/过松都出过事。
   ⚠️ 收上限会**扩大「每国不足 N 篇」的出现面**（以前要 30 篇才触发，现在 15 篇就可能不够）。候选不足时**先看 `GET /api/fetch-news` 的 `funnelByCountry`** 判断掉在哪一段，不要直接动 `pushExclusionReason` 或 `maxPerCountry`。
   **`funnelByCountry` 是 2026-09-22 为回答「某国今天为什么只有一篇」补的**（在那之前只报每源 `fetched`，中间全不可见）。口径：`fetched`（feed 条目）→ `afterDate`（过日期窗）→ `droppedJunk` / `droppedCountry` / `droppedTopic`（三个丢弃原因）→ `candidates`（进候选池）。四个环节的修法完全不同，所以分开计数：
+  ⚠️ **另有 `reassigned` 字段**（2026-09-23 加，**只有 `intl` 行可能非零**）：`intl` 源的稿子被改判到 5 国的条数。
+  它**不是一个「丢弃环节」**，所以不参与 `candidates = afterDate − 三个 dropped*` 这条减法；
+  判不出来而丢的那些才进 `droppedCountry`。见「抓取放宽与内容去重」里 `resolveArticleCountry` 那条。
+  另注意本表**按「源」的国别分组** ⇒ 改判到 uz 的 intl 稿**仍算在 `intl` 行**，不会出现在 `uz` 行；
+  要把它拆到 5 国只能查库（`country_code='uz'` 且 `source_name` 是 Times of Central Asia）。
   - `afterDate` 偏小 → 源在这个时段没发稿，或 **feed 本身只保留很少条目**（实测 Astana Times 的 feed 只有 **10 条**，等于只覆盖最近一两天；对比 Newtimes.kz 有 100 条）
   - `droppedCountry` 偏大 → `isCountryRelevant` 里「标题/正文提到**任何一个其它目标国**就丢」这条互斥规则在该国身上过敏（中亚当地区新闻极易同时提到邻国）
   - `droppedTopic` 偏大 → 入库闸门词表对该国**语言**覆盖不足。**2026-09-22 已按此修过一轮**
@@ -524,10 +558,19 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
     feed 正文里出现 `<html` 字样等边界）。
   - `pnpm analyze:feeds [国别] [--only=<子串>]` —— 逐源报 状态 / **Content-Type** / 字节 / 耗时 /
     条数 / 用了哪个 UA。⚠️ 这是**本机视角**；容器视角仍看 `funnelByCountry` 与 `sourceErrors`。
-  - **线上复核的固定动作（零成本、约 2 分钟）**：`POST /api/fetch-news {"skipTranslation": true}`
+  - **线上复核的固定动作（零成本、约 1–2 分钟）**：`POST /api/fetch-news {"skipTranslation": true}`
     → 轮询 `GET /api/fetch-news` 到 `lastRun.running=false` → 读 `lastRun.summary` 的
-    `sourceErrors`（有几条、都是谁）和 `sourceCounts[*].candidates`（**修复是否真的出货**）。
-    实测耗时 **115.9s**（带翻译的一轮是 67–75 分钟，所以这个体检日常可以随便打）。
+    `sourceErrors`（有几条、都是谁）、`sourceCounts[*].candidates`（**修复是否真的出货**）、
+    以及 `funnelByCountry`（**某国为什么只有 N 篇**，按国别聚合，口径见上一节）。
+    实测耗时 **115.9s**（2026-09-22）/ **69.6s**（2026-09-23）；带翻译的一轮是 67–75 分钟，
+    所以这个体检日常可以随便打。
+    ⚠️ 干跑**只采集、不入库、不翻译**，所以 `saved=0` 与「本可入库 N 篇」**都是正常的**，别当成失败；
+    真正证明「修好了」的是 `candidates` 与 `funnelByCountry`，不是 `saved`。
+    ⚠️ 想证明「线上跑的是不是新代码」，**别用 build ID 当证据**（只说明「有部署发生」）——
+    用**这次改动特有的、能在响应里看到的东西**。例：验 `intl` 改判就看
+    `funnelByCountry` 里有没有 `reassigned` 键（2026-09-23 就是这么验的）。
+    ⚠️ `lastRun` 为 null **不等于**「没跑过」：新版本接管容器会清空这个模块级状态。
+    要判「今天到底跑没跑」看**库里的产出**（如 `GET /api/articles?date=<今天>`）。
     ⚠️ 判断「修好了」要看 `sourceCounts` 里那个源**有产出**，**不能只看 `sourceErrors` 里没它** ——
     源不可达会被记进 `sourceErrors`，但源可达却一条都没解析出来是**另一回事**。
     ⚠️ `lastRun` 在**模块作用域**：部署换容器就清空。体检完顺手记下**当前 build ID**
