@@ -28,7 +28,12 @@
  * |---|---|---|---|
  * | L0 `same_url` | 归一化链接相同 | 确定性，可断言 | 0 |
  * | L1 `same_original` | 原文标题相同（链接不同 → 同稿多链） | 确定性，可断言 | 0 |
+ * | L1.5 `same_title` | **中译标题**接近逐字相同（正文可不参与） | 确定性，可断言 | 0 |
  * | L2 `llm_same_event` | 模型判「表述不同、实际同一件事」 | 概率性，可回退 | 每国 1 次调用 |
+ *
+ * `same_title` 是 2026-09-23 补的，补的是一个**确定性的洞**：L1 只看**原文**标题，
+ * 而同一件事被两家不同语种的源各报一遍时原文标题必然不同 ⇒ L1 接不住；
+ * 但它们的**中译**标题常常一字不差。这条不花 token、不依赖模型，见 {@link isSameTitle}。
  *
  * L2 是「理解机制」本体：像「金价下跌」vs「金价上涨」、「土耳其大使馆」vs「以色列大使馆」
  * 这种**字面很像但语义相反/不同**的对，只有看懂内容才分得开。
@@ -56,7 +61,7 @@ export interface StoryLike {
   publishedAt?: string | null;
 }
 
-export type DedupReason = 'same_url' | 'same_original' | 'same_text' | 'llm_same_event';
+export type DedupReason = 'same_url' | 'same_original' | 'same_text' | 'same_title' | 'llm_same_event';
 
 export interface DedupDrop<T> {
   /** 被保留下来的那一条（组内排最前的） */
@@ -178,6 +183,55 @@ function isNearIdenticalText(a: StoryLike, b: StoryLike): boolean {
 }
 
 /**
+ * 中译标题「几乎逐字相同」⇒ 同一件事。**不需要正文参与。**
+ *
+ * ## 为什么另立这一条（2026-09-23）
+ *
+ * `isNearIdenticalText` 要求**标题和正文都**逐字接近（0.9 / 0.8）。
+ * 那个正文门槛是为了挡「标题像、事实相反」的对（见上面的取舍说明），但它有个副作用：
+ * **同一件事被两家源各写一遍时，中译正文的详略本来就不同**，正文相似度只有 0.1–0.3，
+ * 于是「标题一字不差」的重复行被漏判。实测（10 天 × 5 国、1674 篇库内行）漏了三对：
+ *
+ * | 对 | 中译标题相似度 | 正文相似度 |
+ * |---|---|---|
+ * | kz `id=3925/3909` 托卡耶夫会见俄语组织秘书长博恰罗娃（Newtimes.kz ↔ Egemen Qazaqstan） | **1.000** | 0.274 |
+ * | kz `id=3741/3915` 2027 年启动无人驾驶出租车服务（The Astana Times ↔ Egemen Qazaqstan） | **1.000** | 0.138 |
+ * | az `id=4164/4134` 伊朗航空公司暂停飞往阿塞拜疆的航班（Modern.az ↔ APA） | **1.000** | 0.155 |
+ *
+ * 它们的 `source_url` 与 `original_title` 都不同（不同源、不同语种），所以 L0/L1 也接不住 ——
+ * 第三层是它们唯一的兜底，而第三层默认关着 ⇒ 三条一直重复进推送。
+ *
+ * ## 0.95 这个门槛是量出来的，不是拍的
+ *
+ * 同一批数据（1674 篇）里，**相似度 ≥0.85 的对只有 3 对，且全部恰好 = 1.000**，
+ * 0.85–0.99 这一段**一对都没有**；危险的那几类都远在下面：
+ * 「同主体不同事」0.55、「同题不同场（上合两场会）」0.42、「不同地点的同名项目」0.40。
+ * 所以 0.85–1.0 之间**没有需要区分的东西**，门槛落在这一段里的哪一格都等价 ——
+ * 取 0.95 是为了容忍 `normalizeText` 之后仍剩下的零星差异（长标题差 1 字实测 ≈0.92，
+ * 仍会被挡在外面，这是有意的：宁可漏合并，也不要靠一个字去赌）。
+ *
+ * ⚠️ **这一条只处理「几乎逐字」**，不处理「换词重写」—— 后者分数实测落在 0.35 一档，
+ * 归 L2 模型判（而 L2 当前默认关闭，见 `DedupOptions.useLlm`）。
+ *
+ * ## 反向极性仍然确定性否决
+ *
+ * `sim ≥ 0.95` 理论上能被「同一句话改一个方向词」满足，而那是**两条相反的消息**
+ * （后果是删掉一条利多或一条利空）。方向词是封闭集合、不需要语义推断，
+ * 没有理由交给阈值去赌 ⇒ 用 `hasOppositePolarity` 在阈值之前拦掉。
+ * 实测那类对（金价跌/涨）只有 0.71–0.81，本来也过不了 0.95，这条是双保险。
+ */
+export const TITLE_IDENTICAL_MIN_SIM = 0.95;
+
+/** 中译标题近似相同 ⇒ 同一条新闻（见 {@link TITLE_IDENTICAL_MIN_SIM} 的取舍说明）。 */
+export function isSameTitle(a: StoryLike, b: StoryLike): boolean {
+  const ta = a.title || '';
+  const tb = b.title || '';
+  if (!ta || !tb) return false;
+  if (hasOppositePolarity(ta, tb)) return false;
+  return similarity(ta, tb) >= TITLE_IDENTICAL_MIN_SIM;
+}
+
+/**
  * 确定性的「同一条新闻」判定，按输入顺序保序去重。
  *
  * 复杂度 O(n²)，但这里的 n 是**单国单輪的候选数**（几十条），
@@ -212,10 +266,17 @@ export function dedupeStoriesDeterministic<T extends StoryLike>(items: T[]): {
       continue;
     }
 
-    // 兜底：文本逐字相同的重复（见 isNearIdenticalText 的取舍说明）
+    // 兜底 1：文本逐字相同的重复（见 isNearIdenticalText 的取舍说明）
     const textDup = kept.find((p) => isNearIdenticalText(p, item));
     if (textDup) {
       drops.push({ kept: textDup, dropped: item, reason: 'same_text' });
+      continue;
+    }
+
+    // 兜底 2：中译标题逐字相同、正文详略可以差很远（见 isSameTitle 的取舍说明）
+    const titleDup = kept.find((p) => isSameTitle(p, item));
+    if (titleDup) {
+      drops.push({ kept: titleDup, dropped: item, reason: 'same_title' });
       continue;
     }
 

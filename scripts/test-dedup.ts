@@ -27,9 +27,11 @@ import {
   filterOversizedGroups,
   hasOppositePolarity,
   identityKeys,
+  isSameTitle,
   JUDGE_TEMPERATURE,
   parseEventGroups,
   parsePairVerdict,
+  TITLE_IDENTICAL_MIN_SIM,
   type StoryLike,
 } from '../src/lib/same-event';
 
@@ -309,6 +311,88 @@ section('identityKeys：没有可用身份的条目不应互相合并');
   const { kept, drops } = dedupeStoriesDeterministic(identical);
   ok('逐字重复（无链接无原文标题）仍能兜住', kept.length === 1, `实际 ${kept.length}`);
   ok('逐字重复的丢弃原因记为 same_text', drops[0]?.reason === 'same_text', String(drops[0]?.reason));
+}
+
+// ============================================================
+// 三之二、same_title：中译标题逐字相同、正文详略可以差很远
+//
+// 2026-09-23 新增。来源是真实漏判（10 天 × 5 国、1674 篇库内行里量到 3 对）：
+// 同一件事被两家源各写一遍时，中译**标题**一字不差，但中译**正文**详略迥异
+// （实测正文相似度只有 0.138 / 0.155 / 0.274），旧判据要求正文 ≥0.8 ⇒ 全部漏掉。
+// 这一节同时钉住「必须合并」与「必须保留」两侧 —— 删除类规则只测一边一定会调歪。
+// ============================================================
+
+section('same_title · 标题逐字相同但正文迥异');
+
+{
+  // 必须合并：真实案例形态（az 伊朗航空，Modern.az ↔ APA），正文详略差很远
+  const sameTitle: StoryLike[] = [
+    {
+      title: '伊朗航空公司暂停飞往阿塞拜疆的航班',
+      content: '伊朗航空公司宣布暂停飞往阿塞拜疆的航班，恢复时间另行通知。',
+      country_code: 'az', source_url: 'https://modern.az/a', original_title: 'Iran Hava Yolları...',
+    },
+    {
+      title: '伊朗航空公司暂停飞往阿塞拜疆的航班',
+      content: '据报道，伊朗航空公司因故暂停了飞往阿塞拜疆的航班。公司未说明具体原因，也未给出复航时间表。',
+      country_code: 'az', source_url: 'https://apa.az/b', original_title: 'Иранские авиакомпании...',
+    },
+  ];
+  const { kept, drops } = dedupeStoriesDeterministic(sameTitle);
+  ok('标题逐字相同、正文迥异 → 合并为一条', kept.length === 1, `实际 ${kept.length}`);
+  ok('丢弃原因记为 same_title', drops[0]?.reason === 'same_title', String(drops[0]?.reason));
+  ok('保留的是先出现的那条（保序）', kept[0]?.source_url === 'https://modern.az/a');
+}
+
+{
+  // 必须保留：长标题只差一个字 → 实测 ≈0.92 < 0.95。
+  // 这条钉的是「别为了多合几条就把门槛往下调」：差一个字可能是两个不同的人/批次。
+  const oneCharOff: StoryLike[] = [
+    { title: '哈萨克斯坦总统托卡耶夫会见国际俄语组织秘书长博恰罗娃', content: '', country_code: 'kz', source_url: '', original_title: '' },
+    { title: '哈萨克斯坦总统托卡耶夫会见国际俄语组织秘书长博恰罗夫', content: '', country_code: 'kz', source_url: '', original_title: '' },
+  ];
+  ok(
+    '长标题差 1 字（≈0.92）不合并',
+    dedupeStoriesDeterministic(oneCharOff).kept.length === 2,
+    '阈值 0.95 有意卡在「差一个字」之上，见 isSameTitle 的取舍说明',
+  );
+}
+
+{
+  // 必须保留：方向相反。这条是**双保险** —— 实测 0.81 本来就过不了 0.95，
+  // 但 `hasOppositePolarity` 必须仍然拦得住，否则将来有人调低门槛就会删掉一条相反的事实。
+  const opposite: StoryLike[] = [
+    { title: '哈萨克斯坦央行将基准利率下调至百分之十二', content: '', country_code: 'kz', source_url: '', original_title: '' },
+    { title: '哈萨克斯坦央行将基准利率上调至百分之十二', content: '', country_code: 'kz', source_url: '', original_title: '' },
+  ];
+  ok('反向极性对被确定性否决', hasOppositePolarity(opposite[0].title, opposite[1].title));
+  ok('反向极性对不合并（即使标题很像）', dedupeStoriesDeterministic(opposite).kept.length === 2);
+  // 直接钉住判据本身：把门槛降到 0 也必须是否决
+  ok('isSameTitle 对反向极性恒为 false', !isSameTitle(opposite[0], opposite[1]));
+}
+
+{
+  // 必须保留：危险的三类低分对（实测 0.40–0.55），确认离门槛足够远
+  const risky: Array<[string, string, string]> = [
+    ['不同地点的同名项目', '东哈萨克斯坦州将新建一座跨河桥梁', '阿斯塔纳市将新建一座跨河桥梁'],
+    ['同主体不同事', '哈萨克斯坦政府任命Arsen Zhakhanbaev为水资源与灌溉事务副总理', '哈萨克斯坦任命 Arsen Zhakhanbaev 为水利灌溉部副部长'],
+    ['同题不同场', '上合组织反垄断机构负责人会议在杜尚别举行', '上合组织经贸部长会议在杜尚别举行'],
+  ];
+  for (const [label, a, b] of risky) {
+    const rows: StoryLike[] = [
+      { title: a, content: '', country_code: 'kz', source_url: '', original_title: '' },
+      { title: b, content: '', country_code: 'kz', source_url: '', original_title: '' },
+    ];
+    ok(`危险类不合并：${label}`, dedupeStoriesDeterministic(rows).kept.length === 2);
+  }
+}
+
+{
+  // 门槛本身：常量必须有明确值，且必须严于「正文+标题」那条的标题半边（0.9）
+  ok('TITLE_IDENTICAL_MIN_SIM 为 0.95', TITLE_IDENTICAL_MIN_SIM === 0.95, String(TITLE_IDENTICAL_MIN_SIM));
+  ok('标题门槛严于 same_text 的标题半边（0.9）', TITLE_IDENTICAL_MIN_SIM > 0.9);
+  ok('空标题不触发', !isSameTitle({ title: '' }, { title: '' }));
+  ok('缺标题字段不触发', !isSameTitle({ title: '' }, { title: '阿斯塔纳将建八车道新桥' }));
 }
 
 // ============================================================
