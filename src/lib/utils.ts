@@ -20,12 +20,102 @@ export function splitContentImage(content: string): { coverImage: string | null;
   return { coverImage, textContent };
 }
 
-// 检测文本是否为中文：中文字符占比达到阈值（默认 40%）即视为已翻译为中文
-export function isChineseText(text: string, threshold = 0.4): boolean {
-  const cleaned = (text || '').replace(/<[^>]+>/g, ' ').replace(/[\s，。、；：,.!?…\-"'“”‘’()·%$]+/g, '');
+// ---------------------------------------------------------------------------
+// 语言与书写系统判定
+// ---------------------------------------------------------------------------
+
+/**
+ * 「这段文本已经是中文产物」所需的**最少汉字个数**。
+ *
+ * ⚠️ **两个值都是在真实语料上定标出来的，别凭感觉改**（2026-09-23，7 天 × 5 国 1757 篇）：
+ *
+ * | 阈值 | 语料上被判「未翻译」的篇数 |
+ * |---|---|
+ * | `MIN_HAN_CONTENT = 60` | **106 篇（6.03%）** ← 危险，会静默丢稿 |
+ * | `MIN_HAN_CONTENT = 30` | 11 篇（0.63%） |
+ * | **`MIN_HAN_CONTENT = 20`（现值）** | **2 篇（0.11%）** |
+ * | `MIN_HAN_CONTENT = 10` | 1 篇（0.06%） |
+ *
+ * 语料实测：正文汉字个数 min=4 / p1=34 / 中位=143；标题 min=6 / p1=12 / 中位=24。
+ * 标题取 4（比语料下界 6 还低两个，留余量），正文取 20。
+ *
+ * 那 2 篇的正文汉字只有 11 个和 4 个 —— 是**正文残缺**的稿子（正文只有一两句），
+ * 从「可推送」变成「未翻译」是**正确行为**，不是误杀。抽查过。
+ *
+ * 为什么刻意取低：本判据要区分的是「**0 个汉字**（模型把原文回显了）」和
+ * 「译成了中文」，源语言 ru/kk/ky/az 的原文汉字个数恒为 0，
+ * 所以 4 / 20 这个量级完全够用。阈值取高只会换来一种后果：**合格译文被静默丢弃**。
+ */
+export const MIN_HAN_TITLE = 4;
+export const MIN_HAN_CONTENT = 20;
+
+/** 去 HTML 标签、空白与常见标点，只留真正参与语言判定的字符。 */
+function stripForLangCheck(text: string): string {
+  return (text || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[\s，。、；：,.!?…\-"'“”‘’()·%$《》「」【】—–]+/g, '');
+}
+
+/** 汉字个数（先剥掉标签与标点）。 */
+export function hanCount(text: string): number {
+  return (stripForLangCheck(text).match(/[\u4e00-\u9fa5]/g) || []).length;
+}
+
+/** 汉字占比（保留给需要「比例」语义的调用方；语言判定不要用它，见 isChineseText）。 */
+export function hanRatio(text: string): number {
+  const cleaned = stripForLangCheck(text);
+  if (!cleaned) return 0;
+  return hanCount(cleaned) / cleaned.length;
+}
+
+/**
+ * 找出「一个词里同时含汉字和西里尔字母」的片段。返回空数组 = 干净。
+ *
+ * 为什么这条值得单独成函数：这种写法**结构上不可能正确** ——
+ * 一段中文里不可能合法地出现 `米尔зиёё夫`／`肯еш`／`议员Владимир`。
+ * 2026-09-23 实测 7 天 × 5 国 1757 篇里 **3.2% 的篇目**含这种词（156 种），
+ * 全部是坏的，**没有一例误报**。所以它可以当**硬判据**用（判不合格 → 重试）。
+ *
+ * ⚠️ **故意不把「汉字 + 拉丁字母」也算进来**。看着对称，实际会误伤：
+ * `60kg`／`100kg`／`center私立诊所` 这类是完全正常的写法，
+ * 而这条判据的下游是「重试 → 三次都不过就丢弃该篇」，误报的代价是**静默丢稿**，
+ * 不是排版难看。宁可少抓一种（`霍贾and` 那类交给提示词去要求）。
+ */
+export function mixedScriptTokens(text: string): string[] {
+  const out: string[] = [];
+  for (const tok of (text || '').split(/[\s，。、；：（）()「」“”"'·—\-–/《》【】!?！？]+/)) {
+    if (!tok) continue;
+    if (/[\u4e00-\u9fff]/.test(tok) && /[\u0400-\u04ff]/.test(tok)) out.push(tok);
+  }
+  return out;
+}
+
+/**
+ * 检测文本是否为中文：**汉字个数 ≥ minHan** 即视为已翻译为中文。
+ *
+ * ## ⚠️ 2026-09-23 改过判据（占比 → 绝对个数），改之前先读完
+ *
+ * 旧实现是「汉字**占比** ≥ 0.4，拉丁字母计入分母」。在「人名保留拉丁」的旧口径下
+ * 实测余量只有 0.005（min 0.405），注释里就写着「改动上线后要复查这个分布」。
+ * 2026-09-23 口径扩成**人名/地名/国名/公司名/机构名一律保留拉丁**之后，
+ * 占比会掉到 **0.27–0.36**，**低于 0.4** ——
+ * 于是「翻译完全正确」的稿件会被判成「未翻译」，重试三次后**静默丢弃**。
+ * 更隐蔽的是 `article-format.ts` 的 `isPushableText()` 也用这个判据，
+ * 那意味着**稿子入库了却永远推不出去**。
+ *
+ * 换判据的理由：要回答的问题是「**有没有真的翻译**」，而不是「汉字占多大比例」。
+ * 源语言只有 ru / kk / ky / az，**原文里的汉字个数恒为 0**，
+ * 而只要译了，标题就有十来个汉字。区分度是「0 vs 十几个」，绝对个数完全够。
+ * 占比这个仪器在这里**从根上选错了**：它惩罚的恰好是产品上正确的行为。
+ *
+ * ⚠️ 调用方请用 `article-format.ts` 的 `isPushableText()` / `pushExclusionReason()`，
+ * 或 `translate.ts` 的 `normalizeResult`，**不要**再在这里写裸调用：
+ * 这个表达式曾在两处各写一份，就是历史上三次「体检与生产不一致」的起点。
+ */
+export function isChineseText(text: string, minHan = MIN_HAN_TITLE): boolean {
+  const cleaned = stripForLangCheck(text);
   if (!cleaned) return false;
-  const han = cleaned.match(/[\u4e00-\u9fa5]/g)?.length || 0;
-  return han / cleaned.length >= threshold;
+  return hanCount(cleaned) >= minHan;
 }
 
 // ----- 内容级去重工具（基于语义化归一化 + n-gram 相似度）-----

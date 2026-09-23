@@ -6,7 +6,7 @@
  * 一堆正则、看不到它为什么存在，很容易在「清理代码」时删掉。
  */
 
-import { isChineseText } from './utils';
+import { isChineseText, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
 
 // ---------------------------------------------------------------------------
 // 一、正文清洗
@@ -659,9 +659,14 @@ export type PushExclusion = 'untranslated' | 'category' | 'missing_source' | 'co
  *
  * ⚠️ 调用方请用本函数，**不要再写 `isChineseText(a.title) && isChineseText(a.content)`**
  * —— 这个表达式曾经在两处各写一份，就是分叉的起点。
+ *
+ * ⚠️ 2026-09-23：两个参数**必须**分别传标题/正文的最小汉字个数。
+ * 专有名词改成一律保留拉丁之后，标题的汉字**占比**掉到 0.27–0.36，
+ * 而正文的绝对汉字数仍有上百 —— 用同一个阈值会让标题这一侧先崩，
+ * 表现是「稿子入库了却永远推不出去」。见 `utils.ts` 的 `isChineseText`。
  */
 export function isPushableText(title: string | null | undefined, content: string | null | undefined): boolean {
-  return isChineseText(title || '') && isChineseText(content || '');
+  return isChineseText(title || '', MIN_HAN_TITLE) && isChineseText(content || '', MIN_HAN_CONTENT);
 }
 
 /**
