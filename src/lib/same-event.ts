@@ -222,13 +222,31 @@ function isNearIdenticalText(a: StoryLike, b: StoryLike): boolean {
  */
 export const TITLE_IDENTICAL_MIN_SIM = 0.95;
 
-/** 中译标题近似相同 ⇒ 同一条新闻（见 {@link TITLE_IDENTICAL_MIN_SIM} 的取舍说明）。 */
-export function isSameTitle(a: StoryLike, b: StoryLike): boolean {
-  const ta = a.title || '';
-  const tb = b.title || '';
+/**
+ * `isSameTitle` 的**文本级**形态 —— 闸 2（跨轮、入库前）复用这条判据时用它。
+ *
+ * 为什么导出成独立函数、而不是让闸 2 自己拿两个标题算相似度：
+ * 「批内判重」（闸 3）与「跨轮拦重复」（闸 2）必须**逐字同一份代码**。
+ * 一旦两边各抄一份，阈值就会悄悄分叉 —— `article-format.pushExclusionReason`
+ * 那边因为诊断接口自己抄判据（还抄漏了）得出过相反结论，同类事故已有先例。
+ * 闸 2 的调用点见 `fetch-news` 的「闸 2 之二」段。
+ *
+ * 占位标题（`'无标题'`）在这里就否决，**不靠调用方记得跳过**：
+ * `normalizeText('无标题')` 之后两篇「无标题」的相似度是 1.0，
+ * 不在谓词里拦就会把所有无标题稿判成同一篇 —— 而这类约定靠「调用方自觉」
+ * 迟早被漏掉（闸 2 丢的行不可追，赌不起）。`db-articles.getRecentTitlesByCountry`
+ * 里的同名过滤只是省循环，**不是**防线的本体。
+ */
+export function isSameTitleText(ta: string, tb: string): boolean {
   if (!ta || !tb) return false;
+  if (ta === '无标题' || tb === '无标题') return false;
   if (hasOppositePolarity(ta, tb)) return false;
   return similarity(ta, tb) >= TITLE_IDENTICAL_MIN_SIM;
+}
+
+/** 中译标题近似相同 ⇒ 同一条新闻（见 {@link TITLE_IDENTICAL_MIN_SIM} 的取舍说明）。 */
+export function isSameTitle(a: StoryLike, b: StoryLike): boolean {
+  return isSameTitleText(a.title || '', b.title || '');
 }
 
 /**

@@ -25,7 +25,8 @@
     "test:feed-fetch": "tsx scripts/test-feed-fetch.ts",
     "analyze:feeds": "tsx scripts/analyze-feeds.ts",
     "test:zh-gate": "tsx scripts/test-zh-gate.ts",
-    "analyze:nouns": "tsx scripts/analyze-proper-nouns.ts"
+    "analyze:nouns": "tsx scripts/analyze-proper-nouns.ts",
+    "analyze:title-gate": "tsx scripts/analyze-title-gate.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

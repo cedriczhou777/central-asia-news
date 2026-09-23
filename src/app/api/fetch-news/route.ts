@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { insertArticles, getRecentCanonicalUrls, getRecentOriginalTitleKeys } from '@/lib/db-articles';
+import { insertArticles, getRecentCanonicalUrls, getRecentOriginalTitleKeys, getRecentTitlesByCountry } from '@/lib/db-articles';
 import { fetchTelegramRSS } from '@/lib/scraper';
-import { isChineseText, beijingDate, canonicalUrl, originalTitleKey } from '@/lib/utils';
-import { dedupeStories } from '@/lib/same-event';
+import { isChineseText, beijingDate, canonicalUrl, originalTitleKey, similarity } from '@/lib/utils';
+import { dedupeStories, isSameTitleText } from '@/lib/same-event';
 import { scoreInvestmentRelevance, isInvestmentTopic } from '@/lib/investment-score';
 import { countryList } from '@/lib/data/countries';
 import { RSS_SOURCES, type RSSSource } from '@/lib/data/rss-sources';
@@ -54,18 +54,26 @@ interface FetchSummary {
   candidates: number;
   /** URL 去重后剩余 */
   afterUrlDedup: number;
+  /** 库内中译标题去重后剩余（2026-09-24 加的闸 2 之二） */
+  afterTitleDedup: number;
   /** 内容级去重后剩余 */
   afterContentDedup: number;
   /**
-   * 去重分三段记账。**别再合成一个数字**：三段失败的排查方向完全不同
-   * （批内重复 = 抓取重复拉取；跨轮重复 = 库内判重失效；同事件 = 理解机制漏判），
-   * 合成之后就再也回答不了「今天为什么少了几篇」。
+   * 去重分四段记账。**别再合成一个数字**：四段失败的排查方向完全不同
+   * （批内重复 = 抓取重复拉取；跨轮链接/原文 = 库内判重失效；跨轮标题 = 同一件事隔轮到达；
+   * 同事件 = 理解机制漏判），合成之后就再也回答不了「今天为什么少了几篇」。
    */
   dedup: {
     /** 批内链接/原文重复（同一轮里同一条被抓到两次） */
     intraBatch: number;
     /** 与库内近 3 天重复（跨轮重复，线上重复行的主要来源） */
     againstDb: number;
+    /**
+     * 与库内近 3 天**中译标题**近逐字相同（跨轮「同一件事」，2026-09-24 加）。
+     * 判据与闸 3 `same_title` 同一条（`isSameTitleText`），但作用于入库前，
+     * 所以它拦下的行**库里没有** —— 想知道拦了什么看 `titleDrops` 或日志。
+     */
+    againstDbTitles: number;
     /** 「同一件事」判组剔除（表述不同、事件相同） */
     sameEvent: number;
     /** 库内去重查询失败 → 本轮放弃入库时的原因；正常为 null */
@@ -76,10 +84,13 @@ interface FetchSummary {
      * 报出来是为了让「窗口被静默截断」在线上可判断 —— 单次查询没有分页，
      * 而 PostgREST 的条数上限超限时不报错、只是悄悄少给。
      * 拿 `rows` 与 `GET /api/dedupe-check?days=3` 的 `totals.articles` 对照即可。
+     * `titleRows` 是闸 2 之二（中译标题窗口，筛 `created_at`）的行数，同一个判读法。
      */
-    window: { days: number; rows: number };
+    window: { days: number; rows: number; titleRows: number };
     /** 判组用的模型是否真的跑过。没跑说明本次只有链接/原文去重生效 */
     llmJudge: { ran: boolean; ok: boolean; groups: number[][]; error?: string };
+    /** 标题去重逐条明细（保留行 id + 相似度）—— 上线首日复核就看这个 */
+    titleDrops: Array<{ country: string; keptId: number; kept: string; dropped: string; sim: number }>;
     /** 逐条原因：丢了哪条、留下了哪条 */
     drops: Array<{ country: string; kept: string; dropped: string; reason: string }>;
   };
@@ -998,16 +1009,26 @@ async function processFetchNews(
   // 而重复入库会直接进草稿推给读者，**不可撤销**。
   let existingUrls = new Set<string>();
   let existingOriginals = new Map<string, number>();
+  /** 闸 2 之二用：近窗口各国已入库的**中译标题**（筛 `created_at`，见函数注释） */
+  let existingTitles = new Map<string, Array<{ id: number; title: string }>>();
   let dbCheckError: string | null = null;
   /** 闸 2 窗口查询实际拿到的**行数**（= 窗口内去重前的规模，报给接口用于发现静默截断） */
   let dbWindowRows = 0;
+  /** 闸 2 之二的标题窗口查询实际拿到的行数（截断可判断，理由同上） */
+  let dbTitleWindowRows = 0;
   try {
     const since = new Date(Date.now() - DB_DEDUP_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     existingUrls = await getRecentCanonicalUrls(since);
     existingOriginals = await getRecentOriginalTitleKeys(since);
     dbWindowRows = existingUrls.size;
+    // 标题窗口筛 `created_at`（与上面两个指纹的 `published_at` **故意不同**）：
+    // 要回答的是「我最近是不是已经收过这条」，这在入库时间轴上，不在源站发布轴上。
+    const titleWindow = await getRecentTitlesByCountry(since);
+    existingTitles = titleWindow.byCountry;
+    dbTitleWindowRows = titleWindow.rows;
     console.log(
-      `库内近 ${DB_DEDUP_WINDOW_DAYS} 天已有 ${existingUrls.size} 个链接、${existingOriginals.size} 个原文指纹`,
+      `库内近 ${DB_DEDUP_WINDOW_DAYS} 天已有 ${existingUrls.size} 个链接、${existingOriginals.size} 个原文指纹、` +
+        `${dbTitleWindowRows} 行标题（${[...existingTitles.entries()].map(([cc, l]) => `${cc}:${l.length}`).join(' ') || '无'}）`,
     );
   } catch (dbErr) {
     dbCheckError = dbErr instanceof Error ? dbErr.message : String(dbErr);
@@ -1026,17 +1047,63 @@ async function processFetchNews(
       });
   console.log(`链接/原文去重后剩余 ${newArticles.length} 篇新文章（剔除 ${urlDropped} 篇）`);
 
+  // —— 闸 2 之二：库内**中译标题**去重（跨轮「同一件事」的确定性兜底）——
+  //
+  // 封的洞：`same_title` 在闸 3 只看得到**本批**，而「同一条新闻换源/换语种、
+  // 隔一轮或隔一天才到」的两行永远进不了同一个批 —— 标题逐字相同也合不了。
+  // 库内实测三对就是这么漏的（kz 3741|3915、kz 3925|3909、az 4164|4134，
+  // 中译标题相似度全部 = 1.000，卡在不同轮）。把同一条判据搬到入库前的闸 2，
+  // 跨轮/跨日就可见了。
+  //
+  // ⚠️ 三条安全边界 —— 这里比闸 3 更严，因为**丢在这一步的行库里没有、事后不可追**：
+  //   1. 判据用 `isSameTitleText`（≥0.95 + 反向极性否决 + 占位标题否决），与闸 3
+  //      `same_title` **同一条代码**。0.95 是在 1674 篇库内行上定标的：0.85–0.99
+  //      一对都没有，≥0.85 的 3 对全部恰好 = 1.000（其中就含跨轮对），
+  //      所以这条定标覆盖跨轮场景。上线前还用 `pnpm analyze:title-gate` 在
+  //      7 天 1605 篇上回放过：拦的恰好是已知三对真重复，零误杀。
+  //   2. 只跟**同国**的库内行比 —— 跨国出现同一件事是预期行为，不是重复。
+  //   3. 占位标题（'无标题'）的否决在谓词本体里，不在这里重复
+  //      （防线本体在 `isSameTitleText`，见它的注释）。
+  //
+  // 这条判据**买不到**什么，先写清楚免得误判疗效：标题相似度只有 0.3–0.5 的
+  // 换词重写（如 AIIB 那组）依然拦不住 —— 那类要靠 L2 语义判定（G 节第 3 步）。
+  let titleDropped = 0;
+  const titleDrops: Array<{ country: string; keptId: number; kept: string; dropped: string; sim: number }> = [];
+  const newAfterTitle = dbCheckError
+    ? newArticles
+    : newArticles.filter((a) => {
+        const existing = existingTitles.get(a.country_code || 'intl');
+        if (!existing) return true;
+        for (const row of existing) {
+          if (isSameTitleText(a.title || '', row.title)) {
+            titleDropped++;
+            const sim = similarity(a.title || '', row.title);
+            titleDrops.push({ country: a.country_code || 'intl', keptId: row.id, kept: row.title, dropped: a.title || '', sim });
+            return false;
+          }
+        }
+        return true;
+      });
+  if (titleDropped > 0) {
+    console.log(
+      `库内标题去重剔除 ${titleDropped} 篇（跨轮同一件事）｜逐条：\n` +
+        titleDrops
+          .map((d) => `  [${d.country}] 丢「${d.dropped}」← 库内 id=${d.keptId}（sim=${d.sim.toFixed(3)}）「${d.kept}」`)
+          .join('\n'),
+    );
+  }
+
   // —— 闸 3：「同一件事」理解 ——
   // 按国家分组，逐国判组。**不能跨国家合并**：推送是按国别生成草稿的，
   // 同一件事出现在两个国家频道里是预期行为，不是重复。
-  const contentDeduped: typeof newArticles = [];
+  const contentDeduped: typeof newAfterTitle = [];
   const eventDrops: Array<{ country: string; kept: string; dropped: string; reason: string }> = [];
   const llmJudge: { ran: boolean; ok: boolean; groups: number[][]; error?: string } = {
     ran: false, ok: false, groups: [],
   };
   {
-    const byCountry = new Map<string, typeof newArticles>();
-    for (const a of newArticles) {
+    const byCountry = new Map<string, typeof newAfterTitle>();
+    for (const a of newAfterTitle) {
       const key = a.country_code || 'intl';
       const list = byCountry.get(key);
       if (list) list.push(a);
@@ -1109,6 +1176,7 @@ async function processFetchNews(
     `新闻抓取完成：日期=${targetDate}｜原始采集 ${totalFetched} 篇 → 投资相关候选 ${articlesToInsert.length} 篇 ` +
       `→ 批内去重剔除 ${intraBatchDropped} 篇 ` +
       `→ 链接/原文去重剔除 ${urlDropped} 篇 ` +
+      `→ 库内标题去重剔除 ${titleDropped} 篇 ` +
       `→ 同事件去重剔除 ${eventDrops.length} 篇 ` +
       `→ 实际入库 ${savedCount} 篇`
   );
@@ -1145,13 +1213,19 @@ async function processFetchNews(
     date: targetDate,
     totalFetched,
     candidates: articlesToInsert.length,
-    // 去重分三段记账，别再合成一个数字：三段失败原因完全不同，
+    // 去重分四段记账，别再合成一个数字：四段失败原因完全不同，
     // 合成后「今天为什么少了几篇」就查不出来了。
     dedup: {
       /** 批内链接/原文重复（同一轮里同一条被抓到两次） */
       intraBatch: intraBatchDropped,
       /** 与库内近 3 天重复（跨轮重复，线上重复行的主要来源） */
       againstDb: urlDropped,
+      /**
+       * 与库内近 3 天**中译标题**近逐字相同（跨轮「同一件事」，2026-09-24 加）。
+       * 判据与闸 3 `same_title` 同一条（`isSameTitleText`），但作用于入库前，
+       * 所以它拦下的行**库里没有** —— 想知道拦了什么看 `titleDrops` 或日志。
+       */
+      againstDbTitles: titleDropped,
       /** 「同一件事」判组剔除（表述不同、事件相同） */
       sameEvent: eventDrops.length,
       /** 库内去重查询失败 → 本轮放弃入库时的原因，正常为 null */
@@ -1167,13 +1241,17 @@ async function processFetchNews(
        * 两者应当接近；若 `window.rows` 恰好卡在某个整数上限（1000/5000）且明显偏小，
        * 就是被截断了，此时闸 2 形同虚设。
        */
-      window: { days: DB_DEDUP_WINDOW_DAYS, rows: dbWindowRows },
+      window: { days: DB_DEDUP_WINDOW_DAYS, rows: dbWindowRows, titleRows: dbTitleWindowRows },
       /** 判组用的模型是否真的跑过；没跑说明只是链接/原文去重生效 */
       llmJudge,
+      /** 标题去重逐条明细（保留行 id + 相似度），上线首日复核就看这个 */
+      titleDrops: titleDrops.slice(0, 50),
       /** 逐条原因，便于直接看出「丢了哪条、留下了哪条」 */
       drops: eventDrops.slice(0, 50),
     },
     afterUrlDedup: newArticles.length,
+    /** 闸 2 之二（库内中译标题）之后的规模 —— 与 afterUrlDedup 的差就是标题去重剔除数 */
+    afterTitleDedup: newAfterTitle.length,
     afterContentDedup: contentDeduped.length,
     saved: savedCount,
     insertErrors,
@@ -1194,7 +1272,7 @@ async function processFetchNews(
      * 按国别汇总的漏斗 —— **回答「某国今天为什么只有 N 篇」看这里，不要看 sourceCounts**。
      *
      * 口径：feed 条目 → 过日期窗 → 文体垃圾 / 讲别国 / 非投资 → 候选池。
-     * 四个环节的失败修法完全不同，所以必须分开计数（与 `dedup` 分三段记账同一个理由）：
+     * 四个环节的失败修法完全不同，所以必须分开计数（与 `dedup` 分四段记账同一个理由）：
      *   · `afterDate` 偏小   → 源在这个时段本来就没发稿，或 feed 只保留很少条目
      *     （Astana Times 的 feed 只有 10 条，等于只覆盖最近一两天；别的源有 100 条）
      *   · `droppedCountry` 偏大 → `isCountryRelevant` 里「提到了任何一个其它目标国就丢」
@@ -1203,7 +1281,7 @@ async function processFetchNews(
      *   · `fetched=0` 且 `sourceErrors` 有值 → 源本身不通（网络超时 / XML 畸形）
      *
      * ⚠️ `candidates` 是**入库前**的候选数：不减去批内去重与库内重复，
-     * 也不等于最终入库数（那要看 `candidates` / `afterUrlDedup` / `saved` 三段）。
+     * 也不等于最终入库数（那要看 `candidates` / `afterUrlDedup` / `afterTitleDedup` / `saved` 四段）。
      */
     funnelByCountry: [...new Set(results.map((r) => r.country).filter(Boolean))]
       .sort()

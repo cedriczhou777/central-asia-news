@@ -227,6 +227,55 @@ export async function getRecentOriginalTitleKeys(
   return out;
 }
 
+/**
+ * 取近窗口内已入库的**中译标题**，按国家分组 —— 闸 2 的「跨轮同一件事」指纹。
+ *
+ * 与 `getRecentCanonicalUrls` / `getRecentOriginalTitleKeys` 有**两点刻意不同**：
+ *
+ * 1. **筛 `created_at`（入库时间）而不是 `published_at`**。
+ *    要回答的问题是「我最近是不是已经把这条收进来了」，答案在**入库时间轴**上。
+ *    `published_at` 是源站视角 —— 「发布日期早于窗口、但昨天才入库」的稿子
+ *    会被 `published_at` 窗口漏掉（就是 fetch-news 里 B-3 记录的那个口径问题，
+ *    在标题指纹上不能重演：它漏掉的正是最容易重复的那批）。
+ * 2. **按 `country_code` 分组返回**。「同一件事出现在两个国家频道里是预期行为，
+ *    不是重复」（见 fetch-news 闸 3 的说明），所以标题比较**只在本国之内**做；
+ *    拿全库标题一起比会跨国家误杀。
+ *
+ * 判据本体不在这里 —— 在 `same-event.isSameTitleText`（与闸 3 `same_title` 同一条代码）。
+ * 这里只负责把比较对象取回来。
+ *
+ * ⚠️ 单次 `.limit(5000)`、无分页：行数被网关静默截断时不报错、只是悄悄少给
+ * （与 `getRecentCanonicalUrls` 同一个坑）。所以把**实际行数**一并返回，
+ * 由调用方报进接口响应，让「窗口被截断」在线上可判断。
+ *
+ * 占位标题（`'无标题'`）在这里就剔除，省得调用方每行白比一次 ——
+ * 但**防线本体在 `isSameTitleText` 里**（它对占位标题恒否决），
+ * 这里只是省循环的优化，不是唯一防线。
+ */
+export async function getRecentTitlesByCountry(
+  sinceIso: string,
+): Promise<{ byCountry: Map<string, Array<{ id: number; title: string }>>; rows: number }> {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('articles')
+    .select('id, country_code, title')
+    .gte('created_at', sinceIso)
+    .limit(5000);
+  if (error) throw new Error(`查询近窗口中译标题失败：${error.message}`);
+
+  const rows = (data || []) as Array<{ id: number; country_code: string | null; title: string | null }>;
+  const byCountry = new Map<string, Array<{ id: number; title: string }>>();
+  for (const row of rows) {
+    const title = row.title || '';
+    if (!title || title === '无标题') continue;
+    const cc = row.country_code || 'intl';
+    const list = byCountry.get(cc);
+    if (list) list.push({ id: row.id, title });
+    else byCountry.set(cc, [{ id: row.id, title }]);
+  }
+  return { byCountry, rows: rows.length };
+}
+
 export async function insertArticle(article: {
   title: string;
   summary: string;

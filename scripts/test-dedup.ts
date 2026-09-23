@@ -28,6 +28,7 @@ import {
   hasOppositePolarity,
   identityKeys,
   isSameTitle,
+  isSameTitleText,
   JUDGE_TEMPERATURE,
   parseEventGroups,
   parsePairVerdict,
@@ -393,6 +394,29 @@ section('same_title · 标题逐字相同但正文迥异');
   ok('标题门槛严于 same_text 的标题半边（0.9）', TITLE_IDENTICAL_MIN_SIM > 0.9);
   ok('空标题不触发', !isSameTitle({ title: '' }, { title: '' }));
   ok('缺标题字段不触发', !isSameTitle({ title: '' }, { title: '阿斯塔纳将建八车道新桥' }));
+}
+
+{
+  // isSameTitleText：闸 2（跨轮、入库前）复用的文本级形态，2026-09-24 加。
+  // 核心要求：与 isSameTitle **逐字同一份代码** —— 这组断言钉的是「不会分叉」，
+  // 不是重新测一遍阈值（阈值在上面那组已经钉过）。
+  const cases: Array<[string, string, boolean, string]> = [
+    ['哈萨克斯坦计划于 2027 年启动无人驾驶出租车服务', '哈萨克斯坦计划于 2027 年启动无人驾驶出租车服务', true, '库内真重复 3741|3915，sim=1.000'],
+    ['伊朗航空公司暂停飞往阿塞拜疆的航班', '伊朗航空公司暂停飞往阿塞拜疆的航班', true, '库内真重复 4134|4164，sim=1.000'],
+    ['哈萨克斯坦总统托卡耶夫会见国际俄语组织秘书长博恰罗娃', '哈萨克斯坦总统托卡耶夫会见国际俄语组织秘书长博恰罗夫', false, '差 1 字 ≈0.92，闸 2 丢的行不可追，不放行'],
+    ['全球市场黄金和白银价格下跌', '全球市场黄金和白银价格上涨', false, '反向极性'],
+    ['无标题', '无标题', false, '占位标题：normalizeText 后相似度是 1.0，靠谓词本体否决'],
+    ['', '任何标题', false, '空标题'],
+  ];
+  for (const [a, b, want, why] of cases) {
+    ok(`isSameTitleText「${a.slice(0, 14)}…」vs「${b.slice(0, 14)}…」→ ${want ? '同一件事' : '不同'}（${why}）`,
+      isSameTitleText(a, b) === want);
+  }
+  // 与 isSameTitle 的一致性：同输入必须同结论（防「两边各改一边」的分叉）
+  for (const [a, b] of cases.map((c) => [c[0], c[1]] as [string, string])) {
+    ok(`isSameTitle 与 isSameTitleText 同结论（「${a.slice(0, 10)}…」）`,
+      isSameTitle({ title: a }, { title: b }) === isSameTitleText(a, b));
+  }
 }
 
 // ============================================================
