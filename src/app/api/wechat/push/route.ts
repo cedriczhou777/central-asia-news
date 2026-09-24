@@ -403,7 +403,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     const today = beijingDate();
     // 每国每份报告的篇数上限。
     //
-    // 2026-09-22 由 30 收到 15：现在是**早晚报两段**（早报 13h / 晚报 11h），
+    // 2026-09-22 由 30 收到 15：现在是**早晚报两段**（各 12h，见 `scheduler.ts`），
     // 每份报告每国 15 篇已经足够，30 篇只会把相关性靠后的稿子也塞进来、拉低整份报告的质量。
     // 这是个**上限**不是配额 —— 候选不足 15 篇时按实际可用量推，不硬凑
     // （硬凑就得放宽判据，而本项目历史上「判据过严/过松」都出过事）。
@@ -415,6 +415,14 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     const maxPerCountry = 15;
 
     // 计算时间范围（过去 N 小时）
+    //
+    // ⚠️ `hours` 与「定时时刻」是**绑在一起**的：起点 = 执行时刻 - hours。
+    // 改 `scheduler.ts` 里的 cron 时**必须同步改 hours**（早报 07:00/12h、晚报 19:00/12h，
+    // 两段首尾相接覆盖满一天），否则会出现重叠（重复推送）或空档（永久漏稿）。
+    // ⚠️ 另一个已知缺陷：起点锚在**执行时刻**而不是「上一轮报告的终点」，
+    // 所以推送只要迟到，整个窗口就跟着后移 —— 2026-09-24 早报空跑就是它造成的
+    // （抓取跑了 185 分钟，推送迟到 150 分钟，窗口滑到已无稿可推的区间）。
+    // 见 `AGENTS.md` H 节缺陷 19。
     const now = new Date();
     const startDate = new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
     const endDate = now.toISOString();

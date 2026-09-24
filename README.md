@@ -1,7 +1,7 @@
 # 中亚投资快报
 
 抓取中亚与南高加索五国（哈/乌/吉/阿/塔）投资相关新闻 → 翻译整理成中文 → 推送至微信公众号草稿箱。
-定时每天 08:00 / 19:00（北京时间）各推一次，部署在微信云托管。
+定时每天 07:00 / 19:00（北京时间）各推一次，部署在微信云托管。
 
 - 生产模式跑的是自定义服务器 `src/server.ts`（内嵌 Next.js + node-cron 调度器）
 - 推公众号走微信**云调用**，免 IP 白名单、免 access_token
@@ -47,7 +47,7 @@ pnpm build
 pnpm start
 ```
 
-生产模式会拉起 `startScheduler()`，注册 08:00 / 19:00 两个定时任务。
+生产模式会拉起 `startScheduler()`，注册 07:00 / 19:00 两个定时任务。
 
 ## 项目结构
 
@@ -70,7 +70,7 @@ src/
 核心业务文件：
 
 ├── src/server.ts                    # 自定义服务器入口（内嵌 Next.js + 调度器）
-├── src/lib/scheduler.ts             # node-cron 定时任务（08:00 / 19:00 北京时间）
+├── src/lib/scheduler.ts             # node-cron 定时任务（07:00 / 19:00 北京时间）
 ├── src/lib/translate.ts             # 翻译链路：智谱 → DeepSeek 多通道降级
 ├── src/lib/runtime.ts               # 端口口径与自身地址（唯一来源）
 ├── src/lib/telegram-channels.ts     # TELEGRAM_CHANNELS 解析（纯函数，有测试）

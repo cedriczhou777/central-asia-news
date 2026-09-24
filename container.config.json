@@ -33,11 +33,13 @@ container:
   executeSQLs:
     - "CREATE TABLE IF NOT EXISTS articles (id SERIAL PRIMARY KEY, title TEXT, summary TEXT, content TEXT, country_code VARCHAR(2), category VARCHAR(20), source_name VARCHAR(50), source_url TEXT, original_title TEXT, original_content TEXT, original_language VARCHAR(5), published_at TIMESTAMP WITH TIME ZONE, tags JSONB, is_featured BOOLEAN DEFAULT false, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());"
 
-# 定时抓取与推送由应用内调度器负责：src/lib/scheduler.ts，每天 08:00 / 19:00 北京时间。
-# 两段回看窗口首尾相接不重叠：早报 13h（昨日19:00→今日08:00）、晚报 11h（今日08:00→今日19:00）。
+# 定时抓取与推送由应用内调度器负责：src/lib/scheduler.ts，每天 07:00 / 19:00 北京时间。
+# 两段回看窗口首尾相接不重叠：早报 12h（昨日19:00→今日07:00）、晚报 12h（今日07:00→今日19:00）。
 #
 # 下面这两个触发器只做「预热」，不承担业务逻辑：实例被缩容到零时进程停了，
-# 应用内定时器也就没了，提前 5 分钟唤醒它，才能在 08:00 / 19:00 准时触发。
+# 应用内定时器也就没了，提前 5 分钟唤醒它，才能在 07:00 / 19:00 准时触发。
+#
+# ⚠️ 预热时间必须跟着 `scheduler.ts` 里改后的时刻走 —— 改早报时刻时，这里也要改。
 #
 # 当前控制台的**最小实例数是 1**（实例常驻），所以这两条预热实际上用不上，
 # 留着当保险（成本极低：每天两次唤醒请求）。真要靠预热时，得先在控制台确认它们已被创建 ——
@@ -49,7 +51,7 @@ container:
 triggers:
   - name: warmup-morning
     type: timer
-    config: "55 23 * * *"  # 北京时间 07:55（UTC 前一日 23:55）
+    config: "50 22 * * *"  # 北京时间 06:55（UTC 前一日 22:50）
     payload: '{}'
 
   - name: warmup-evening
