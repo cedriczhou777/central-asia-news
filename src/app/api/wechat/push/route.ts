@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { beijingDate, extractFirstImage } from '@/lib/utils';
-import { PUBLISH_SCHEDULES } from '@/lib/publish-schedule';
+import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 import { dedupeStories } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
@@ -288,6 +288,21 @@ interface PushSummary {
   hours: number;
   period: string | null;
   today: string;
+  /**
+   * 本次实际使用的回看窗口。
+   *
+   * **必须报出来**：窗口是「漏稿」与「重复推送」的唯一来源，而它的两种算法
+   * （定时时段按时刻表固定 / 人工补跑按 hours 浮动）在响应里本来完全看不出区别 ——
+   * 于是「这次到底覆盖了哪一段」只能靠读日志猜。2026-09-24 早晚报各空跑一轮，
+   * 事后判读时最缺的就是这一行。
+   */
+  window?: {
+    start: string;
+    end: string;
+    /** `schedule` = 按时刻表固定（定时时段）；`hours` = 执行时刻 − hours（人工补跑） */
+    source: 'schedule' | 'hours';
+    hours: number;
+  };
   drafts: PushDraft[];
   failures: PushFailure[];
 }
@@ -403,6 +418,16 @@ export async function GET() {
      * 所以两者不一致时去翻启动日志。
      */
     schedules: PUBLISH_SCHEDULES,
+    /**
+     * 时刻表的 `hours` 声明值与**从 cron 推导出的窗口长度**是否一致。
+     *
+     * 为什么要报：2026-09-24 起定时时段不再用 `hours` 算窗口（改由 {@link scheduledWindow}
+     * 从钟点推导，见缺陷 19），`hours` 因此退化为一个**交叉校验值**。
+     * 但它还在 `scheduler.ts` 的日志和本响应里露脸，一旦两者不一致，
+     * 「响应里写着 12h、实际窗口是别的」就会重新变成需要靠读代码才能发现的差异。
+     * 任何一项 `ok: false` 都说明有人只改了 cron 或只改了 hours。
+     */
+    scheduleHoursCrossCheck: scheduleHoursCrossCheck(),
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿，summary.failures 是哪些国家失败、为什么。
     lastRun: pushRunState,
@@ -430,21 +455,30 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     // 不要去动 `pushExclusionReason` 或 `maxPerCountry`。
     const maxPerCountry = 15;
 
-    // 计算时间范围（过去 N 小时）
+    // 计算时间范围
     //
-    // ⚠️ `hours` 与「定时时刻」是**绑在一起**的：起点 = 执行时刻 - hours。
-    // 改 `scheduler.ts` 里的 cron 时**必须同步改 hours**（早报 07:00/12h、晚报 19:00/12h，
-    // 两段首尾相接覆盖满一天），否则会出现重叠（重复推送）或空档（永久漏稿）。
-    // ⚠️ 另一个已知缺陷：起点锚在**执行时刻**而不是「上一轮报告的终点」，
-    // 所以推送只要迟到，整个窗口就跟着后移 —— 2026-09-24 早报空跑就是它造成的
-    // （抓取跑了 185 分钟，推送迟到 150 分钟，窗口滑到已无稿可推的区间）。
-    // 见 `AGENTS.md` H 节缺陷 19。
+    // 定时时段（早报 / 晚报）用**固定钟点窗口**：起点/终点由 `publish-schedule.ts`
+    // 的时刻表推导（早报 `[昨日19:00, 今日07:00]`、晚报 `[今日07:00, 今日19:00]`），
+    // **与执行时刻无关**。原因见 `scheduledWindow` 的注释 —— 起点锚在执行时刻的话，
+    // 推送一迟到窗口就整体后移：既漏掉一段，又与上一轮重叠（2026-09-24 早晚报各栽一次）。
+    //
+    // 非定时（`manual` / 没传 period）仍按「执行时刻 − hours」——人工补跑就是
+    // 要「从现在往回数 N 小时」，那是它本来的语义，不能套固定钟点。
     const now = new Date();
-    const startDate = new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
-    const endDate = now.toISOString();
+    const scheduled = scheduledWindow(period);
+    const startDate = scheduled
+      ? scheduled.start.toISOString()
+      : new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
+    const endDate = scheduled ? scheduled.end.toISOString() : now.toISOString();
+    /** 这次窗口是「按时刻表固定」还是「按 hours 浮动」—— 响应里要报，否则无法核实 */
+    const windowSource: 'schedule' | 'hours' = scheduled ? 'schedule' : 'hours';
+    const windowHours =
+      scheduled ? scheduled.hours : Math.round((now.getTime() - new Date(startDate).getTime()) / 3_600_000);
 
     console.log(
-      `微信公众号推送：${today}${suffix ? ' ' + suffix : ''}，汇总 ${startDate} 至 ${endDate}（过去 ${hours} 小时），每国精选（上限 ${maxPerCountry} 篇）`
+      `微信公众号推送：${today}${suffix ? ' ' + suffix : ''}，汇总 ${startDate} 至 ${endDate}` +
+        `（${windowSource === 'schedule' ? `按时刻表固定窗口 ${windowHours}h` : `过去 ${hours} 小时`}），` +
+        `每国精选（上限 ${maxPerCountry} 篇）`
     );
 
     const results: PushDraft[] = [];
@@ -650,6 +684,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       hours,
       period: typeof period === 'string' ? period : null,
       today,
+      window: { start: startDate, end: endDate, source: windowSource, hours: windowHours },
       drafts: results,
       failures,
     };

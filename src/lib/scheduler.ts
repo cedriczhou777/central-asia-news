@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { resolveSelfBaseUrl } from './runtime';
-import { PUBLISH_SCHEDULES } from './publish-schedule';
+import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from './publish-schedule';
 
 // 北京时间定时任务
 // 用户需求：取消网页端后，每天推送 2 次 —— 早上 07:00（早报）、晚上 19:00（晚报）。
@@ -274,8 +274,25 @@ export function startScheduler() {
     }, {
       timezone: 'Asia/Shanghai',
     });
-    console.log(`已注册公众号推送任务：${schedule} (${label})，回看 ${hours} 小时`);
+    // 打**推导出来的**窗口，而不是 `hours`：2026-09-24 起窗口由时刻表的钟点决定，
+    // `hours` 只是交叉校验值。启动日志是唯一能确认「这个容器里的窗口到底覆盖哪一段」
+    // 的地方（接口响应也能看到，但要先发一个请求）。
+    const w = scheduledWindow(period);
+    console.log(
+      `已注册公众号推送任务：${schedule} (${label})，窗口 ` +
+        (w ? `${w.start.toISOString()} → ${w.end.toISOString()}（${w.hours}h，按时刻表固定）` : '（未知：时刻表里没有这一段）')
+    );
   });
+
+  // 声明值与推导值必须一致 —— 不一致说明有人只改了 cron 或只改了 hours。
+  // 这里**主动报出来**而不是留给测试：容器里跑的是编译产物，测试没在容器里跑过。
+  for (const c of scheduleHoursCrossCheck()) {
+    if (c.ok) continue;
+    console.warn(
+      `⚠️ 时刻表不一致：${c.period} 声明 hours=${c.declared}，但按 cron 推导是 ${c.derived}。` +
+        `窗口以**推导值**为准（见 publish-schedule.scheduledWindow），请把 hours 改成 ${c.derived}。`
+    );
+  }
 
   console.log(`共注册 ${PUBLISH_SCHEDULES.length} 个定时任务`);
 }
