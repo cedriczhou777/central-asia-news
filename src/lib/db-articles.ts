@@ -126,22 +126,44 @@ export async function findExistingCanonicalUrls(urls: string[]): Promise<Set<str
  *   - 结果条数由时间窗决定，与本次抓取多少篇无关，可预期。
  *
  * 两天的窗口足以覆盖「同一条新闻被两天分别抓到」的情形 —— 这也是重复入库的典型场景。
+ *
+ * ⚠️ **必须分页**。曾经这里是单次 `.limit(5000)`，线上实测窗口里有 1228 行、
+ * 而这个查询只给回 1000 行 —— PostgREST 单次有条数上限（常见 1000），
+ * `.limit(5000)` 是**写了但不生效**，且**超限不报错、只是悄悄少给**。
+ * 后果是闸 2 对窗口内约 19% 的稿子完全看不见，重复入库照旧发生，
+ * 而日志里那行「已有 1000 个链接」看着还挺正常。
+ * 分页写法照 {@link getArticleIdentities} 抄（那边注释早就记过这个坑）。
+ *
+ * 返回里带上 `rows`（**分页累加的真实行数**，不是 `urls.size`）——
+ * 这是截断的回归护栏：值再次卡在 1000 附近就说明分页又坏了。
  */
-export async function getRecentCanonicalUrls(sinceIso: string): Promise<Set<string>> {
+export async function getRecentCanonicalUrls(
+  sinceIso: string,
+): Promise<{ urls: Set<string>; rows: number }> {
   const client = getSupabaseClient();
-  const { data, error } = await client
-    .from('articles')
-    .select('source_url')
-    .gte('published_at', sinceIso)
-    .limit(5000);
-  if (error) throw new Error(`查询近窗口来源 URL 失败：${error.message}`);
-
+  const PAGE = 1000;
   const out = new Set<string>();
-  for (const row of (data || []) as Array<{ source_url: string | null }>) {
-    const c = canonicalUrl(row.source_url || '');
-    if (c) out.add(c);
+  let rows = 0;
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from('articles')
+      .select('id, source_url')
+      .gte('published_at', sinceIso)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`查询近窗口来源 URL 失败（offset ${from}）：${error.message}`);
+
+    const page = (data || []) as Array<{ id: number; source_url: string | null }>;
+    rows += page.length;
+    for (const row of page) {
+      const c = canonicalUrl(row.source_url || '');
+      if (c) out.add(c);
+    }
+    if (page.length < PAGE) break;
   }
-  return out;
+
+  return { urls: out, rows };
 }
 
 /**
@@ -207,24 +229,38 @@ export async function deleteArticlesByIds(ids: number[]): Promise<number> {
 /**
  * 取某时间窗内已入库的「原文标题」指纹，用于识别**同一篇原文挂在两个不同链接下**
  * （同稿多链 / 聚合站转载）。键与 `same-event.ts` 的 `original_title` 归一化必须一致。
+ *
+ * ⚠️ 与 {@link getRecentCanonicalUrls} 同样的坑：必须分页。
+ * 曾经是单次 `.limit(5000)`，线上实测只给回 1000 行（窗口实际 1228 行），
+ * 而且**超限不报错**。返回 `rows`（真实行数，不是 `keys.size`）作为截断护栏。
  */
 export async function getRecentOriginalTitleKeys(
   sinceIso: string,
-): Promise<Map<string, number>> {
+): Promise<{ keys: Map<string, number>; rows: number }> {
   const client = getSupabaseClient();
-  const { data, error } = await client
-    .from('articles')
-    .select('id, original_title')
-    .gte('published_at', sinceIso)
-    .limit(5000);
-  if (error) throw new Error(`查询近窗口原文标题失败：${error.message}`);
-
+  const PAGE = 1000;
   const out = new Map<string, number>();
-  for (const row of (data || []) as Array<{ id: number; original_title: string | null }>) {
-    const key = originalTitleKey(row.original_title || '');
-    if (key && !out.has(key)) out.set(key, row.id);
+  let rows = 0;
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from('articles')
+      .select('id, original_title')
+      .gte('published_at', sinceIso)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`查询近窗口原文标题失败（offset ${from}）：${error.message}`);
+
+    const page = (data || []) as Array<{ id: number; original_title: string | null }>;
+    rows += page.length;
+    for (const row of page) {
+      const key = originalTitleKey(row.original_title || '');
+      if (key && !out.has(key)) out.set(key, row.id);
+    }
+    if (page.length < PAGE) break;
   }
-  return out;
+
+  return { keys: out, rows };
 }
 
 /**
@@ -244,9 +280,9 @@ export async function getRecentOriginalTitleKeys(
  * 判据本体不在这里 —— 在 `same-event.isSameTitleText`（与闸 3 `same_title` 同一条代码）。
  * 这里只负责把比较对象取回来。
  *
- * ⚠️ 单次 `.limit(5000)`、无分页：行数被网关静默截断时不报错、只是悄悄少给
- * （与 `getRecentCanonicalUrls` 同一个坑）。所以把**实际行数**一并返回，
- * 由调用方报进接口响应，让「窗口被截断」在线上可判断。
+ * ⚠️ 必须分页。曾经是单次 `.limit(5000)`、无分页：行数被网关静默截断时
+ * 不报错、只是悄悄少给（与 `getRecentCanonicalUrls` 同一个坑，线上实测 1000 vs 1228）。
+ * 分页后把**真实行数**一并返回，由调用方报进接口响应，让「窗口被截断」在线上可判断。
  *
  * 占位标题（`'无标题'`）在这里就剔除，省得调用方每行白比一次 ——
  * 但**防线本体在 `isSameTitleText` 里**（它对占位标题恒否决），
@@ -256,24 +292,33 @@ export async function getRecentTitlesByCountry(
   sinceIso: string,
 ): Promise<{ byCountry: Map<string, Array<{ id: number; title: string }>>; rows: number }> {
   const client = getSupabaseClient();
-  const { data, error } = await client
-    .from('articles')
-    .select('id, country_code, title')
-    .gte('created_at', sinceIso)
-    .limit(5000);
-  if (error) throw new Error(`查询近窗口中译标题失败：${error.message}`);
-
-  const rows = (data || []) as Array<{ id: number; country_code: string | null; title: string | null }>;
+  const PAGE = 1000;
   const byCountry = new Map<string, Array<{ id: number; title: string }>>();
-  for (const row of rows) {
-    const title = row.title || '';
-    if (!title || title === '无标题') continue;
-    const cc = row.country_code || 'intl';
-    const list = byCountry.get(cc);
-    if (list) list.push({ id: row.id, title });
-    else byCountry.set(cc, [{ id: row.id, title }]);
+  let rows = 0;
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from('articles')
+      .select('id, country_code, title')
+      .gte('created_at', sinceIso)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`查询近窗口中译标题失败（offset ${from}）：${error.message}`);
+
+    const page = (data || []) as Array<{ id: number; country_code: string | null; title: string | null }>;
+    rows += page.length;
+    for (const row of page) {
+      const title = row.title || '';
+      if (!title || title === '无标题') continue;
+      const cc = row.country_code || 'intl';
+      const list = byCountry.get(cc);
+      if (list) list.push({ id: row.id, title });
+      else byCountry.set(cc, [{ id: row.id, title }]);
+    }
+    if (page.length < PAGE) break;
   }
-  return { byCountry, rows: rows.length };
+
+  return { byCountry, rows };
 }
 
 export async function insertArticle(article: {

@@ -1012,23 +1012,33 @@ async function processFetchNews(
   /** 闸 2 之二用：近窗口各国已入库的**中译标题**（筛 `created_at`，见函数注释） */
   let existingTitles = new Map<string, Array<{ id: number; title: string }>>();
   let dbCheckError: string | null = null;
-  /** 闸 2 窗口查询实际拿到的**行数**（= 窗口内去重前的规模，报给接口用于发现静默截断） */
+  /** 闸 2 窗口查询实际拿到的**行数**（分页累加的真实行数，报给接口用于发现静默截断） */
   let dbWindowRows = 0;
   /** 闸 2 之二的标题窗口查询实际拿到的行数（截断可判断，理由同上） */
   let dbTitleWindowRows = 0;
   try {
     const since = new Date(Date.now() - DB_DEDUP_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    existingUrls = await getRecentCanonicalUrls(since);
-    existingOriginals = await getRecentOriginalTitleKeys(since);
-    dbWindowRows = existingUrls.size;
+    const urlWindow = await getRecentCanonicalUrls(since);
+    const originalWindow = await getRecentOriginalTitleKeys(since);
+    existingUrls = urlWindow.urls;
+    existingOriginals = originalWindow.keys;
+    dbWindowRows = urlWindow.rows;
+    // 两个指纹查询同表、同窗口口径（都是 `published_at >= since`），行数**应当相等**。
+    // 不等说明两个查询的过滤条件被改歪了 —— 一个多看一个少看，闸 2 会时灵时不灵。
+    if (urlWindow.rows !== originalWindow.rows) {
+      console.warn(
+        `⚠️ 闸 2 两个窗口查询行数不一致：链接 ${urlWindow.rows} 行 vs 原文指纹 ${originalWindow.rows} 行（窗口口径可能被改歪）`,
+      );
+    }
     // 标题窗口筛 `created_at`（与上面两个指纹的 `published_at` **故意不同**）：
     // 要回答的是「我最近是不是已经收过这条」，这在入库时间轴上，不在源站发布轴上。
     const titleWindow = await getRecentTitlesByCountry(since);
     existingTitles = titleWindow.byCountry;
     dbTitleWindowRows = titleWindow.rows;
     console.log(
-      `库内近 ${DB_DEDUP_WINDOW_DAYS} 天已有 ${existingUrls.size} 个链接、${existingOriginals.size} 个原文指纹、` +
-        `${dbTitleWindowRows} 行标题（${[...existingTitles.entries()].map(([cc, l]) => `${cc}:${l.length}`).join(' ') || '无'}）`,
+      `库内近 ${DB_DEDUP_WINDOW_DAYS} 天窗口共 ${dbWindowRows} 行：` +
+        `${existingUrls.size} 个链接指纹、${existingOriginals.size} 个原文指纹、` +
+        `${dbTitleWindowRows} 行中译标题（${[...existingTitles.entries()].map(([cc, l]) => `${cc}:${l.length}`).join(' ') || '无'}）`,
     );
   } catch (dbErr) {
     dbCheckError = dbErr instanceof Error ? dbErr.message : String(dbErr);
@@ -1231,15 +1241,19 @@ async function processFetchNews(
       /** 库内去重查询失败 → 本轮放弃入库时的原因，正常为 null */
       dbCheckError,
       /**
-       * 闸 2 那次窗口查询**实际拿到多少行**。
+       * 闸 2 那次窗口查询**实际拿到多少行**（分页累加后的真实行数）。
        *
        * 必须报出来，否则「窗口是不是被静默截断」在线上无法判断：
-       * `getRecentCanonicalUrls` 是单次 `.limit(5000)`、**没有分页**，
-       * 而 PostgREST 的返回条数上限通常是 1000（服务端配置），
+       * PostgREST 的返回条数上限通常是 1000（服务端配置），
        * **超限时不报错、只是悄悄少给**（同一个坑 `getArticleIdentities` 的注释里已经写过）。
        * 判读：拿 `window.rows` 和 `GET /api/dedupe-check?days=3` 的 `totals.articles` 对照 ——
        * 两者应当接近；若 `window.rows` 恰好卡在某个整数上限（1000/5000）且明显偏小，
        * 就是被截断了，此时闸 2 形同虚设。
+       *
+       * 2026-09-24 实测：窗口内 1228 行，而三个查询都只给回 1000 行 —— 闸 2 对约 19% 的稿子瞎。
+       * 现在三个查询（`getRecentCanonicalUrls` / `getRecentOriginalTitleKeys` /
+       * `getRecentTitlesByCountry`）都改成了 `PAGE = 1000` + `.range()` 分页，
+       * 这行数字从 1000 涨到真实值就是修好的证据；**再次卡在 1000 就是分页坏了**。
        */
       window: { days: DB_DEDUP_WINDOW_DAYS, rows: dbWindowRows, titleRows: dbTitleWindowRows },
       /** 判组用的模型是否真的跑过；没跑说明只是链接/原文去重生效 */

@@ -373,15 +373,26 @@
 
 #### 四个缺陷，按「影响面 × 易修」排序（**都不是今天新引入的**）
 
-18. **⚠️ 闸 2 的三个窗口查询被静默截断在 1000 行**（**直接影响去重，优先修**）。
+18. **✅ 闸 2 的三个窗口查询被静默截断在 1000 行**（2026-09-24 修，见 git log）。
     日志写「库内近 3 天已有 **1000** 个链接、**1000** 个原文指纹、**1000** 行标题」，
     而 `GET /api/dedupe-check?days=3` 报 `totals.articles = **1228**` —— 三个都恰好卡 1000。
     ⇒ `.limit(5000)` 没生效，被 PostgREST 的返回上限截断，**超限不报错、只是悄悄少给**
     （正是 `getRecentCanonicalUrls` 注释里预言过的坑）。
     后果：闸 2 对窗口内约 **19% 的行是失明的**，跨轮去重一直在「部分失明」状态下工作。
-    **修法**：照 `getArticleIdentities` 抄 —— 它用 `PAGE = 1000` + `.range()` 分页，
-    所以它没这个问题。三个函数（`getRecentCanonicalUrls` / `getRecentOriginalTitleKeys` /
-    `getRecentTitlesByCountry`）都补上分页；`window.rows` / `titleRows` 继续报出来做回归护栏。
+    **修法（已落地）**：照 `getArticleIdentities` 抄 —— `PAGE = 1000` + `.order('id')` +
+    `.range(from, from + PAGE - 1)`，页不满即停。三个函数
+    （`getRecentCanonicalUrls` / `getRecentOriginalTitleKeys` / `getRecentTitlesByCountry`）都改了。
+    - 顺带把「窗口行数」的读数改准：原先 `dbWindowRows = existingUrls.size` 报的是
+      **去重后的集合大小**，跟注释里写的「行数」不是一回事（集合天然更小，
+      真的卡在 1000 时反而看不出来是截断还是本来就只有 1000）。
+      现在三个函数都返回**分页累加的真实行数**（`rows`），`window.rows` / `titleRows` 报它。
+      ⇒ 截断探测器的读数自己必须可信，否则护栏本身就是坏的。
+    - 加了一条一致性告警：链接窗口与原文指纹窗口**同表同过滤条件**（都是
+      `published_at >= since`），行数应当相等；不等就 `console.warn`，说明有人把窗口口径改歪了。
+    - **回归判读**：`window.rows` 从 1000 涨到真实值（当前约 1230+）= 修好；
+      **再次恰好卡在 1000 = 分页坏了**，立刻查。
+    - 代价：闸 2 现在多打 1–2 次往返（窗口 1228 行 → 2 页 × 3 个查询）。可忽略，
+      闸 2 本来就不是瓶颈（gates+insert 实测 7 秒，全部时间花在翻译的 429 重试上）。
     （注：2026-09-24 新加的 `titleRows` 观测点就是靠「恰好 1000」把这事暴露出来的。）
 
 19. **早报窗口的起点用了 `now - hours`，而 `now` 是「推送真正开始跑的时刻」**。
