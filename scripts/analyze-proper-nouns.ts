@@ -127,6 +127,42 @@ async function main() {
     }
   }
 
+  // ---------- 1b. 判据盲区：拉丁 + 西里尔同词（**仅报告，不进生产闸**）----------
+  //
+  // 为什么单列一段：`mixedScriptTokens` 只抓「汉字+西里尔」，
+  // 所以 T1 = 0 会被读成「全清」，但它对下面这一类**完全无感**：
+  //   - `BUТБ`（白俄罗斯统一商品交易所 БУТБ，B/U 拉丁 + Т/Б 西里尔）
+  //   - `Guly Kожокулова`（K 拉丁 + ожокулова 西里尔）
+  //   - `Mirlan Жеенчороев`（人名整个漏成西里尔，夹在中文里）
+  // 前两类是「同一个词里混两种字母」，结构与 T1 同类，只是字母对换了。
+  //
+  // ⚠️ **为什么不直接加进 `mixedScriptTokens`**：那个函数在生产链路上
+  // （`translate.ts:421`），下游是「重试 → 三次不过就丢稿」，
+  // 按项目既有纪律（下游是丢弃的判据宁漏不误杀）必须先拿语料量误报率再决定。
+  // 这里先把它**变成看得见的数字**，攒够证据再谈要不要进闸。
+  // 第三类（整词漏译）连「同词混排」都不是，本段也抓不到，属已知盲区。
+  const LC = /[A-Za-z]/;
+  const CYR2 = /[\u0400-\u04ff]/;
+  let t2 = 0;
+  const t2Words = new Map<string, number>();
+  for (const r of all) {
+    const hits = [r.title, r.summary, r.content].flatMap((f) =>
+      (f || '')
+        .split(/[\s，。、；：（）()「」“”"'·—\-–/《》【】!?！？]+/)
+        .filter((tok) => LC.test(tok) && CYR2.test(tok)),
+    );
+    if (hits.length) t2++;
+    for (const h of hits) t2Words.set(h, (t2Words.get(h) || 0) + 1);
+  }
+  console.log(`\n=== 1b. 判据盲区：拉丁+西里尔同词（仅报告）===`);
+  console.log(`  T2 命中：${t2} 篇（${pct(t2, all.length)}）｜目标 0，但**不进生产闸**，见源码注释`);
+  if (t2Words.size) {
+    console.log('  T2 样本（前 15）：');
+    for (const [w, n] of [...t2Words.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
+      console.log(`    ${String(n).padStart(3)}×  ${w}`);
+    }
+  }
+
   // ---------- 2. 人名写法 ----------
   console.log('\n=== 2. 人名写法（目标：收敛到一种＋同篇混用为 0）===');
   for (const p of PERSONS) {
@@ -143,16 +179,95 @@ async function main() {
   }
 
   // ---------- 3. 国名/州名/城市是否仍是中文 ----------
+  //
+  // ⚠️ 这里扫的是**可见正文**，必须先剥掉 `<img src="...">` 与裸链接。
+  // 2026-09-24 实测：第一次跑出来「Uzbekistan 1 篇 / Azerbaijan 2 篇」，逐条看全是误报 ——
+  //   - `National-Olympic-Committee-of-Uzbekistan.png`（图片文件名）
+  //   - 「阿塞拜疆国家铁路公司（Azerbaijan State Railways Company）」（机构名括注，口径本来就要求拉丁）
+  //   - `DanceAbility Azerbaijan`（机构名）
+  // 即 **3/3 命中都是误报**。判据本身要问的是「译文里有没有把国名写成英文」，
+  // 图片 URL 和机构名括注都不是「译文写成英文」。不剥就每次都被这几条干扰，
+  // 久了就会像「狼来了」一样把这条护栏忽略掉 —— 这正是护栏失效的典型死法。
+  const visible = (s: string) =>
+    (s || '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/\S+\.(png|jpe?g|gif|webp|svg)\b/gi, ' ');
   console.log('\n=== 3. 国名/州名/城市应为中文（出现英文即第二版口径回归）===');
+  console.log('  （已剥掉 HTML 标签 / 链接 / 图片文件名；机构名的英文括注不算违规）');
   let anyRegression = false;
+  /**
+   * 扫描范围 = 标题 + 摘要 + **剥掉标签/链接后的正文**。
+   * 原来只扫标题+摘要，说明它**看不见正文里的英文地名** ——
+   * 而「国名写成英文」恰恰可能只出现在正文里。漏扫比误报更危险（误报看得见，漏扫看不见）。
+   */
+  /**
+   * 命中词左右（跨空格）是否还连着别的拉丁词。
+   *
+   * 连着 ⇒ 这是**西文专名/机构名**的一部分（`inDrive Kazakhstan`、
+   * `Kazakhstan Travel Forum 2026`、`State Oil Fund of Azerbaijan`、
+   * 「阿塞拜疆国家航空公司（Azerbaijan Airlines）」），按口径**本来就该是拉丁**，不是违规。
+   * 单独蹦出来 ⇒ 才是「把国名写成英文」。
+   *
+   * 为什么非要加这条：实测 8 天 12 个国名、28 处命中，**逐条看完 28/28 全是专名括注**。
+   * 一个每次都报 11 个假警报的护栏，下场就是被无视 —— 那还不如不报。
+   * （保守起见：连着的仍会打印出来，只是不算违规，人工想复核还能复核。）
+   */
+  const gluedToLatin = (f: string, idx: number, len: number) => {
+    const left = f.slice(0, idx).match(/[A-Za-z][A-Za-z'&.-]*\s*$/);
+    const right = f.slice(idx + len).match(/^\s*[A-Za-z][A-Za-z'&.-]*/);
+    return Boolean((left && left[0].trim()) || (right && right[0].trim()));
+  };
+  const enHits: Array<{ id: number; country: string; cn: string; en: string; where: string; ctx: string; name: boolean }> = [];
   for (const { cn, en } of SHOULD_BE_CHINESE) {
-    const cnN = all.filter((r) => `${r.title} ${r.summary}`.includes(cn)).length;
-    const enN = all.filter((r) => new RegExp(`\\b${en}\\b`).test(`${r.title} ${r.summary}`)).length;
-    if (enN > 0) anyRegression = true;
-    console.log(`  ${enN > 0 ? '❌' : '✓'} ${cn}：中文标题 ${String(cnN).padStart(3)} 篇 ／ 英文 ${en}：${enN} 篇`);
+    const re = new RegExp(`\\b${en}\\b`);
+    const cnN = all.filter((r) => visible(`${r.title} ${r.summary}`).includes(cn)).length;
+    let enN = 0;
+    let bareN = 0;
+    for (const r of all) {
+      for (const [where, raw] of [
+        ['标题', r.title],
+        ['摘要', r.summary],
+        ['正文', r.content],
+      ] as Array<[string, string]>) {
+        const f = visible(raw);
+        const m = re.exec(f);
+        if (!m || m.index === undefined) continue;
+        enN++;
+        const name = gluedToLatin(f, m.index, m[0].length);
+        if (!name) bareN++;
+        // 「疑似违规」**全部**打印（数量少、每条都要人看）；
+        // 「专名括注」只打前 25 条（数量多、且按口径合法，打全了会淹掉前者）。
+        if (!name || enHits.length < 25) {
+          enHits.push({
+            id: r.id,
+            country: r.country,
+            cn,
+            en,
+            where,
+            ctx: f.slice(Math.max(0, m.index - 45), m.index + 55).replace(/\s+/g, ' '),
+            name,
+          });
+        }
+      }
+    }
+    if (bareN > 0) anyRegression = true;
+    const tag = bareN > 0 ? '❌ 疑似违规' : enN > 0 ? '△ 仅专名括注' : '✓';
+    console.log(
+      `  ${tag} ${cn}：中文标题 ${String(cnN).padStart(3)} 篇 ／ 英文 ${en}：${enN} 处` +
+        `${enN > 0 ? `（其中疑似单独违规 ${bareN} 处）` : ''}`,
+    );
+  }
+  if (enHits.length) {
+    console.log('  ↓ 逐条（`专名括注` = 左右连着别的拉丁词，按口径合法；`★ 疑似违规` = 单独出现）');
+    for (const h of enHits) {
+      console.log(`    ${h.name ? '专名括注' : '★ 疑似违规'} [${h.id}][${h.country}] ${h.where} 命中 ${h.en}：…${h.ctx}…`);
+    }
   }
   if (anyRegression) {
-    console.log('  ⚠️ 有英文地名 → 第 6 条的「国名/州名/城市 → 中文」没被遵守');
+    console.log('  ⚠️ 有单独出现的英文地名 → 第 6 条的「国名/州名/城市 → 中文」可能没被遵守');
+  } else {
+    console.log('  ✅ 没有单独出现的英文地名（命中的都嵌在西文专名里，符合口径）');
   }
 
   // ---------- 4. 汉字个数分布（判据余量）----------
