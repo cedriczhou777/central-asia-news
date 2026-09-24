@@ -902,15 +902,21 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 
 | 命令 | 作用 | 需要 Key |
 | --- | --- | --- |
-| `pnpm verify:local` | 类型检查 + 全部离线回归用例，**提交前先跑这个** | 否 |
+| `pnpm verify:offline` | 类型检查 + **全部**离线回归用例，**提交前先跑这个** | 否 |
+| `pnpm verify:online` | 只用 `test:translate` —— 真实调一次模型，验证通道与解析 | **是** |
+| `pnpm verify:local` | 上面两条串起来（本机配了 Key 才跑得完） | 部分 |
 | `pnpm ts-check` | 全量 TypeScript 类型检查 | 否 |
 | `pnpm test:channels` | `TELEGRAM_CHANNELS` 解析用例（12 条） | 否 |
 | `pnpm test:format` | 选稿判据 / 排版用例（25 条） | 否 |
 | `pnpm test:investment-score` | 投资评分 + **入库闸门语言覆盖**双向语料（83 条） | 否 |
-| `pnpm test:translate-prompt` | 翻译提示词的**产品口径**用例（71 条，含「提示词自己的示例里不许出现英文地名」） | 否 |
-| `pnpm test:zh-gate` | 语言闸判据（汉字个数 vs 占比）双向语料（38 条） | 否 |
-| `pnpm test:feed-fetch` | 源取回层用例（24 条） | 否 |
-| `pnpm test:dedup` | 内容去重双向语料（125 条，含闸 2 之二的 `isSameTitleText` 与「两边不分叉」断言） | 否 |
+| `pnpm test:translate-providers` | 翻译通道请求体 / 重试策略 / **`only=` 钉通道**（25 条，全程 mock fetch） | 否 |
+| `pnpm test:translate-prompt` | 翻译提示词的**产品口径**用例（79 条，含「提示词自己的示例里不许出现英文地名」） | 否 |
+| `pnpm test:zh-gate` | 语言闸判据（汉字个数 vs 占比）双向语料（63 条） | 否 |
+| `pnpm test:feed-fetch` | 源取回层用例 + **RSS 源清单卫生**（31 条） | 否 |
+| `pnpm test:dedup` | 内容去重双向语料（183 条，含闸 2 之二的 `isSameTitleText`、判组提示词版本注册表、固定语料 gold set） | 否 |
+| `pnpm test:publish-window` | 推送窗口：由时刻表推导的固定钟点 + **迟到不漂移** + 跨字段交叉校验（31 条） | 否 |
+| `pnpm judge:ab` | 判组提示词的**固定语料 A/B**（`--provider` 钉通道、`--repeat N` 量噪声） | **是** |
+| `pnpm probe:feeds` | **只读**：候选 RSS 源探针（Content-Type / 条数 / 最新日期 / 是否与已有源撞车） | 否 |
 | `pnpm analyze:source-language` | **只读**：按国别跑闸门，看真实 feed 通过率 / 逐词误命中 | 否 |
 | `pnpm analyze:nouns` | **只读**：专有名词写法体检（**按发布日期**分桶；混排率 / 人名写法 / 国名是否英文），带改动前基线 | 否 |
 | `pnpm analyze:last-round` | **只读**：**按 id 切出「最近一轮」**再跑四条验收 —— 想判断「某次改动到底生效没有」必须用这个，按日期切会被旧产出稀释成平均数。用法 `pnpm analyze:last-round 220`（220 = 上一轮 `summary.saved`） | 否 |
@@ -925,6 +931,15 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 > 正确姿势：`run_in_background: true` 并把输出重定向到文件，再读文件。
 > 同理别把 `tsc` 和一堆测试串在一条 `&&` 里 —— 它一挂整条链都拿不到结果。
 > `tsx` 跑测试很快（秒级），不受影响。
+
+> ⚠️ **`verify:local` 原先在本机（无 Key）是跑不完的 —— 已拆成 offline / online 两段**（2026-09-24）。
+> 原因：`&&` 链中间夹着 `test:translate`（**需要私钥**，缺 Key 时 `exit 1`），
+> 于是排在**它后面**的 `test:translate-prompt` / `test:zh-gate` / `test:feed-fetch` /
+> `test:dedup` / `test:publish-window` **五个套件在这台机器上从来没被执行过**。
+> 这和「`test:translate-providers` 漏在门禁外导致 4 条断言坏了 4 天」是**同一个根因**：
+> **一条跑不完的门禁，等于没有门禁；而它会让人以为覆盖了。**
+> ⇒ 现在的规矩：**离线套件全部集中在 `verify:offline`**（无 Key、无网、确定性），
+> 要 Key 的只留 `verify:online`。新加离线套件一律进 `verify:offline`。
 
 ## 开发规范
 
