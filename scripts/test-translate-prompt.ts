@@ -45,7 +45,7 @@
  * 因为「口径没写进去」和「写进去了但模型不听」是两种不同的故障，
  * 混在一起查会查错方向。
  */
-import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS } from '../src/lib/translate';
+import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint } from '../src/lib/translate';
 import { RSS_SOURCES } from '../src/lib/data/rss-sources';
 
 // ----- 极简断言（与其它 scripts/test-*.ts 同款，便于一起读输出）-----
@@ -280,6 +280,44 @@ ok(
   '没有把「忽略以上指令」之类的注入痕迹留在正文要求里',
   !/忽略(以上|上面)指令/.test(P),
 );
+
+// ============================================================
+// 质检失败后的「重试修正指令」
+// ============================================================
+
+/**
+ * `buildRepairHint` 是**闸门的配套护栏**，不是可有可无的文案。
+ *
+ * 背景：`translateNews` 的三次重试**用的是同一个提示词**，而「专名译了一半」（`阿克tau市`）
+ * 是模型的**系统性**转写习惯，不是随机手滑。三次不过该篇就被丢弃
+ * （返回 `translated:false`、调用方不入库）⇒ **静默丢稿**。
+ * 这段指令把「上一次错在哪、该改成什么」告诉模型，才有机会在第二次就修好。
+ *
+ * ⇒ 断言的目的不是文案好看，而是**防止它被删掉或退化成没有信息的空串**：
+ *   一旦它没了，闸门就从「拦下 → 引导改正」变成「拦下 → 盲目重采样 → 丢稿」。
+ */
+section('质检失败后的重试修正指令（buildRepairHint）');
+
+const hintHalf = buildRepairHint({ kind: 'half-translated', tokens: ['斯皮塔梅en区', '阿克tau市'] });
+ok('半译专名的指令里带上了被拦下的词', hintHalf.includes('斯皮塔梅en区') && hintHalf.includes('阿克tau市'));
+ok('半译专名的指令说清了原因（汉字后面残留拉丁）', hintHalf.includes('汉字后面残留'));
+ok('指令给出了「要么完整中文、要么完整拉丁」的明确要求', /完整的中文译名/.test(hintHalf) && /完整的拉丁写法/.test(hintHalf));
+ok('指令里带具体改法示例（阿克tau市 → 阿克套市）', hintHalf.includes('阿克套市'));
+ok(
+  '指令里明确「不要把这些要求写进 content」（否则模型会把说明抄进正文）',
+  hintHalf.includes('不要写进 content'),
+);
+
+const hintMixed = buildRepairHint({ kind: 'mixed-script', tokens: ['米尔зиёё夫'] });
+ok('汉字+西里尔那类的指令换了一套说法', hintMixed.includes('西里尔') && !hintMixed.includes('汉字后面残留'));
+ok('两类原因的指令互不相同（不是同一段文案复用）', hintHalf !== hintMixed);
+
+// 被拦下的词可能很多，指令不能无限膨胀（提示词长度有成本）
+const hintLong = buildRepairHint({
+  kind: 'half-translated',
+  tokens: Array.from({ length: 30 }, (_, i) => `专名${i}en`),
+});
+ok('被拦词很多时指令有上限（最多列 8 个）', hintLong.includes('专名7en') && !hintLong.includes('专名8en'));
 
 // ============================================================
 // 汇总

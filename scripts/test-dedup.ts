@@ -18,8 +18,10 @@
 import {
   canonicalUrl,
   originalTitleKey,
+  similarity,
 } from '../src/lib/utils';
 import {
+  buildPairPrompt,
   candidatePairs,
   clusterPairs,
   dedupeStories,
@@ -29,7 +31,10 @@ import {
   identityKeys,
   isSameTitle,
   isSameTitleText,
+  JUDGE_PROMPT_VERSION,
   JUDGE_TEMPERATURE,
+  PAIR_CANDIDATE_MIN_SIM,
+  PAIR_MAX_CANDIDATES,
   parseEventGroups,
   parsePairVerdict,
   TITLE_IDENTICAL_MIN_SIM,
@@ -492,18 +497,151 @@ section('candidatePairs · 召回（宁多问，不漏问）');
   const far = [{ title: '哈萨克斯坦聚乙烯工厂投产' }, { title: '塔吉克斯坦桑搏世锦赛开幕' }];
   ok('完全无关的两条不产生候选对', candidatePairs(far).length === 0);
 
-  // 按相似度降序 —— 候选被截断时，留下的是最像的那几对
+  // ⚠️ 2026-09-24 改：选对顺序从「所有对按 sim 降序取前 N」改成「**先保覆盖、再按 sim 填**」。
+  //   所以「返回数组本身按 sim 降序」这个性质**不再成立** —— 覆盖轮选中的对是按条目顺序
+  //   挑的（每条取自己最高分的那对），它们之间不一定降序。
+  //   下面盯的是新的硬契约：**不浪费名额** + **不让条目沉默**。
   const mixed = [
     { title: '哈萨克斯坦总统会见中国外长' },
     { title: '哈萨克斯坦总统会见中国外交部长' }, // 与 0 很像
     { title: '哈萨克斯坦总统会见俄罗斯外长' },   // 与 0 一般像
   ];
   const sorted = candidatePairs(mixed, 0.3, 10);
-  ok('候选按相似度降序', sorted.length === 0 || sorted.every((c, i) => i === 0 || sorted[i - 1].sim >= c.sim), JSON.stringify(sorted.map((c) => c.sim)));
+  ok('名额没被浪费：有几对就给几对（≤ maxPairs）', sorted.length === 3, JSON.stringify(sorted.map((c) => c.sim)));
+  ok(
+    '每条都进了至少一个候选对（覆盖轮的作用）',
+    [0, 1, 2].every((i) => sorted.some((c) => c.a === i || c.b === i)),
+    JSON.stringify(sorted),
+  );
 
-  // 上限：超过就截断，且截断后仍是最像的那些
+  // 上限：超过就截断
   const many = Array.from({ length: 30 }, (_, i) => ({ title: `哈萨克斯坦总统会见中国外长代表团${i}` }));
   ok('候选数量受 maxPairs 限制', candidatePairs(many, 0.3, 5).length === 5);
+}
+
+// ------------------------------------------------------------
+// ★ 覆盖优先：把「按相似度截断会饿死低分条目」这个缺陷钉住
+// ------------------------------------------------------------
+
+section('candidatePairs · ★ 覆盖优先（2026-09-24：修「按 sim 截断会饿死低分条目」）');
+
+{
+  /**
+   * 线上真实案例：2026-09-24 用户截图里那三条 Unibank
+   * （`id` 4638/4663/4673），标题相似度只有 **0.375 / 0.387 / 0.400**。
+   *
+   * 它们**过得了 0.35 的下限**，但分数偏低。旧实现按 sim 降序取前 12 对，
+   * 名额会被模板稿（标题只差一两个字、相似度 0.8+）吃光 ⇒ 这三条一对都问不到。
+   * 新实现先保覆盖，所以它们必然被问到。
+   */
+  const UNIBANK = [
+    'Unibank 推出绿色贷款，年利率从 12% 起',
+    'Unibank 推出面向企业主的绿色信贷：年利率低至 12%',
+    'Unibank 为企业家提供绿色信贷：年利率从 12% 开始',
+  ];
+  // 模板稿：同一句式、只换项目名 ⇒ 彼此高度相似（就是线上「体育类模板稿占满名额」那个形态）
+  const TEMPLATED = Array.from(
+    { length: 20 },
+    (_, i) => `阿塞拜疆与土耳其签署第 ${i + 1} 项双边合作协议`,
+  );
+
+  const items = [...TEMPLATED, ...UNIBANK].map((title) => ({ title }));
+  const unibankIdx = UNIBANK.map((_, i) => TEMPLATED.length + i);
+  const touchesUnibank = (pairs: Array<{ a: number; b: number }>) =>
+    pairs.some((p) => unibankIdx.includes(p.a) || unibankIdx.includes(p.b));
+
+  const chosen = candidatePairs(items, PAIR_CANDIDATE_MIN_SIM, PAIR_MAX_CANDIDATES);
+
+  // 旧实现（按 sim 降序取前 N）—— 在测试里现算一遍做对照，好让「为什么要改」可复核
+  const all: Array<{ a: number; b: number; sim: number }> = [];
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const sim = similarity(items[i].title, items[j].title);
+      if (sim >= PAIR_CANDIDATE_MIN_SIM) all.push({ a: i, b: j, sim });
+    }
+  }
+  all.sort((x, y) => y.sim - x.sim || x.a - y.a || x.b - y.b);
+  const oldStyle = all.slice(0, PAIR_MAX_CANDIDATES);
+
+  const coverCount = (pairs: Array<{ a: number; b: number }>) =>
+    new Set(pairs.flatMap((p) => [p.a, p.b])).size;
+
+  ok(
+    '名额仍然用满（不浪费预算）',
+    chosen.length === PAIR_MAX_CANDIDATES,
+    `得到 ${chosen.length}/${PAIR_MAX_CANDIDATES}`,
+  );
+  ok(
+    '覆盖到的条目数严格多于旧实现',
+    coverCount(chosen) > coverCount(oldStyle),
+    `新 ${coverCount(chosen)} 条 vs 旧（按 sim 截断）${coverCount(oldStyle)} 条`,
+  );
+  ok(
+    '★ 三条 Unibank（sim 0.375–0.400 的低分对）没有被饿死',
+    touchesUnibank(chosen),
+    '回归：这正是用户截图里那三条被推送了两次的新闻',
+  );
+  ok(
+    '对照：旧实现确实会漏掉它们（证明这次改动不是白改）',
+    !touchesUnibank(oldStyle),
+    '若这里变 true，说明这个构造已不再复现缺陷，要换构造',
+  );
+  ok(
+    '返回结果确定性（同样输入两次结果相同）',
+    JSON.stringify(candidatePairs(items, PAIR_CANDIDATE_MIN_SIM, PAIR_MAX_CANDIDATES)) ===
+      JSON.stringify(chosen),
+    '同分对必须有稳定的次键，否则判定稳定性实验无法解读',
+  );
+  // 无候选时不能崩
+  ok('一条都不像时返回空数组', candidatePairs([{ title: '甲' }, { title: '乙' }], 0.9, 5).length === 0);
+}
+
+// ------------------------------------------------------------
+// ★ 判组提示词的校准：正例 / 反例 / 兜底句都不许被删
+// ------------------------------------------------------------
+
+section('buildPairPrompt · ★ 判组提示词的校准（正例/反例/兜底句）');
+
+{
+  /**
+   * 这份提示词是整套机制的**核心资产**，而且它是一整块字符串 ——
+   * 「顺手精简一下」不会让类型检查报错，症状要等下一轮影子运行才看得出来。
+   *
+   * ⚠️ 2026-09-24 的背景：原来这份提示词**只有反例、没有正例细化**，末句还是
+   * 「拿不准就判否」。叠加判组温度 0（同一输入恒定输出）与兜底通道 `zhipu-flash`，
+   * 漏合并变成**系统性**的 —— 实测把用户截图里那三条 Unibank（同一家公司
+   * 同一个绿色信贷产品的三家媒体报道）判成「否」。所以下面那两条正例必须留着。
+   */
+  const P = buildPairPrompt([{ a: 0, b: 1 }], [
+    { title: 'Unibank 推出绿色贷款，年利率从 12% 起' },
+    { title: 'Unibank 推出面向企业主的绿色信贷：年利率低至 12%' },
+  ]);
+
+  // ---- 正例（防止「漏合并」回归：留下重复，用户看得见）----
+  ok('正例：点明「不同媒体换词重写是同一件事最常见的形态」', P.includes('换词重写'));
+  ok('正例：带上了 Unibank 那条真实案例', P.includes('Unibank'));
+  ok('正例：点明「标题有笔误/重复字」也要判是', P.includes('笔误'));
+  ok('正例仍保留「来源不同、措辞不同…也算同一件事」', P.includes('即使来源不同'));
+
+  // ---- 反例（防止「误合并」回归：丢信息且不可逆）----
+  ok('反例：「同组织同城市的不同活动」还在', P.includes('上合组织'));
+  ok('反例：「否认某报道 vs 该报道本身」已补入', P.includes('否认'));
+  ok('反例：方向相反还在', P.includes('金价下跌'));
+  ok('反例：不同主体做同类事还在（土耳其/以色列大使馆）', P.includes('土耳其大使馆'));
+
+  // ---- 兜底句：宁可留重复也不要误合并 ----
+  ok('兜底句「拿不准就判「否」」必须保留（删掉等于放开误合并）', P.includes('拿不准就判「否」'));
+  ok('兜底句写清了代价（丢信息比留重复更糟）', P.includes('丢信息'));
+
+  // ---- 输入被正确带进提示词 ----
+  ok('标题按行写入、行首带编号', /0 \| Unibank 推出绿色贷款/.test(P));
+
+  // ---- 版本号：改提示词必须 +1，否则影子运行的结论会被读成旧版 ----
+  ok(
+    `判组提示词版本号 ≥ 2（当前 ${JUDGE_PROMPT_VERSION}）`,
+    JUDGE_PROMPT_VERSION >= 2,
+    '改了 buildPairPrompt 就要 +1，并在注释里记下这一版改了什么',
+  );
 }
 
 section('hasOppositePolarity · 高相似度假阳性的确定性否决');

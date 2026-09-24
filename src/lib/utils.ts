@@ -69,6 +69,16 @@ export function hanRatio(text: string): number {
 }
 
 /**
+ * 词切分：空白 + 中英文常见标点。
+ *
+ * ⚠️ **`mixedScriptTokens` 与 `mixedScriptTokensLatin` 必须共用这一份。**
+ * 两条判据的边界必须一致，否则「同一个词」在一边是一个 token、在另一边被切成两个，
+ * 结论就会分叉 —— 本项目已经因为「同一条判据两处各写一份」栽过三次
+ * （体检与生产不一致、闸 2 与闸 3 不一致、`isPushableText` 与 `pushExclusionReason` 分家）。
+ */
+const TOKEN_SPLIT_RE = /[\s，。、；：（）()「」“”"'·—\-–/《》【】!?！？]+/;
+
+/**
  * 找出「一个词里同时含汉字和西里尔字母」的片段。返回空数组 = 干净。
  *
  * 为什么这条值得单独成函数：这种写法**结构上不可能正确** ——
@@ -83,9 +93,72 @@ export function hanRatio(text: string): number {
  */
 export function mixedScriptTokens(text: string): string[] {
   const out: string[] = [];
-  for (const tok of (text || '').split(/[\s，。、；：（）()「」“”"'·—\-–/《》【】!?！？]+/)) {
+  for (const tok of (text || '').split(TOKEN_SPLIT_RE)) {
     if (!tok) continue;
     if (/[\u4e00-\u9fff]/.test(tok) && /[\u0400-\u04ff]/.test(tok)) out.push(tok);
+  }
+  return out;
+}
+
+/**
+ * 找出「一个词里同时含汉字和**拉丁字母**」的片段 —— 与 {@link mixedScriptTokens} 互补的那一半。
+ *
+ * ## 为什么这条曾经被明确否掉，2026-09-24 又拿回来
+ *
+ * `mixedScriptTokens` 的注释里写着「**故意**不把汉字+拉丁算进来」，理由是
+ * `60kg`／`center私立诊所` 这类写法完全正常，而它的下游是「重试 → 三次不过就丢弃该篇」，
+ * 误报的代价是**静默丢稿**。当时把 `霍贾and` 这一类判给了提示词去管。
+ *
+ * ⚠️ **这个假设被证伪了两次**：用户先报 `霍贾and`，2026-09-24 又报 `斯皮塔梅en区`
+ * （`id=4492`）。而提示词第 6 条**早就逐字写着**这两个词作为反例
+ * （`translate.ts` 的「绝不允许出现『霍贾and』『斯皮塔梅en』…这种写法」）——
+ * 也就是说**反例被写进了提示词，模型照犯**。提示词管不住，就只能上闸。
+ *
+ * ## 判据：**汉字后面紧跟一段「全小写」的拉丁片段**，再加三条确定性排除
+ *
+ * 这个结构对应的是**专名被译了一半**：模型把 `Спитамен`/`Spitamen` 的前半截音译成
+ * `斯皮塔梅`、后半截忘了处理，于是留下 `斯皮塔梅en`。所以判据只认「汉字在前、拉丁在后」。
+ *
+ * | 放行（正常写法） | 命中（译文缺陷） |
+ * |---|---|
+ * | `CEO表示`、`GDP增长`、`B超`、`维生素C`、`3D打印`、`pH值`、`iPhone手机`、`60kg`、`Egemen.kz` | `斯皮塔梅en`、`霍贾and`、`阿克tau市`、`哈萨克mys`、`沙霍比丁hon` |
+ *
+ * 放行靠**结构**而不是白名单，四条规则：
+ * 1. 拉丁片段必须**全小写**（`run === run.toLowerCase()`）⇒ 大写缩写与驼峰专名（`CEO`/`GDP`/`iPhone`）全部放行。
+ *    引号类字符（`‘ ’ ʻ ʼ`）算进拉丁片段一起匹配，所以 `G‘aniyev` 是一个整体、不会被切成 `G`+`aniyev`。
+ * 2. 片段**前一个字符必须是汉字**。这一条同时排掉 `aniyev`（引号被当分隔符切开后的残段）与
+ *    整词漏译的 `şəbəkəsi`，代价是漏掉「片段在词首」的形态（如 `aktau市`）—— 实测语料里没有。
+ * 3. 片段**两侧紧邻的字符不是 `.`** ⇒ 排掉域名（`Egemen.kz`、`inbusiness.kz`、`现代.az`）。
+ * 4. 片段**前一个字符不是数字** ⇒ 排掉计量（`60kg`、`100kg`、`50km`）。
+ *
+ * ⚠️ **2026-09-24 实测**：只用「小写片段」一条时误报 44%（4/9 篇）；补上规则 4 之前的中间版本
+ * 在 7 天语料上仍有 3 个误报类（见上表右列的 `60kg`/`G‘aniyev`/`inbusiness.kz`）。
+ * 四条规则齐备后，**1977 篇语料上误报 0**（23 处命中逐条人工看过，全是真缺陷）。
+ * 这达到了 `mixedScriptTokens` 当年进闸的同一标准（156 种词、0 误报）。
+ *
+ * ⚠️ 仍**看不见**「整个词漏译成西里尔」那一类（`Mirlan Жеенчороев`），那是另一个盲区。
+ */
+export function mixedScriptTokensLatin(text: string): string[] {
+  const HAN = /[\u4e00-\u9fff]/;
+  const out: string[] = [];
+  for (const tok of (text || '').split(TOKEN_SPLIT_RE)) {
+    if (!tok) continue;
+    // 必须含汉字 —— 纯拉丁/纯数字词（`60kg`、`AIIB`）不是本判据的对象
+    if (!HAN.test(tok)) continue;
+    // 用 `\p{Script=Latin}` 而不是 `[A-Za-z]`：后者会把带变音符的拉丁名切碎
+    // （`Alagözov` → `Alag` + `zov`，后半段误命中）。引号并入片段，见规则 1。
+    for (const m of tok.matchAll(/[\p{Script=Latin}'\u2018\u2019\u02bb\u02bc]+/gu)) {
+      const run = m[0];
+      if (run.length < 2) continue;
+      if (run !== run.toLowerCase()) continue; // 规则 1
+      const at = m.index ?? 0;
+      const prev = at > 0 ? tok[at - 1] : '';
+      const next = tok[at + run.length] ?? '';
+      if (!HAN.test(prev)) continue; // 规则 2
+      if (prev === '.' || next === '.') continue; // 规则 3
+      if (/[0-9]/.test(prev)) continue; // 规则 4
+      out.push(tok);
+    }
   }
   return out;
 }

@@ -1,4 +1,4 @@
-import { isChineseText, mixedScriptTokens, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
+import { isChineseText, mixedScriptTokens, mixedScriptTokensLatin, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
 import type { Category } from './data/types';
 
 /**
@@ -404,24 +404,89 @@ export function fallbackCategory(title: string, content: string): Category {
   return 'economy';
 }
 
+/**
+ * 质检拒绝的原因。**不是给日志看的花瓶** —— 它会被拼成重试时的修正指令，见 `buildRepairHint`。
+ */
+export interface GateReject {
+  kind: 'mixed-script' | 'half-translated';
+  /** 被拦下的词（截断到前几个） */
+  tokens: string[];
+}
+
+/**
+ * 把质检拒绝变成一段**修正指令**，附在重试的提示词末尾。
+ *
+ * 导出只为回归测试（`scripts/test-translate-prompt.ts`）—— 别在别处调用。
+ *
+ * ## 为什么非有不可
+ *
+ * 重试用的是**同一个提示词**（只多等 800ms/1600ms 退避），而这两类错误都是
+ * **系统性**的 —— `阿克tau市`（id=4512）来自模型对 Aktau 的转写习惯，
+ * 不是随机手滑。温度是 0.3（不是 0），所以重采样**有机会**自己修好，
+ * 但连错三次就会**丢弃该篇**：`translateNews` 三次不过即返回 `translated:false`，
+ * 调用方不入库 ⇒ **静默丢稿**，这正是本项目最忌讳的形态
+ * （「宁可留重复（看得见），不要丢稿（看不见）」）。
+ *
+ * 带上「上一次错在哪、该改成什么」能把第二次的成功率显著抬起来，
+ * 代价只是一段提示词。**注意别把这份要求本身写进 content**（提示词里已有同样的禁令）。
+ */
+export function buildRepairHint(reject: GateReject): string {
+  const what =
+    reject.kind === 'half-translated'
+      ? '专有名词被译了一半 —— 汉字后面残留了一段拉丁字母'
+      : '汉字与西里尔字母挤在同一个词里';
+  return [
+    '',
+    '⚠️ 你上一次的输出**没有通过质检**，原因：' + what + '。',
+    '被拦下的词：' + reject.tokens.slice(0, 8).join('、'),
+    '请**重新**输出完整 JSON，并把上面这些专有名词改成**要么是完整的中文译名、要么是完整的拉丁写法**，',
+    '绝对不要再出现「汉字 + 字母」拼起来的残缺写法。正确示例：',
+    '  「斯皮塔梅en区」→「Spitamen 区」（该地名无通用中文译名 ⇒ 用完整拉丁写法）',
+    '  「阿克tau市」→「阿克套市」',
+    '  「霍贾and市」→「苦盏市」或「Khujand 市」',
+    '以上要求本身不要写进 content —— content 里只写读者要读的新闻内容。',
+  ].join('\n');
+}
+
 // 把一次成功的 LLM 输出规整为 Result（中文验证）
 function normalizeResult(
   parsed: Record<string, unknown>,
   originalTitle: string,
   originalContent: string,
   provider: string
-): TranslateResult {
+): { result: TranslateResult; reject?: GateReject } {
   const titleZh = typeof parsed.title === 'string' ? parsed.title : originalTitle;
   const summaryZh = typeof parsed.summary === 'string' ? parsed.summary : originalContent.substring(0, 100);
   const contentZh = typeof parsed.content === 'string' ? parsed.content : originalContent;
 
   // 语言闸：汉字个数够（见 utils.isChineseText 的说明，**不是**占比）
   const zhOk = isChineseText(titleZh, MIN_HAN_TITLE) && isChineseText(contentZh, MIN_HAN_CONTENT);
-  // 书写系统闸：不允许出现「汉字 + 西里尔」挤在同一个词里（结构上不可能正确，误报率为 0）
-  const mixed = [...mixedScriptTokens(titleZh), ...mixedScriptTokens(contentZh)];
-  const ok = zhOk && mixed.length === 0;
+
+  // 书写系统闸。两条判据都是**结构性**的（不是「像不像」的阈值），
+  // 且都在真实语料上量过误报率为 0，所以敢当硬判据用：
+  //   a) 「汉字 + 西里尔」挤在同一个词里 —— 结构上不可能正确（`米尔зиёё夫`／`肯еш`）。
+  //   b) 「汉字 + 小写拉丁片段」= **专名被译了一半**（`斯皮塔梅en`／`霍贾and`／`阿克tau市`／
+  //      `哈萨克mys`／`沙霍比丁hon`）。判据的构造、放行/命中的边界、以及
+  //      1977 篇语料上 12 处命中 0 误报的实测记录，都写在 `utils.mixedScriptTokensLatin` 的注释里。
+  //
+  // ⚠️ 2026-09-24 才加 (b)，原因值得记下来：提示词第 6 条**早就逐字写着**
+  // `斯皮塔梅en`／`霍贾and` 作为禁止反例（`translate.ts` 的「绝不允许出现…」那一行），
+  // 而口径改完之后的新产出里 `阿克tau市`（id=4512）、`霍贾and`（id=4556）**照样出现**。
+  // ⇒ 对这类错误，**提示词是无效的承载体**，只有闸门能兜住。别再往提示词里加例子了。
+  //
+  // ⚠️ 查**三段**（标题/摘要/正文）：草稿里三段都会显示给读者，
+  // 而 `斯皮塔梅en` 恰恰标题和摘要里都有（id=4492）。原来只查标题+正文是漏的。
+  const fields = [titleZh, summaryZh, contentZh];
+  const mixed = fields.flatMap((f) => mixedScriptTokens(f));
+  const halfTranslated = fields.flatMap((f) => mixedScriptTokensLatin(f));
+  const ok = zhOk && mixed.length === 0 && halfTranslated.length === 0;
   if (zhOk && mixed.length > 0) {
     console.log(`[translate] 译文含「汉字+西里尔」混排词 ${mixed.slice(0, 6).join('/')}，判不合格并重试`);
+  }
+  if (zhOk && halfTranslated.length > 0) {
+    console.log(
+      `[translate] 译文含「汉字+拉丁」半译专名 ${halfTranslated.slice(0, 6).join('/')}，判不合格并重试`,
+    );
   }
 
   const rawCategory = typeof parsed.category === 'string' ? parsed.category : '';
@@ -429,14 +494,29 @@ function normalizeResult(
     ? (rawCategory as Category)
     : null;
 
+  // 拒绝原因 —— 决定重试时要不要带修正指令（见 buildRepairHint）。
+  // 语言闸不过（模型把原文回显了）**不带**修正指令：那不是「专名写法」的问题，
+  // 让它按原样重译即可。
+  const reject: GateReject | undefined = !zhOk
+    ? undefined
+    : halfTranslated.length > 0 || mixed.length > 0
+      ? {
+          kind: halfTranslated.length > 0 ? 'half-translated' : 'mixed-script',
+          tokens: [...new Set([...halfTranslated, ...mixed])],
+        }
+      : undefined;
+
   return {
-    titleZh: ok ? titleZh : originalTitle,
-    summaryZh: ok ? summaryZh : originalContent.substring(0, 100),
-    contentZh: ok ? contentZh : originalContent,
-    category: ok ? category : null,
-    investorRelevant: ok && parsed.investorRelevant === true,
-    translated: ok,
-    provider,
+    result: {
+      titleZh: ok ? titleZh : originalTitle,
+      summaryZh: ok ? summaryZh : originalContent.substring(0, 100),
+      contentZh: ok ? contentZh : originalContent,
+      category: ok ? category : null,
+      investorRelevant: ok && parsed.investorRelevant === true,
+      translated: ok,
+      provider,
+    },
+    ...(reject ? { reject } : {}),
   };
 }
 
@@ -658,6 +738,12 @@ export async function translateNews(
 ): Promise<TranslateResult> {
   const prompt = buildPrompt(title, content, sourceLanguage);
   const unconfigured: string[] = [];
+  /**
+   * 质检失败后的修正指令（见 `buildRepairHint`）。
+   * **跨通道保留**：一个通道三次都不过、切到下一个通道时，下一个通道也该知道
+   * 「上一家错在哪」，而不是从零再错三遍 —— 那样只会把丢稿概率乘起来。
+   */
+  let repairHint = '';
 
   for (const provider of PROVIDERS) {
     if (!process.env[provider.keyEnv]) {
@@ -668,19 +754,30 @@ export async function translateNews(
     const model = resolveModel(provider);
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      console.log(`[translate] ${provider.name}/${model} 第 ${attempt}/${MAX_ATTEMPTS} 次尝试...`);
+      console.log(
+        `[translate] ${provider.name}/${model} 第 ${attempt}/${MAX_ATTEMPTS} 次尝试...` +
+          (repairHint ? '（带修正指令）' : ''),
+      );
 
-      const call = await callChatProvider(provider, prompt);
+      const call = await callChatProvider(provider, repairHint ? `${prompt}\n${repairHint}` : prompt);
       if (call.text) {
         const parsed = parseLlmJson(call.text);
         if (parsed) {
-          const result = normalizeResult(parsed, title, content, provider.name);
+          const { result, reject } = normalizeResult(parsed, title, content, provider.name);
           if (result.translated && result.contentZh !== content) {
             translationStats.providerCounts[provider.name] =
               (translationStats.providerCounts[provider.name] || 0) + 1;
             return result;
           }
-          console.log(`[translate] ${provider.name} 返回内容未通过中文校验，继续重试`);
+          if (reject) {
+            // 质检拦下专名写法 ⇒ 下一次重试带上「错在哪、该改成什么」
+            repairHint = buildRepairHint(reject);
+            console.log(
+              `[translate] 质检拦下（${reject.kind}）：${reject.tokens.slice(0, 6).join('/')} ⇒ 重试带修正指令`,
+            );
+          } else {
+            console.log(`[translate] ${provider.name} 返回内容未通过中文校验，继续重试`);
+          }
         } else {
           console.log(`[translate] ${provider.name} 返回内容不是合法 JSON，继续重试`);
         }

@@ -34,7 +34,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getArticleIdentities, deleteArticlesByIds } from '@/lib/db-articles';
 import { canonicalUrl, originalTitleKey, similarity } from '@/lib/utils';
-import { dedupeStoriesDeterministic } from '@/lib/same-event';
+import { dedupeStoriesDeterministic, JUDGE_PROMPT_VERSION } from '@/lib/same-event';
 import { pushExclusionReason } from '@/lib/article-format';
 import { countryList } from '@/lib/data/countries';
 
@@ -464,6 +464,15 @@ export async function GET(request: NextRequest) {
       judgeMode,
       perCountryLimit,
       debug,
+      /**
+       * 判组提示词的版本（见 `same-event.JUDGE_PROMPT_VERSION`）。
+       *
+       * 为什么必须带出来：提示词改动**在响应里本来完全不可见**，
+       * 而影子运行的结论是按「这次跑的判据」解读的 —— 版本号对不上，
+       * 结论就可能被当成新版/旧版读反（本项目已经因为「分不清跑的是哪版代码」误判过一次）。
+       * 拿它当**部署指纹**用：期望值 `2`。
+       */
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
       /**
        * 体检口径说明：输入已套与 `push` 相同的选稿判据（分类/空壳文/国家相关性），
        * 且只覆盖 `push` 会遍历的国家。**改这几条等于改体检结论的含义**，

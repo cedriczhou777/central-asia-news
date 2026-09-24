@@ -26,7 +26,14 @@
  *   标题汉字 min=6 / p1=12 / 中位=24　正文汉字 min=4 / p1=34 / 中位=143
  *   T1 = 3.2%（57 篇）／含任意西里尔 = 9.4%（165 篇）／kg 的西里尔率最高（24%）
  */
-import { hanCount, hanRatio, mixedScriptTokens, MIN_HAN_TITLE, MIN_HAN_CONTENT } from '../src/lib/utils';
+import {
+  hanCount,
+  hanRatio,
+  mixedScriptTokens,
+  mixedScriptTokensLatin,
+  MIN_HAN_TITLE,
+  MIN_HAN_CONTENT,
+} from '../src/lib/utils';
 
 const BASE = process.env.SITE_BASE || 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
 const COUNTRIES = ['kz', 'uz', 'kg', 'az', 'tj'];
@@ -64,6 +71,18 @@ const SHOULD_BE_CHINESE: Array<{ cn: string; en: string }> = [
 ];
 
 const CYR = /[\u0400-\u04ff]/;
+
+/**
+ * 去掉 HTML 标签、裸链接、图片文件名 —— 剩下的才是**读者能看见的文字**。
+ *
+ * 提到模块作用域是为了让 1c 段也能用（1c 在 section 3 之前执行，原来那个
+ * 函数体内部的 `const` 会撞上 TDZ）。判据的完整理由写在 section 3 那里。
+ */
+const visible = (s: string) =>
+  (s || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\S+\.(png|jpe?g|gif|webp|svg)\b/gi, ' ');
 
 function beijingDates(days: number): string[] {
   const out: string[] = [];
@@ -163,6 +182,62 @@ async function main() {
     }
   }
 
+  // ---------- 1c. 汉字 + 拉丁粘连（用户 09-24 第二次报的那一类）----------
+  //
+  // 判据本体在 `utils.mixedScriptTokensLatin`（注释里写了它为什么收窄到「拉丁片段全小写且 ≥2」）。
+  // 这里量的是**误报率**：逐条把命中处的上下文打出来，人工判每一条是
+  // 「译文真缺陷」还是「正常的中英混排」（`开启wifi` 这类同形）。
+  //
+  // ⚠️ 为什么必须先量再进闸：这条判据的下游是「重试 → 三次不过就丢弃该篇」
+  // （`translate.ts` 的 normalizeResult），**误报 = 静默丢稿**。
+  // 参照 `mixedScriptTokens`（汉字+西里尔）进闸的理由：那条在 1757 篇里
+  // 命中 156 种词、**一例误报都没有**，所以它敢当硬判据。这一条要先证明同样干净。
+  console.log('\n=== 1c. 汉字+拉丁粘连（仅报告，量误报率后再决定是否进闸）===');
+  const t3Ctx: Array<{ id: number; country: string; where: string; ctx: string }> = [];
+  const t3Words = new Map<string, number>();
+  const t3ByCountry: Record<string, number> = {};
+  let t3 = 0;
+  for (const r of all) {
+    let hit = false;
+    for (const [where, raw] of [
+      ['标题', r.title],
+      ['摘要', r.summary],
+      ['正文', r.content],
+    ] as Array<[string, string]>) {
+      for (const tok of mixedScriptTokensLatin(visible(raw))) {
+        hit = true;
+        // token 可能是一整个短语（切分只按标点/空白），所以只截取拉丁片段周围 ±14 字
+        const m = tok.match(/[a-z]{2,}/);
+        const at = m && m.index !== undefined ? m.index : 0;
+        const snippet = tok.slice(Math.max(0, at - 14), at + 16);
+        t3Words.set(snippet, (t3Words.get(snippet) || 0) + 1);
+        if (t3Ctx.length < 40) t3Ctx.push({ id: r.id, country: r.country, where, ctx: snippet });
+      }
+    }
+    if (hit) {
+      t3++;
+      t3ByCountry[r.country] = (t3ByCountry[r.country] || 0) + 1;
+    }
+  }
+  console.log(
+    `  T3 命中：${t3} 篇（${pct(t3, all.length)}）` +
+      `　按国家：${Object.entries(t3ByCountry).map(([c, n]) => `${c}=${n}`).join(' ') || '无'}`,
+  );
+  if (t3Ctx.length) {
+    console.log('  ↓ 命中上下文（最多 40 条）—— 判读标准：');
+    console.log('     `译文真缺陷` = 专名被译了一半（`斯皮塔梅en`／`霍贾and`／`纳赫ichevan`）');
+    console.log('     `正常混排`   = 小写外文词整词附着（`开启wifi`／`微信wx`／`50公里km`）—— 这类就是误报');
+    for (const h of t3Ctx) {
+      console.log(`    [${h.id}][${h.country}] ${h.where}：…${h.ctx}…`);
+    }
+  }
+  if (t3Words.size) {
+    console.log('  命中片段频次（前 15）—— **同一个片段重复出现是好消息**（说明是少数几种坏词）：');
+    for (const [w, n] of [...t3Words.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
+      console.log(`    ${String(n).padStart(3)}×  …${w}…`);
+    }
+  }
+
   // ---------- 2. 人名写法 ----------
   console.log('\n=== 2. 人名写法（目标：收敛到一种＋同篇混用为 0）===');
   for (const p of PERSONS) {
@@ -188,11 +263,6 @@ async function main() {
   // 即 **3/3 命中都是误报**。判据本身要问的是「译文里有没有把国名写成英文」，
   // 图片 URL 和机构名括注都不是「译文写成英文」。不剥就每次都被这几条干扰，
   // 久了就会像「狼来了」一样把这条护栏忽略掉 —— 这正是护栏失效的典型死法。
-  const visible = (s: string) =>
-    (s || '')
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/https?:\/\/\S+/g, ' ')
-      .replace(/\S+\.(png|jpe?g|gif|webp|svg)\b/gi, ' ');
   console.log('\n=== 3. 国名/州名/城市应为中文（出现英文即第二版口径回归）===');
   console.log('  （已剥掉 HTML 标签 / 链接 / 图片文件名；机构名的英文括注不算违规）');
   let anyRegression = false;

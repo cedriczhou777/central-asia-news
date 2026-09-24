@@ -30,7 +30,7 @@
  * （`GET /api/fetch-news` 的 `summary` 是**内存态**，一重新部署就没了）。
  * 所以它会先把切分点（id 区间）打出来 —— **先看这个区间对不对，再看结论**。
  */
-import { mixedScriptTokens } from '../src/lib/utils';
+import { mixedScriptTokens, mixedScriptTokensLatin } from '../src/lib/utils';
 
 const BASE = process.env.SITE_BASE || 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
 const COUNTRIES = ['kz', 'uz', 'kg', 'az', 'tj'];
@@ -121,9 +121,39 @@ async function main() {
     rows.filter((r) =>
       [r.title, r.summary, r.content].some((f) => visible(f).split(SPLIT).some((t) => LC.test(t) && CYR.test(t))),
     ).length;
+  // T3 汉字+拉丁粘连 —— 用户 09-24 第二次报的那一类（`斯皮塔梅en区`，id=4492）。
+  //
+  // ⚠️ **T1 为 0 不代表「全清」**：`mixedScriptTokens` 只抓汉字+西里尔，
+  // 对这类完全无感。这条判据（`utils.mixedScriptTokensLatin`）目前**还没进生产闸**，
+  // 所以这里的「最近一轮」数字就是「新提示词到底管不管得住」的直接答案：
+  //   - 最近一轮 ≈ 0 而历史明显多 ⇒ 提示词已经管住了，用户在截图里看到的是**改口径前的存量行**
+  //     （被补发/回看窗口重新捞出来推的），修法在「清理存量」而不是「加闸」；
+  //   - 最近一轮仍然有 ⇒ 提示词管不住（它第 6 条早就逐字写了 `斯皮塔梅en` 这个反例），
+  //     必须把判据接进生产闸。
+  const t3 = (rows: Row[]) =>
+    rows.filter((r) =>
+      [r.title, r.summary, r.content].some((f) => mixedScriptTokensLatin(visible(f)).length),
+    ).length;
   console.log('=== 验收 1（书写系统混用）===');
   console.log(`  T1 汉字+西里尔：最近一轮 ${t1(recent)} 篇（${pct(t1(recent), recent.length)}）  ／ 历史 ${t1(older)} 篇（${pct(t1(older), older.length)}）`);
   console.log(`  T2 拉丁+西里尔：最近一轮 ${t2(recent)} 篇（${pct(t2(recent), recent.length)}）  ／ 历史 ${t2(older)} 篇（${pct(t2(older), older.length)}）`);
+  console.log(`  T3 汉字+拉丁：  最近一轮 ${t3(recent)} 篇（${pct(t3(recent), recent.length)}）  ／ 历史 ${t3(older)} 篇（${pct(t3(older), older.length)}）　★ 这一行才是用户报的那一类`);
+  // 最近一轮的 T3 逐条打出来（数量应很少）—— 有它才判得出「该加闸还是该清存量」
+  for (const r of recent) {
+    for (const [where, raw] of [
+      ['标题', r.title],
+      ['摘要', r.summary],
+      ['正文', r.content],
+    ] as Array<[string, string]>) {
+      for (const tok of mixedScriptTokensLatin(visible(raw))) {
+        const m = tok.match(/[a-z]{2,}/);
+        const at = m && m.index !== undefined ? m.index : 0;
+        console.log(
+          `    ★ T3 [${r.id}][${r.country}] ${where}：…${tok.slice(Math.max(0, at - 14), at + 16)}…`,
+        );
+      }
+    }
+  }
 
   // ---------- 3：人名「同篇混用」（这一条才是要盯的）----------
   console.log('\n=== 验收 2（人名：同篇混用应为 0）===');

@@ -359,10 +359,10 @@ const MAX_GROUP_SIZE = 4;
  * 同一政策的两种译法（「17.5%降至12%」/「17.5%下调至12%」0.75）、
  * 以及提示词里那对「团结的力量」/「团结之力」0.71。
  */
-const PAIR_CANDIDATE_MIN_SIM = 0.35;
+export const PAIR_CANDIDATE_MIN_SIM = 0.35;
 
 /** pair 形态：单轮最多问多少对（控制提示词长度与延迟）。 */
-const PAIR_MAX_CANDIDATES = 12;
+export const PAIR_MAX_CANDIDATES = 12;
 
 /*
  * ## 为什么这里**没有**「判是比例过高就熔断」这条护栏
@@ -429,34 +429,112 @@ export function hasOppositePolarity(a: string, b: string): boolean {
 }
 
 /**
- * 生成「值得让模型看两眼」的候选对（下标对，按相似度降序）。
+ * 生成「值得让模型看两眼」的候选对（下标对）。
  *
  * 这一步是**召回**，不是判定：门槛刻意放低（默认 0.35），
  * 宁可多问几对，也不要把真正同一件事的两条漏在候选之外。
  * 判定交给模型（precision），职责分离。
+ *
+ * ## ⚠️ 选对顺序：**先保覆盖，再按相似度填**（2026-09-24 改）
+ *
+ * 旧实现是「把所有 ≥ 下限的对按 `sim` 降序 `slice(0, maxPairs)`」——
+ * 那等于**按「像的程度」配额**。而同一批里最像的那几对往往集中在**少数几篇模板稿**上
+ * （体育赛果、例行通报的标题只差一两个字），于是别的条目**一对都问不到**。
+ * 线上实测：kz 一批 53 行 22 对只留 12 对、az 一批 76 行 16 对也只留 12 对。
+ *
+ * 这个缺陷在 L2 关着时是**休眠**的（`candidatePairs` 根本不被调用），
+ * 但一旦打开开关就会静默漏掉本该问到的对。典型受害者就是 2026-09-24 用户截图里
+ * 那三条 Unibank（`id` 4638/4663/4673）—— 它们 sim 只有 0.375/0.387/0.400，
+ * **过得了 0.35 这条线**，却排不进「最像的 12 对」。
+ * 所以这一步必须排在「打开 `SAME_EVENT_JUDGE`」**之前**。
+ *
+ * 两轮：
+ *   1. **覆盖轮** —— 按 `items` 的顺序逐条检查（调用方已按重要性排好：push 端传进来的
+ *      是投资相关性降序），谁还没被任何已选中的对覆盖，就选**它自己最高分的那一对**。
+ *      ⇒ 「重要的条目至少被问过一次」。
+ *   2. **填充轮** —— 还有名额就按 `sim` 降序把其余的对填满，不浪费预算。
+ *
+ * 结果条数不变（= min(候选对数, maxPairs)），只是**留下哪几对**变了。
+ * 排序也变成本函数内部确定性：同分时按 `(a, b)` 兜底，
+ * 避免「同样的输入两次给出不同候选集」让判定稳定性实验失去意义。
  */
 export function candidatePairs<T extends StoryLike>(
   items: T[],
   minSim = PAIR_CANDIDATE_MIN_SIM,
   maxPairs = PAIR_MAX_CANDIDATES,
 ): Array<{ a: number; b: number; sim: number }> {
-  const out: Array<{ a: number; b: number; sim: number }> = [];
+  const all: Array<{ a: number; b: number; sim: number }> = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
       const sim = similarity(items[i].title || '', items[j].title || '');
-      if (sim >= minSim) out.push({ a: i, b: j, sim });
+      if (sim >= minSim) all.push({ a: i, b: j, sim });
     }
   }
-  out.sort((x, y) => y.sim - x.sim);
-  return out.slice(0, maxPairs);
+  if (all.length === 0) return [];
+  all.sort((x, y) => y.sim - x.sim || x.a - y.a || x.b - y.b);
+
+  // 每个条目「自己最高分的那一对」——all 已降序，所以第一次遇到它的那一对就是最高分
+  const bestOf = new Array<number>(items.length).fill(-1);
+  for (let k = 0; k < all.length; k++) {
+    if (bestOf[all[k].a] < 0) bestOf[all[k].a] = k;
+    if (bestOf[all[k].b] < 0) bestOf[all[k].b] = k;
+  }
+
+  const chosen: Array<{ a: number; b: number; sim: number }> = [];
+  const picked = new Set<number>();
+  const covered = new Set<number>();
+
+  // 轮 1：覆盖
+  for (let i = 0; i < items.length && chosen.length < maxPairs; i++) {
+    if (covered.has(i)) continue;
+    const k = bestOf[i];
+    if (k < 0) continue; // 这条跟谁都不够像，覆盖不了，交给别的条目占名额
+    picked.add(k);
+    const p = all[k];
+    chosen.push(p);
+    covered.add(p.a);
+    covered.add(p.b);
+  }
+
+  // 轮 2：按相似度填满剩余名额
+  for (let k = 0; k < all.length && chosen.length < maxPairs; k++) {
+    if (picked.has(k)) continue;
+    picked.add(k);
+    chosen.push(all[k]);
+  }
+
+  return chosen;
 }
+
+/**
+ * 判组提示词的版本号。**改了 `buildPairPrompt` 就把它 +1。**
+ *
+ * ## 为什么需要它
+ *
+ * 提示词是一整块字符串 —— 改了它在接口响应里**完全看不出来**，和
+ * `scheduler.ts` 里那个 cron 时刻是同一类问题（当时靠把 `PUBLISH_SCHEDULES`
+ * 抽成纯数据模块才变得可验证）。
+ *
+ * 判组这条链路尤其需要：改动**唯一的验收手段**是跑影子运行看逐对判定，
+ * 而「这次跑的是新版还是旧版判据」如果没法确认，那 A/B 就毫无意义
+ * （旧版的结论会被当新版的读）。
+ *
+ * ⇒ 版本号随 `GET /api/dedupe-check` 的 `llmJudgeParams.judgePromptVersion` 一起返回。
+ * 版本历史：
+ *   1 —— 2026-09-21 pair 形态上线（只有反例、末句「拿不准就判否」）
+ *   2 —— 2026-09-24 补「同一公司同一产品被多家媒体换词重写」与「标题有笔误」两类**正例**，
+ *        并把「否认某报道 vs 该报道本身」加进反例（依据见 `buildPairPrompt` 的注释）
+ */
+export const JUDGE_PROMPT_VERSION = 2;
 
 /**
  * pair 形态的提示词：每行一对，逐对二选一。
  *
- * ⚠️ **反例清单是拿线上真实误判喂出来的，不是编的。** 改之前先想清楚
+ * ⚠️ **例子全是拿线上真实误判喂出来的，不是编的。** 改之前先想清楚
  * 「新加的例子会不会和已有的例子冲突」，然后跑 `/api/dedupe-check?llm=1&debug=1` 复测。
- * 已收录的反例（都对应一次实测踩坑或实测高危）：
+ *
+ * ## 已收录的判「否」反例（对应用户报的「误合并」）
+ *
  *   - 「土耳其大使馆」vs「以色列大使馆」—— 同类机构、不同主体（相似度 0.55）
  *   - 「金价下跌」vs「金价上涨」—— 方向相反（0.71，但已由 `hasOppositePolarity` 确定性拦掉，
  *     留在提示词里是为了双保险）
@@ -464,8 +542,30 @@ export function candidatePairs<T extends StoryLike>(
  *     同一个城市的两场不同会议**（0.38）。这一条是 2026-09-21 pair 形态首次上线后
  *     实测出现的**唯一一类误判**：group 形态那种「大面积乱合并」已经没有了，
  *     剩下的系统性错误就是这种「同话题、同主办方、不同活动」。
+ *   - **「否认某报道」vs「该报道本身」** —— 2026-09-24 新增。实测 az 一批里模型把
+ *     「阿塞拜疆否认准备对柴油出口实施 90 天禁令的消息」与
+ *     「《Politico》：阿塞拜疆准备对柴油燃料出口实施 90 天禁令」判成同一件事（sim 0.44），
+ *     合并就会**丢掉「官方否认」这个事实**。这属于「同一主题、两条各自独立的事实」。
+ *
+ * ## 已收录的判「是」正例（2026-09-24 新增，**解决用户报的「重复没被合并」**）
+ *
+ *   ⚠️ 原来这份提示词**只有反例、没有正例的细化**，末句还是「拿不准就判否」，
+ *   叠加 `JUDGE_TEMPERATURE = 0`（同一输入恒定输出）与兜底通道 `zhipu-flash`，
+ *   漏合并就变成了**系统性**的。2026-09-24 影子运行实测两类漏合并：
+ *
+ *   1. **同一家公司的同一个产品，几家媒体各写一篇**（用户截图那三条 Unibank，sim 0.375–0.400）：
+ *      「Unibank 推出绿色贷款，年利率从 12% 起」↔「Unibank 为企业主推出绿色信贷：年利率低至 12%」
+ *      —— 模式判「否」。这正是最该判「是」的一类，因为**中文换词重写**恰恰是同一件事的典型形态。
+ *   2. **其中一条标题有笔误/重复字**：「阿塞拜疆与塞尔维亚讨论战略伙伴关系」↔
+ *      「阿塞拜疆与塞尔维亚战略伙伴关系关系」（sim 0.72）—— 模式判「否」。
+ *
+ *   修法是**补正例**而不是把「拿不准判否」删掉：那条兜底对误合并（不可逆）依然必要，
+ *   问题在于模型缺「换词重写也算同一件事」的校准。
+ *
+ * 导出只为回归测试（`scripts/test-dedup.ts`）—— 那边会把「正例/反例/兜底句都还在」钉住，
+ * 防止有人「顺手精简一下提示词」把它们删掉。
  */
-function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLike[]): string {
+export function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLike[]): string {
   const lines = pairs.map((p, idx) => {
     const t1 = (items[p.a].title || '').slice(0, TITLE_MAX);
     const t2 = (items[p.b].title || '').slice(0, TITLE_MAX);
@@ -476,6 +576,11 @@ function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLik
     '',
     '算同一件事：同一次会议 / 同一次签约 / 同一份公告 / 同一条政策 / 同一个项目的重复报道。',
     '即使来源不同、措辞不同、详略不同、细节数字有出入，也算同一件事。',
+    '  · 常见形态一：**同一家公司/机构发布了同一个产品、政策或计划，几家媒体各自写了一篇。**',
+    '    「Unibank 推出绿色贷款，年利率从 12% 起」与「Unibank 推出面向企业主的绿色信贷：年利率低至 12%」',
+    '    讲的是同一次发布 —— **不同媒体换词重写是同一件事最常见的形态**，判「是」。',
+    '  · 常见形态二：**其中一条标题有笔误、重复字或被截断。**',
+    '    「阿塞拜疆与塞尔维亚讨论战略伙伴关系」与「阿塞拜疆与塞尔维亚战略伙伴关系关系」，判「是」。',
     '',
     '判断方法：先在心里把两条各自概括成「谁 + 做了什么 + 在哪」，',
     '只有当两次概括指的是**同一次具体活动**时才判「是」。',
@@ -483,6 +588,9 @@ function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLik
     '不算同一件事（务必判「否」）：',
     '  · 同一个组织 / 同一个城市办的**不同活动**：「上合组织反垄断机构负责人会议在杜尚别举行」',
     '    与「上合组织经贸部长会议在杜尚别举行」—— 主办方和地点都一样，但这是两场不同的会议',
+    '  · **一条是「否认 / 驳斥某条报道」，另一条就是那条报道本身**：',
+    '    「阿塞拜疆否认准备对柴油出口实施 90 天禁令的消息」与',
+    '    「《Politico》：阿塞拜疆准备对柴油燃料出口实施 90 天禁令」—— 合并会丢掉「官方否认」这个事实',
     '  · 不同主体做同类事：「土耳其大使馆祝贺主权日」与「以色列大使馆祝贺主权日」',
     '  · 方向相反：「金价下跌」与「金价上涨」',
     '  · 不同地点/不同项目：「东哈萨克斯坦州建桥」与「阿斯塔纳建桥」',
