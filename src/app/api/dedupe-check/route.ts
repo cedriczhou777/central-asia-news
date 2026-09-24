@@ -34,7 +34,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getArticleIdentities, deleteArticlesByIds } from '@/lib/db-articles';
 import { canonicalUrl, originalTitleKey, similarity } from '@/lib/utils';
-import { dedupeStoriesDeterministic, JUDGE_PROMPT_VERSION } from '@/lib/same-event';
+import { dedupeStoriesDeterministic, JUDGE_PROMPT_VERSION, availablePromptVersions } from '@/lib/same-event';
 import { pushExclusionReason } from '@/lib/article-format';
 import { countryList } from '@/lib/data/countries';
 
@@ -287,6 +287,24 @@ export async function GET(request: NextRequest) {
       sample: groups.slice(0, sampleLimit),
     },
     perCountry,
+    /**
+     * 判组提示词的版本（见 `judge-prompts.JUDGE_PROMPT_VERSION`）。
+     *
+     * ⚠️ **特意放在这个「无论 `llm` 开关如何都会返回」的对象里**，而不是
+     * `llmJudgeParams` 内。原先它只随 `llm=1` 出现，于是「确认线上跑的是哪版判据」
+     * 这件事本身要花一次模型调用 —— 部署指纹被放在了最贵的分支上，
+     * 这不是取舍问题，是**放错了位置**（2026-09-24 修正）。
+     * 指纹必须零成本可读：拿它当**部署指纹**用，期望值见 `judge-prompts` 的版本历史。
+     */
+    judgePromptVersion: JUDGE_PROMPT_VERSION,
+    /**
+     * 可以拿来 A/B 的版本清单（`&pv=` 参数）。
+     *
+     * 报出来是因为「对照」这件事容易悄悄退化：如果哪天有人把 `JUDGE_PROMPTS` 里的
+     * 老版本删了、只剩一个，`pv=1` 就再也跑不出基线，而接口看起来一切正常。
+     * 清单长度 < 2 时，`pv` 这个参数已经在骗人。
+     */
+    judgePromptVersions: availablePromptVersions(),
   };
 
   // 可选：真的调一次模型，验证 L2 通道通不通（每国 1 次调用）
@@ -310,6 +328,32 @@ export async function GET(request: NextRequest) {
           : undefined; // auto：沿用通道默认值
     const taskMode = searchParams.get('mode') === 'group' ? 'group' : 'pair';
     const debug = searchParams.get('debug') === '1';
+    /**
+     * 判组提示词版本（`pv=1` / `pv=3`）。不传 = 当前版本。
+     *
+     * 与 `judge=think|nothink`、`mode=pair|group` 同一套路子：让**同一份部署**里
+     * 能同批数据对比两种判据，免得每试一版都等一轮构建。
+     *
+     * 非法值**当场 400**，不静默回退 —— 回退会让 `pv=9` 这类手误跑出一个
+     * 看起来正常的「当前版本」结果，而那正是这套参数要消灭的「分不清跑的是哪版」。
+     */
+    const pvRaw = searchParams.get('pv');
+    let promptVersion: number | undefined;
+    if (pvRaw !== null && pvRaw !== '') {
+      promptVersion = Number(pvRaw);
+      const usable = availablePromptVersions();
+      if (!Number.isInteger(promptVersion) || !usable.includes(promptVersion)) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `未知的判组提示词版本 pv=${pvRaw}；可用：${usable.join(', ')}`,
+            judgePromptVersions: usable,
+            judgePromptVersion: JUDGE_PROMPT_VERSION,
+          },
+          { status: 400 },
+        );
+      }
+    }
     const perCountryLimit = Math.min(Number(searchParams.get('limit')) || 60, 200);
 
     /** 因为「不会被推送」而没进体检的国家（当前只有 intl）—— 报出来，别让它静默消失 */
@@ -407,7 +451,7 @@ export async function GET(request: NextRequest) {
       const { llm } = await dedupeStories(slice as never[], {
         // 显式打开：体检的目的就是验证 L2，不能受生产默认值（关闭）影响
         useLlm: true,
-        judge: { extraBody, collectRaw: debug, mode: taskMode },
+        judge: { extraBody, collectRaw: debug, mode: taskMode, promptVersion },
       });
       // 候选对里被模型判为「是」的那些，配上相似度 —— 相似度是召回的排序依据，
       // 把它和模型的判定并排看，才能分清「模型判错」与「候选没召回」。
@@ -465,14 +509,13 @@ export async function GET(request: NextRequest) {
       perCountryLimit,
       debug,
       /**
-       * 判组提示词的版本（见 `same-event.JUDGE_PROMPT_VERSION`）。
+       * **本次实际使用的**判组提示词版本。
        *
-       * 为什么必须带出来：提示词改动**在响应里本来完全不可见**，
-       * 而影子运行的结论是按「这次跑的判据」解读的 —— 版本号对不上，
-       * 结论就可能被当成新版/旧版读反（本项目已经因为「分不清跑的是哪版代码」误判过一次）。
-       * 拿它当**部署指纹**用：期望值 `2`。
+       * ⚠️ 与顶层的 `judgePromptVersion`（= 当前版本，永远可读）不同，这个字段是
+       * 「这一次调用真的用了哪版」—— 传了 `pv=1` 时它会是 1。
+       * A/B 记录里**必须引用这个值**，引用顶层那个会把对照组的数据标成新版本。
        */
-      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      judgePromptVersionUsed: promptVersion ?? JUDGE_PROMPT_VERSION,
       /**
        * 体检口径说明：输入已套与 `push` 相同的选稿判据（分类/空壳文/国家相关性），
        * 且只覆盖 `push` 会遍历的国家。**改这几条等于改体检结论的含义**，

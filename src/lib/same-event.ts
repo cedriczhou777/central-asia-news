@@ -45,6 +45,22 @@
  */
 import { canonicalUrl, similarity, originalTitleKey } from './utils';
 import { askLlmJson } from './translate';
+// 判组提示词与它的版本号都在 `judge-prompts` 里 —— 那边同时冻着 v1 对照组。
+// `TITLE_MAX` 也从那里取，保证标题截断长度两边只有一个真值。
+//
+// ⚠️ 必须**先 import 再 export**：`export { x } from './y'` 只是转发，
+// **不会在本模块建立绑定**，本文件内部用 `buildPairPrompt` 会报未定义
+// （2026-09-24 踩过，靠 `test:dedup` 的端到端断言抓到 —— 类型检查是后知后觉的）。
+import {
+  TITLE_MAX,
+  JUDGE_PROMPT_VERSION,
+  buildPairPrompt,
+  availablePromptVersions,
+  promptBuilderFor,
+} from './judge-prompts';
+
+// 转出去，保持既有调用点（`/api/dedupe-check`、`scripts/test-dedup.ts`）的 import 路径不变。
+export { TITLE_MAX, JUDGE_PROMPT_VERSION, buildPairPrompt, availablePromptVersions };
 
 /** 判定「是不是同一件事」所需的最小字段集。DB 行与抓取中间产物都能满足。 */
 export interface StoryLike {
@@ -88,8 +104,14 @@ export interface DedupResult<T> {
     /** 本次实际用的任务形态（`pair` = 逐对二选一，`group` = 长串找组，已停用） */
     mode: JudgeMode;
     groups: number[][];
-    /** pair 形态：模型判为「同一件事」的下标对（原样保留，未做合并） */
-    pairs?: Array<{ a: number; b: number }>;
+    /**
+     * pair 形态：模型判为「同一件事」的下标对（原样保留，未做合并）。
+     *
+     * `sim` 与 `vetoed`/`declined` 同口径（三条列表形状一致），这样体检报告与
+     * `POST /api/judge-pairs` 的输出可以一视同仁地读，不必为「判是的」单独再算一遍
+     * 相似度（两处各算一次，迟早会算出不一致的数字 —— 本项目栽过同类跟头）。
+     */
+    pairs?: Array<{ a: number; b: number; sim: number }>;
     /** pair 形态：本轮问了多少个候选对 */
     candidateCount?: number;
     /** pair 形态：被确定性判据（反向极性）拦下、没问模型的对 */
@@ -386,8 +408,7 @@ export const PAIR_MAX_CANDIDATES = 12;
  * 让「模型到底是不是在乱答」由人看着原始对判断，而不是交给一个拍出来的阈值。
  */
 
-/** 标题/摘要截断长度，防止个别超长正文把单次请求撑爆。 */
-const TITLE_MAX = 80;
+/** 摘要截断长度，防止个别超长正文把单次请求撑爆。（标题长度见 `judge-prompts.TITLE_MAX`） */
 const SUMMARY_MAX = 60;
 
 /** 只有「方向明确、且不会在无关语境里出现」的词才收。宁可少收，也不要误判。 */
@@ -507,107 +528,16 @@ export function candidatePairs<T extends StoryLike>(
 }
 
 /**
- * 判组提示词的版本号。**改了 `buildPairPrompt` 就把它 +1。**
+ * 判组提示词（及其版本号）已移到 `./judge-prompts` —— 那边是**版本注册表**，
+ * 冻着 v1 对照组，并支持按 `pv=` 切换版本做 A/B。改动理由与逐版判据见那个文件。
  *
- * ## 为什么需要它
+ * 这里只留一条**属于本文件**的实测结论（它解释的是召回层，不是提示词）：
  *
- * 提示词是一整块字符串 —— 改了它在接口响应里**完全看不出来**，和
- * `scheduler.ts` 里那个 cron 时刻是同一类问题（当时靠把 `PUBLISH_SCHEDULES`
- * 抽成纯数据模块才变得可验证）。
- *
- * 判组这条链路尤其需要：改动**唯一的验收手段**是跑影子运行看逐对判定，
- * 而「这次跑的是新版还是旧版判据」如果没法确认，那 A/B 就毫无意义
- * （旧版的结论会被当新版的读）。
- *
- * ⇒ 版本号随 `GET /api/dedupe-check` 的 `llmJudgeParams.judgePromptVersion` 一起返回。
- * 版本历史：
- *   1 —— 2026-09-21 pair 形态上线（只有反例、末句「拿不准就判否」）
- *   2 —— 2026-09-24 补「同一公司同一产品被多家媒体换词重写」与「标题有笔误」两类**正例**，
- *        并把「否认某报道 vs 该报道本身」加进反例（依据见 `buildPairPrompt` 的注释）
+ *   · 「上合组织反垄断机构负责人会议在杜尚别举行」vs「上合组织经贸部长会议在杜尚别举行」
+ *     （sim 0.38）是 2026-09-21 pair 形态上线后实测出的**唯一一类系统性误判**：
+ *     **同话题、同主办方、不同活动**。group 形态那种「大面积乱合并」已经没有了，
+ *     剩下的就是这一类，它同时说明了「话题相同 ≠ 同一件事」为什么必须写进判据。
  */
-export const JUDGE_PROMPT_VERSION = 2;
-
-/**
- * pair 形态的提示词：每行一对，逐对二选一。
- *
- * ⚠️ **例子全是拿线上真实误判喂出来的，不是编的。** 改之前先想清楚
- * 「新加的例子会不会和已有的例子冲突」，然后跑 `/api/dedupe-check?llm=1&debug=1` 复测。
- *
- * ## 已收录的判「否」反例（对应用户报的「误合并」）
- *
- *   - 「土耳其大使馆」vs「以色列大使馆」—— 同类机构、不同主体（相似度 0.55）
- *   - 「金价下跌」vs「金价上涨」—— 方向相反（0.71，但已由 `hasOppositePolarity` 确定性拦掉，
- *     留在提示词里是为了双保险）
- *   - 「上合组织反垄断机构负责人会议」vs「上合组织经贸部长会议」—— **同一个组织、
- *     同一个城市的两场不同会议**（0.38）。这一条是 2026-09-21 pair 形态首次上线后
- *     实测出现的**唯一一类误判**：group 形态那种「大面积乱合并」已经没有了，
- *     剩下的系统性错误就是这种「同话题、同主办方、不同活动」。
- *   - **「否认某报道」vs「该报道本身」** —— 2026-09-24 新增。实测 az 一批里模型把
- *     「阿塞拜疆否认准备对柴油出口实施 90 天禁令的消息」与
- *     「《Politico》：阿塞拜疆准备对柴油燃料出口实施 90 天禁令」判成同一件事（sim 0.44），
- *     合并就会**丢掉「官方否认」这个事实**。这属于「同一主题、两条各自独立的事实」。
- *
- * ## 已收录的判「是」正例（2026-09-24 新增，**解决用户报的「重复没被合并」**）
- *
- *   ⚠️ 原来这份提示词**只有反例、没有正例的细化**，末句还是「拿不准就判否」，
- *   叠加 `JUDGE_TEMPERATURE = 0`（同一输入恒定输出）与兜底通道 `zhipu-flash`，
- *   漏合并就变成了**系统性**的。2026-09-24 影子运行实测两类漏合并：
- *
- *   1. **同一家公司的同一个产品，几家媒体各写一篇**（用户截图那三条 Unibank，sim 0.375–0.400）：
- *      「Unibank 推出绿色贷款，年利率从 12% 起」↔「Unibank 为企业主推出绿色信贷：年利率低至 12%」
- *      —— 模式判「否」。这正是最该判「是」的一类，因为**中文换词重写**恰恰是同一件事的典型形态。
- *   2. **其中一条标题有笔误/重复字**：「阿塞拜疆与塞尔维亚讨论战略伙伴关系」↔
- *      「阿塞拜疆与塞尔维亚战略伙伴关系关系」（sim 0.72）—— 模式判「否」。
- *
- *   修法是**补正例**而不是把「拿不准判否」删掉：那条兜底对误合并（不可逆）依然必要，
- *   问题在于模型缺「换词重写也算同一件事」的校准。
- *
- * 导出只为回归测试（`scripts/test-dedup.ts`）—— 那边会把「正例/反例/兜底句都还在」钉住，
- * 防止有人「顺手精简一下提示词」把它们删掉。
- */
-export function buildPairPrompt(pairs: Array<{ a: number; b: number }>, items: StoryLike[]): string {
-  const lines = pairs.map((p, idx) => {
-    const t1 = (items[p.a].title || '').slice(0, TITLE_MAX);
-    const t2 = (items[p.b].title || '').slice(0, TITLE_MAX);
-    return `${idx} | ${t1} || ${t2}`;
-  });
-  return [
-    '下面是若干对新闻标题（每对一行，行首是编号）。请**逐对**判断：这一对讲的是不是同一件事。',
-    '',
-    '算同一件事：同一次会议 / 同一次签约 / 同一份公告 / 同一条政策 / 同一个项目的重复报道。',
-    '即使来源不同、措辞不同、详略不同、细节数字有出入，也算同一件事。',
-    '  · 常见形态一：**同一家公司/机构发布了同一个产品、政策或计划，几家媒体各自写了一篇。**',
-    '    「Unibank 推出绿色贷款，年利率从 12% 起」与「Unibank 推出面向企业主的绿色信贷：年利率低至 12%」',
-    '    讲的是同一次发布 —— **不同媒体换词重写是同一件事最常见的形态**，判「是」。',
-    '  · 常见形态二：**其中一条标题有笔误、重复字或被截断。**',
-    '    「阿塞拜疆与塞尔维亚讨论战略伙伴关系」与「阿塞拜疆与塞尔维亚战略伙伴关系关系」，判「是」。',
-    '',
-    '判断方法：先在心里把两条各自概括成「谁 + 做了什么 + 在哪」，',
-    '只有当两次概括指的是**同一次具体活动**时才判「是」。',
-    '',
-    '不算同一件事（务必判「否」）：',
-    '  · 同一个组织 / 同一个城市办的**不同活动**：「上合组织反垄断机构负责人会议在杜尚别举行」',
-    '    与「上合组织经贸部长会议在杜尚别举行」—— 主办方和地点都一样，但这是两场不同的会议',
-    '  · **一条是「否认 / 驳斥某条报道」，另一条就是那条报道本身**：',
-    '    「阿塞拜疆否认准备对柴油出口实施 90 天禁令的消息」与',
-    '    「《Politico》：阿塞拜疆准备对柴油燃料出口实施 90 天禁令」—— 合并会丢掉「官方否认」这个事实',
-    '  · 不同主体做同类事：「土耳其大使馆祝贺主权日」与「以色列大使馆祝贺主权日」',
-    '  · 方向相反：「金价下跌」与「金价上涨」',
-    '  · 不同地点/不同项目：「东哈萨克斯坦州建桥」与「阿斯塔纳建桥」',
-    '  · 不同人物：「运动员甲夺金」与「运动员乙夺金」',
-    '  · 只是同属一个话题、同一类机构、同一个州/部委 —— 话题相同不等于同一件事',
-    '  · 两条讲的是同一主题但各自独立发生的不同事件',
-    '',
-    '拿不准就判「否」：把两条不同的新闻合成一条是**丢信息**，比留下重复更糟。',
-    '',
-    '只输出 JSON，不要解释。把**判为是同一件事**的编号列出来：',
-    '{"same": [1, 4]}',
-    '若一对都不是，输出 {"same": []}。',
-    '',
-    '# | 标题A || 标题B',
-    ...lines,
-  ].join('\n');
-}
 
 /**
  * pair 形态的解析。越界编号丢掉，返回去重后的编号数组；
@@ -737,6 +667,15 @@ export interface JudgeOptions {
    * 判为「是」的对**确实**删对了条目、被极性拦下的对**确实**一条都没删。
    */
   ask?: AskFn;
+  /**
+   * 判组提示词的版本（见 `judge-prompts.JUDGE_PROMPTS`）。不传 = 用当前版本。
+   *
+   * 只有体检接口的 `pv=` 参数会传它 —— 那是**同一批数据上做 A/B 的唯一手段**：
+   * 窗口会随日期滑动，两次运行喂给模型的候选对本来就不一样，
+   * 不锁住这个变量就分不清「结论变了」是提示词改的还是今天新闻换了。
+   * 生产链路（`fetch-news` / `wechat/push`）**不要传**，永远走当前版本。
+   */
+  promptVersion?: number;
 }
 
 /** 模型调用出口的签名：只吃提示词，返回文本或错误（与 `askLlmJson` 的返回同形）。 */
@@ -836,46 +775,75 @@ function resolveAsk(options: JudgeOptions): AskFn {
     });
 }
 
-/**
- * pair 形态：只让模型对候选对做二选一，返回「判为同一件事」的下标对。
- *
- * 无候选对、调用失败、返回不合法 —— 一律返回空数组（= 不合并），
- * 并带上 `error` 说明原因。**默认不合并**是这条链路的既定方向。
- *
- * `vetoed` 是**没问模型**就被确定性判据拦下的对（当前只有反向极性，见
- * {@link hasOppositePolarity}）。把它单独报出来有两个作用：
- * 一是体检时能确认「该拦的确实拦住了」，二是它的数量能反映候选里的噪声水平 ——
- * 如果某些国家每轮都否决一堆，说明召回下限可能该往上调。
- *
- * 返回 `accepted/candidateCount` 就是**接受率**。它**不参与任何自动判定**，
- * 只是报出来给人看（见文件里「为什么没有比例熔断」的说明）。
- */
-export async function judgeSameEventPairs<
-  T extends StoryLike & { category?: string | null; summary?: string | null },
->(
-  items: T[],
-  options: JudgeOptions = {},
-): Promise<{
-  pairs: Array<{ a: number; b: number }>;
+/** `judgeSameEventPairs` / `judgeExplicitPairs` 共用的返回形状。 */
+export interface PairJudgeResult {
+  /**
+   * 模型判为「同一件事」的对（下标是 `items` 里的下标）。
+   *
+   * `sim` 与 `vetoed`/`declined` 同口径 —— 三条列表形状一致，
+   * 调用方（体检、固定语料对照）可以一视同仁地读，不用为「判是的」
+   * 单独再算一遍相似度（那会在两处算出可能不一致的数字）。
+   */
+  pairs: Array<{ a: number; b: number; sim: number }>;
+  /** 这次送进去问了几对（含被极性拦下的；被拦的不占 `pairs`/`declined`） */
   candidateCount: number;
+  /** 没问模型就被确定性判据（反向极性）拦下的对 */
   vetoed: Array<{ a: number; b: number; sim: number }>;
+  /**
+   * 问了模型、但模型判「否」的对。
+   * **这是「漏合并」的唯一可见窗口** —— 只盯 `pairs`（判是的）会让人误以为
+   * 剩下的都判对了，实际上真重复被否掉就永久留成两条，没人会知道。
+   */
   declined: Array<{ a: number; b: number; sim: number }>;
   /** 回答这次判定的通道名（见 `DedupResult.llm.provider` 的说明） */
   provider?: string;
   error?: string;
   raw?: string[];
-}> {
-  const all = candidatePairs(items);
+}
+
+/**
+ * pair 形态：只让模型对**给定的**这些对做二选一。
+ *
+ * 与 {@link judgeSameEventPairs} 的唯一区别是**谁决定问哪些对**：那个从 `items`
+ * 自己召回（生产链路），这个照单全收（体检用的固定语料，见 `/api/judge-pairs`）。
+ * 判定、极性否决、解析、下标映射**共用这一份实现** —— 本项目已经因为
+ * 「同一条判据两处各写一份」栽过两次；固定语料的对照要是靠复制一份逻辑来做，
+ * 测的就不是生产那条链路了，那对照也就白做。
+ *
+ * 无配对、调用失败、返回不合法 —— 一律返回空数组（= 不合并），并带上 `error`。
+ * **默认不合并**是这条链路的既定方向。
+ *
+ * `vetoed` 是**没问模型**就被确定性判据拦下的对（当前只有反向极性，见
+ * {@link hasOppositePolarity}）。单独报出来有两个作用：一是体检时能确认
+ * 「该拦的确实拦住了」，二是它的数量能反映候选里的噪声水平 ——
+ * 如果某些国家每轮都否决一堆，说明召回下限可能该往上调。
+ *
+ * 返回的 `pairs.length / candidateCount` 就是**接受率**。它**不参与任何自动判定**，
+ * 只是报出来给人看（见文件里「为什么没有比例熔断」的说明）。
+ */
+export async function judgeExplicitPairs<T extends StoryLike>(
+  pairs: Array<{ a: number; b: number }>,
+  items: T[],
+  options: JudgeOptions = {},
+): Promise<PairJudgeResult> {
+  // 相似度按 `candidatePairs` 的同一口径重算（同函数、同入参），
+  // 这样「报出来的 sim」在两条入口下含义一致。
+  const all = pairs.map((p) => ({
+    a: p.a,
+    b: p.b,
+    sim: similarity(items[p.a]?.title || '', items[p.b]?.title || ''),
+  }));
+
   // 反向极性对在问模型之前就拦掉（确定性判据，不让概率模型碰）
   const asked: typeof all = [];
   const vetoed: typeof all = [];
   for (const c of all) {
-    if (hasOppositePolarity(items[c.a].title || '', items[c.b].title || '')) vetoed.push(c);
+    if (hasOppositePolarity(items[c.a]?.title || '', items[c.b]?.title || '')) vetoed.push(c);
     else asked.push(c);
   }
   if (asked.length === 0) return { pairs: [], candidateCount: all.length, vetoed, declined: [] };
 
-  const res = await resolveAsk(options)(buildPairPrompt(asked, items));
+  const res = await resolveAsk(options)(buildPairPrompt(asked, items, options.promptVersion));
   const raw = options.collectRaw ? [res.ok ? res.text : `调用失败：${'error' in res ? res.error : '未知'}`] : undefined;
   if (!res.ok) {
     return {
@@ -904,7 +872,7 @@ export async function judgeSameEventPairs<
   // 否则被否决的对会让后面每一对的下标都错位一格 —— 那会静默删错新闻。
   const accepted = new Set(verdict);
   return {
-    pairs: verdict.map((i) => ({ a: asked[i].a, b: asked[i].b })),
+    pairs: verdict.map((i) => ({ a: asked[i].a, b: asked[i].b, sim: asked[i].sim })),
     candidateCount: all.length,
     vetoed,
     // 被模型判「否」的对也要报出来：只看「判是的」没法发现**漏合并**，
@@ -913,6 +881,23 @@ export async function judgeSameEventPairs<
     ...(res.provider ? { provider: res.provider } : {}),
     raw,
   };
+}
+
+/**
+ * pair 形态的**生产入口**：先从 `items` 召回候选对（{@link candidatePairs}），
+ * 再交给 {@link judgeExplicitPairs} 判定。
+ *
+ * 特意只留这一行 —— 召回策略与判定实现分开，是为了让「改成什么形态」
+ * （pair / group）、「召回下限多少」、「提示词哪一版」能各自独立地验证，
+ * 而不是绞在一起只能整体试。
+ */
+export async function judgeSameEventPairs<
+  T extends StoryLike & { category?: string | null; summary?: string | null },
+>(
+  items: T[],
+  options: JudgeOptions = {},
+): Promise<PairJudgeResult> {
+  return judgeExplicitPairs(candidatePairs(items), items, options);
 }
 
 /**

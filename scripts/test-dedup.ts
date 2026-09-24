@@ -21,6 +21,7 @@ import {
   similarity,
 } from '../src/lib/utils';
 import {
+  availablePromptVersions,
   buildPairPrompt,
   candidatePairs,
   clusterPairs,
@@ -31,6 +32,7 @@ import {
   identityKeys,
   isSameTitle,
   isSameTitleText,
+  judgeExplicitPairs,
   JUDGE_PROMPT_VERSION,
   JUDGE_TEMPERATURE,
   PAIR_CANDIDATE_MIN_SIM,
@@ -38,8 +40,12 @@ import {
   parseEventGroups,
   parsePairVerdict,
   TITLE_IDENTICAL_MIN_SIM,
+  TITLE_MAX,
   type StoryLike,
 } from '../src/lib/same-event';
+import { promptBuilderFor } from '../src/lib/judge-prompts';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 // ----- 极简断言 -----
 
@@ -830,7 +836,16 @@ async function llmPipelineChecks(): Promise<void> {
     ok('L2 确实跑了并判定成功', res.llm.ran && res.llm.ok, JSON.stringify(res.llm).slice(0, 160));
     ok('候选对数是 2（金价对 + 项目对）', res.llm.candidateCount === 2, String(res.llm.candidateCount));
     ok('金价对被记为 vetoed', res.llm.vetoed?.length === 1, JSON.stringify(res.llm.vetoed));
-    ok('判「是」的对映射回原下标 0,1', JSON.stringify(res.llm.pairs) === '[{"a":0,"b":1}]', JSON.stringify(res.llm.pairs));
+    // 只比 a/b：`pairs` 现在还带 `sim`（三条列表统一形状，见 `PairJudgeResult`），
+    // 用整串 JSON 比对会把「多了一个字段」误报成「下标映射错了」——
+    // 这条断言要钉的是**下标**，不该被字段增减牵连。
+    const abOf = (ps?: Array<{ a: number; b: number }>) => JSON.stringify(ps?.map((p) => ({ a: p.a, b: p.b })));
+    ok('判「是」的对映射回原下标 0,1', abOf(res.llm.pairs) === '[{"a":0,"b":1}]', JSON.stringify(res.llm.pairs));
+    ok(
+      '判「是」的对也带 sim（与 vetoed / declined 同形状）',
+      typeof res.llm.pairs?.[0]?.sim === 'number',
+      JSON.stringify(res.llm.pairs),
+    );
 
     // ★ 整套护栏的核心断言：被极性拦下的对**根本没有进入提示词**，
     //   模型连看到它的机会都没有 —— 所以「答什么都无效」是结构上成立的，
@@ -1003,6 +1018,139 @@ if (dataPath) {
   }
 }
 
+// ----- 判组提示词版本与固定语料 -----
+//
+// 这一节不联网、不调模型，钉的是**让 A/B 这件事本身成立**的前提：
+//   · 指定配对入口真的「不过召回」，且下标映射没错位（错位 = 静默删错新闻）；
+//   · 版本注册表里对照组与当前版本**确实不同**（相同的话 pv 参数就是假的）；
+//   · 固定语料是双向的（既有该合并的、也有该保留的），且标注都带理由。
+//
+// 这三条一旦破掉，`scripts/ab-judge-prompt.ts` 跑出来的对照表会**看起来正常**
+// 但结论无效 —— 那正是最难发现的一类失效，所以必须用断言钉住而不是靠人记得。
+async function promptVersionChecks(): Promise<void> {
+  section('判组提示词：指定配对入口（不过召回 + 下标映射）');
+  {
+    // 两条毫不相干的标题。先用 candidatePairs 钉住**前提**：
+    // 它们不会被召回 —— 否则下一句就证明不了「指定配对不走召回」。
+    const items = [
+      { title: '哈萨克斯坦总统签署赦免法令' },
+      { title: '塔吉克斯坦举行马拉松比赛' },
+    ];
+    const recalled = candidatePairs(items);
+    ok('前提：这对陌生标题不会被 candidatePairs 召回', recalled.length === 0, `实际召回 ${recalled.length} 对`);
+
+    const { seen, ask } = fakeAsk(() => '{"same": [0]}');
+    const res = await judgeExplicitPairs([{ a: 0, b: 1 }], items, { ask });
+    ok('指定配对即使低于召回下限也照样问模型', seen.length === 1 && res.pairs.length === 1, `seen=${seen.length} pairs=${res.pairs.length}`);
+    ok('指定配对的标题原样进了提示词', Boolean(seen[0]?.includes('塔吉克斯坦举行马拉松比赛')));
+    ok('candidateCount = 给定的对数（不是召回出来的对数）', res.candidateCount === 1, String(res.candidateCount));
+  }
+
+  section('判组提示词：极性否决不进提示词 + 下标映射');
+  {
+    // 前一对方向相反（会被确定性拦下），后一对正常。
+    // 关键在**下标**：模型答的是 `asked` 里的第 0 个，映射回原数组必须是 (2,3)。
+    // 这一条接错，被否决的对会让后面每对下标错位一格，静默删错新闻。
+    const items = [
+      { title: '全球市场黄金和白银价格下跌' },
+      { title: '全球市场黄金和白银价格上涨' },
+      { title: '阿塞拜疆总统签署赦免令开始执行' },
+      { title: '阿塞拜疆总统签署大赦令开始执行' },
+    ];
+    const { seen, ask } = fakeAsk(() => '{"same": [0]}');
+    const res = await judgeExplicitPairs([{ a: 0, b: 1 }, { a: 2, b: 3 }], items, { ask });
+
+    ok('反向极性的对被确定性拦下', res.vetoed.length === 1 && res.vetoed[0]?.a === 0, JSON.stringify(res.vetoed));
+    ok('被拦下的对不出现在提示词里', seen.length === 1 && !seen[0].includes('黄金'), '提示词里出现了被拦下的对');
+    ok('提示词里只剩 1 行配对', seen[0].split('\n').filter((l) => /^\d+ \| /.test(l)).length === 1);
+    ok('下标映射回原数组（不被否决的对错位）', res.pairs[0]?.a === 2 && res.pairs[0]?.b === 3, JSON.stringify(res.pairs));
+    ok('三条列表都带 sim', res.pairs.every((p) => typeof p.sim === 'number') && res.vetoed.every((p) => typeof p.sim === 'number'));
+    ok(
+      'sim 与 similarity() 同口径',
+      Math.abs((res.pairs[0]?.sim ?? -1) - similarity(items[2].title, items[3].title)) < 1e-9,
+      String(res.pairs[0]?.sim),
+    );
+  }
+
+  section('判组提示词：版本注册表');
+  {
+    const versions = availablePromptVersions();
+    ok('注册表里至少 2 个版本（否则 pv 参数是假的）', versions.length >= 2, versions.join(','));
+    ok('包含冻结的 v1 对照组', versions.includes(1), versions.join(','));
+    ok('包含当前版本', versions.includes(JUDGE_PROMPT_VERSION), String(JUDGE_PROMPT_VERSION));
+    ok('当前版本是最大版本号', JUDGE_PROMPT_VERSION === Math.max(...versions), `${JUDGE_PROMPT_VERSION} vs ${versions.join(',')}`);
+    ok('当前版本 ≥ 3（v2 的校准已被 v3 取代）', JUDGE_PROMPT_VERSION >= 3, String(JUDGE_PROMPT_VERSION));
+
+    const items = [{ title: '甲' }, { title: '乙' }];
+    const pairs = [{ a: 0, b: 1 }];
+    ok('不传版本 = 当前版本', buildPairPrompt(pairs, items) === buildPairPrompt(pairs, items, JUDGE_PROMPT_VERSION));
+    ok(
+      '对照组与当前版本的提示词**确实不同**（相同的话 A/B 是假的）',
+      promptBuilderFor(1)(pairs, items) !== promptBuilderFor(JUDGE_PROMPT_VERSION)(pairs, items),
+    );
+
+    let threw = false;
+    try {
+      promptBuilderFor(99);
+    } catch {
+      threw = true;
+    }
+    ok('未知版本抛错，不静默回退到最新版', threw);
+    ok('TITLE_MAX 仍是 80（模块搬家的护栏）', TITLE_MAX === 80, String(TITLE_MAX));
+  }
+
+  section('判组提示词：当前版本（v3）的校准要点');
+  {
+    const p = promptBuilderFor(JUDGE_PROMPT_VERSION)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
+    ok('保留末句兜底「拿不准就判否」（误合并不可逆，这条不能删）', p.includes('拿不准就判「否」'));
+    ok('有「相反事实」的第一步检查（v2 只加例子不管用）', p.includes('相反事实'));
+    ok('点明「否认」是核心事实而非修饰语', p.includes('它就是那条新闻的核心事实'));
+    ok('否认反例的那对真实标题在', p.includes('否认准备对柴油出口实施 90 天禁令'));
+    ok('「不同主体」给了可操作判据', p.includes('不同的具体对象') && p.includes('不同公司名'));
+    ok('明说「同义指代不算不同主体」（v2 回退的根因）', p.includes('同义指代'));
+    ok('正例形态三在（近义指代 + 数字表述）', p.includes('常见形态三') && p.includes('近 50 个 / 约 50 个'));
+    ok('Unibank 那条正例仍在（用户报的重复）', p.includes('Unibank 推出绿色贷款'));
+
+    const v1 = promptBuilderFor(1)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
+    ok('v1 对照组没有正例细化（它就该是校准前那版）', !v1.includes('常见形态'));
+    ok('v1 保留自己的兜底句', v1.includes('拿不准就判「否」'));
+  }
+
+  section('判组提示词：固定语料（gold set）');
+  {
+    type GoldPair = { a?: string; b?: string; expect?: string; note?: string };
+    const goldPath = resolve(process.cwd(), 'scripts/fixtures/judge-gold.json');
+    // 读失败时给空数组而不是让整节挂掉：这一节要报的是「语料合不合格」，
+    // 读取异常本身就是最该被报出来的那一条。
+    let pairs: GoldPair[] = [];
+    try {
+      const gold = JSON.parse(readFileSync(goldPath, 'utf8')) as { pairs?: GoldPair[] };
+      pairs = gold.pairs ?? [];
+    } catch (err) {
+      ok('固定语料可读', false, `${goldPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    ok('固定语料可读且有内容', pairs.length >= 10, `${pairs.length} 对`);
+
+    const same = pairs.filter((x) => x.expect === 'same');
+    const diff = pairs.filter((x) => x.expect === 'diff');
+    // 这条是项目已经记载过的教训：只测一边一定会把判据调歪。
+    ok('双向语料：既要「必须合并」也要「必须保留」', same.length >= 3 && diff.length >= 3, `same=${same.length} diff=${diff.length}`);
+    ok('每对都有 a / b 且非空', pairs.every((x) => (x.a ?? '').trim() && (x.b ?? '').trim()));
+    ok('expect 只有 same / diff', pairs.every((x) => x.expect === 'same' || x.expect === 'diff'));
+    // 没有理由的标注不能当金标：将来有人觉得「这对我看是判否」时，
+    // 必须能看到当初为什么标成「是」。
+    ok('每对都写了标注理由', pairs.every((x) => (x.note ?? '').trim().length > 0));
+    // 标题超过 TITLE_MAX 会被提示词截断 —— 那 A/B 测的就是标题前缀而不是整条标题，
+    // 而语料是要长期复用的，不该默默丢掉尾巴。
+    const tooLong = pairs.filter((x) => (x.a ?? '').length > TITLE_MAX || (x.b ?? '').length > TITLE_MAX);
+    ok(`标题都不超过 TITLE_MAX(${TITLE_MAX})，不会被提示词截断`, tooLong.length === 0, tooLong.map((x) => x.a).join(' / '));
+    // 语料必须含用户报的这两类，否则「固定语料」与真实缺陷脱节
+    ok('语料含用户报的 Unibank 重复（该合并）', pairs.some((x) => (x.a ?? '').includes('Unibank') && x.expect === 'same'));
+    ok('语料含「否认某报道 vs 该报道本身」（该保留）', pairs.some((x) => (x.a ?? '').includes('否认准备对柴油出口') && x.expect === 'diff'));
+    ok('语料含 v2 的回退点（中国 50 个联合项目）', pairs.some((x) => (x.a ?? '').includes('主要企业') && x.expect === 'same'));
+  }
+}
+
 // ----- 汇总 -----
 
 function summarize() {
@@ -1017,11 +1165,12 @@ function summarize() {
   }
 }
 
-// 异步检查（modeChecks + llmPipelineChecks）必须跑完再汇总，
+// 异步检查（llmPipelineChecks + modeChecks + promptVersionChecks）必须跑完再汇总，
 // 否则这些断言会在打印结果之后才执行、不计入总数。
 // 顺序：先测装配（端到端），再测配置通路 —— 端到端挂了的话更该先看到。
 llmPipelineChecks()
   .then(modeChecks)
+  .then(promptVersionChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);
