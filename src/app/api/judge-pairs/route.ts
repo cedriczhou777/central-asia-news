@@ -11,10 +11,16 @@
  * 这个入口把「配对集合」也变成入参：同一批**写死的**标题对，配 `pv=1|3`
  * 切换判据版本，**唯一的变量就只剩提示词**。
  *
+ * ⚠️ 但「只剩提示词」这件事**还得再钉一个参数才成立**：`provider`。降级链按
+ * `PROVIDERS` 顺序取第一个不报错的通道，谁不报错取决于这一刻谁被 429 限流 ——
+ * 实测同一次 A/B 两臂就落到了不同通道（pv=1→zhipu、pv=3→zhipu-flash）。
+ * 不钉通道，比出来的差异分不清是提示词还是型号。**跑 A/B 一律带上 `provider`**。
+ *
  * ## 用法
  *
  *   curl -s -X POST "$BASE/api/judge-pairs" -H 'content-type: application/json' -d '{
  *     "pv": 1,
+ *     "provider": "zhipu-flash",
  *     "pairs": [
  *       {"a": "「Unibank 推出…」原文", "b": "另一条标题", "expect": "same"},
  *       {"a": "标题甲", "b": "标题乙", "expect": "diff"}
@@ -35,6 +41,7 @@ import {
   JUDGE_PROMPT_VERSION,
   availablePromptVersions,
 } from '@/lib/same-event';
+import { availableProviderNames } from '@/lib/translate';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,7 +56,7 @@ const MAX_PAIRS = 40;
 type RawPair = { a?: unknown; b?: unknown; expect?: unknown; note?: unknown };
 
 export async function POST(req: NextRequest) {
-  let body: { pairs?: RawPair[]; pv?: unknown; judge?: unknown; debug?: unknown };
+  let body: { pairs?: RawPair[]; pv?: unknown; judge?: unknown; debug?: unknown; provider?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -106,6 +113,28 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 钉住通道。和 `pv=` 同一条规矩：非法值当场 400，不静默回退。
+  //
+  // 为什么这个参数是**必需**而不是锦上添花：降级链按 `PROVIDERS` 顺序取第一个
+  // 不报错的通道，而「谁不报错」取决于这一刻谁被 429 限流。实测同一次 A/B 的两臂
+  // 就落到了不同通道（pv=1→zhipu、pv=3→zhipu-flash）—— 那样「结论不同」多出一种
+  // 解释：换了通道。钉住它，A/B 才真的只剩提示词一个变量。
+  let only: string | undefined;
+  if (body.provider !== undefined && body.provider !== null) {
+    const usable = availableProviderNames();
+    if (typeof body.provider !== 'string' || !usable.includes(body.provider)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `未知的模型通道 provider=${String(body.provider)}；可用：${usable.join(', ')}`,
+          availableProviders: usable,
+        },
+        { status: 400 },
+      );
+    }
+    only = body.provider;
+  }
+
   const judgeMode = body.judge === 'think' ? 'think' : body.judge === 'nothink' ? 'nothink' : undefined;
   const extraBody =
     judgeMode === undefined ? undefined : ({ thinking: { type: judgeMode === 'think' ? 'enabled' : 'disabled' } } as Record<string, unknown>);
@@ -119,6 +148,7 @@ export async function POST(req: NextRequest) {
   const res = await judgeExplicitPairs(pairs, items, {
     mode: 'pair',
     ...(promptVersion !== undefined ? { promptVersion } : {}),
+    ...(only !== undefined ? { only } : {}),
     ...(extraBody ? { extraBody } : {}),
     ...(body.debug === true ? { collectRaw: true } : {}),
   });
@@ -170,7 +200,15 @@ export async function POST(req: NextRequest) {
     judgePromptVersionUsed: promptVersion ?? JUDGE_PROMPT_VERSION,
     judgePromptVersions: availablePromptVersions(),
     ...(judgeMode ? { judgeMode } : {}),
+    /**
+     * 钉住的通道（没传就是 `undefined`）。**必须同时报出 requested 和实际 answering 的
+     * 通道**：只报实际的那个，读的人分不清「它是被钉住才走这条」还是「它只是恰好没被限流」，
+     * 而这两者对应的结论可信度完全不同。
+     */
+    ...(only ? { providerRequested: only } : {}),
     ...(res.provider ? { provider: res.provider } : {}),
+    /** 可用通道清单（给脚本/人校验入参，避免本地硬编码通道名） */
+    availableProviders: availableProviderNames(),
     candidateCount: res.candidateCount,
     judgedSameCount: res.pairs.length,
     /** ⚠️ 是**数量**，不是列表 —— 与 `dedupe-check` 的同名字段（列表）不同，别混读 */

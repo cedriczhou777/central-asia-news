@@ -676,6 +676,19 @@ export interface JudgeOptions {
    * 生产链路（`fetch-news` / `wechat/push`）**不要传**，永远走当前版本。
    */
   promptVersion?: number;
+  /**
+   * **只走这一个模型通道**（`PROVIDERS[].name`）。不传 = 走完整降级链。
+   *
+   * 只有体检接口的 `provider=` 参数会传它 —— 和 `promptVersion` 是同一类东西：
+   * 都是「把 A/B 里不打算研究的那个变量钉死」。为什么必须能钉：
+   * 降级链按 `PROVIDERS` 顺序取第一个不报错的通道，而「谁不报错」取决于
+   * **这一刻谁被 429 限流**。2026-09-24 实测同一次 A/B 两臂就落到了不同通道
+   * （pv=1→zhipu、pv=3→zhipu-flash），于是「结论不同」多出一种解释：换了通道。
+   * 详见 `translate.resolveProviderChain` 的说明。
+   *
+   * 生产链路（`fetch-news` / `wechat/push`）**不要传** —— 钉住通道等于放弃降级。
+   */
+  only?: string;
 }
 
 /** 模型调用出口的签名：只吃提示词，返回文本或错误（与 `askLlmJson` 的返回同形）。 */
@@ -772,6 +785,10 @@ function resolveAsk(options: JudgeOptions): AskFn {
       timeoutMs: 45000,
       temperature: JUDGE_TEMPERATURE,
       ...(options.extraBody ? { extraBody: options.extraBody } : {}),
+      // 钉住通道（体检 / A-B 专用，见 `JudgeOptions.only`）。
+      // 不传时**不要**写 `only: undefined` —— `askLlmJson` 用 `if (!only)` 判空，
+      // 显式 undefined 与不传等价，但显式写会让「这次到底钉没钉」在代码里看不出区别。
+      ...(options.only ? { only: options.only } : {}),
     });
 }
 

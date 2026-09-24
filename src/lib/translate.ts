@@ -689,6 +689,46 @@ const RETRY_BASE_DELAY_MS = 800;
  * 全部通道都失败时返回 `{ ok: false, error }`，错误信息聚合了每个通道的原因，
  * 便于一眼看出是「没配 Key」还是「Key 无效」还是「全被限流」。
  */
+/**
+ * 按名字把降级链**收窄成单通道**。
+ *
+ * ## 为什么必须有这个（2026-09-24 实测的仪器缺陷）
+ *
+ * 判组的 A/B 要比较的是**提示词版本**。但 `askLlmJson` 会按 `PROVIDERS` 顺序取
+ * 第一个不报错的通道 —— 而「哪个通道不报错」取决于**这一刻谁被 429 限流**。
+ * 实测同一次 A/B 的两臂就落到了不同通道上：
+ *
+ *   pv=1 → provider=zhipu      （当时 glm-4.7-flash 恰好没被限流）
+ *   pv=3 → provider=zhipu-flash（跑第二臂时 zhipu 已 429）
+ *
+ * 「两臂结论不同」于是有两种解释：**提示词改了** 或 **换了通道**。
+ * 这和「窗口滑动」是同一类污染，只是藏在更下游。不钉住通道，A/B 的 ★结论不可采信。
+ *
+ * ## 为什么未知名字**返回错误而不是回退全链**
+ *
+ * 与 `pv=`、`promptBuilderFor` 同一条规矩：手误的 `provider=zhipu-flash2` 若静默跑
+ * 全链，会产出一个**看起来正常**的结果，而它恰恰不是被钉住的那一档 ——
+ * 又一次「分不清跑的是哪个配置」。宁可当场失败。
+ */
+export function resolveProviderChain(
+  only?: string,
+): { ok: true; providers: ChatProvider[] } | { ok: false; error: string } {
+  if (!only) return { ok: true, providers: PROVIDERS };
+  const hit = PROVIDERS.filter((p) => p.name === only);
+  if (hit.length === 0) {
+    return {
+      ok: false,
+      error: `未知的模型通道 provider=${only}；可用：${availableProviderNames().join(', ')}`,
+    };
+  }
+  return { ok: true, providers: hit };
+}
+
+/** 可用通道名清单。给体检接口校验入参、给脚本打印用，保证只有一处真值。 */
+export function availableProviderNames(): string[] {
+  return PROVIDERS.map((p) => p.name);
+}
+
 export async function askLlmJson(
   prompt: string,
   options: {
@@ -699,12 +739,22 @@ export async function askLlmJson(
      * 两次得到不同答案（2026-09-21 实测：同一批候选对，两次分别判出 4 对 / 10 对）。
      */
     temperature?: number;
+    /**
+     * **只走这一个通道**（名字取自 `PROVIDERS[].name`）。不传 = 走完整降级链。
+     *
+     * 只给体检 / A/B 用。**生产链路不要传** —— 钉住通道等于放弃降级，
+     * 一旦该通道被限流，整轮就没了兜底。详见 `resolveProviderChain` 的说明。
+     */
+    only?: string;
   } = {},
 ): Promise<{ ok: true; text: string; provider: string } | { ok: false; error: string }> {
   const { timeoutMs = CALL_TIMEOUT_MS } = options;
   const failures: string[] = [];
 
-  for (const provider of PROVIDERS) {
+  const chain = resolveProviderChain(options.only);
+  if (!chain.ok) return { ok: false, error: chain.error };
+
+  for (const provider of chain.providers) {
     if (!process.env[provider.keyEnv]) {
       failures.push(`${provider.name}：未配置 ${provider.keyEnv}`);
       continue;

@@ -14,6 +14,7 @@
     "validate": "pnpm dlx concurrently --group --names lint-tsc,lint-build,lint-style \"pnpm ts-check\" \"pnpm lint:build\" \"pnpm lint:style\"",
     "scheduler": "node scripts/scheduler.js",
     "test:translate": "tsx scripts/test-translate.ts",
+    "test:translate-providers": "tsx scripts/test-translate-providers.ts",
     "test:channels": "tsx scripts/test-telegram-channels.ts",
     "test:dedup": "tsx scripts/test-dedup.ts",
     "test:format": "tsx scripts/test-format.ts",
@@ -23,13 +24,14 @@
     "test:publish-window": "tsx scripts/test-publish-window.ts",
     "judge:ab": "tsx scripts/ab-judge-prompt.ts",
     "analyze:source-language": "tsx scripts/analyze-source-language.ts",
-    "verify:local": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:feed-fetch && pnpm test:dedup && pnpm test:publish-window",
+    "verify:local": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:feed-fetch && pnpm test:dedup && pnpm test:publish-window",
     "test:feed-fetch": "tsx scripts/test-feed-fetch.ts",
     "analyze:feeds": "tsx scripts/analyze-feeds.ts",
     "test:zh-gate": "tsx scripts/test-zh-gate.ts",
     "analyze:nouns": "tsx scripts/analyze-proper-nouns.ts",
     "analyze:title-gate": "tsx scripts/analyze-title-gate.ts",
-    "analyze:last-round": "tsx scripts/analyze-last-round.ts"
+    "analyze:last-round": "tsx scripts/analyze-last-round.ts",
+    "probe:feeds": "tsx scripts/probe-feed-candidates.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",
