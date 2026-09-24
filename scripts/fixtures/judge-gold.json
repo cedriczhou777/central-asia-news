@@ -5,16 +5,33 @@
     "capturedAt": "2026-09-24 17:22（提示词 v1）与 17:42（v2）",
     "provider": "zhipu-flash（首选通道 zhipu 当时被 429 限流）",
     "whyThisCountry": "az 是用户报的重复所在国，且候选对数最多（12 对）、同时含「该合并/不该合并」两类样本",
-    "observedV1V2": "v1/v2 的实测判定逐对留档 —— 改判据后先比这一列，能立刻看出动了哪几对"
+    "observedV1V2": "v1/v2 的实测判定逐对留档 —— 改判据后先比这一列，能立刻看出动了哪几对",
+    "⚠️observedV1V2不可直接对照": "这两列采自 `dedupe-check`（**当天候选列表**的组成与顺序），而 `pv=` 跑的是 `judge-pairs`（**本文件这一版顺序**）。2026-09-24 晚实测：同一份 v1、同一条通道，[1] 与 [11] 两对在两处结论相反 —— 原因已定位为**判定对列表顺序敏感**（见下面 orderSensitivity）。⇒ 比版本差异请用 `pnpm judge:ab` 自己的输出，别拿这两列当基线。",
+    "orderSensitivity": {
+      "measuredAt": "2026-09-24 22:36 CST",
+      "method": "同一版本（pv=1）、同一通道（zhipu-flash）、**同一批 12 对**，只把顺序倒过来再发一次",
+      "result": "翻转 3/12 对：[0] Unibank 是→否、[9] 国际委员会 是→否、[11] 否认柴油 否→是",
+      "significance": "v1 与 v3 的版本差异只有 1–2 对 ⇒ **噪声（3）> 信号（1–2）**，这 12 对**分辨不出两个版本**。★修好/★★回退 都不可作为定版依据。",
+      "alsoExplains": "代码注释里记的「同一批候选对，两次分别判出 4 对 / 10 对」"
+    },
+    "channelMatters": {
+      "measuredAt": "2026-09-24 22:35–22:36 CST",
+      "method": "pnpm judge:ab --provider <name> --repeat 3（每版 3 轮，逐轮判定完全一致、0 摇摆）",
+      "zhipu-flash": "v1 判错 1 对（[9]）；v3 判错 1 对（[10]，误合并「塞尔维亚 vs 美国」）",
+      "zhipu": "v1 判错 1 对（[1] 漏合并「塞尔维亚笔误」）；v3 12/12",
+      "conclusion": "**版本排序取决于通道**：在 zhipu-flash 上 v1 ≥ v3，在 zhipu 上 v3 > v1。通道不是「钉掉就完事的干扰变量」，它本身就是一等的影响因子。"
+    },
+    "labelCorrection_2026_09_24": "[9]（阿塞拜疆与国际委员会讨论合作 ↔ …国际电工委员会讨论扩大合作）的 expect 由 `diff` **改为 `same`**。证据见该对的 note。改之前 v1 像是判错了、v3 像是「修好了」；改之后 v1 是对的、v3 那次是回退 —— **一个错标注足以让版本结论反过来**，这正是文件头那句「标错一对会把正确的判据修坏」的实例。"
   },
   "pairs": [
     {
       "a": "Unibank 推出面向企业主的绿色信贷：年利率低至 12%",
       "b": "Unibank 为企业家提供绿色信贷：年利率从 12% 开始",
       "expect": "same",
-      "note": "★用户报的重复：同一家银行、同一个产品、同一档利率，只是换词重写",
+      "note": "★用户报的重复：同一家银行、同一个产品、同一档利率，只是换词重写。⚠️ 这一对**对顺序敏感**：原顺序判「是」、倒序判「否」—— 用户看到的「重复时有时无」很可能就是这个。",
       "observedV1": "diff",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆与塞尔维亚讨论战略伙伴关系",
@@ -22,7 +39,8 @@
       "expect": "same",
       "note": "★同一条新闻，第二条标题有重复字（笔误）",
       "observedV1": "diff",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆与中国主要企业合作近 50 个联合项目",
@@ -30,7 +48,8 @@
       "expect": "same",
       "note": "★「主要企业/大型企业」是同一批人的近义指代、「近 50/约 50」是同一个数 —— 一次发布的两篇报道。v2 把它误伤成「不同主体」判否（真回退）",
       "observedV1": "same",
-      "observedV2": "diff"
+      "observedV2": "diff",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆与白俄罗斯签署领事事务合作备忘录",
@@ -38,7 +57,8 @@
       "expect": "same",
       "note": "同一次签约，「领事事务合作备忘录/领事合作备忘录」是同一份文件",
       "observedV1": "same",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆副总理：去年中国公民赴阿塞拜疆人数增长 42%",
@@ -46,7 +66,8 @@
       "expect": "same",
       "note": "同一位副总理、同一场发布、同一个数字，换词重写",
       "observedV1": "same",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆开始执行总统赦免法令",
@@ -54,7 +75,8 @@
       "expect": "same",
       "note": "同一条赦免/大赦法令，「赦免令」「大赦令」是同一份文件的两种译法",
       "observedV1": "same",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆开始执行总统赦免法令",
@@ -62,7 +84,8 @@
       "expect": "same",
       "note": "同一条法令的两种表述",
       "observedV1": "same",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆总统签署赦免令开始执行",
@@ -70,7 +93,8 @@
       "expect": "same",
       "note": "同一条法令，仅「赦免令/大赦令」用词不同",
       "observedV1": "same",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "same"
     },
     {
       "a": "亚洲开发银行预测中亚 2026 年经济增长率平均为 6.8%",
@@ -78,31 +102,35 @@
       "expect": "diff",
       "note": "一条是增长率的**水平**（6.8%），另一条是各国之间的**离散度**（相差 7.8 个百分点）——同一机构的两份不同报告，合并会把两个不同指标揉成一个",
       "observedV1": "diff",
-      "observedV2": "diff"
+      "observedV2": "diff",
+      "observedV3": "diff"
     },
     {
       "a": "阿塞拜疆与国际委员会讨论合作",
       "b": "阿塞拜疆与国际电工委员会讨论扩大合作",
-      "expect": "diff",
-      "note": "「国际委员会」与「国际电工委员会」不是同一个机构（指名的是一个具体组织）",
+      "expect": "same",
+      "note": "⚠️ **2026-09-24 晚由 `diff` 更正为 `same`。** 原标注的理由是「不是同一个机构」，**那条理由是错的**。库内证据（GET /api/articles?country=az，2026-09-23 当日）：`id 4654`「阿塞拜疆与**国际电工委员会**讨论扩大合作」（13:17，AZERTAC，正文详实：Azerishiq 与 IEC 签谅解备忘录、具名 Elchin Mammadov）、`id 4622`「阿塞拜疆与**IEC**探索能源领域标准化合作」（12:39，AZERTAC，正文详实），而 `id 4644`「阿塞拜疆与**国际委员会**讨论合作」（16:56，AZERTAC）的正文是**幻觉填充**（「具体合作内容未披露…」重复句、零事实）—— 说明那一条的翻译退化、标题丢了限定语。三条同源同日同一件事；世上也没有一个机构就叫「国际委员会」。⇒ 判「是」才对。**这一处更正直接反转了 v1/v3 的胜负**（见 _provenance.labelCorrection）。",
       "observedV1": "diff",
-      "observedV2": "diff"
+      "observedV2": "diff",
+      "observedV3": "diff"
     },
     {
       "a": "阿塞拜疆与塞尔维亚讨论战略伙伴关系",
       "b": "阿塞拜疆与美国讨论战略关系",
       "expect": "diff",
-      "note": "不是同一个对象 —— 一个是塞尔维亚、一个是美国（反例「不同主体」的正解）",
+      "note": "不是同一个对象 —— 一个是塞尔维亚、一个是美国（反例「不同主体」的正解）。⚠️ v3 在这对上是**误合并**（判「是」）—— v3 为了修「主要企业/大型企业」把「同义指代不算不同主体」写进判据后，模型把它过度泛化到了这里。",
       "observedV1": "diff",
-      "observedV2": "diff"
+      "observedV2": "diff",
+      "observedV3": "same"
     },
     {
       "a": "阿塞拜疆否认准备对柴油出口实施 90 天禁令的消息",
       "b": "《Politico》：阿塞拜疆准备对柴油燃料出口实施 90 天禁令",
       "expect": "diff",
-      "note": "★一条是官方**否认**、一条是被否认的报道本身 —— 两条是相反的事实。合并会**丢掉「官方否认」**这个信息，属于不可逆丢信息",
+      "note": "★一条是官方**否认**、一条是被否认的报道本身 —— 两条是相反的事实。合并会**丢掉「官方否认」**这个信息，属于不可逆丢信息。⚠️ 这一对**对顺序敏感**：原顺序判「否」、倒序判「是」（即倒序时会错）。",
       "observedV1": "same",
-      "observedV2": "same"
+      "observedV2": "same",
+      "observedV3": "diff"
     }
   ]
 }

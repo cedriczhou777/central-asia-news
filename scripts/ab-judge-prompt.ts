@@ -39,6 +39,23 @@
  * `--repeat N` 先量出**版本自身的摇摆对数**（噪声地板），再把版本差异分成
  * 「稳定差异」与「摇摆」，只有前者能拿来定版。只跑 1 轮就下结论 = 比谁运气好。
  *
+ * ## ⚠️⚠️ 最要命的一条：**判定对「列表顺序」敏感**
+ *
+ * `--repeat` 量的是「同一顺序、多跑几次」—— 2026-09-24 实测这个抖动是 **0/12**。
+ * 但同一版本、同一通道、**同一批 12 对**，只把顺序**倒过来**发：
+ *
+ *   翻转 **3/12 对**，其中包括用户报的那对 Unibank（原顺序判「是」→ 倒序判「否」）。
+ *
+ * 而 v1 与 v3 的版本差异只有 **1–2 对** ⇒ **噪声 > 信号，这 12 对分辨不出两个版本。**
+ * ⇒ 脚本固定跑一节「顺序敏感性」，并在噪声 ≥ 差异时打出大字警告：
+ *   **★修好 / ★★回退 均不可作为定版依据。**
+ *
+ * 这也顺带解释了两件旧事：
+ *   ① 代码注释里记的「同一批候选对，两次分别判出 4 对 / 10 对」；
+ *   ② `judge-gold.json` 里 `observedV1/V2` 两列（采自 `dedupe-check` 的**当天列表**）
+ *      与今天 `pv=1` 的判定在 [1] / [11] 两对上不一致 —— **顺序/组成变了**，
+ *      所以那两列**不能**与 `judge-pairs` 的结果直接对照。
+ *
  * ## 语料的期望值从哪来
  *
  * 人工标注（`expect: same|diff` + `note` 写理由），标题**逐字取自线上**。
@@ -154,6 +171,41 @@ async function probe(pv: number | undefined): Promise<ProbeResponse> {
 function cell(v: string | undefined): string {
   const map: Record<string, string> = { same: '是', diff: '否', vetoed: '拦', error: '!失败' };
   return (map[v ?? ''] ?? '?').padEnd(2, ' ');
+}
+
+/**
+ * 按**倒序**发同一批对，用于测「顺序敏感性」。
+ *
+ * `order[k]` = 第 k 个**发出去**的条目对应 fixture 里的第几个 pair。
+ * 倒序时第 k 条对应 `n-1-k`，所以要映射回来才能逐对比。
+ *
+ * 为什么需要它（2026-09-24 实测，**这条改写了整个仪器的可信度**）：
+ * 同一个版本、同一条通道、**同一批 12 对**，只把顺序倒过来，
+ * **3/12 对翻转** —— 含用户报的那对 Unibank（原顺序判「是」，倒序判「否」）。
+ * 而 v1 与 v3 的版本差异只有 1–2 对 ⇒ **差异比顺序噪声还小，
+ * 这批语料根本分辨不出两版。** 不测这一项，就会把顺序噪声当成版本收益去定版。
+ */
+async function probeReversed(
+  pv: number | undefined,
+): Promise<{ res: ProbeResponse; order: number[] }> {
+  const gold = JSON.parse(readFileSync(resolve(process.cwd(), fixturePath), 'utf8')) as GoldFile;
+  const n = gold.pairs.length;
+  const rev = gold.pairs.map((_, i) => n - 1 - i); // 发出去的顺序（fixture 下标）
+  const body = {
+    ...(pv !== undefined ? { pv } : {}),
+    ...(pinnedProvider ? { provider: pinnedProvider } : {}),
+    // 只发 a/b —— `expect`/`note` 一律不发，它们只用于本地统计与展示。
+    pairs: rev.map((i) => ({ a: gold.pairs[i].a, b: gold.pairs[i].b })),
+  };
+  const res = await fetch(`${BASE}/api/judge-pairs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const json = (await res.json()) as ProbeResponse;
+  if (!res.ok) throw new Error(`HTTP ${res.status}：${json.error || JSON.stringify(json).slice(0, 300)}`);
+  return { res: json, order: rev };
 }
 
 async function main() {
@@ -454,6 +506,49 @@ async function main() {
             ? '（只跑了 1 轮，无法区分「提示词改的」与「模型不稳」—— 加 --repeat 3 再判）'
             : ''),
       );
+    }
+
+    // ── 顺序敏感性：**这是真正的噪声地板** ────────────────────────────────
+    //
+    // `--repeat` 量的是「同一顺序、多跑几次」的抖动（实测经常是 0）。
+    // 但真正决定结论能不能用的是**换一个顺序它会不会翻** —— 2026-09-24 实测：
+    // 同一版本、同一通道、同一批 12 对，仅倒序 → **3 对翻转**，
+    // 而版本间差异只有 1–2 对 ⇒ 差异被噪声淹没，这批语料**分辨不出两版**。
+    // 所以这一节必须报，而且要在版本差异之后紧接着报（它是差异的解释边界）。
+    if (!confounded) {
+      console.log('');
+      console.log(`顺序敏感性（pv=${runs[0].v}，同一批对仅**倒序**发一次）：`);
+      try {
+        const { res: revRes, order } = await probeReversed(runs[0].v);
+        const revVerdict = new Map<number, string>();
+        for (const [k, r] of (revRes.results ?? []).entries()) revVerdict.set(order[k], r.verdict);
+        const orderFlips: string[] = [];
+        for (let i = 0; i < gold.pairs.length; i++) {
+          const a = [...judgedSet(runs[0].v, i)];
+          const b = revVerdict.get(i);
+          if (a.length !== 1 || (b !== 'same' && b !== 'diff')) continue; // 没判成的不比
+          if (a[0] !== b) orderFlips.push(`[${i}] ${cell(a[0]).trim()}→${cell(b).trim()}`);
+        }
+        console.log(`  ${orderFlips.length}/${gold.pairs.length} 对翻转` + (orderFlips.length ? ` —— ${orderFlips.join('、')}` : ''));
+        if (orderFlips.length === 0) {
+          console.log('  ⇒ 本批语料对顺序不敏感，上面的版本差异可以当结论用。');
+        } else if (orderFlips.length >= Math.max(1, stableFlips + shakyFlips)) {
+          console.log('');
+          console.log('  ' + '!'.repeat(66));
+          console.log(
+            `  ⚠️ **顺序噪声（${orderFlips.length} 对）≥ 版本间差异（${stableFlips + shakyFlips} 对）**` +
+              ' ⇒ 这批语料**分辨不出这两个版本**。',
+          );
+          console.log('     上面的 ★修好 / ★★回退 **不可作为定版依据** —— 换个顺序就可能反过来。');
+          console.log('     要定版必须先扩语料（门 1：历史 42S/24D 那份从未落盘），或先消掉顺序敏感。');
+          console.log('  ' + '!'.repeat(66));
+        } else {
+          console.log(`  ⇒ 顺序噪声（${orderFlips.length} 对）小于版本差异（${stableFlips + shakyFlips} 对），差异方向可参考。`);
+        }
+      } catch (err) {
+        console.log(`  ⚠️ 顺序敏感性测不了：${err instanceof Error ? err.message : String(err)}`);
+        console.log('  ⇒ 没有噪声地板，上面的版本差异**无法判断是否显著**，别据此定版。');
+      }
     }
   }
 
