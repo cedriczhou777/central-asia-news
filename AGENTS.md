@@ -536,6 +536,31 @@ POST /api/wechat/push {"hours": 17, "period": "manual"}
 而这 1 小时已被当天 08:00 那轮早报覆盖）——**仅此一次**，次日起两段严丝合缝。
 （真正的根治办法是缺陷 19：窗口锚到「上一轮报告的终点」而不是执行时刻。）
 
+#### 怎么验证「新时刻真的注册上了」（不用等第二天，也不用进控制台）
+
+`GET /api/wechat/push` 的响应里现在带 `schedules` 字段，直接来自
+`src/lib/publish-schedule.ts`：
+
+```bash
+curl -s "$BASE/api/wechat/push" | python3 -c 'import sys,json;print(json.load(sys.stdin)["schedules"])'
+# 期望：[{"cron":"0 7 * * *","label":"早上 07:00（早报）","period":"morning","hours":12},
+#        {"cron":"0 19 * * *","label":"晚上 19:00（晚报）","period":"evening","hours":12}]
+```
+
+**为什么值得为它加一个字段**：改时刻这件事**在响应里原本完全看不见** ——
+过去只能等第二天那一轮跑起来、再去控制台翻启动日志
+（`已注册公众号推送任务：0 7 * * * ...`），而启动日志外面拿不到。
+现在 `cron: "0 7 * * *"` 直接出现在响应里，**一条 curl 同时证明两件事**：
+新版本接管了流量、且时刻表就是改后的值。
+这比首页 build ID 强 —— build ID 只说明「有部署发生」，**说不清是哪个提交**
+（同一天推了多次时最容易误判）。
+
+⚠️ 它反映的是**代码里的时刻表**，不是「容器里 node-cron 真的注册成功」。
+注册失败会在启动日志里抛错，两者不一致时去翻启动日志。
+⚠️ 为此 `PUBLISH_SCHEDULES` 从 `scheduler.ts` 挪到了独立的
+`src/lib/publish-schedule.ts`（纯数据、无副作用）：直接 import `scheduler.ts`
+会把 `node-cron` 和 `resolveSelfBaseUrl()` 的模块级求值一起打进这个路由的 bundle。
+
 ## 目录结构
 
 ```

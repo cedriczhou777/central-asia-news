@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { resolveSelfBaseUrl } from './runtime';
+import { PUBLISH_SCHEDULES } from './publish-schedule';
 
 // 北京时间定时任务
 // 用户需求：取消网页端后，每天推送 2 次 —— 早上 07:00（早报）、晚上 19:00（晚报）。
@@ -24,6 +25,8 @@ import { resolveSelfBaseUrl } from './runtime';
 // 只改 cron 不改 hours，必然落进上面两种错法之一 —— 而且都要过几天才被人发现
 // （重叠要等读者说「这条早上推过了」；漏掉则永远没人知道）。
 //
+// 时刻表本体与详细表格在 `./publish-schedule.ts`（纯数据，路由也要读它来报指纹）。
+//
 // 代价（知情选择）：某一时段整体失败（例如容器没被预热唤醒）时，这一段窗口的新闻
 // 不会被下一次推送自动补上。人工补齐的办法是手动调一次
 //   POST /api/wechat/push  {"hours": 24, "period": "manual"}
@@ -37,10 +40,8 @@ import { resolveSelfBaseUrl } from './runtime';
 // 而一轮推送（逐张下载外链图 → 转码 → 传素材库）远不止 65 秒。
 // 那只是响应送不回来，请求在服务端照样跑完；想知道结果就轮询 lastRun。
 // 应用内调度器走 localhost，不经过网关，没有这个问题。
-const PUBLISH_SCHEDULES = [
-  { cron: '0 7 * * *', label: '早上 07:00（早报）', period: 'morning', hours: 12 },
-  { cron: '0 19 * * *', label: '晚上 19:00（晚报）', period: 'evening', hours: 12 },
-];
+// 时刻表本体（cron / label / period / hours）在 `./publish-schedule.ts`：
+// 纯数据、无副作用，因为 `GET /api/wechat/push` 也要读它（报出来当线上指纹）。
 
 // 内部接口互调的地址。端口口径统一由 lib/runtime 决定，避免多处写死不一致。
 const API_BASE = resolveSelfBaseUrl();

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { beijingDate, extractFirstImage } from '@/lib/utils';
+import { PUBLISH_SCHEDULES } from '@/lib/publish-schedule';
 import { dedupeStories } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
@@ -387,6 +388,21 @@ export async function GET() {
   return NextResponse.json({
     message: '微信公众号推送接口',
     usage: 'POST /api/wechat/push with optional { hours: 24, period: "morning" | "evening" | "manual" }',
+    /**
+     * 已注册的早晚报时刻表（来自 `lib/publish-schedule.ts`）。
+     *
+     * 为什么要把一个「配置值」报出来：改时间这件事**在响应里原本完全看不见** ——
+     * 部署之后想确认「新时刻真的注册上了」，过去只能等第二天那一轮跑起来、
+     * 再去控制台翻启动日志（`已注册公众号推送任务：0 7 * * * ...`），
+     * 而启动日志外面拿不到。现在 `cron: "0 7 * * *"` 直接出现在响应里，
+     * **一条 curl 同时证明两件事：新版本接管了流量、且时刻表就是改后的值**。
+     * 这比 build ID 强 —— build ID 只能说明「有部署发生」，说不清是哪个提交。
+     *
+     * ⚠️ 注意它反映的是**代码里的时刻表**，不是「容器里 node-cron 真的注册成功」。
+     * 注册失败会在启动日志里报错（`cron.schedule` 遇到非法表达式会抛），
+     * 所以两者不一致时去翻启动日志。
+     */
+    schedules: PUBLISH_SCHEDULES,
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿，summary.failures 是哪些国家失败、为什么。
     lastRun: pushRunState,
