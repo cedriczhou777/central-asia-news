@@ -282,6 +282,45 @@ interface PushDraft {
   article_count: number;
 }
 
+/**
+ * 「这一国本轮没出草稿」及其原因。
+ *
+ * ## 为什么要新加这一段
+ *
+ * 2026-09-27 早报：`drafts` 只有 kg，`failures` 是**空的**，
+ * 而 kz/uz/az/tj 四国窗口内各有 29/25/33/3 篇、本该各自出草稿。
+ * 用户看到的现象是「今天早上好像只有吉尔吉斯的新闻推送了」，
+ * 而**从接口上完全读不出为什么** —— 因为「跳过」是静默的：
+ *
+ *   - `articles.length === 0`         → `continue`（只写容器日志）
+ *   - 全部被 `pushExclusionReason` 挡掉 → `continue`（逐条日志，但响应里没有）
+ *   - 去重后一条不剩                   → `continue`
+ *
+ * `failures` 只记「读取失败」和「建草稿失败」——这两类是**异常**；
+ * 而上面三类是**正常的跳过**，于是「五国只推一国」这种最需要解释的情况
+ * 反而什么字段都不留。本结构就是补这个洞：把漏斗的中间计数直接写进响应。
+ *
+ * 判据本身仍然是 `pushExclusionReason` 那四条，这里只做**计数**，不改变任何取舍。
+ */
+interface PushSkip {
+  country_code: string;
+  country_name: string;
+  reason: 'no_articles' | 'all_excluded' | 'all_deduped';
+  /** 漏斗各段计数，回答「到底卡在哪一段」 */
+  detail: {
+    /** 窗口内读到几篇（`reason: 'no_articles'` 时这里就是 0） */
+    inWindow: number;
+    /** `isPushableText` 挡掉几篇（未翻译 / 翻译退化） */
+    untranslated: number;
+    /** 其余三条判据各挡掉几篇，键是 `PushExclusion` 的值 */
+    excludedByReason: Record<string, number>;
+    /** 过完四条判据还剩几篇 */
+    eligible: number;
+    /** 确定性去重 + 模型判组一共剔除几篇 */
+    dedupDrops: number;
+  };
+}
+
 // 一轮推送的结果。除 success/message 外，字段与原同步响应的结构保持一致，
 // 老调用方改成读 lastRun.summary 时不用改字段名。
 interface PushSummary {
@@ -305,6 +344,14 @@ interface PushSummary {
   };
   drafts: PushDraft[];
   failures: PushFailure[];
+  /**
+   * 本轮**被跳过**的国家及原因。与 `failures` 的区别：
+   * `failures` 是出了异常（读库失败 / 建草稿失败），这里是**正常跳过**。
+   *
+   * 排查「今天怎么只推了某国」时先看这一段 —— 它直接给出漏斗各段的计数，
+   * 不用进容器翻日志、也不用猜。为空数组表示窗口内有文章的每个国家都出了草稿。
+   */
+  skipped: PushSkip[];
 }
 
 interface PushRunState {
@@ -429,7 +476,12 @@ export async function GET() {
      */
     scheduleHoursCrossCheck: scheduleHoursCrossCheck(),
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
-    // 人工排查时 summary.drafts 是成功建的草稿，summary.failures 是哪些国家失败、为什么。
+    // 人工排查时 summary.drafts 是成功建的草稿、summary.failures 是哪些国家失败、
+    // **summary.skipped 是哪些国家被正常跳过及卡在哪一段**。
+    //
+    // ⚠️ 只看 `failures` 会得到错误结论：它只记异常（读库失败 / 建草稿失败），
+    // 「窗口内没文章」「全部被判据挡掉」「去重后一条不剩」三类**正常跳过**
+    // 在 2026-09-27 之前一个字都不写，于是「五国只推了一国」在响应里表现为成功。
     lastRun: pushRunState,
   }, {
     // 必须禁掉缓存：调度器轮询这个接口等状态变化，被缓存住就会一直看到旧状态，
@@ -484,6 +536,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     const results: PushDraft[] = [];
     // 失败的国家单独记账，最后一起返回 —— 排查「今天怎么没推」时能一眼看出卡在哪一国
     const failures: PushFailure[] = [];
+    // 正常被跳过的国家（不是异常）。见 `PushSkip` 的注释：2026-09-27 那次
+    // 「五国只推一国、failures 却是空的」就是因为这里什么都不记。
+    const skipped: PushSkip[] = [];
 
     // 按国别分组推送
     for (const country of countryList) {
@@ -501,6 +556,12 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       
       if (articles.length === 0) {
         console.log(`${country.name}过去${hours}小时无文章，跳过`);
+        skipped.push({
+          country_code: country.code,
+          country_name: country.name,
+          reason: 'no_articles',
+          detail: { inWindow: 0, untranslated: 0, excludedByReason: {}, eligible: 0, dedupDrops: 0 },
+        });
         continue;
       }
 
@@ -546,13 +607,17 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       //   2. 判组看不到全量候选 —— 模型/判据一次只能看到前面已选的那几条，
       //      同一件事的第二条刚好排在后面时更容易漏。
       // 拆成两步后，去重看的是「本国全部合格候选」，截取上限放在最后。
+      // 逐条判据的剔除量在这里记账，最后进 `summary.skipped`（见 `PushSkip`）。
+      const excludedByReason: Record<string, number> = {};
       const eligible = scoredArticles.filter((article) => {
         // 四条判据本体在 `@/lib/article-format` 的 `pushExclusionReason` ——
         // **不要在这里内联重写**。原因见那个函数的注释：诊断接口一度因为
         // 自己抄了一份（还抄漏了 `EXCLUDED_CATEGORIES`）而得出相反结论。
         const reason = pushExclusionReason(article, country.code);
         if (!reason) return true;
-        // 逐条打日志，便于事后回答「这篇为什么没进」
+        // 逐条计数 + 逐条打日志：计数进 `summary.skipped`（接口可见），
+        // 日志留单条明细（内容可见）。两者都要，缺一个就会回到「只能进容器翻日志」。
+        excludedByReason[reason] = (excludedByReason[reason] || 0) + 1;
         if (reason === 'untranslated') {
           // 正常不该走到这里（上面 `isPushableText` 已经滤过一轮）。
           // 真出现说明两处判据又不一致了 —— 所以这条不是死代码，是哨兵。
@@ -593,6 +658,20 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       // TypeError: Cannot read properties of undefined → 整轮请求 500。
       if (selectedArticles.length === 0) {
         console.log(`${country.name}无相关新闻，跳过本轮推送`);
+        // 记进 `summary.skipped`：`eligible` 为 0 说明是四条判据吃掉了全部候选，
+        // 否则说明是去重吃掉的。这一行就是「为什么这一国没有草稿」的答案。
+        skipped.push({
+          country_code: country.code,
+          country_name: country.name,
+          reason: eligible.length === 0 ? 'all_excluded' : 'all_deduped',
+          detail: {
+            inWindow: articles.length,
+            untranslated: articles.length - chineseArticles.length,
+            excludedByReason,
+            eligible: eligible.length,
+            dedupDrops: eventDrops.length,
+          },
+        });
         continue;
       }
 
@@ -687,6 +766,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       window: { start: startDate, end: endDate, source: windowSource, hours: windowHours },
       drafts: results,
       failures,
+      skipped,
     };
   } catch (error) {
     console.error('微信推送失败（本轮整体失败）:', error);

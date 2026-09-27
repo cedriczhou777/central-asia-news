@@ -27,11 +27,15 @@ import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from './p
 //
 // 时刻表本体与详细表格在 `./publish-schedule.ts`（纯数据，路由也要读它来报指纹）。
 //
-// 代价（知情选择）：某一时段整体失败（例如容器没被预热唤醒）时，这一段窗口的新闻
+// 代价：某一时段整体失败（例如容器没被预热唤醒）时，这一段窗口的新闻
 // 不会被下一次推送自动补上。人工补齐的办法是手动调一次
 //   POST /api/wechat/push  {"hours": 24, "period": "manual"}
 // 它不走增量窗口，按指定小时数汇总；period=manual 让标题带「补报」后缀，
 // 从而与当天自动跑的早报/晚报区分开（不传 period 会和上一次人工补跑同名 → 草稿箱出现同名草稿）。
+//
+// 2026-09-27 起又多了一个「整轮不推送」的情形：抓取在**硬上限**内没跑完
+// （见下面 FETCH_HARD_WAIT_MS 的注释）。此时补跑要**等抓取真跑完再发**，
+// 否则补出来的还是同一份缺国家的稿子。
 //
 // ⚠️ 推送接口是**异步**的（和抓取一样）：POST 只代表任务已启动，立刻返回 200。
 // 结果要 GET 同一个地址、读 lastRun（summary.drafts 是建成功的草稿，
@@ -71,13 +75,68 @@ const POLL_INTERVAL_MS = 15_000;
 //     这时即使篇数不变也会明显变慢
 // 所以 100 分钟只剩 10% 余量，太薄 → 给到 150 分钟。
 //
-// 代价只是「草稿出现得晚一点」（07:00 触发 → 最晚 09:30 出草稿），
-// 换来的是「宁可晚，也不要在库半空时推出一份缺国家的草稿」。
-// 这个取舍是刻意选的，改小之前先看清上面两个变量。
-const FETCH_WAIT_TIMEOUT_MS = 150 * 60_000;
+// ⚠️ 2026-09-27 早报证明**150 分钟也已经不够**，而且它踩坑的方式比「不够」更糟：
+//   07:00 触发 → 抓取实际跑了 **154 分 51 秒**（finishedAt 01:34:51Z）；
+//   软上限 150 分钟在 **01:30:00Z** 到点，`triggerAndWait` 只打了一行 warn
+//   就**继续往下走**，于是推送在 01:30:02Z 启动 —— 比抓取结束早 **4 分 49 秒**。
+//   那一刻库里窗口内的行只有上一轮留下的 8 篇（id ≤ 6068），
+//   于是：草稿只剩 kg 一篇（6 条），kz/uz/az/tj 四个国家**窗口内 0 篇**
+//   直接 `continue`，而 `summary.failures` 是 **空的** —— 接口看起来是成功的。
+//   复现方式：`pnpm diagnose:push --period=morning --date=2026-09-27 --max-id=6068`
+//   输出 kg 正好 6 篇、其余 0 篇，与线上草稿逐字吻合。
+//
+// 所以现在的等待是**两段式**：
+//   - 软上限（下面 `softMs`）：到点打 ⚠️ 并**继续等**（加时），不再是「放弃」的信号；
+//   - 硬上限（`hardMs`）：到点才算真等不到，此时 `runPublishCycle` **直接不推送**。
+// 为什么超时后不推送、而不是「推一份缺国家的」：上面那行「宁可晚，也不要在库半空时
+// 推出一份缺国家的草稿」本来就是这段等待存在的**唯一理由**，而旧实现在超时后照样推，
+// 等于把这个理由取消了。窗口是按时刻表固定的（见 publish-schedule），
+// 所以**晚推不会与下一轮重叠、也不会漏** —— 迟到的代价只是读者晚看到，比缺国家轻。
+//
+// ⚠️ 单篇耗时为什么从 16 秒涨到 ~37 秒（252 候选 → 155 分钟）还没查完，
+// 大概率是缺陷 21（429 放大 / 翻译退化）。**真正的解法是压低单篇耗时或改并发**，
+// 把上限继续往上加只是把撞墙时间推后。
+export const FETCH_SOFT_WAIT_MS = 150 * 60_000;
+export const FETCH_HARD_WAIT_MS = 240 * 60_000;
 // 推送比抓取快，但它要做「逐篇下载外链图 → 转码 → 传微信素材库 → 建草稿」，
 // 5 个国家串行，留 20 分钟足够宽松。
-const PUSH_WAIT_TIMEOUT_MS = 20 * 60_000;
+export const PUSH_SOFT_WAIT_MS = 20 * 60_000;
+export const PUSH_HARD_WAIT_MS = 40 * 60_000;
+
+/**
+ * 已知**最坏**的一次抓取耗时（2026-09-27 早报，读 `/api/fetch-news` 的 lastRun 得到）。
+ *
+ * 记成常量而不是写在注释里，是为了让「上限够不够」这件事可以被断言 ——
+ * 150 分钟这个上限当初就是凭「268 篇 → 73 分钟」定的，
+ * 而那天实际是 252 候选 → **154 分 51 秒**（单篇耗时从 ~16 秒涨到 ~37 秒）。
+ * 上限低于实测值，撞墙只是时间问题。
+ */
+export const MEASURED_WORST_FETCH_MS = 154 * 60_000 + 51_000;
+
+/**
+ * 等待预算的自检 —— 与 `scheduleHoursCrossCheck()` 同一形式：
+ * 把「必须成立的关系」报出来，改数字时本地就会红，而不是等到读者说「今天只有一国的稿子」。
+ */
+export function waitBudgetCrossCheck(): Array<{ name: string; ok: boolean; detail: string }> {
+  const min = (ms: number) => `${Math.round(ms / 60_000)} 分钟`;
+  return [
+    {
+      name: '抓取硬上限 > 软上限（超时后必须还能继续等，不能直接放弃）',
+      ok: FETCH_HARD_WAIT_MS > FETCH_SOFT_WAIT_MS,
+      detail: `软 ${min(FETCH_SOFT_WAIT_MS)} / 硬 ${min(FETCH_HARD_WAIT_MS)}`,
+    },
+    {
+      name: '抓取硬上限 > 已知最坏实测耗时（低于它必然重演「半库推送」）',
+      ok: FETCH_HARD_WAIT_MS > MEASURED_WORST_FETCH_MS,
+      detail: `硬 ${min(FETCH_HARD_WAIT_MS)} vs 实测 ${min(MEASURED_WORST_FETCH_MS)}`,
+    },
+    {
+      name: '推送硬上限 > 软上限',
+      ok: PUSH_HARD_WAIT_MS > PUSH_SOFT_WAIT_MS,
+      detail: `软 ${min(PUSH_SOFT_WAIT_MS)} / 硬 ${min(PUSH_HARD_WAIT_MS)}`,
+    },
+  ];
+}
 
 // 两个接口的 GET 都返回同样形状的 lastRun，这里只声明调度器真正用到的字段。
 interface RunStateLite {
@@ -86,6 +145,21 @@ interface RunStateLite {
   finishedAt?: string | null;
   summary?: unknown;
   error?: string | null;
+}
+
+/**
+ * 「触发并等待」的结局。**必须把三种结局分开报**，否则调用方无从判断
+ * 「任务完成了」和「等到超时了」——这正是 2026-09-27 早报漏掉 4 个国家的原因：
+ * 旧实现的 `triggerAndWait` 返回 `void`，两种结局在调用方看来完全一样。
+ */
+interface WaitOutcome {
+  /** 任务真的跑完了（观测到新的 finishedAt） */
+  finished: boolean;
+  /** 过了软上限、进入加时 */
+  overtime: boolean;
+  /** 连硬上限都过了，任务仍未结束 */
+  timedOut: boolean;
+  waitedMs: number;
 }
 
 function sleep(ms: number) {
@@ -144,12 +218,22 @@ async function readRunState(path: string): Promise<RunStateLite | null> {
 // 「已等了多久」写进日志。旧版整段等待期间一行都不打，于是「状态读错了 →
 // 一直等到超时」这件事在日志里表现为「触发之后就没了」，只能靠事后猜。
 // 现在拿不到 running / finishedAt 会直接打 `running=undefined`，一眼可见。
+//
+// ## 两段式上限（2026-09-27 起）
+//
+// `softMs` 到点**不再放弃**，只打 ⚠️ 然后继续等到 `hardMs`。旧实现只有一个上限，
+// 到点后照样返回、由调用方继续往下走 —— 于是「等到超时」和「任务已完成」
+// 在调用方看来**一模一样**，两者唯一的区别只在一行 warn 里。
+// 2026-09-27 早报就是在软上限到点后 2 秒开始推送的，读到一份半空的库。
+//
+// 返回值用 {@link WaitOutcome} 把三种结局分开，调用方才有机会做不同的事。
 async function triggerAndWait(
   label: string,
   path: string,
-  timeoutMs: number,
+  softMs: number,
   trigger: () => Promise<void>,
-) {
+  hardMs: number = softMs,
+): Promise<WaitOutcome> {
   const before = await readRunState(path);
   const finishedBefore = before?.finishedAt ?? null;
 
@@ -157,13 +241,15 @@ async function triggerAndWait(
     await trigger();
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ${label}触发失败:`, error);
-    return;
+    return { finished: false, timedOut: true, overtime: false, waitedMs: 0 };
   }
 
   const startedWaitingAt = Date.now();
-  const deadline = startedWaitingAt + timeoutMs;
+  const softDeadline = startedWaitingAt + softMs;
+  const hardDeadline = startedWaitingAt + hardMs;
   let polls = 0;
-  while (Date.now() < deadline) {
+  let softWarned = false;
+  while (Date.now() < hardDeadline) {
     await sleep(POLL_INTERVAL_MS);
     const state = await readRunState(path);
     if (!state) continue;
@@ -181,26 +267,38 @@ async function triggerAndWait(
     }
 
     if (!state.running && finishedNow && finishedNow !== finishedBefore) {
+      const waitedMs = Date.now() - startedWaitingAt;
       // summary 是各源采集量与最终入库数，或本轮建的草稿与失败国家；失败时这里是 error
       console.log(
-        `[${new Date().toISOString()}] ${label}完成（等了 ${Math.round((Date.now() - startedWaitingAt) / 60_000)} 分钟）:`,
+        `[${new Date().toISOString()}] ${label}完成（等了 ${Math.round(waitedMs / 60_000)} 分钟` +
+        `${softWarned ? '，**已超过软上限**' : ''}）:`,
         JSON.stringify(state.summary ?? state.error ?? state)
       );
-      return;
+      return { finished: true, timedOut: false, overtime: softWarned, waitedMs };
+    }
+
+    if (!softWarned && Date.now() >= softDeadline) {
+      softWarned = true;
+      console.warn(
+        `[${new Date().toISOString()}] ⚠️ ${label}超过软上限 ${softMs / 60_000} 分钟仍未结束` +
+        `，进入加时等待（硬上限 ${hardMs / 60_000} 分钟）。` +
+        `加时是为了「宁可晚，也不要在数据只到一半时就往下走」—— 见 FETCH_HARD_WAIT_MS 的注释。`
+      );
     }
   }
 
-  // 超时也继续往下走：宁可推稍旧的数据 / 少一条日志，也不要整轮什么都不做。
-  // 但打 warn，方便从日志看出「这轮是超时后硬走的」。
-  console.warn(
-    `[${new Date().toISOString()}] 等待${label}超过 ${timeoutMs / 60_000} 分钟仍未结束，不再等待` +
-    `（最后一轮观测：running=${(await readRunState(path))?.running}）`
+  const waitedMs = Date.now() - startedWaitingAt;
+  console.error(
+    `[${new Date().toISOString()}] ⛔ ${label}等待超过硬上限 ${hardMs / 60_000} 分钟仍未结束，放弃等待` +
+    `（最后一轮观测：running=${(await readRunState(path))?.running}）。` +
+    `调用方**不应**把这一轮当成正常结束。`
   );
+  return { finished: false, timedOut: true, overtime: true, waitedMs };
 }
 
 // 抓取当天新闻（每国先凑足一个下限量，具体推送篇数由推送端"今日精选"决定）
-async function runFetchNews() {
-  await triggerAndWait('新闻抓取', '/api/fetch-news', FETCH_WAIT_TIMEOUT_MS, async () => {
+async function runFetchNews(): Promise<WaitOutcome> {
+  return await triggerAndWait('新闻抓取', '/api/fetch-news', FETCH_SOFT_WAIT_MS, async () => {
     console.log(`[${new Date().toISOString()}] 开始抓取当天新闻...`);
     const response = await fetch(`${API_BASE}/api/fetch-news`, {
       method: 'POST',
@@ -214,7 +312,7 @@ async function runFetchNews() {
       `[${new Date().toISOString()}] 新闻抓取已触发:`,
       JSON.stringify(await response.json())
     );
-  });
+  }, FETCH_HARD_WAIT_MS);
 }
 
 // 微信公众号推送（按固定时段汇总新闻，逐国推送，不写死篇数）
@@ -225,8 +323,8 @@ async function runFetchNews() {
 // 会被网关 65 秒切断）。调度器走 localhost 本来就不受那个限制，
 // 但同样要等到终态，日志里才会留下「本轮建了哪几个草稿 / 哪几个国家失败」这行 ——
 // 排查「今天怎么没推」全靠它。
-async function runWechatPush(hours: number, period: string) {
-  await triggerAndWait('微信公众号推送', '/api/wechat/push', PUSH_WAIT_TIMEOUT_MS, async () => {
+async function runWechatPush(hours: number, period: string): Promise<WaitOutcome> {
+  return await triggerAndWait('微信公众号推送', '/api/wechat/push', PUSH_SOFT_WAIT_MS, async () => {
     console.log(
       `[${new Date().toISOString()}] 开始执行微信公众号推送任务（时段 ${period}，回看过去 ${hours} 小时）...`
     );
@@ -239,12 +337,38 @@ async function runWechatPush(hours: number, period: string) {
       `[${new Date().toISOString()}] 微信公众号推送任务已触发:`,
       JSON.stringify(await response.json())
     );
-  });
+  }, PUSH_HARD_WAIT_MS);
 }
 
 // 每次推送：先抓最新新闻，再按本时段窗口整理推送公众号
+//
+// ⚠️ 抓取**没在硬上限内跑完**时，本轮**不推送**。
+//
+// 这不是新增的策略，而是把这段等待本来就宣称的目的落到实处 ——
+// 见 FETCH_HARD_WAIT_MS 上方那行「宁可晚，也不要在库半空时推出一份缺国家的草稿」。
+// 旧实现在超时后照样往下走，于是 2026-09-27 早报推出一份只有 kg 的稿子，
+// 而 `summary.failures` 是空的（跳过是静默的），看起来一切正常。
+//
+// 少推一轮的代价可控：窗口按时刻表固定（`publish-schedule`），
+// 所以下一个时段不会替它补，但也**不会重复**；补的办法是抓取跑完后手工调
+//   POST /api/wechat/push {"hours": 24, "period": "manual"}
 async function runPublishCycle(hours: number, period: string) {
-  await runFetchNews();
+  // 变量名刻意不叫 `fetch` —— 那会遮住全局的 fetch，将来在这个函数里加一次请求就会踩空。
+  const fetchOutcome = await runFetchNews();
+  if (!fetchOutcome.finished) {
+    console.error(
+      `[${new Date().toISOString()}] ⛔ 抓取未在 ${FETCH_HARD_WAIT_MS / 60_000} 分钟内完成` +
+      `（时段 ${period}）—— **本轮不推送**，避免推出一份缺国家的稿子。` +
+      `等抓取跑完后手工补：POST /api/wechat/push {"hours":24,"period":"manual"}`
+    );
+    return;
+  }
+  if (fetchOutcome.overtime) {
+    console.warn(
+      `[${new Date().toISOString()}] ⚠️ 抓取是加时才完成的（耗时 ${Math.round(fetchOutcome.waitedMs / 60_000)} 分钟，` +
+      `软上限 ${FETCH_SOFT_WAIT_MS / 60_000} 分钟）—— 本轮照常推送，但请留意单篇耗时是否在恶化。`
+    );
+  }
   await runWechatPush(hours, period);
 }
 

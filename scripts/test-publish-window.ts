@@ -20,6 +20,11 @@
  * 讲的是北京时间。直接写 UTC 会让人每看一行都要心算一次 -8。
  */
 import { cronHour, scheduleHoursCrossCheck, scheduledWindow, PUBLISH_SCHEDULES } from '../src/lib/publish-schedule';
+import {
+  FETCH_HARD_WAIT_MS,
+  MEASURED_WORST_FETCH_MS,
+  waitBudgetCrossCheck,
+} from '../src/lib/scheduler';
 
 let passed = 0;
 const failures: string[] = [];
@@ -145,6 +150,19 @@ section('时刻表自身的一致性（跨字段校验）');
     ok(`${c.period} 声明的 hours 与按 cron 推导的一致`, c.ok, `声明 ${c.declared} vs 推导 ${c.derived}`);
   }
   ok('两段的钟点分别是 7 与 19', cronHour(PUBLISH_SCHEDULES[0].cron) === 7 && cronHour(PUBLISH_SCHEDULES[1].cron) === 19);
+}
+
+section('调度器等待预算（抓取没跑完就不该往下走）');
+{
+  // 2026-09-27 早报：软上限 150 分钟在 01:30:00 到点，而抓取实际跑了 154 分 51 秒，
+  // 推送于是在抓取结束前 4 分 49 秒启动，读到一份半空的库 ——
+  // 最终只出 1 个国家的草稿。下面这几条把「上限必须留出余量」钉住。
+  for (const c of waitBudgetCrossCheck()) ok(c.name, c.ok, c.detail);
+  ok(
+    '硬上限留了 ≥30 分钟余量（不是刚刚压过实测值）',
+    FETCH_HARD_WAIT_MS - MEASURED_WORST_FETCH_MS >= 30 * 60_000,
+    `余量 ${Math.round((FETCH_HARD_WAIT_MS - MEASURED_WORST_FETCH_MS) / 60_000)} 分钟`,
+  );
 }
 
 console.log(`\n${'='.repeat(60)}`);
