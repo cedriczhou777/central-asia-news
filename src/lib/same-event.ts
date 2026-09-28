@@ -233,7 +233,7 @@ function isNearIdenticalText(a: StoryLike, b: StoryLike): boolean {
  * 仍会被挡在外面，这是有意的：宁可漏合并，也不要靠一个字去赌）。
  *
  * ⚠️ **这一条只处理「几乎逐字」**，不处理「换词重写」—— 后者分数实测落在 0.35 一档，
- * 归 L2 模型判（而 L2 当前默认关闭，见 `DedupOptions.useLlm`）。
+ * 归 L2 模型判（L2 自 2026-09-28 起**默认开**，但入库端显式关，见 `DedupOptions.useLlm`）。
  *
  * ## 反向极性仍然确定性否决
  *
@@ -1043,22 +1043,56 @@ export async function judgeSameEventGroups<
 export interface DedupOptions {
   /**
    * 是否允许调用模型做 L2 判定。**默认取环境变量 `SAME_EVENT_JUDGE`**：
-   * 只有显式设成 `on` / `1` / `true` 才启用，其余（含未设置）一律关闭。
+   * 显式设成 `off` / `0` / `false` 才关闭，其余（含未设置）一律**开启**。
    *
-   * 为什么默认**关**：2026-09-21 首次上线实测，L2 在关闭 thinking 的免费通道上
-   * 会把 18 条毫不相关的新闻并成一组 —— 采信它就等于一次性删掉 17 条不同新闻。
-   * 「误合并」是**丢信息且不可逆**的，所以这条链路的默认值必须是「不合并」，
-   * 等有把握了再显式打开。判断依据在 `GET /api/dedupe-check?llm=1&judge=think|nothink&debug=1`。
+   * ## 2026-09-28 默认值从「关」翻成「开」—— 翻转的理由
+   *
+   * 关的原始理由（2026-09-21）是：L2 在关闭 thinking 的免费通道上会把 18 条毫不相关的
+   * 新闻并成一组，采信它就等于一次性删掉 17 条不同新闻。「误合并」丢信息且不可逆，
+   * 所以当时把默认值定成「不合并」。**那条理由本身仍然成立**，翻的是两边的代价对比：
+   *
+   * ① **只做确定性去重 → 跨源「同一件事」根本无解**。确定性层只认
+   *    「链接相同 / 原文标题指纹相同 / 逐字重复 / 中译标题几乎逐字相同」，
+   *    而同一件事被 5 家媒体各写一遍时**这四条一条都不命中**。
+   *    2026-09-28 用户报「哈萨克还是出现了不少重复新闻」，
+   *    同一件「托卡耶夫要求国防部改革」在库里躺了 **38 篇**（kz 窗口内）；
+   *    早上那份 kz 草稿 15 篇里就有多组同事件重复。
+   * ② **误合并不是没有护栏的**：`hasOppositePolarity` 先拦「一涨一跌」这类反向对，
+   *    候选对还要 `sim ≥ PAIR_CANDIDATE_MIN_SIM`，合并出的簇超过
+   *    `MAX_GROUP_SIZE` 会**整簇丢弃**（宁可少合，不整簇删）。
+   *    2026-09-28 实测 az 就有一个簇因超限被整簇丢掉 —— 护栏是活的。
+   * ③ **实测一轮，12 组合并逐组人工看过，全部是真的同一件事**：
+   *    kz 6 组（阿斯塔纳公交 4/8 条、「希姆肯特 TikTok 博主」3 篇、
+   *    「托卡耶夫任命 Myrzakhmetov 国防部长」3 篇、免去 Qosanov 职务 2 篇…）、
+   *    az 4 组、uz 1 组、tj 1 组（把 `Khujand`/`胡占德`/`苦盏` 三种写法合成一条）、
+   *    kg 0 组（通道没答）。**没有一例误合并**。
+   *    复现：`GET /api/dedupe-check?days=2&llm=1&debug=1`。
+   *
+   * ⇒ 结论：**「少合」的代价（用户每天看得见重复）已经高于「误合」的风险
+   * （有护栏、且可审计）**。翻转后把 `SAME_EVENT_JUDGE=off` 当**紧急刹车**保留 ——
+   * 一旦观察到误合并，不用改代码、改环境变量重启即可回到旧行为。
+   *
+   * ⚠️ 翻转**必须同时保证「合并可审计」**：`push` 的响应里新增了
+   * `summary.merges`（谁被合进了谁）与 `summary.judge`（L2 到底跑没跑成）。
+   * 一个看不见的删除动作，比一个看得见的重复更难排查。
+   *
+   * ⚠️ **只对推送端翻**。入库端（`fetch-news/route.ts` 的闸 3）**显式写死 `useLlm: false`**，
+   * 不跟这个默认值走 —— 三条理由见那里的注释（省不到翻译、花在最不能花的窗口、
+   * 丢在入库端的行事后不可追）。
    */
   useLlm?: boolean;
   /** 透传给判组调用的选项（thinking 开关、原始返回收集）。 */
   judge?: JudgeOptions;
 }
 
-/** `SAME_EVENT_JUDGE` 是否把 L2 打开。默认关，见 `DedupOptions.useLlm` 的说明。 */
+/**
+ * `SAME_EVENT_JUDGE` 是否把 L2 打开。**默认开**，只有显式 `off` / `0` / `false` 才关。
+ * 翻转的理由与护栏见 {@link DedupOptions.useLlm}。
+ */
 export function isLlmJudgeEnabled(): boolean {
   const v = (process.env.SAME_EVENT_JUDGE || '').trim().toLowerCase();
-  return v === 'on' || v === '1' || v === 'true';
+  if (v === 'off' || v === '0' || v === 'false') return false;
+  return true;
 }
 
 /**

@@ -164,6 +164,65 @@ export function mixedScriptTokensLatin(text: string): string[] {
 }
 
 /**
+ * 找出「汉字后面紧跟一段**首字母大写**的拉丁片段」的片段 —— 覆盖 {@link mixedScriptTokensLatin}
+ * 够不着的那一半：`卡赫拉莫恩·库罗诺Boyev`（用户 2026-09-28 报的）。
+ *
+ * ## ⚠️⚠️ 这个函数**只做体检、不能进闸**。原因必须看完再考虑用它做判据
+ *
+ * `mixedScriptTokensLatin` 用「片段必须**全小写**」这一条，顺便把
+ * `CEO表示`／`GDP增长`／`维生素C` 这类正常写法全放行了（规则 1）。
+ * 而用户报的 `库罗诺Boyev` 是**大写开头**的，被规则 1 顺手放过 —— 这是那个判据的已知缺口。
+ *
+ * 直觉上「把规则 1 从『全小写』放宽到『首字母大写也算』」就能补上。**实测不行**：
+ * 2026-09-28 在 500 篇真实语料上跑放宽版，命中 49 种 / 25 篇，逐条人工过目后
+ * **绝大多数是正常的**，因为按现行口径「职务中文 + 人名拉丁」是**规定写法**：
+ *
+ * | 命中（**正常**，不能拦） | 命中（真缺陷） |
+ * |---|---|
+ * | `哈萨克斯坦国际象棋联合会主席Timur`、`临时负责人Romanos`、`美国国务卿Rubio` | `库罗诺Boyev` |
+ * | `阿塞拜疆总统Ilham`、`任命由曼吉斯套州州长Nurdaulet`、`企业家兼收藏家Timur` | `朱纳奥Zen市` |
+ * | `作为Freedom`、`XRG和TotalEnergies`、`白俄罗斯High`、`铁路建设将覆盖Zabrat` | |
+ *
+ * ⇒ 放宽后**必然误伤**「中文职务/连接词 + 拉丁人名」——而那是产品**要求**的写法。
+ * 而这条判据的下游是「重试 → 三次不过就丢弃该篇」，误报的代价是**静默丢稿**，
+ * 500 篇里 25 篇（5%）的量级不可接受。所以**放宽版只能当体检指标，不能当闸**。
+ *
+ * ## 那 `库罗诺Boyev` 怎么防？
+ *
+ * 只能靠**提示词**（见 `translate.ts` 提示词第 6 条的人名两类规则 + 反例），
+ * 并把本函数的命中数当作「提示词有没有生效」的观测量盯着。
+ * 想真正把它变成闸，需要能区分「`库罗诺` 是音译残段」和「`主席` 是中文词」——
+ * 那是**词义判断**，正则做不到；可行方向是拿原文比对（拉丁原文里 `Boyev` 只是
+ * `Quronboyev` 的后缀，而 `Tokayev` 是原文里的独立词），但西里尔原文的语料覆盖不到。
+ *
+ * ⚠️ 判据构造与 {@link mixedScriptTokensLatin} **共用同一个 `TOKEN_SPLIT_RE`**，
+ * 边界必须一致（理由见那个常量的注释）。
+ */
+export function mixedScriptTokensLatinCapitalized(text: string): string[] {
+  const HAN = /[\u4e00-\u9fff]/;
+  const out: string[] = [];
+  for (const tok of (text || '').split(TOKEN_SPLIT_RE)) {
+    if (!tok) continue;
+    if (!HAN.test(tok)) continue;
+    for (const m of tok.matchAll(/[\p{Script=Latin}'\u2018\u2019\u02bb\u02bc]+/gu)) {
+      const run = m[0];
+      if (run.length < 2) continue;
+      // 与 `mixedScriptTokensLatin` 的差别只有这一条：全大写缩写（CEO/GDP/KFB）仍然放行，
+      // 「首字母大写」不再放行 —— 代价见上面的表格。
+      if (/[\p{Lu}]{2}/u.test(run)) continue;
+      const at = m.index ?? 0;
+      const prev = at > 0 ? tok[at - 1] : '';
+      const next = tok[at + run.length] ?? '';
+      if (!HAN.test(prev)) continue;
+      if (prev === '.' || next === '.') continue;
+      if (/[0-9]/.test(prev)) continue;
+      out.push(tok);
+    }
+  }
+  return out;
+}
+
+/**
  * 检测文本是否为中文：**汉字个数 ≥ minHan** 即视为已翻译为中文。
  *
  * ## ⚠️ 2026-09-23 改过判据（占比 → 绝对个数），改之前先读完

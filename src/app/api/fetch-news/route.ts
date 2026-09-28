@@ -1121,7 +1121,25 @@ async function processFetchNews(
     }
 
     for (const [cc, list] of byCountry) {
-      const { kept, drops, llm } = await dedupeStories(list);
+      // **显式关掉 L2，不跟着 `isLlmJudgeEnabled()` 的默认值走。**
+      //
+      // 2026-09-28 L2 的默认值从「关」翻成「开」（理由见 `same-event.ts` 的
+      // `DedupOptions.useLlm`）—— 那是为**推送端**翻的。入库端必须显式写 false，
+      // 否则会跟着一起开，而这里开 L2 有三条账都是负的：
+      //
+      //   1. **省不到翻译**。这一步跑在翻译**之后**（下面 `isSameTitleText` 比的是
+      //      库内中译标题，且 `skipTranslation` 的注释写明走到这里 title/content
+      //      已是中文）⇒ 重复稿的翻译钱已经花完，L2 只是额外再花 5 次调用。
+      //   2. **花在最不能花的地方**。这 5 次调用落在抓取窗口里，而那正是 2026-09-27
+      //      事故现场：抓取实测 154 分 51 秒 > 当时 150 分钟的软上限，超时后照样推送，
+      //      读到半空的库（见 AGENTS.md K 节）。给抓取再加模型调用是在拿刚修好的
+      //      那条链路冒险，而**收益是零**（推送端 L2 已经能看到同一批重复）。
+      //   3. **丢在这里的行事后不可追**。推送端的合并只是本轮不推，库里还在；
+      //      入库端合掉的是根本不会 insert，`lastRun.summary.dedup.drops` 之外没有第二份记录。
+      //
+      // 用户报的「哈萨克重复」是**草稿里**的重复，推送端 L2 已能消掉（同一件事在窗口内
+      // 的重复稿对推送端是可见的，包括跨轮累积的那 38 篇）。所以入库端维持确定性三层。
+      const { kept, drops, llm } = await dedupeStories(list, { useLlm: false });
       contentDeduped.push(...kept);
       if (llm.ran) {
         llmJudge.ran = true;

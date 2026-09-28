@@ -323,6 +323,39 @@ interface PushSkip {
 
 // 一轮推送的结果。除 success/message 外，字段与原同步响应的结构保持一致，
 // 老调用方改成读 lastRun.summary 时不用改字段名。
+/**
+ * 一条「被判为同一件事」而被合并掉的稿子。
+ *
+ * 为什么要报出来：L2（模型判组）默认状态在 2026-09-28 从「关」翻成「开」，
+ * 翻的理由与护栏见 `same-event.ts` 的 `DedupOptions.useLlm`。
+ * **误合并是静默丢信息**，所以每一次合并都必须能在接口上看见 ——
+ * 「哪条稿子因为被判成重复而没出现在草稿里」以前只能进容器翻日志。
+ */
+interface PushMerge {
+  country_code: string;
+  /** `same_url` / `same_original` / `same_text` / `same_title` = 确定性；`llm_same_event` = 模型判的 */
+  reason: string;
+  kept: string;
+  dropped: string;
+}
+
+/**
+ * L2（模型判组）本轮的实际执行情况。
+ *
+ * **必须报出来**：L2 失败时 `drops` 里只剩确定性去重的结果，看起来和「本来就没重复」一模一样。
+ * `ran=false`（没跑，例如候选不足 2 条）与 `ok=false`（跑了但没答成）要能区分 ——
+ * 否则「今天怎么这么多重复」会又一次变成只能靠猜的问题。
+ */
+interface PushJudge {
+  ran: boolean;
+  ok: boolean;
+  error?: string;
+  /** 模型被问了几对 */
+  candidateCount?: number;
+  /** 模型答了「是同一件事」的对数 */
+  mergedPairs?: number;
+}
+
 interface PushSummary {
   hours: number;
   period: string | null;
@@ -352,6 +385,16 @@ interface PushSummary {
    * 不用进容器翻日志、也不用猜。为空数组表示窗口内有文章的每个国家都出了草稿。
    */
   skipped: PushSkip[];
+  /**
+   * 本轮被判为「同一件事」而合并掉的篇目（每国一组）。
+   *
+   * 这是**唯一能审计「模型判组有没有乱合并」的出口** —— 合并掉的稿子不会出现在
+   * `drafts` 里，也不会出现在 `skipped` 里（那一国照样出草稿）。
+   * 空数组 = 本轮没有任何重复。
+   */
+  merges: PushMerge[];
+  /** 各国 L2 的执行情况，用来区分「没有重复」和「判组没跑成」 */
+  judge: Array<PushJudge & { country_code: string }>;
 }
 
 interface PushRunState {
@@ -539,6 +582,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     // 正常被跳过的国家（不是异常）。见 `PushSkip` 的注释：2026-09-27 那次
     // 「五国只推一国、failures 却是空的」就是因为这里什么都不记。
     const skipped: PushSkip[] = [];
+    // 判组合并的审计轨迹：谁被合进了谁（见 `PushMerge`）。L2 打开后这是唯一的可审计出口。
+    const merges: PushMerge[] = [];
+    const judgeRuns: Array<PushJudge & { country_code: string }> = [];
 
     // 按国别分组推送
     for (const country of countryList) {
@@ -632,13 +678,27 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         return false;
       });
 
-      // 「同一件事」去重：链接 / 原文指纹（确定性）+ 模型判组（每国 1 次调用）。
+      // 「同一件事」去重：链接 / 原文指纹（确定性）+ 模型判组（L2，每国 1 次调用）。
       // 判据与入库端**完全同源**（同一个 `dedupeStories`），不另起一套。
       const { kept: dedupedArticles, drops: eventDrops, llm: llmJudge } =
         await dedupeStories(eligible);
       for (const d of eventDrops) {
         console.log(`[${country.code}][${d.reason}] 跳过重复：${d.dropped.title} ← 保留：${d.kept.title}`);
+        merges.push({
+          country_code: country.code,
+          reason: d.reason,
+          kept: d.kept.title,
+          dropped: d.dropped.title,
+        });
       }
+      judgeRuns.push({
+        country_code: country.code,
+        ran: llmJudge.ran,
+        ok: llmJudge.ok,
+        ...(llmJudge.error ? { error: llmJudge.error } : {}),
+        ...(llmJudge.candidateCount !== undefined ? { candidateCount: llmJudge.candidateCount } : {}),
+        ...(llmJudge.pairs ? { mergedPairs: llmJudge.pairs.length } : {}),
+      });
       if (llmJudge.error) {
         console.warn(`[${country.name}] 「同一件事」模型判组未生效，本轮只做了链接/原文去重：${llmJudge.error}`);
       }
@@ -767,6 +827,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       drafts: results,
       failures,
       skipped,
+      merges,
+      judge: judgeRuns,
     };
   } catch (error) {
     console.error('微信推送失败（本轮整体失败）:', error);

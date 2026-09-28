@@ -20,6 +20,7 @@
  */
 import {
   isChineseText, hanCount, hanRatio, mixedScriptTokens, mixedScriptTokensLatin,
+  mixedScriptTokensLatinCapitalized,
   MIN_HAN_TITLE, MIN_HAN_CONTENT,
 } from '../src/lib/utils';
 import { isPushableText, pushExclusionReason } from '../src/lib/article-format';
@@ -229,6 +230,52 @@ ok(
   mixedScriptTokensLatin('aktau市发生火灾').length === 0,
   '若这里开始抓到了，说明规则 2 被放宽了 —— 请重新量一遍误报率再决定',
 );
+
+// ============================================================
+// 三之四、★ 体检指标（**故意不进闸**）：汉字 + 首字母大写拉丁片段
+// ============================================================
+//
+// 2026-09-28：用户报 `卡赫拉莫恩·库罗诺Boyev`。判据本体在
+// `utils.mixedScriptTokensLatinCapitalized` —— **它只做体检、不能进闸**，
+// 因为放宽「全小写」之后必然误伤「职务中文 + 人名拉丁」这种**规定写法**。
+// 这一节断言的是**这个取舍本身**：该抓的抓到、该放行的也必须放行。
+// 谁要是把它接进 `translate.ts` 的闸门，这里会立刻红。
+
+section('三之四、体检指标（不进闸）：汉字 + 首字母大写拉丁片段');
+
+const capMustCatch: Array<[string, string]> = [
+  ['卡赫拉莫恩·库罗诺Boyev被任命为乌兹别克斯坦内阁社会发展部门负责人', '用户 2026-09-28 报的原始形态'],
+  ['Mukaş在任命前担任阿克套市朱纳奥Zen市副市长', '地名被译了一半（Жаңаөзен）'],
+];
+for (const [t, why] of capMustCatch) {
+  const hits = mixedScriptTokensLatinCapitalized(t);
+  ok(`抓到「${t.slice(0, 24)}…」（${why}）`, hits.length > 0, '没抓到，判据退化了');
+}
+
+// 这些都是**按现行口径正确的写法**，放宽版会误伤 —— 所以它不能当闸。
+const capMustNotGate: Array<[string, string]> = [
+  ['哈萨克斯坦国际象棋联合会主席Timur', '职务中文 + 人名拉丁 = 规定写法'],
+  ['美国国务卿Rubio将访问撒马尔罕', '同上'],
+  ['阿塞拜疆总统Ilham Aliyev出席仪式', '同上'],
+];
+for (const [t] of capMustNotGate) {
+  const hits = mixedScriptTokensLatinCapitalized(t);
+  ok(
+    `放宽版**会**误伤「${t.slice(0, 24)}…」—— 这正是它不能进闸的证据`,
+    hits.length > 0,
+    '若这里变成 0 命中，说明判据被收紧了，请重新评估能否进闸',
+  );
+}
+
+// 全大写缩写（2 个及以上连续大写）仍然放行 —— 这一条是**真的**安全，别把它也放宽掉。
+const capMustAllow: Array<[string, string]> = [
+  ['CEO表示公司将在哈萨克斯坦扩大投资', '大写缩写贴汉字旁（原判据就放行的正常写法）'],
+  ['GDP增长带动 AIIB 贷款需求', '同上'],
+];
+for (const [t, why] of capMustAllow) {
+  const hits = mixedScriptTokensLatinCapitalized(t);
+  ok(`仍放行「${t.slice(0, 24)}…」（${why}）`, hits.length === 0, `却抓到了 ${hits.join('/')}`);
+}
 
 // ============================================================
 // 四、推送资格闸：新口径的稿子必须仍然推得出去

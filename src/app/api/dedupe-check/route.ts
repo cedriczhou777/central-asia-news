@@ -449,7 +449,10 @@ export async function GET(request: NextRequest) {
       const excludedByRules = list.length - eligible.length;
       const slice = eligible.slice(0, perCountryLimit);
       const { llm } = await dedupeStories(slice as never[], {
-        // 显式打开：体检的目的就是验证 L2，不能受生产默认值（关闭）影响
+        // 显式打开。**不再是为了覆盖生产默认值**（L2 自 2026-09-28 起默认就是开的），
+        // 而是因为这里要传 `judge` 里的额外参数：体检的目的就是验证 L2 的某一种配置，
+        // `useLlm` 一旦跟着默认值走，将来默认值再翻一次，这条查询就会变成
+        // 「关着 L2 去验 L2」——那正是 2026-09-21「L2 不稳定」假结论的成因。
         useLlm: true,
         judge: { extraBody, collectRaw: debug, mode: taskMode, promptVersion },
       });

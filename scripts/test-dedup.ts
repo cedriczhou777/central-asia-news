@@ -30,6 +30,7 @@ import {
   filterOversizedGroups,
   hasOppositePolarity,
   identityKeys,
+  isLlmJudgeEnabled,
   isSameTitle,
   isSameTitleText,
   judgeExplicitPairs,
@@ -791,6 +792,63 @@ async function modeChecks(): Promise<void> {
     gProbe.llm.provider === 'fake-model',
     String(gProbe.llm.provider),
   );
+
+  // ------------------------------------------------------------
+  // L2 默认值（2026-09-28 从「关」翻成「开」）—— 翻转本身 + 两个调用点的口径差
+  // ------------------------------------------------------------
+  //
+  // 为什么要断言「默认值」这种东西：它**没有输出、没有症状**，只有两个后果 ——
+  //   · 有人无意改回去 ⇒ 跨源「同一件事」又开始漏（用户 09-28 报的那个问题复发），不报错；
+  //   · 有人把它当全局开关 ⇒ **入库端跟着一起开**，而入库端开 L2 是净亏（见下）。
+  // 两种都不会有任何日志，只能靠断言钉住。
+  //
+  // 口径分叉是**故意的**，不是不一致：
+  //   · 推送端裸调用 ⇒ 跟默认值 ⇒ 开（用户报的重复是草稿里的重复，这里才治得了）
+  //   · 入库端显式 false ⇒ 不跟 ⇒ 关（省不到翻译 / 花在抓取窗口 / 丢在入库端不可追）
+  // 所以下面既断言「默认是开」，也断言「入库端钉死了关」。
+  {
+    const saved = process.env.SAME_EVENT_JUDGE;
+    const restore = () => {
+      if (saved === undefined) delete process.env.SAME_EVENT_JUDGE;
+      else process.env.SAME_EVENT_JUDGE = saved;
+    };
+    try {
+      delete process.env.SAME_EVENT_JUDGE;
+      ok('未设 SAME_EVENT_JUDGE 时 L2 **默认开**（2026-09-28 翻转）', isLlmJudgeEnabled() === true);
+
+      // 显式关仍然有效 —— 这是**不用改代码、不用发版**的紧急刹车，
+      // 一旦观察到误合并，改环境变量重启即可回到旧行为。它必须好使。
+      for (const off of ['off', 'OFF', '0', 'false', ' false ']) {
+        process.env.SAME_EVENT_JUDGE = off;
+        ok(`SAME_EVENT_JUDGE=${JSON.stringify(off)} 关掉 L2（紧急刹车可用）`, isLlmJudgeEnabled() === false);
+      }
+      for (const on of ['on', '1', 'true']) {
+        process.env.SAME_EVENT_JUDGE = on;
+        ok(`SAME_EVENT_JUDGE=${JSON.stringify(on)} 打开 L2（旧写法仍然认）`, isLlmJudgeEnabled() === true);
+      }
+    } finally {
+      restore();
+    }
+
+    // 调用点口径：用源码断言。这是「删除类」开关，接错的表现是**静默丢稿**，
+    // 而 route 文件不好做单测 —— 源码级断言在这里比没有断言强得多。
+    try {
+      const fetchSrc = readFileSync(resolve(process.cwd(), 'src/app/api/fetch-news/route.ts'), 'utf8');
+      ok(
+        '入库端（闸 3）显式关掉 L2，不跟默认值走',
+        /dedupeStories\(list,\s*\{\s*useLlm:\s*false\s*\}\s*\)/.test(fetchSrc),
+        '没找到 `dedupeStories(list, { useLlm: false })` —— 入库端会跟着默认值开 L2',
+      );
+      const pushSrc = readFileSync(resolve(process.cwd(), 'src/app/api/wechat/push/route.ts'), 'utf8');
+      ok(
+        '推送端裸调用 dedupeStories（跟默认值 ⇒ L2 开）',
+        /dedupeStories\(eligible\)/.test(pushSrc),
+        '推送端不再裸调用了 —— 如果改成显式传值，请把 L2 的开关口径同步写进 AGENTS.md',
+      );
+    } catch (e) {
+      ok('能读到两个调用点的源码（读不到就无法守住口径差）', false, e instanceof Error ? e.message : String(e));
+    }
+  }
 }
 
 // ============================================================
