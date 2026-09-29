@@ -13,19 +13,48 @@ import {
 import { generateWechatHtml } from '@/lib/wechat-template';
 import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 import {
+  buildEditorPrompt,
+  applyVerdict,
   crossCountryOverlaps,
   isEditorReviewEnabled,
   reviewDraft,
   planCoverBorrows,
   EDITOR_PROMPT_VERSION,
+  DUP_SIM_FLOOR,
   MAX_DROPS,
   MAX_FIXES,
+  QUOTE_MIN,
   type ReviewAudit,
   type ReviewItem,
 } from '@/lib/editor-review';
+import { pickDraftCover } from '@/lib/draft-cover';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
+
+/**
+ * `codeVersion` 的两个**活体探针**用的极小样本（2026-09-29 新增）。
+ *
+ * 为什么放在模块级：探针在**每次 GET** 上跑，要便宜到可以忽略 —— 这里只是三个对象字面量，
+ * 进程启动时算一次就不再变。
+ *
+ * 为什么三条就够：两个探针要证明的事情（JSON 契约里 order 示例的形状、抄示例的理由会被拦住）
+ * 与样本大小无关 —— `buildEditorPrompt` 只要有一位数字就能渲染出真实契约，
+ * `applyVerdict` 只要有一组标题就能走完判据。
+ *
+ * ⚠️ 标题里**故意不带任何真实新闻内容**：探针的输出会被贴进排查记录，
+ * 掺进真稿件会让「这是探针还是真实一审」变得分不清。
+ */
+const PROBE_ITEMS: ReviewItem[] = Array.from({ length: 3 }, (_, i) => ({
+  title: `探针第 ${i} 条（不含任何真实新闻内容）`,
+  summary: '探针摘要',
+  category: 'economy',
+  source: 'probe',
+  time: '1970-01-01 00:00',
+  hasImage: false,
+  relevance: 0,
+  contentPeek: '',
+}));
 
 // 投资相关性评分（含中英文关键词、标题加权、分档权重）统一在
 // `@/lib/investment-score`。**不要再在本文件里重建关键词表** ——
@@ -291,6 +320,21 @@ interface PushDraft {
   country_name: string;
   media_id: string;
   article_count: number;
+  /**
+   * 这份草稿的封面图取自**最终顺序里的第几条**（2026-09-29 新增）。
+   *
+   * 用户 09-29 的投诉：「你的封面是以第一个新闻的照片做插图的……没有图的时候，
+   * 你要不然把第二新闻放在第一个位置，或者直接使用第二个新闻的图片做封面。」
+   * 于是封面改为「第一条有图的那条」（见 `lib/draft-cover.ts`）。
+   * `0` = 就是第一张（正常情况）；`>0` = 第一条没图、封面借了后面某条的图；
+   * `null` = 全篇无图，退成内置品牌图。
+   *
+   * ⚠️ 为什么值得单列一个字段：这三种情况在微信公众号后台看起来**完全一样**
+   * （都只是「有封面」），只有这里能区分。少记一个数，将来「封面怎么是这张」就没法回答。
+   */
+  cover_from_index: number | null;
+  /** 封面的来源稿件标题（`null` 表示用的是内置品牌图） */
+  cover_from_title: string | null;
 }
 
 /**
@@ -385,7 +429,15 @@ interface PushReview extends ReviewAudit {
   before: number;
   after: number;
   /** 被总审合并或删掉的稿件（与 `merges` 分开放：那是判组删的，这是总审删的） */
-  drops: Array<{ title: string; kind: string; reason: string }>;
+  drops: Array<{
+    title: string;
+    kind: string;
+    reason: string;
+    /** v3：判 duplicate 时模型自称「与它重复」的原索引（`unreliable`/`not_news` 没有这个字段） */
+    sameAs?: number;
+    /** 上面那个索引对应的标题 —— 写出来是为了让人**不用回数据库**就能核对它指得对不对 */
+    sameAsTitle?: string;
+  }>;
   /** 被总审改过文字的字段 */
   fixes: Array<{ field: string; before: string; after: string; why: string }>;
   /**
@@ -423,12 +475,14 @@ interface PreparedCountry {
 /**
  * 把一条库里的稿件转成总审能看的形态。
  *
- * `contentPeek` 只取正文**开头 200 字**（去掉 HTML 标签）：总审要判的五件事里，
+ * `contentPeek` 只取正文**开头 200 字**（去掉 HTML 标签）：总审要判的六件事里，
  * 重复看标题+摘要就够，逻辑与数字错误在开头就暴露（线上那两条 `500 座教学楼`、
  * `下调1.5倍` 都是标题级）。全文会把这层调用放大十倍，而收益要到正文中后段才出现。
  * ⚠️ 代价是**正文中后段的错误抓不到** —— 已知缺口，别当成没 bug。
  * ⚠️ 第五件事（内部一致性）受同一个缺口影响最大：**摘要之间互相矛盾看得见，
  * 正文深处的矛盾看不见**。所以它是「最保守」的那一件事，判据写得比前几件严得多。
+ * ⚠️ 第六件事（国家归属）**受影响最小**：国名与主体几乎总在标题或摘要里
+ * （09-29 那条「哈萨克斯坦建设部长视察奥什机场」就写在摘要上），所以这一条**不需要全文**。
  */
 function toReviewItem(a: {
   title?: string | null;
@@ -654,7 +708,16 @@ export async function GET() {
       /** 终审提示词版本 —— 改 `EDITOR_PROMPT` 时必须一起改它 */
       editorPromptVersion: EDITOR_PROMPT_VERSION,
       /** 终审护栏上限（调参后可以从这里确认线上拿到的是新值） */
-      editorGuards: { maxDrops: MAX_DROPS, maxFixes: MAX_FIXES },
+      editorGuards: {
+        maxDrops: MAX_DROPS,
+        maxFixes: MAX_FIXES,
+        /**
+         * v3 新增的两道闸（2026-09-29 晚报换来的）—— 系数**从常量现算**，
+         * 所以它们**存在**就说明这一版带上了 v3 的两道闸。
+         */
+        dupSimFloor: DUP_SIM_FLOOR,
+        quoteMin: QUOTE_MIN,
+      },
       /**
        * 「借图」（`planCoverBorrows`）的配对下限 —— 从常量现算，所以它**存在**本身就说明
        * 这一版代码带上了借图。2026-09-29 新增。
@@ -682,6 +745,44 @@ export async function GET() {
        * 入参是线上真实命中（id=6658 正文）。
        */
       cyrillicNoteStripProbe: stripCyrillicParentheticals('吉尔吉斯斯坦国家税务局（ГНС）'),
+      /**
+       * ★ v3 的核心活体探针 ①：**提示词里 JSON 契约的 order 示例长什么样**。
+       *
+       * 返回的是**字符串**（`'[0, 1, 2]'`），不是布尔 —— 同 `cyrillicNoteStripProbe` 的理由：
+       * 一个 `true` 只能说明「模板存在」，说明不了「模板对」。
+       *
+       * 它存在的唯一理由是 2026-09-29 晚报那次事故：模板写成了 `"order": [{ORDER_EXAMPLE}]`，
+       * 渲染出 `[[0, 1, 2]]`，模型照抄 ⇒ 五国排序**全部作废**，而报错看起来像「模型没给」。
+       * 现在：只要这里出现**任何**连续的 `[[`，或出现 `(没匹配到)`，就是模板又被改坏了。
+       * 正确值形如 `[0, 1, 2]`。
+       */
+      editorOrderExampleProbe: (() => {
+        const p = buildEditorPrompt({ countryName: '探针', items: PROBE_ITEMS });
+        const m = p.match(/"order":\s*(\[[^\]\n]*\])/);
+        return m ? m[1] : '(没匹配到)';
+      })(),
+      /**
+       * ★ v3 的核心活体探针 ②：**照抄提示词示例的理由，会被当场拦住吗**。
+       *
+       * 入参是 2026-09-29 晚报**五国同时给出**的那句理由（当时配在 5 条互不相干的稿子上，
+       * 把 5 条真稿子静默删掉了）。正确值是 `删了 0 条｜…最长引文 N 字 < 6…⇒ 拒绝`。
+       *
+       * 为什么把**拒绝理由**也带出来：只报「删了 0 条」分不清是护栏工作、
+       * 还是碰巧撞上了别的判据（例如「没给 sameAs」）。带上理由，
+       * 就能一眼看出**是哪一个判据、量到了多少**。这正是 `cyrillicNoteStripProbe` 的套路。
+       */
+      editorDropGuardProbe: (() => {
+        const r = applyVerdict(PROBE_ITEMS, {
+          drops: [
+            {
+              index: 1,
+              kind: 'duplicate',
+              reason: '与第 2 条同为 9 月 27 日阿塞拜疆政府与 AIIB 的那场会谈',
+            },
+          ],
+        });
+        return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '没有拒绝记录（护栏可能失效了）'}`.slice(0, 120);
+      })(),
     },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿、summary.failures 是哪些国家失败、
@@ -1012,6 +1113,12 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
               title: a?.title || '',
               kind: d.kind,
               reason: d.reason,
+              // v3：把「它自称和谁重复」一起记下来。事故当晚五国的理由全是抄来的空话，
+              // 而审计里**没有任何字段**能回答「它到底在说和谁重复」—— 于是无从判断
+              // 是「看错了」还是「乱指」。`sameAsTitle` 让人一眼就能自己核对。
+              ...(d.sameAs !== undefined
+                ? { sameAs: d.sameAs, sameAsTitle: pc.articles[d.sameAs]?.title || '' }
+                : {}),
             });
             // 只有**被判为重复**的稿子才配当捐赠者：总审明确说过它与某条是同一件事。
             // `not_news` / `unreliable` 的稿子跟谁都不同一件事，不能拿它的图。
@@ -1122,15 +1229,30 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         wechatArticles
       );
 
-      // 上传缩略图（优先用第一篇文章已上传微信的封面图，再从原图取）
-      // 上面已保证 selectedArticles 非空；这里统一用可选链，避免将来改动再踩空数组。
-      const thumbUrl =
-        wechatArticles[0]?.cover_image ||
-        selectedArticles[0]?.cover_image ||
-        // 同样从清洗后的正文取，避免把模型编造的图片地址当成草稿封面去下载
-        extractFirstImage(sanitizeArticleContent(selectedArticles[0]?.content || '')) ||
-        undefined;
-      const thumbMediaId = await uploadThumb(thumbUrl);
+      // 上传缩略图。**取「最终顺序里第一条有图的」**，而不是只看第一条（2026-09-29 改）。
+      //
+      // 用户原话：「你的封面是以第一个新闻的照片做插图的……没有图的时候，你要不然把第二新闻
+      // 放在第一个位置，或者直接使用第二个新闻的图片做封面。」
+      // 前者（把有图的排前面）由总审提示词的「封面规则」负责；这里负责后者。
+      // 两者的分工与边界都在 `lib/draft-cover.ts` 的注释里。
+      //
+      // ⚠️ 候选图**只从这份日报自己的稿件里取**，且每个 URL 都先用 `sanitizeArticleContent`
+      // 过一遍 —— 用原始 `a.content` 会把模型自己编造的图片地址（占位图 / picsum 之类）
+      // 当成草稿封面去下载。绝不搜图库、绝不生成图。
+      const coverCandidates = wechatArticles.map((a, i) => {
+        const cleaned = sanitizeArticleContent(selectedArticles[i]?.content || '');
+        return {
+          title: a.title,
+          imageUrl: a.cover_image || extractFirstImage(cleaned) || undefined,
+        };
+      });
+      const draftCover = pickDraftCover(coverCandidates);
+      if (draftCover && draftCover.index > 0) {
+        console.log(
+          `[${country.name}] 草稿封面取自第 ${draftCover.index + 1} 条（第一条没图）：${draftCover.title}`,
+        );
+      }
+      const thumbMediaId = await uploadThumb(draftCover?.url);
 
       // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
       // 标题带「早报 / 晚报」：同一天两次推送的草稿标题必须不同，
@@ -1161,6 +1283,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         country_name: country.name,
         media_id: mediaId,
         article_count: selectedArticles.length,
+        cover_from_index: draftCover ? draftCover.index : null,
+        cover_from_title: draftCover ? draftCover.title : null,
       });
     }
 
