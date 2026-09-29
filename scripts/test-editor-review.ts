@@ -25,6 +25,7 @@ import {
   applyVerdict,
   buildEditorPrompt,
   crossCountryOverlaps,
+  DROP_KINDS,
   EDITOR_PROMPT_VERSION,
   fixRejectReason,
   isEditorReviewEnabled,
@@ -105,6 +106,15 @@ section('一、开关（EDITOR_REVIEW）与提示词版本');
   }
 }
 ok('提示词有版本号（改了提示词要能分辨）', EDITOR_PROMPT_VERSION.length > 0, EDITOR_PROMPT_VERSION);
+// ⚠️ 这条是**故意写死字面量**的：它是一个「改了提示词就得改版本号」的哨兵。
+// 提示词一改而版本没动，`summary.review[].promptVersion` 就会撒谎，
+// 「两次结论不同」也就分不清是换了提示词还是换了模型 —— 那正是这个字段存在的唯一理由。
+// 改动提示词时把它 +1，并同步这条断言（`AGENTS.md` 的改动清单里提到过）。
+ok(
+  '提示词版本号与 v2 对齐（改了提示词必须先改版本号）',
+  EDITOR_PROMPT_VERSION === 'v2',
+  `现在是 ${EDITOR_PROMPT_VERSION} —— 若你刚改了提示词，请把 EDITOR_PROMPT_VERSION +1 并同步这条断言`,
+);
 
 // ============================================================
 // 二、正常路径：合规的处置必须**真的被执行**
@@ -401,6 +411,43 @@ section('五、提示词（buildEditorPrompt）');
     ['"order"', '"drops"', '"fixes"', '"needsImage"', '"verdict"'].every((k) => prompt.includes(k)));
   // 不喂全文是**刻意的**取舍，写成断言免得后人以为是漏了
   ok('不喂全文（contentPeek 只到 200 字，见该函数的取舍说明）', items[0].contentPeek.length <= 200);
+
+  // ------------------------------------------------------------
+  // v2：两处「提示词在撒谎」的修正 —— 两处都是**反例断言**
+  // ------------------------------------------------------------
+  //
+  // ① 第四件事原来写「这些会由排版环节优先补图」。**链路里从来没有补图环节**
+  //    （`article-format.ts` 反而把 unsplash/picsum 当编造图拦掉）。
+  //    后果不是「白说一句」，而是让模型为了兑现一个不存在的机制去凑清单。
+  ok(
+    '⚠️ 不再声称「排版环节会优先补图」（那是从未实现的承诺）',
+    !prompt.includes('优先补图'),
+    '提示词里仍有「优先补图」—— 请检查是不是又写回了一个不存在的环节',
+  );
+  ok('第四件事改成实话：只给人工看、不会自动补图', prompt.includes('不会自动补图'));
+
+  // ② 第五件事（真实性）—— 用户明确要求「审新闻的真实性」，
+  //    而 v1 的四个 job 里没有一个管这件事。
+  ok('提示词里是「五件事」（真实性这件事真的加进去了）', prompt.includes('五件事'));
+  ok(
+    '明说「无法联网、不要试图核实是否属实」（不夸口做不到的事）',
+    // ⚠️ 断言不能写整句 —— 提示词里「不要」两侧有 `**` 加粗标记，整句子串匹配不到。
+    // 这不是妥协：一条被加粗切碎的断言将来还会再骗人一次。
+    prompt.includes('无法联网') && prompt.includes('试图核实'),
+    prompt.includes('无法联网') ? '' : '提示词里找不到「无法联网」—— 是不是把外部核查当成了这一层的职责？',
+  );
+  // ★ 这条是本轮最值钱的一条：v1 里 `unreliable` **只出现在约束 2 的括号列表里**，
+  //   从没说什么时候该用它 —— 那等于给了一个从未被说明的权限。现在三个 kind 都有判据。
+  //   （断言用 `kind: "x"` 而不是裸子串：裸子串在 v1 里也是绿的，抓不到这个缺口。）
+  ok(
+    '三个 drop kind 都有明确判据（v1 的 `unreliable` 从未被定义）',
+    DROP_KINDS.every((k) => prompt.includes(`kind: "${k}"`)),
+    `缺判据的 kind：${DROP_KINDS.filter((k) => !prompt.includes(`kind: "${k}"`)).join(' / ')}`,
+  );
+  ok(
+    '删稿类判据自带「最保守」的止损语（删错不可逆）',
+    prompt.includes('最保守') && prompt.includes('留着') && prompt.includes('读者永远看不到'),
+  );
 }
 
 // ============================================================
