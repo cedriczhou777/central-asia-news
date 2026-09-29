@@ -86,6 +86,9 @@
    一条 curl 即可：`curl -s "$URL/api/wechat/push" | python3 -m json.tool | head -60`。
    另：`codeVersion` 是**本次新增**的指纹，它要等**下一次部署**才会出现在响应里 ——
    所以今晚看不到它属正常（别误判成「指纹没生效」）。
+   ⚠️ **同理：今晚跑的是提示词 `v1`。** `0999f80` 把 `EDITOR_PROMPT_VERSION` 提到了 `v2`
+   （补真实性判据 + 删掉「排版环节会补图」那句假承诺，见 M-7），
+   但**它也要下一次部署才生效**。所以今晚 `review[].promptVersion` 若显示 `v1`，**也是正常的**。
 
 1. **Telegram 绑自有域名** —— 12 个频道全不可用，根因是容器到不了 `*.workers.dev`（不是配置问题）。
    要做：Cloudflare 给 Worker 绑 Custom Domain → 云托管改 `TELEGRAM_WORKER_URL` → 验证 `GET /api/telegram-check` 的 `okCount=12`。
