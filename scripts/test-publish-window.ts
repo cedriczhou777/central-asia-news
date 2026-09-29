@@ -25,6 +25,8 @@ import {
   MEASURED_WORST_FETCH_MS,
   waitBudgetCrossCheck,
 } from '../src/lib/scheduler';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 let passed = 0;
 const failures: string[] = [];
@@ -163,6 +165,44 @@ section('调度器等待预算（抓取没跑完就不该往下走）');
     FETCH_HARD_WAIT_MS - MEASURED_WORST_FETCH_MS >= 30 * 60_000,
     `余量 ${Math.round((FETCH_HARD_WAIT_MS - MEASURED_WORST_FETCH_MS) / 60_000)} 分钟`,
   );
+}
+
+// ------------------------------------------------------------
+// ★ 源码断言：抓取没在硬上限内跑完 ⇒ **本轮不推送**（缺陷第 20 条）
+// ------------------------------------------------------------
+//
+// 为什么这里只能用**源码断言**，不能用行为断言：`runPublishCycle` 一跑就真的
+// 会发 HTTP、读库、建草稿 —— 单测里不可能调它。而这条早退是「静默丢稿」的
+// 唯一防线：2026-09-27 早报在抓取结束前 4 分 49 秒启动推送，读到半空的库，
+// 最后只出了 kg 一国，而 `summary.failures` 是**空的**（接口看起来是成功的）。
+//
+// ⚠️ 删掉这个 `return` 不会有任何测试变红，只会让某天的草稿箱悄悄变空 ——
+// 正是本项目最怕的那类形态。所以退而求其次：把它在**源码里的形状**钉死。
+// 这类断言比行为断言脆（改个变量名就会红），但红的时候看一眼就知道是不是真删了。
+try {
+  const src = readFileSync(resolve(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+  ok(
+    '★ 抓取未完成时 `runPublishCycle` **直接 return**（不许推一份缺国家的稿子）',
+    /if\s*\(\s*!fetchOutcome\.finished\s*\)\s*\{[\s\S]{0,700}?return;/.test(src),
+    '这条没了 = 2026-09-27「五国只推一国、failures 却是空的」会重演',
+  );
+  ok(
+    '★ 早退走的是 `console.error`（不是 warn / log）',
+    /!fetchOutcome\.finished\s*\)\s*\{[\s\S]{0,700}?console\.error/.test(src),
+    '降成 warn 就会被淹没在推流的日志里',
+  );
+  ok(
+    '★ 早退的日志里带了「手工补推」的指引（否则这一轮新闻永久漏掉）',
+    /手工补[\s\S]{0,200}?period["']?\s*:\s*["']?manual/.test(src),
+    '没有补推指引 = 运维只知道失败了，不知道该做什么',
+  );
+  ok(
+    '★ 抓取与推送在同一个函数里**串行**（推送不得先于抓取跑）',
+    /const fetchOutcome = await runFetchNews\(\);[\s\S]{0,1400}?await runWechatPush\(/.test(src),
+    '先推/并行 = 读到上一轮的旧数据，早报把前一晚推过的新闻再推一遍',
+  );
+} catch (err) {
+  ok('能读到 scheduler.ts 做源码断言', false, err instanceof Error ? err.message : String(err));
 }
 
 console.log(`\n${'='.repeat(60)}`);
