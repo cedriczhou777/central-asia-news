@@ -36,7 +36,8 @@
  * | 重排序 | `order` 必须是 `0..N-1` 的**完整排列** | 整个 order 作废，保持原序 |
  * | 合并/删除 | 每个 drops 必须有 `kind` + 具体 `reason`；条数上限 `MAX_DROPS`、比例上限 `MAX_DROP_RATIO`、保留下限 `MIN_KEEP` | 逐条拒绝，只采信合规的那些 |
  * | 改 title/summary | `before` 必须与当前文本**逐字相同**；`after` 非空、长度有界、无换行/标签；**且必须通过翻译层的书写系统闸与倍数闸** | 逐条拒绝 |
- * | 指出缺图 | 只记录，不动内容 | — |
+ * | 指出缺图 | 只记录，不动内容（**不改写文字**） | — |
+ * | —— 缺图的**补图** | 见 `planCoverBorrows`：**只**把「刚被删掉的重复稿」的封面挪给没图的幸存稿 | 匹配不到就不挪 |
  *
  * ⚠️ **最后一条护栏值得单独讲**：终审写出的中文，必须**和翻译层受同一套闸约束**
  * （`mixedScriptTokens` / `mixedScriptTokensLatin` / `mixedScriptTokensLatinCapitalized` /
@@ -63,9 +64,15 @@
  *   它只能删（`kind: 'unreliable'`）或不动，不能重写全文。
  * - **不动正文 content**：正文里有整段错误时它只能给出 `unreliable` 判断。
  *   正文改写属于另一个量级的工作（见 AGENTS.md 的待办）。
+ * - **配图只能「挪」不能「找」**：`planCoverBorrows` 只搬运**同一件事的重复稿**身上
+ *   已经存在的真图。线上实测（3 天 1152 篇）187 篇完全没图，其中能这样挪到图的**上限约 20%**
+ *   （同国 35 篇）。**剩下的 80% 挪不到** —— 要覆盖它们只能去图库搜图，
+ *   而那正是用户 2026-09-29 明确否掉的选项（图不是那件事的照片）。
+ *   ⇒ 别把「没图的稿子变少了」当成这个功能的疗效指标，它只解决「同一件事有两份、有图那份被删了」这一种情况。
  */
 
 import { askLlmJson } from './translate';
+import { PAIR_CANDIDATE_MIN_SIM } from './same-event';
 import { similarity, mixedScriptTokens, mixedScriptTokensLatin, mixedScriptTokensLatinCapitalized, descendingMultiplePhrases } from './utils';
 
 /**
@@ -572,6 +579,90 @@ export function crossCountryOverlaps(
     }
   }
   return out.sort((a, b) => b.sim - a.sim);
+}
+
+// ----- 借图（2026-09-29：「重要新闻要配图」，用户选定「只挪真图」）-----
+
+/** 一次「借图」：把已删掉的重复稿的封面挪给一条没图的幸存稿。 */
+export interface CoverBorrow {
+  /** 幸存稿在**最终顺序**里的下标（重排之后的下标，路由据此插图） */
+  targetIndex: number;
+  /** 出图的稿子标题（它已被总审删掉，不在成品里） */
+  fromTitle: string;
+  imageUrl: string;
+  /** 两条标题的相似度 —— 用来事后回答「凭什么认为它们是一件事」 */
+  sim: number;
+}
+
+/**
+ * 计划「借图」：给没图的幸存稿，从**刚被删掉的重复稿**身上把封面挪过来。
+ *
+ * ## 为什么捐赠者只能是「已被删掉的重复稿」
+ *
+ * 用户对这个功能的原话是**「只挪真图」**（另一个选项是去图库搜一张，被否了）。
+ * 而「真图」有一个前提：**它必须是这条新闻的照片**。这就要求两条稿子
+ * 讲的**是同一件事**。三条自我约束由此而来：
+ *
+ * 1. **必须有一条「同一件事」的既成判断。** 凭空按相似度配对会把
+ *    「同一主题的不同场会议」的图挪过来 —— 那是**事实错误**，比没图严重得多。
+ *    这里唯一的既成判断就是「总审把它作为 duplicate 删掉了」（模型看过两边文字、给了理由）。
+ * 2. **捐赠者必须不在成品里。** 否则同一个国家的同一天里会**两条稿子同一张图**，
+ *    看起来就是重复 —— 正是用户反复在报的那个观感问题。
+ *    捐赠者是**被删掉**的稿子，所以这条天然成立。
+ * 3. **只挪封面，不动正文，绝不生成图、绝不搜图库。**（`article-format.ts` 现在
+ *    正是把 unsplash/picsum 当**编造图**在拦。）
+ *
+ * ## 阈值用的是既有的 `PAIR_CANDIDATE_MIN_SIM`，不是新拍的
+ *
+ * 配对用 `similarity(标题)`，下限直接复用 `same-event.ts` 里那个**已被真实语料回测过**的
+ * 0.35（它的注释里列了「人名音译差异 0.37 / 数字有出入 0.43」这些最难的锚点）。
+ * ⚠️ 这条纪律来自 2026-09-29 的教训：`crossCountryOverlaps` 的阈值当初拍了个 0.5，
+ * 恰好把唯一那条真实锚点（0.4595）漏掉。**阈值不能拍。**
+ *
+ * ## 为什么**不**做跨国（实测过，不是省事）
+ *
+ * 2026-09-29 拿线上 3 天 1152 篇量过：187 篇完全没图，其中
+ * **同国能找到「同一件事且有图」的 35 篇，而「仅跨国」才多 2 篇（1%）**。
+ * 为 1% 去引入一条跨国路径（还要为它单独定阈值、单独处理「同一张图出现在两国日报」的观感）
+ * 不划算。要接跨国的话，先拿这个测量脚本重新量一遍再说。
+ */
+export function planCoverBorrows(args: {
+  /** 最终成品，**顺序即最终顺序**（`targetIndex` 就是这个数组的下标） */
+  survivors: Array<{ title: string; hasImage: boolean }>;
+  /** 被总审删掉的重复稿里、**自己有图**的那些 */
+  donors: Array<{ title: string; imageUrl: string }>;
+  minSim?: number;
+}): CoverBorrow[] {
+  const minSim = args.minSim ?? PAIR_CANDIDATE_MIN_SIM;
+  const taken = new Set<number>();
+  const out: CoverBorrow[] = [];
+
+  for (const donor of args.donors) {
+    // 没标题就没法证明它和谁是一件事 ⇒ 不挪（宁可不挪，也不挪错）
+    if (!donor.title || !donor.imageUrl) continue;
+
+    let best: { index: number; sim: number } | null = null;
+    for (let i = 0; i < args.survivors.length; i++) {
+      const s = args.survivors[i];
+      // 已经有图的不用挪；已经被别的捐赠者挪过的也不重复挪
+      if (s.hasImage || taken.has(i) || !s.title) continue;
+      const sim = similarity(donor.title, s.title);
+      if (sim < minSim) continue;
+      if (!best || sim > best.sim) best = { index: i, sim };
+    }
+
+    if (best) {
+      taken.add(best.index);
+      out.push({
+        targetIndex: best.index,
+        fromTitle: donor.title,
+        imageUrl: donor.imageUrl,
+        sim: best.sim,
+      });
+    }
+  }
+
+  return out;
 }
 
 /** 模型调用出口（与 `same-event.AskFn` 同形）。注入只为测试。 */

@@ -34,9 +34,12 @@ import {
   MAX_TITLE_LEN,
   MIN_KEEP,
   parseVerdict,
+  planCoverBorrows,
   reviewDraft,
   type ReviewItem,
 } from '../src/lib/editor-review';
+import { PAIR_CANDIDATE_MIN_SIM } from '../src/lib/same-event';
+import { similarity } from '../src/lib/utils';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
@@ -570,6 +573,161 @@ section('八、版本指纹（GET 的 codeVersion）');
     '仍保留 lastRun（「进程年龄」指纹的载体：内存态，容器一重启就清零）',
     /lastRun:\s*pushRunState/.test(src),
     'lastRun 没了 —— 就少了一条不依赖「这次改动恰好加了字段」的版本证据',
+  );
+  ok(
+    '含「借图配对下限」（它**存在**就说明这一版带上了借图）',
+    /coverBorrowMinSim:\s*PAIR_CANDIDATE_MIN_SIM/.test(src),
+  );
+  // 借图的两条接线上限：捐赠者只许来自「被判重复」的稿子，且只能插进正文开头。
+  // 这两条都是**安全边界**（拿错图的后果比没图严重），所以用源码断言钉住。
+  ok(
+    "借图的捐赠者只从 `kind === 'duplicate'` 的稿子里取（not_news / unreliable 的图不能要）",
+    /d\.kind === 'duplicate'/.test(src),
+    '捐赠者的来源放宽了 —— 那会把「不是同一件事」的稿子的图挪过来，属于事实错误',
+  );
+  ok(
+    '借图靠把 `<img>` 插进正文开头（`cover_image` 字段不入库，这是唯一的存图办法）',
+    /target\.content = `<img src="\$\{b\.imageUrl\}"/.test(src),
+  );
+  ok(
+    '借图用**重排之后**的数组来配对（否则 targetIndex 对不上，会把图插到别的稿子上）',
+    /survivors:\s*pc\.articles\.map\(/.test(src),
+  );
+}
+
+// ============================================================
+// 九、借图（planCoverBorrows）—— 2026-09-29「只挪真图」
+// ============================================================
+//
+// 用户的选项原话是「只挪真图」（另一个选项「去图库搜一张」被否了）。
+// 「真」的含义就是**它必须是这条新闻的照片**，所以这个函数只有一条铁律：
+// **只在有「同一件事」既成判断的地方挪，宁可挪不到，也不挪错。**
+//
+// 本节的标题**全部是线上真实标题**（2026-09-29 从 3 天 1152 篇里筛出来的），
+// 相似度也是实测值 —— 因为本项目已经栽过一次「阈值拍脑袋、恰好漏掉唯一真实锚点」
+// （见 `crossCountryOverlaps` 的注释）。锚点必须是量出来的。
+
+section('九、借图（planCoverBorrows）');
+
+{
+  // ---- 真·同一件事的正例（有图那侧当捐赠者）----
+  const POS = [
+    {
+      sim: 0.5833,
+      donor: '巴库举行第二届阿塞拜疆国际投资论坛，签署总额 10.8 亿美元协议',
+      survivor: '第二届阿塞拜疆国际投资论坛签署 23 份投资协议，总金额 108 亿美元',
+    },
+    {
+      sim: 0.5313,
+      donor: '希姆肯特四名博主因 TikTok 直播被处以行政拘留',
+      survivor: '希姆肯特四名博主因 TikTok 直播中辱骂被拘留达 17 天',
+    },
+    {
+      // 边界正例：0.375 只比下限高一点点 —— 它必须能被借到，
+      // 否则等于把阈值悄悄抬到了 0.4（就是那个「拍阈值」的老毛病）
+      sim: 0.375,
+      donor: '第二届阿塞拜疆国际投资论坛期间签署文件',
+      survivor: '世界媒体聚焦阿塞拜疆国际投资论坛',
+    },
+  ];
+
+  for (const p of POS) {
+    // 前置条件先自证：锚点的相似度确实和注释里写的一致（防止标题被改后断言变成空转）
+    const actual = similarity(p.donor, p.survivor);
+    ok(
+      `锚点相似度自证 = ${p.sim}（真实标题，非编造）`,
+      Math.abs(actual - p.sim) < 0.002,
+      `实测 ${actual.toFixed(4)}，注释/断言写的是 ${p.sim} —— 标题被改过？`,
+    );
+    const plan = planCoverBorrows({
+      survivors: [{ title: p.survivor, hasImage: false }],
+      donors: [{ title: p.donor, imageUrl: 'https://cdn.example.az/photo.jpg' }],
+    });
+    ok(`同一件事 ⇒ 借图（sim ${p.sim}）`, plan.length === 1 && plan[0].targetIndex === 0, JSON.stringify(plan));
+    ok(`借图带出相似度（事后能回答「凭什么认为是一件事」）`, plan[0]?.sim === actual);
+    ok(`借图带出「从哪条借的」`, plan[0]?.fromTitle === p.donor);
+  }
+
+  // ---- 负例：相似度**低于下限**，必须一条都不借 ----
+  // ① 「同类事件、不同地点」——最危险的一类：挪了图就是**另一场事故的照片**
+  const n1a = '希杰兹恩发生交通事故';
+  const n1b = '巴尔达地区发生交通事故，造成人员死亡';
+  ok('负例①相似度确实低于下限（前置条件）', similarity(n1a, n1b) < PAIR_CANDIDATE_MIN_SIM, String(similarity(n1a, n1b)));
+  ok(
+    '❗同类事件、不同地点 ⇒ **不借**（挪了就是另一场事故的照片）',
+    planCoverBorrows({
+      survivors: [{ title: n1b, hasImage: false }],
+      donors: [{ title: n1a, imageUrl: 'https://cdn.example.az/x.jpg' }],
+    }).length === 0,
+  );
+  // ② 同一场论坛的两条不同侧记（0.3103）—— 看着像，但没到「同一件事」的判据
+  const n2a = '阿塞拜疆外长在纽约举行 37 场双边会议';
+  const n2b = '阿塞拜疆外长在纽约与联合国秘书长会晤';
+  ok('负例②相似度确实低于下限（前置条件）', similarity(n2a, n2b) < PAIR_CANDIDATE_MIN_SIM, String(similarity(n2a, n2b)));
+  ok(
+    '相似但未到下限 ⇒ **不借**',
+    planCoverBorrows({
+      survivors: [{ title: n2b, hasImage: false }],
+      donors: [{ title: n2a, imageUrl: 'https://cdn.example.az/y.jpg' }],
+    }).length === 0,
+  );
+
+  // ---- 三条「不许发生」的护栏 ----
+  const d1 = '巴库举行第二届阿塞拜疆国际投资论坛，签署总额 10.8 亿美元协议';
+  const s1 = '第二届阿塞拜疆国际投资论坛签署 23 份投资协议，总金额 108 亿美元';
+
+  ok(
+    '幸存稿**已经有图** ⇒ 不借（绝不覆盖原有封面）',
+    planCoverBorrows({
+      survivors: [{ title: s1, hasImage: true }],
+      donors: [{ title: d1, imageUrl: 'u' }],
+    }).length === 0,
+  );
+  ok(
+    '捐赠者**没标题** ⇒ 不借（没法证明是一件事）',
+    planCoverBorrows({ survivors: [{ title: s1, hasImage: false }], donors: [{ title: '', imageUrl: 'u' }] }).length === 0,
+  );
+  ok(
+    '捐赠者**没图 URL** ⇒ 不借（空图会插一个破 `<img>` 进正文）',
+    planCoverBorrows({ survivors: [{ title: s1, hasImage: false }], donors: [{ title: d1, imageUrl: '' }] }).length === 0,
+  );
+  ok('没有捐赠者 ⇒ 返回空数组', planCoverBorrows({ survivors: [{ title: s1, hasImage: false }], donors: [] }).length === 0);
+
+  // 两条捐赠者争同一条幸存稿 ⇒ 只借一次（否则会把两张图叠进同一篇正文）
+  const s2 = '希姆肯特四名博主因 TikTok 直播中辱骂被拘留达 17 天';
+  const two = planCoverBorrows({
+    survivors: [
+      { title: s2, hasImage: false },
+      { title: '完全不相干的一条稿子标题在这里', hasImage: false },
+    ],
+    donors: [
+      { title: '希姆肯特四名博主因 TikTok 直播被处以行政拘留', imageUrl: 'a' },
+      { title: '希姆肯特四名博主因TikTok直播被处以行政拘留', imageUrl: 'b' },
+    ],
+  });
+  ok(
+    '两条捐赠者争同一条幸存稿 ⇒ 只借一次（不叠两张图）',
+    two.filter((b) => b.targetIndex === 0).length === 1,
+    JSON.stringify(two),
+  );
+  ok('另一条找不到匹配对象时不会被硬塞', two.every((b) => b.targetIndex === 0));
+
+  // 阈值必须是**复用的既有常量**，不是新拍的数
+  ok(
+    '默认下限 === PAIR_CANDIDATE_MIN_SIM（复用回测过的常量，不是新拍一个数）',
+    planCoverBorrows({
+      survivors: [{ title: s1, hasImage: false }],
+      donors: [{ title: d1, imageUrl: 'u' }],
+      // 不传 minSim，走默认
+    }).length === 1 && PAIR_CANDIDATE_MIN_SIM === 0.35,
+  );
+  ok(
+    '显式调高下限能挡住（参数真的生效）',
+    planCoverBorrows({
+      survivors: [{ title: s1, hasImage: false }],
+      donors: [{ title: d1, imageUrl: 'u' }],
+      minSim: 0.9,
+    }).length === 0,
   );
 }
 

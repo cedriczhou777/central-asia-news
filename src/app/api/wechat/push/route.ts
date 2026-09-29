@@ -3,7 +3,7 @@ import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { beijingDate, extractFirstImage } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
-import { dedupeStories, isLlmJudgeEnabled } from '@/lib/same-event';
+import { dedupeStories, isLlmJudgeEnabled, PAIR_CANDIDATE_MIN_SIM } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
   pushExclusionReason,
@@ -16,6 +16,7 @@ import {
   crossCountryOverlaps,
   isEditorReviewEnabled,
   reviewDraft,
+  planCoverBorrows,
   EDITOR_PROMPT_VERSION,
   MAX_DROPS,
   MAX_FIXES,
@@ -388,18 +389,22 @@ interface PushReview extends ReviewAudit {
   /** 被总审改过文字的字段 */
   fixes: Array<{ field: string; before: string; after: string; why: string }>;
   /**
-   * 总审指出「重要但缺图」的标题。
+   * 总审指出「值得读者点开看、但一张图都没有」的标题。
    *
-   * ⚠️ **目前只记录，不补图** —— 别以为写了就会有图。原注释写的是
-   * 「阶段 ③ 会优先给它找图」，那是**没实现**的（2026-09-29 复核时改掉）。
-   * 原因：全链路**没有任何图片检索能力**（`src/` 里查不到 pexels/unsplash 之类的取图代码，
-   * 而 `article-format.ts` 恰恰把 unsplash/picsum 当**编造图**拦掉）。
-   * 阶段 ③ 的图只有一个来源：稿件自带（`cover_image` 或正文里的 `<img>`）——
-   * 而 `hasImage` 已经是「有 cover_image 或正文有图」的并集，
-   * 所以被总审标成 needsImage 的条目，**恰好就是一张图都没有的那些**，无从补起。
-   * 真要补，得先接一个图片源；在那之前这个字段的用途是「告诉人哪几条值得配图」。
+   * ⚠️ **这是给人工看的提示，不是「已经补好图了」的凭证**（2026-09-29 复核）。
+   * 原注释写的是「阶段 ③ 会优先给它找图」，那是**没实现**的。
+   * 补充图的唯一机制是 `planCoverBorrows`（借图），而它**只能**在
+   * 「同一件事的重复稿被删掉了、且那份有图」时生效 —— 线上实测只覆盖约 20% 的缺图稿件。
+   * ⇒ 判断「这几条补到图了没有」要看 `imagesBorrowed`，**不要**看这个字段。
    */
   needsImage: string[];
+  /**
+   * 本轮**借到封面**的稿件（2026-09-29 新增，见 `planCoverBorrows`）。
+   *
+   * 只记「哪条借到了、从哪条借的、相似度多少」。借图**不写入数据库**，
+   * 只改本轮要发出去的那份 `content`（在开头插一张 `<img>`），所以这里是唯一的留痕。
+   */
+  imagesBorrowed: Array<{ title: string; fromTitle: string; sim: number }>;
   /** 总评（模型给的，20 字内） */
   verdict: string;
 }
@@ -650,6 +655,12 @@ export async function GET() {
       editorPromptVersion: EDITOR_PROMPT_VERSION,
       /** 终审护栏上限（调参后可以从这里确认线上拿到的是新值） */
       editorGuards: { maxDrops: MAX_DROPS, maxFixes: MAX_FIXES },
+      /**
+       * 「借图」（`planCoverBorrows`）的配对下限 —— 从常量现算，所以它**存在**本身就说明
+       * 这一版代码带上了借图。2026-09-29 新增。
+       * ⚠️ 它没有独立开关：借图跑在总审内部，所以 `EDITOR_REVIEW=off` 会一并关掉。
+       */
+      coverBorrowMinSim: PAIR_CANDIDATE_MIN_SIM,
     },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿、summary.failures 是哪些国家失败、
@@ -959,9 +970,10 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         const drops: PushReview['drops'] = [];
         const fixes: PushReview['fixes'] = [];
         const needsImageTitles: string[] = [];
+        const borrows: PushReview['imagesBorrowed'] = [];
 
         if (decision) {
-          // 文字修正：`index` 是**原索引**，而 `kept` 里是同一批对象的引用，
+          // 文字修正：`index` 是**原索引**，而 `pc.articles` 里是同一批对象的引用，
           // 所以先改对象、再按顺序取，两件事互不干扰（顺序不影响引用）。
           for (const f of decision.fixes) {
             const target = pc.articles[f.index];
@@ -971,6 +983,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
             fixes.push({ field: f.field, before: f.before, after: f.after, why: f.why });
             console.log(`[${pc.country.name}][总审改字] ${f.field}：「${f.before}」→「${f.after}」（${f.why}）`);
           }
+          // 「借图」的捐赠者必须在这里抓 —— 下面重排/剔除之后，这些对象就不在数组里了。
+          const donors: Array<{ title: string; imageUrl: string }> = [];
           for (const d of decision.drops) {
             const a = pc.articles[d.index];
             drops.push({
@@ -978,6 +992,12 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
               kind: d.kind,
               reason: d.reason,
             });
+            // 只有**被判为重复**的稿子才配当捐赠者：总审明确说过它与某条是同一件事。
+            // `not_news` / `unreliable` 的稿子跟谁都不同一件事，不能拿它的图。
+            if (d.kind === 'duplicate' && a) {
+              const url = extractFirstImage(a.content || '');
+              if (url) donors.push({ title: a.title || '', imageUrl: url });
+            }
             console.log(`[${pc.country.name}][总审合并][${d.kind}] 删除：${a?.title || ''}｜理由：${d.reason}`);
           }
           for (const ni of decision.needsImage) {
@@ -985,11 +1005,35 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
             if (a?.title) needsImageTitles.push(a.title);
           }
           pc.articles = decision.finalIndices.map((idx) => pc.articles[idx]).filter(Boolean);
+
+          // 借图：把刚被删掉的重复稿的封面，挪给「本来一张图都没有」的幸存稿。
+          // 判据、边界、以及**为什么不做跨国**都在 `planCoverBorrows` 的注释里（含线上实测数据）。
+          if (donors.length > 0) {
+            const plan = planCoverBorrows({
+              // ⚠️ 必须用**重排之后**的数组：`targetIndex` 就是这个数组的下标。
+              survivors: pc.articles.map((a) => ({
+                title: a.title || '',
+                hasImage: Boolean(a.cover_image) || /<img/i.test(a.content || ''),
+              })),
+              donors,
+            });
+            for (const b of plan) {
+              const target = pc.articles[b.targetIndex];
+              if (!target) continue;
+              // 与 fetch-news 存封面**同一套办法**：`cover_image` 字段不入库（见 db-articles.ts），
+              // 只能把图插进正文开头。这样阶段 ③ 的草稿封面与正文首图都会取到它。
+              target.content = `<img src="${b.imageUrl}" referrerpolicy="no-referrer" />\n\n${target.content || ''}`;
+              borrows.push({ title: target.title || '', fromTitle: b.fromTitle, sim: Number(b.sim.toFixed(3)) });
+              console.log(
+                `[${pc.country.name}][总审借图] 「${target.title}」借到封面 ← 被删掉的重复稿「${b.fromTitle}」（相似度 ${b.sim.toFixed(3)}）`,
+              );
+            }
+          }
         }
 
         console.log(
           `[${pc.country.name}] 总审：${before} → ${pc.articles.length} 篇` +
-            `（删 ${drops.length} / 改字 ${fixes.length} / 重排 ${audit.orderAccepted ? '是' : '否'}）` +
+            `（删 ${drops.length} / 改字 ${fixes.length} / 借图 ${borrows.length} / 重排 ${audit.orderAccepted ? '是' : '否'}）` +
             (audit.ok ? '' : `｜未生效：${audit.error || '未知原因'}`),
         );
 
@@ -1002,6 +1046,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           drops,
           fixes,
           needsImage: needsImageTitles,
+          imagesBorrowed: borrows,
           verdict: decision?.verdict ?? '',
         });
       }
