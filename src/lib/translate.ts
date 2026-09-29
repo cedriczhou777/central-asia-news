@@ -1,4 +1,4 @@
-import { isChineseText, mixedScriptTokens, mixedScriptTokensLatin, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
+import { isChineseText, mixedScriptTokens, mixedScriptTokensLatin, descendingMultiplePhrases, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
 import type { Category } from './data/types';
 
 /**
@@ -360,6 +360,51 @@ export const TRANSLATE_PROMPT = `你是一位面向国际投资者的中亚与�
      后面的 Boyev 是原样残留，属于「一个名字只译了一半」。
      除引用原文标题（放在《》里）外，译文里**不得出现西里尔字母**。
 
+7. **数字、单位与倍数（2026-09-29 新增 —— 两类线上实例，都是「数字对、话不通」）**：
+
+   数字本身你不会翻错，错的是**数字和它修饰的东西对不上**。
+   译文里的每一组数字，都必须能回答「这个数说的是什么、单位是什么」。
+
+   ★ **(a) 「倍」只能用于增长，不能用于下降。**
+     俄语/中亚语言的两种表达式最容易直译翻车：
+       - снижение / уменьшение **в 1.5 раза**（直译「下降 1.5 倍」）
+       - понижающий **коэффициент 1.5**（直译「1.5 倍的下调系数」）
+     中文里「下降 N 倍」在逻辑上等于**负数**（1 元降 1.5 倍 = −0.5 元），是病句，读者一眼就看出不对。
+     这类表达的真实含义是**除以**那个倍数，必须改写成语义等价的中文说法之一：
+       - 「降至原来的 1/1.5（约低 33%）」
+       - 「按 1/1.5 的系数下调」／「下调约 33%」
+       - 口语化一点也行：「打了约 6.7 折」
+     ⚠️ **反例（线上 2026-09-28 实际出过，标题级别）**：
+       ✗ 「乌兹别克斯坦大型电力用户白天电价**下调 1.5 倍**」
+       ✓ 「乌兹别克斯坦大型电力用户 09:00–17:00 电价**降至原来的 1/1.5（约低 33%）**」
+     与之相对，**增长**方向可以直接用「倍」：增长 2 倍 = 是原来的 2 倍（或「翻一番」）；
+     「增长到 2 倍」与「增长了 2 倍」差别很大，按原文的 **в 2 раза**（→ 是原来的 2 倍）与
+     **на 100%**（→ 增长一倍）分别对待，不要混用。
+     同样的道理适用于**系数 / 折算率**：写「系数 1.5」时，必须同时说清它是**乘**还是**除** ——
+     只说「1.5 倍系数」，投资者无法判断电价是涨了还是跌了。
+
+   ★ **(b) 量词必须来自「数字实际修饰的名词」，不能来自旁边的名词。**
+     最典型的坑：俄语 **мест**（座位 / 名额 / 席位，英文 places / seats）。
+     「500 мест」说的是**500 个座位（学生名额）**，它**不是** 500 栋楼、500 间教室。
+     ⚠️ **反例（线上 2026-09-28 实际出过，标题级别）**：
+       原标题大意：曼纳斯市 R. Azimov 第 13 中学新增 **500 мест**
+       ✗ 「曼纳斯市 R. Azimov №13 中学 **500 座新教学楼**竣工 90%」 ← 500 被安到了「教学楼」头上
+       ✓ 「曼纳斯市 R. Azimov 第 13 中学新增 **500 个学生名额**，工程完工 90%」
+     判定方法：**先把原文那个词单独查出来它是不是一个「单位词」**（座位、名额、席位、套、间、公顷、
+     立方米、千瓦、吨、人、户、家），再决定中文怎么写。**拿不准时把单位写全** ——
+     写「500 个座位（学生名额）」比写一个语义不清的「500 座」强得多，因为
+     「座 / 栋 / 间」这类**建筑量词会让读者以为在建 500 栋楼**，把一条教育新闻读成基建新闻。
+     同理：「安置 500 户」不要写成「安置 500 栋」；「装机 100 兆瓦」不要写成「100 座电站」。
+
+   ★ **(c) 数字的「单位」不许丢，也不许换。**
+     金额必须带币种（坚戈 / 苏姆 / 马纳特 / 美元）；面积/重量/电量带单位；
+     百分比与「倍」分清（占比 30% ≠ 增长 30%）。数字与单位之间的搭配若原文没写清，写最保守的那一种。
+
+   ★ **(d) 符号规范化：原文的 № 写成「第」。**
+     「№13」→「第 13」（「R. Azimov №13 中学」→「R. Azimov 第 13 中学」）；
+     「№5 总统令」→「第 5 号总统令」。译文里不要出现 № 这个符号。
+     （人名仍按第 6 条办：不是国家领导人或国际知名人物 ⇒ 写拉丁字母，例如 R. Azimov。）
+
 **关于图片的说明 —— 这是写给你的规则，不是要写进 content 的内容：**
 
 - 只有当**原文里确实存在**以 http:// 或 https:// 开头的图片地址时，才把那张图插进
@@ -449,9 +494,18 @@ export function fallbackCategory(title: string, content: string): Category {
  * 质检拒绝的原因。**不是给日志看的花瓶** —— 它会被拼成重试时的修正指令，见 `buildRepairHint`。
  */
 export interface GateReject {
-  kind: 'mixed-script' | 'half-translated';
+  kind: 'mixed-script' | 'half-translated' | 'impossible-multiple';
   /** 被拦下的词（截断到前几个） */
   tokens: string[];
+  /**
+   * 命中的「下降 N 倍」说法（如 `下调1.5倍`）。
+   *
+   * **与 `tokens` 分开存**：两类问题可以**同时**出现在同一份译文里
+   * （既有半译人名、又有不可能的倍数），而重试只有一次机会 ——
+   * 修正指令必须把**所有**已发现的问题一次说清，否则第二次修好一类、留另一类，
+   * 三次用完就丢稿（见 `buildRepairHint` 的说明）。
+   */
+  impossibleMultiples?: string[];
 }
 
 /**
@@ -472,21 +526,51 @@ export interface GateReject {
  * 代价只是一段提示词。**注意别把这份要求本身写进 content**（提示词里已有同样的禁令）。
  */
 export function buildRepairHint(reject: GateReject): string {
-  const what =
-    reject.kind === 'half-translated'
-      ? '专有名词被译了一半 —— 汉字后面残留了一段拉丁字母'
-      : '汉字与西里尔字母挤在同一个词里';
-  return [
-    '',
-    '⚠️ 你上一次的输出**没有通过质检**，原因：' + what + '。',
-    '被拦下的词：' + reject.tokens.slice(0, 8).join('、'),
-    '请**重新**输出完整 JSON，并把上面这些专有名词改成**要么是完整的中文译名、要么是完整的拉丁写法**，',
-    '绝对不要再出现「汉字 + 字母」拼起来的残缺写法。正确示例：',
-    '  「斯皮塔梅en区」→「Spitamen 区」（该地名无通用中文译名 ⇒ 用完整拉丁写法）',
-    '  「阿克tau市」→「阿克套市」',
-    '  「霍贾and市」→「苦盏市」或「Khujand 市」',
-    '以上要求本身不要写进 content —— content 里只写读者要读的新闻内容。',
-  ].join('\n');
+  const blocks: string[] = [];
+
+  // 块 1：专名写法（汉字 + 拉丁/西里尔 拼在一起）
+  if (reject.tokens.length > 0) {
+    const what =
+      reject.kind === 'half-translated'
+        ? '专有名词被译了一半 —— 汉字后面残留了一段拉丁字母'
+        : '汉字与西里尔字母挤在同一个词里';
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**没有通过质检**，原因：' + what + '。',
+        '被拦下的词：' + reject.tokens.slice(0, 8).join('、'),
+        '请把上面这些专有名词改成**要么是完整的中文译名、要么是完整的拉丁写法**，',
+        '绝对不要再出现「汉字 + 字母」拼起来的残缺写法。正确示例：',
+        '  「斯皮塔梅en区」→「Spitamen 区」（该地名无通用中文译名 ⇒ 用完整拉丁写法）',
+        '  「阿克tau市」→「阿克套市」',
+        '  「霍贾and市」→「苦盏市」或「Khujand 市」',
+      ].join('\n'),
+    );
+  }
+
+  // 块 2：中文里逻辑不成立的「下降 N 倍」。
+  //
+  // 为什么必须由修正指令来讲清「该改成什么」：模型不是随机手滑，是**把原文的
+  // `в N раза` / `понижающий коэффициент N` 直译**了 —— 只叫它「重写一遍」
+  // 大概率还是同样的直译。必须把「除以」这层语义当场讲白。
+  if (reject.impossibleMultiples && reject.impossibleMultiples.length > 0) {
+    blocks.push(
+      [
+        '⚠️ 另有一类问题：**「下降 N 倍」在中文里逻辑不成立**。',
+        '被拦下的说法：' + reject.impossibleMultiples.slice(0, 5).join('、'),
+        '「下调 1.5 倍」按字面算是 1 − 1×1.5 = −0.5，成了负数。原文那种写法',
+        '（俄语 `снижение в 1.5 раза` 或 `понижающий коэффициент 1.5`）的意思是**除以**那个倍数。',
+        '必须改写成下面这类说法之一：',
+        '  「降至原来的 1/1.5（约低 33%）」「按 1/1.5 的系数下调」「下调约 33%」',
+        '⚠️ 注意方向：**增长**方向可以直接用「倍」（增长 2 倍 = 是原来的 2 倍），',
+        '只有**下降**方向不能用「倍」。另外凡出现「系数」，必须说清是**乘**还是**除**。',
+      ].join('\n'),
+    );
+  }
+
+  if (blocks.length === 0) return '';
+  return ['', ...blocks, '以上要求本身不要写进 content —— content 里只写读者要读的新闻内容。'].join(
+    '\n',
+  );
 }
 
 // 把一次成功的 LLM 输出规整为 Result（中文验证）
@@ -520,13 +604,33 @@ function normalizeResult(
   const fields = [titleZh, summaryZh, contentZh];
   const mixed = fields.flatMap((f) => mixedScriptTokens(f));
   const halfTranslated = fields.flatMap((f) => mixedScriptTokensLatin(f));
-  const ok = zhOk && mixed.length === 0 && halfTranslated.length === 0;
+
+  // 第三类闸（2026-09-29 加）：「下降 N 倍」在中文里逻辑不成立。
+  //
+  // 与上面两类并列而不是替代 —— 它的性质更硬：不是「写法习惯」问题，
+  // 而是**语义上不可能成立**（1 元下调 1.5 倍 = −0.5 元）。构造、刻意不跨过
+  // 「至/到」的理由、以及 500 篇真实语料上 2 篇 4 处命中 **0 误报**的实测记录，
+  // 都写在 `descendingMultiplePhrases` 的注释里。
+  //
+  // 为什么敢当闸：误报的代价是「重试 → 三次不过丢稿」，而这个判据在中文里
+  // 不存在合法反例，所以误报率的结构性上限就是 0（实测也是 0）。
+  // 对比之下 `mixedScriptTokensLatinCapitalized` 只做体检 —— 因为它实测 5% 误伤。
+  // **两者待遇不同的唯一依据是实测误报率**，不是「哪个看起来更准」。
+  const impossible = fields.flatMap((f) => descendingMultiplePhrases(f));
+
+  const ok =
+    zhOk && mixed.length === 0 && halfTranslated.length === 0 && impossible.length === 0;
   if (zhOk && mixed.length > 0) {
     console.log(`[translate] 译文含「汉字+西里尔」混排词 ${mixed.slice(0, 6).join('/')}，判不合格并重试`);
   }
   if (zhOk && halfTranslated.length > 0) {
     console.log(
       `[translate] 译文含「汉字+拉丁」半译专名 ${halfTranslated.slice(0, 6).join('/')}，判不合格并重试`,
+    );
+  }
+  if (zhOk && impossible.length > 0) {
+    console.log(
+      `[translate] 译文含「下降 N 倍」这种中文里不成立的说法 ${[...new Set(impossible)].slice(0, 4).join('/')}，判不合格并重试`,
     );
   }
 
@@ -538,12 +642,20 @@ function normalizeResult(
   // 拒绝原因 —— 决定重试时要不要带修正指令（见 buildRepairHint）。
   // 语言闸不过（模型把原文回显了）**不带**修正指令：那不是「专名写法」的问题，
   // 让它按原样重译即可。
+  //
+  // ⚠️ 名字类与倍数类**可以同时出现**，所以这里不是「三选一」：
+  // `tokens` 装名字类、`impossibleMultiples` 装倍数类，两块都带给重试
+  // （见 `GateReject.impossibleMultiples` 的说明 —— 重试只有一次机会，
+  // 只说清一类，另一类就会撑到三次用完然后丢稿）。
+  const nameKind: GateReject['kind'] | undefined =
+    halfTranslated.length > 0 ? 'half-translated' : mixed.length > 0 ? 'mixed-script' : undefined;
   const reject: GateReject | undefined = !zhOk
     ? undefined
-    : halfTranslated.length > 0 || mixed.length > 0
+    : nameKind || impossible.length > 0
       ? {
-          kind: halfTranslated.length > 0 ? 'half-translated' : 'mixed-script',
+          kind: nameKind ?? 'impossible-multiple',
           tokens: [...new Set([...halfTranslated, ...mixed])],
+          ...(impossible.length > 0 ? { impossibleMultiples: [...new Set(impossible)] } : {}),
         }
       : undefined;
 
@@ -861,11 +973,16 @@ export async function translateNews(
             return result;
           }
           if (reject) {
-            // 质检拦下专名写法 ⇒ 下一次重试带上「错在哪、该改成什么」
+            // 质检拦下 ⇒ 下一次重试带上「错在哪、该改成什么」
             repairHint = buildRepairHint(reject);
-            console.log(
-              `[translate] 质检拦下（${reject.kind}）：${reject.tokens.slice(0, 6).join('/')} ⇒ 重试带修正指令`,
-            );
+            // 两类问题都可能出现，日志要**分别**打 —— 只打 tokens 的话，
+            // 「纯倍数问题」（tokens 为空）会打出一行看不懂的空日志。
+            const bits: string[] = [];
+            if (reject.tokens.length > 0) bits.push(`专名 ${reject.tokens.slice(0, 6).join('/')}`);
+            if (reject.impossibleMultiples?.length) {
+              bits.push(`不成立的倍数 ${reject.impossibleMultiples.slice(0, 4).join('/')}`);
+            }
+            console.log(`[translate] 质检拦下（${reject.kind}）：${bits.join(' + ')} ⇒ 重试带修正指令`);
           } else {
             console.log(`[translate] ${provider.name} 返回内容未通过中文校验，继续重试`);
           }

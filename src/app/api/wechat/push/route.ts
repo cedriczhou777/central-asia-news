@@ -12,6 +12,13 @@ import {
 } from '@/lib/article-format';
 import { generateWechatHtml } from '@/lib/wechat-template';
 import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
+import {
+  crossCountryOverlaps,
+  isEditorReviewEnabled,
+  reviewDraft,
+  type ReviewAudit,
+  type ReviewItem,
+} from '@/lib/editor-review';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
@@ -356,6 +363,86 @@ interface PushJudge {
   mergedPairs?: number;
 }
 
+/**
+ * 一国草稿的**总审结果**（2026-09-29 新增，见 `lib/editor-review.ts`）。
+ *
+ * 为什么要报出来：总审是全链路里**唯一能改写文字、也是唯一能删稿的模型环节**，
+ * 而它的输出全部落在成品里、不看这里就完全不可见。
+ * 「今天这条标题怎么和库里不一样」的答案只可能在这里。
+ *
+ * ⚠️ `rejections` 尤其要看：它记的是**模型提了但被护栏拒掉的处置**。
+ * 非空不代表出错（护栏正常工作），但**突然变多**通常意味着模型开始跑偏
+ * （例如 order 不再是完整排列、before 对不上原文）—— 那是该调提示词的信号。
+ */
+interface PushReview extends ReviewAudit {
+  country_code: string;
+  country_name: string;
+  /** 审前 / 审后篇数 */
+  before: number;
+  after: number;
+  /** 被总审合并或删掉的稿件（与 `merges` 分开放：那是判组删的，这是总审删的） */
+  drops: Array<{ title: string; kind: string; reason: string }>;
+  /** 被总审改过文字的字段 */
+  fixes: Array<{ field: string; before: string; after: string; why: string }>;
+  /**
+   * 总审指出「重要但缺图」的标题。
+   *
+   * ⚠️ **目前只记录，不补图** —— 别以为写了就会有图。原注释写的是
+   * 「阶段 ③ 会优先给它找图」，那是**没实现**的（2026-09-29 复核时改掉）。
+   * 原因：全链路**没有任何图片检索能力**（`src/` 里查不到 pexels/unsplash 之类的取图代码，
+   * 而 `article-format.ts` 恰恰把 unsplash/picsum 当**编造图**拦掉）。
+   * 阶段 ③ 的图只有一个来源：稿件自带（`cover_image` 或正文里的 `<img>`）——
+   * 而 `hasImage` 已经是「有 cover_image 或正文有图」的并集，
+   * 所以被总审标成 needsImage 的条目，**恰好就是一张图都没有的那些**，无从补起。
+   * 真要补，得先接一个图片源；在那之前这个字段的用途是「告诉人哪几条值得配图」。
+   */
+  needsImage: string[];
+  /** 总评（模型给的，20 字内） */
+  verdict: string;
+}
+
+/**
+ * 阶段 ① 的产出：一国「已选题、待总审、待发布」的稿件。
+ *
+ * ⚠️ 这个结构存在的理由值得写下来：它把「选题」和「建草稿」**在时间上分开**，
+ * 于是总审才有东西可审（建草稿是不可逆的 —— 草稿箱里一旦有了，改就得重建）。
+ */
+interface PreparedCountry {
+  country: (typeof countryList)[number];
+  articles: Awaited<ReturnType<typeof getArticlesByDateRange>>;
+}
+
+/**
+ * 把一条库里的稿件转成总审能看的形态。
+ *
+ * `contentPeek` 只取正文**开头 200 字**（去掉 HTML 标签）：总审要判的四件事里，
+ * 重复看标题+摘要就够，逻辑与数字错误在开头就暴露（线上那两条 `500 座教学楼`、
+ * `下调1.5倍` 都是标题级）。全文会把这层调用放大十倍，而收益要到正文中后段才出现。
+ * ⚠️ 代价是**正文中后段的错误抓不到** —— 已知缺口，别当成没 bug。
+ */
+function toReviewItem(a: {
+  title?: string | null;
+  summary?: string | null;
+  content?: string | null;
+  category?: string | null;
+  source_name?: string | null;
+  cover_image?: string | null;
+  relevanceScore?: number;
+  published_at?: unknown;
+}): ReviewItem {
+  const content = sanitizeArticleContent(a.content || '');
+  return {
+    title: a.title || '',
+    summary: a.summary || '',
+    category: a.category || '',
+    source: a.source_name || '',
+    time: a.published_at ? String(a.published_at).slice(0, 16) : '',
+    hasImage: Boolean(a.cover_image) || /<img/i.test(content),
+    relevance: typeof a.relevanceScore === 'number' ? a.relevanceScore : 0,
+    contentPeek: content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200),
+  };
+}
+
 interface PushSummary {
   hours: number;
   period: string | null;
@@ -395,6 +482,15 @@ interface PushSummary {
   merges: PushMerge[];
   /** 各国 L2 的执行情况，用来区分「没有重复」和「判组没跑成」 */
   judge: Array<PushJudge & { country_code: string }>;
+  /**
+   * 各国草稿的**总审**结果（2026-09-29 新增）。
+   *
+   * 与 `merges` / `judge` 的分工：那两项是**判组（L2）**干的（只判「是不是同一件事」），
+   * 这里是**终审编辑**干的（合并 + 改文字 + 重排序 + 指出缺图）。
+   * 两者都删稿，但删的依据不同、留痕也必须分开 —— 混在一个数组里就分不清
+   * 「这条是被判组当重复删的」还是「被总审编辑删的」。
+   */
+  review: PushReview[];
 }
 
 interface PushRunState {
@@ -585,8 +681,28 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     // 判组合并的审计轨迹：谁被合进了谁（见 `PushMerge`）。L2 打开后这是唯一的可审计出口。
     const merges: PushMerge[] = [];
     const judgeRuns: Array<PushJudge & { country_code: string }> = [];
+    const reviews: PushReview[] = [];
+    /** 阶段 ① 的产出：已选题、待总审、待发布的稿件（见 `PreparedCountry`） */
+    const prepared: PreparedCountry[] = [];
 
-    // 按国别分组推送
+    // ============================================================
+    // 这一轮推送分三个阶段，顺序即阶段名（2026-09-29 起）
+    // ============================================================
+    //
+    // 旧版是**一趟循环**：逐国「选题 → 立刻上传图片 → 立刻建草稿」。
+    // 用户 2026-09-29 要求「5 个国家的草稿准备好之后，交由 AI 再统一审稿」——
+    // 那在旧结构里**做不到**，不只是麻烦：第 3 国开始选稿时，第 1 国的草稿
+    // 已经进了草稿箱，改也改不回来（建草稿不可逆，改就得重建，而重建会
+    // 在草稿箱里留下两份，正是本项目反复踩过的观感问题）。
+    //
+    //   ① 逐国选题 —— 只读库：筛判据、判组去重、截取上限。失败/跳过照旧记账
+    //   ② 整体总审 —— 5 国放在一起审（`lib/editor-review.ts`）：合并、改文字、重排序
+    //   ③ 逐国发布 —— 上传外链图 → 排版 → 建草稿
+    //
+    // 顺带买到一件事：③ 之前整轮崩掉，草稿箱里**一条都不会留下半个**。
+    //
+    // 阶段 ①
+    // 按国别分组选题
     for (const country of countryList) {
       // 获取该国家过去 N 小时的文章。
       // 单国读取失败（DB 抖动）不该拖垮整轮：跳过这一国，其余国家照常出草稿。
@@ -735,6 +851,132 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         continue;
       }
 
+      // 阶段 ① 到此结束：这一国的选题定了，**不碰微信**。
+      // 交给阶段 ②（整体总审）之后，才在阶段 ③ 统一上传图片、排版、建草稿。
+      // 存的是**副本**：阶段 ② 会用总审的结论原地改写它（重排 / 删 / 改文字），
+      // 不能让它改到 `dedupedArticles`（那是判组的产物，审计时要对得上）。
+      prepared.push({ country, articles: [...selectedArticles] });
+    }
+
+    // ============================================================
+    // 阶段 ②：整体总审（5 国统一一道）—— 2026-09-29 新增
+    // ============================================================
+    //
+    // 为什么是「统一一道」而不是逐国各审各的：跨国重复**只有看全局才看得见**，
+    // 而排序也只有在同一把尺子下比过才谈得上「最重要」。所以这一阶段先把
+    // 五国的选题摆在一起，再逐国调模型（每国一次调用，因为一次塞 75 篇会
+    // 稀释注意力、而且一国的结论失败会连累其他国）。
+    //
+    // 判据、护栏、审计的结构都在 `lib/editor-review.ts`；这里只负责
+    // 「组上下文 → 调用 → 应用 → 记账」四件事。
+    //
+    // ⚠️ **失败必须无损**：模型超时/返回不合法/解析失败 ⇒ 一条都不改（见 `reviewDraft`）。
+    // 一段审稿没跑成，不该让五国少稿子 —— 那是「静默丢稿」，本项目最忌讳的形态。
+    // `EDITOR_REVIEW=off` 是**不用发版的紧急刹车**（与 `SAME_EVENT_JUDGE` 同款）。
+    if (prepared.length === 0) {
+      console.log('本轮没有任何国家产出选题，跳过整体总审');
+    } else if (!isEditorReviewEnabled()) {
+      console.log('EDITOR_REVIEW=off：跳过整体总审（紧急刹车生效，本轮沿用旧行为）');
+    } else {
+      // 五国摆在一起才算「统一审稿」：既让每国知道自己和别人有没有撞题，
+      // 又能在响应里给出跨国重复的观测（只报不改，理由见 `crossCountryOverlaps`）。
+      const perCountryItems = prepared.map((p) => ({
+        country: p.country.name,
+        items: p.articles.map((a) => toReviewItem(a)),
+      }));
+
+      for (let i = 0; i < prepared.length; i++) {
+        const pc = prepared[i];
+        const others = perCountryItems.filter((_, j) => j !== i);
+        // 跨国重复：**只作为知情上下文**喂给模型，并要求它不要据此删任何一条。
+        // 同一件事出现在两个国家的日报里是**预期行为**（见 AGENTS.md 的判组一节），
+        // 所以这里绝不能让模型替我们做「跨国去重」。
+        const overlaps = crossCountryOverlaps(perCountryItems[i].items, others);
+
+        let decision: Awaited<ReturnType<typeof reviewDraft>>['decision'] | null = null;
+        let audit: ReviewAudit;
+        try {
+          const res = await reviewDraft({
+            countryName: pc.country.name,
+            items: perCountryItems[i].items,
+            overlaps,
+          });
+          decision = res.decision;
+          audit = res.audit;
+        } catch (err) {
+          // `reviewDraft` 自己已经兜了模型层异常，这里是**兜底中的兜底** ——
+          // 总审出任何意外都不许影响发布（旧行为照跑）。
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[${pc.country.name}] 总审异常，本轮不改动该国任何内容：`, err);
+          audit = {
+            promptVersion: 'unknown',
+            ran: false,
+            ok: false,
+            error: msg,
+            itemCount: pc.articles.length,
+            rejections: ['总审抛异常 ⇒ 一条都没改'],
+          };
+        }
+
+        const before = pc.articles.length;
+        const drops: PushReview['drops'] = [];
+        const fixes: PushReview['fixes'] = [];
+        const needsImageTitles: string[] = [];
+
+        if (decision) {
+          // 文字修正：`index` 是**原索引**，而 `kept` 里是同一批对象的引用，
+          // 所以先改对象、再按顺序取，两件事互不干扰（顺序不影响引用）。
+          for (const f of decision.fixes) {
+            const target = pc.articles[f.index];
+            if (!target) continue;
+            if (f.field === 'title') target.title = f.after;
+            else target.summary = f.after;
+            fixes.push({ field: f.field, before: f.before, after: f.after, why: f.why });
+            console.log(`[${pc.country.name}][总审改字] ${f.field}：「${f.before}」→「${f.after}」（${f.why}）`);
+          }
+          for (const d of decision.drops) {
+            const a = pc.articles[d.index];
+            drops.push({
+              title: a?.title || '',
+              kind: d.kind,
+              reason: d.reason,
+            });
+            console.log(`[${pc.country.name}][总审合并][${d.kind}] 删除：${a?.title || ''}｜理由：${d.reason}`);
+          }
+          for (const ni of decision.needsImage) {
+            const a = pc.articles[ni];
+            if (a?.title) needsImageTitles.push(a.title);
+          }
+          pc.articles = decision.finalIndices.map((idx) => pc.articles[idx]).filter(Boolean);
+        }
+
+        console.log(
+          `[${pc.country.name}] 总审：${before} → ${pc.articles.length} 篇` +
+            `（删 ${drops.length} / 改字 ${fixes.length} / 重排 ${audit.orderAccepted ? '是' : '否'}）` +
+            (audit.ok ? '' : `｜未生效：${audit.error || '未知原因'}`),
+        );
+
+        reviews.push({
+          ...audit,
+          country_code: pc.country.code,
+          country_name: pc.country.name,
+          before,
+          after: pc.articles.length,
+          drops,
+          fixes,
+          needsImage: needsImageTitles,
+          verdict: decision?.verdict ?? '',
+        });
+      }
+    }
+
+    // ============================================================
+    // 阶段 ③：逐国发布（上传外链图 → 排版 → 建草稿）
+    // ============================================================
+    //
+    // 这里用**总审之后**的 `prepared[i].articles`。建草稿是不可逆的，
+    // 所以整段排版/上传都放在总审结论定下来之后 —— 顺序本身就是护栏。
+    for (const { country, articles: selectedArticles } of prepared) {
       // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
       // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
       const wechatArticles = [];
@@ -829,6 +1071,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       skipped,
       merges,
       judge: judgeRuns,
+      review: reviews,
     };
   } catch (error) {
     console.error('微信推送失败（本轮整体失败）:', error);

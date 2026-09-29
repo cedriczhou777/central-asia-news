@@ -20,10 +20,12 @@
  */
 import {
   isChineseText, hanCount, hanRatio, mixedScriptTokens, mixedScriptTokensLatin,
-  mixedScriptTokensLatinCapitalized,
+  mixedScriptTokensLatinCapitalized, descendingMultiplePhrases,
   MIN_HAN_TITLE, MIN_HAN_CONTENT,
 } from '../src/lib/utils';
 import { isPushableText, pushExclusionReason } from '../src/lib/article-format';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 let passed = 0;
 const failures: string[] = [];
@@ -277,6 +279,36 @@ for (const [t, why] of capMustAllow) {
   ok(`仍放行「${t.slice(0, 24)}…」（${why}）`, hits.length === 0, `却抓到了 ${hits.join('/')}`);
 }
 
+// ------------------------------------------------------------
+// 2026-09-29：这个判据现在**多了一个用法** —— 终审（`editor-review.ts`）拿它当护栏。
+//
+// 为什么同一判据在两处可以有不同结论：**误报代价不对称**。
+//   翻译层误报 ⇒ `translated:false` ⇒ 重试 ×3 后**静默丢稿**（少一条消息）；
+//   终审误报   ⇒ 只丢掉一条**改写提议**，原稿一字不动（少改一个字）。
+// 一侧是丢消息，一侧是少改字，所以「翻译层只体检、终审可进闸」不矛盾。
+//
+// ⚠️ 下面两条源码断言把**这个分裂本身**钉死：防止以后有人拿终审当先例，
+// 把放宽版接进翻译层的闸门（那会误伤「职务中文 + 人名拉丁」这种规定写法）。
+// ------------------------------------------------------------
+try {
+  const translateSrc = readFileSync(resolve(process.cwd(), 'src/lib/translate.ts'), 'utf8');
+  const editorSrc = readFileSync(resolve(process.cwd(), 'src/lib/editor-review.ts'), 'utf8');
+  ok(
+    '翻译层**没有**接放宽版半译判据（接了就是误伤规定写法）',
+    // 只认「调用」：translate.ts 的注释里**确实**会提到这个名字（说明为什么不用它），
+    // 所以不能用 `includes` 裸匹配 —— 那样连注释都会被当成违规。
+    !/\bmixedScriptTokensLatinCapitalized\s*\(/.test(translateSrc),
+    '若新增的只是日志/体检用途，请把这条断言改精确到闸门那几行，不要直接删掉 —— 它拦的是「接进闸门」这件事',
+  );
+  ok(
+    '终审**确实**用了放宽版（这是有意的取舍，别当成笔误删掉）',
+    /\bmixedScriptTokensLatinCapitalized\s*\(/.test(editorSrc),
+    'editor-review.ts 不再调用它了 —— 若是有意收紧，请同步改这条断言与 fixRejectReason 的注释',
+  );
+} catch (err) {
+  ok('能读到 translate.ts / editor-review.ts 做源码断言', false, err instanceof Error ? err.message : String(err));
+}
+
 // ============================================================
 // 四、推送资格闸：新口径的稿子必须仍然推得出去
 // ============================================================
@@ -312,6 +344,89 @@ ok(
   }, 'kz') === 'untranslated',
 );
 ok('空正文仍不可推送', !isPushableText(newStyleTitle, ''));
+
+// ============================================================
+// 四之二、「下降 N 倍」闸（2026-09-29 新增）—— 这一类**进了闸**，双向都要钉
+// ============================================================
+//
+// 与上面「体检指标」那一节的区别值得盯住：`mixedScriptTokensLatinCapitalized`
+// 实测 5% 误伤 ⇒ **只做体检**；而本判据实测 **500 篇 0 误报** ⇒ **敢进闸**。
+// 两者待遇不同，依据只有一条：实测误报率。
+// 谁要是觉得「这个看着也不准，干脆别进闸」，请先看下面的 mustNotCatch 清单
+// —— 它已经把刻意的放行边界写全了，不是没想过。
+
+section('四之二、「下降 N 倍」闸（descendingMultiplePhrases）');
+
+// (1) 必须命中：中文里逻辑不成立（1 元下调 1.5 倍 = −0.5 元）
+const multMustCatch = [
+  '乌兹别克斯坦大型电力用户白天电价下调1.5倍',
+  '电价下调 1.5 倍',
+  '电价下降了1.5倍',
+  '赔偿金额下调 13000 倍',
+  '成本降低2倍',
+  '库存减少3倍',
+  '房价下跌 2 倍',
+  '销量下滑1.5倍',
+  '降幅2倍',
+  '补贴削减 4 倍',
+  '排放量缩减 3 倍',
+];
+for (const s of multMustCatch) {
+  ok(`必须命中：${s}`, descendingMultiplePhrases(s).length > 0);
+}
+
+// (2) 必须放行：方向是**增长**，或句式不构成「动词+数字+倍」
+const multMustNotCatch = [
+  '出口额增长2倍',
+  '营收翻一番',
+  '投资者收益提高1.5倍',
+  '电价下调 33%',
+  '电价降至原来的 1/1.5（约低 33%）',
+  '按 1/1.5 的系数下调',
+  '电价下调，幅度为原来的三分之一',
+  '该指标是上季度的 1.5 倍',
+  '跌幅收窄至 2%',
+  '减少 3 亿元',
+];
+for (const s of multMustNotCatch) {
+  const hit = descendingMultiplePhrases(s);
+  ok(`必须放行：${s}`, hit.length === 0, JSON.stringify(hit));
+}
+
+// (3) ⚠️ **刻意放行的边界**，写成断言免得后人以为是漏写：
+//     「下降至 / 降低到」与「下降了」语义不同（「降至 1.5 倍」是「变成 1.5 倍」），
+//     跨过「至/到」会把误报引进来，而误报的代价是**静默丢稿**。
+ok(
+  '刻意放行：「下降至 1.5 倍」（至/到 另一层语义，放行以免误报）',
+  descendingMultiplePhrases('电价下降至 1.5 倍').length === 0,
+);
+ok(
+  '刻意放行：「降低到 2 倍」',
+  descendingMultiplePhrases('成本降低到 2 倍').length === 0,
+);
+
+// (4) 命中时返回**原文片段**（不是布尔）—— 上游要把它拼进重试的修正指令
+ok(
+  '返回的是命中片段本身（要拼进修正指令）',
+  descendingMultiplePhrases('电价下调 1.5 倍').includes('下调 1.5 倍'),
+  JSON.stringify(descendingMultiplePhrases('电价下调 1.5 倍')),
+);
+
+// (5) 线上真实回归锚点（语料实测的两条，见 translate.ts 提示词第 7 条）
+ok(
+  '锚点：id=6886「白天电价下调1.5倍」（用户 2026-09-28 报的）',
+  descendingMultiplePhrases('乌兹别克斯坦大型电力用户白天电价下调1.5倍').length === 1,
+);
+ok(
+  '锚点：id=6569「生态赔偿金额下调 13000 倍」（同类，用户未报）',
+  descendingMultiplePhrases('法院将生态赔偿金额下调 13000 倍').length === 1,
+);
+// 增长方向不得被这条锚点带偏
+ok('锚点反向：同一句话改成「上调」不命中', descendingMultiplePhrases('白天下调电价').length === 0);
+
+// (6) 与同族判据一致：必须能处理**空串 / 无数字**而不抛
+ok('空串安全', descendingMultiplePhrases('').length === 0);
+ok('无数字安全', descendingMultiplePhrases('电价下调').length === 0);
 
 // ============================================================
 // 汇总

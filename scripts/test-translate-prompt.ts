@@ -354,6 +354,68 @@ const hintLong = buildRepairHint({
 });
 ok('被拦词很多时指令有上限（最多列 8 个）', hintLong.includes('专名7en') && !hintLong.includes('专名8en'));
 
+// ------------------------------------------------------------
+// 倍数类（2026-09-29 新增）：提示词第 7 条 + 闸的修正指令块
+// ------------------------------------------------------------
+//
+// 用户 2026-09-28 报「电价下调1.5倍」这类「数字对、话不通」的错。
+// 两类承载体都要钉：提示词（预防）+ 闸的修正指令（补救）。
+// 只钉一个的话，另一处被删掉不会有任何症状，只会继续出病句。
+
+// 提示词第 7 条：方向规则必须写进去
+ok('提示词有第 7 条（数字、单位与倍数）', TRANSLATE_PROMPT.includes('数字、单位与倍数'));
+ok(
+  '第 7 条写明了「倍只能用于增长、不能用于下降」',
+  TRANSLATE_PROMPT.includes('只能用于增长') && TRANSLATE_PROMPT.includes('不能用于下降'),
+);
+ok(
+  '第 7 条给了俄语两种来源写法（в N раза / понижающий коэффициент）',
+  TRANSLATE_PROMPT.includes('в 1.5 раза') && TRANSLATE_PROMPT.includes('коэффициент'),
+);
+ok(
+  '第 7 条要求「出现系数必须说清是乘还是除」（只写系数读者判不出涨跌）',
+  TRANSLATE_PROMPT.includes('说清它是**乘**还是**除**'),
+);
+ok(
+  '第 7 条带了用户报的那条反例（下调 1.5 倍 ⇒ 降至原来的 1/1.5）',
+  TRANSLATE_PROMPT.includes('下调 1.5 倍') && TRANSLATE_PROMPT.includes('1/1.5'),
+);
+// 量词那一段（500 座教学楼）
+ok('第 7 条写明了量词必须来自「数字实际修饰的名词」', TRANSLATE_PROMPT.includes('量词必须来自'));
+ok(
+  '第 7 条带了 500 мест 的反例（座位/名额 ≠ 栋楼）',
+  TRANSLATE_PROMPT.includes('мест') && TRANSLATE_PROMPT.includes('500 个学生名额'),
+);
+ok(
+  '第 7 条要求「拿不准时把单位写全」而不是写一个语义不清的量词',
+  TRANSLATE_PROMPT.includes('把单位写全'),
+);
+ok('第 7 条规范了 № 的写法（写成「第」）', TRANSLATE_PROMPT.includes('№13') && TRANSLATE_PROMPT.includes('第 13'));
+
+// 修正指令里必须有倍数那一块 —— 而且要**讲清该改成什么**。
+// 只叫模型「重写一遍」是没用的：它不是手滑，是在直译 в N раза。
+const hintMult = buildRepairHint({ kind: 'impossible-multiple', tokens: [], impossibleMultiples: ['下调1.5倍'] });
+ok('倍数类的修正指令带上了被拦下的说法', hintMult.includes('下调1.5倍'));
+ok('倍数类的修正指令讲明「下降 N 倍 在中文里逻辑不成立」', hintMult.includes('逻辑不成立'));
+ok('倍数类的修正指令讲明原文的语义是「除以」', hintMult.includes('除以'));
+ok('倍数类的修正指令给了可直接照抄的正确说法（1/1.5）', hintMult.includes('1/1.5'));
+ok('倍数类的修正指令提醒「增长方向仍可用倍」（不要一并改错）', hintMult.includes('增长'));
+ok('倍数类的修正指令同样声明「不要写进 content」', hintMult.includes('不要写进 content'));
+
+// 两类问题同时出现时，**一次说清**（重试只有一次机会，只说一类会撑到丢稿）
+const hintBoth = buildRepairHint({
+  kind: 'half-translated',
+  tokens: ['阿克tau市'],
+  impossibleMultiples: ['下调1.5倍'],
+});
+ok(
+  '两类问题同时命中时，修正指令两块都带（不是二选一）',
+  hintBoth.includes('阿克tau市') && hintBoth.includes('下调1.5倍'),
+);
+
+// 空 reject（理论上的兜底）不得吐出一段没有信息的文案
+ok('没有任何问题时指令为空串（不是一段空话）', buildRepairHint({ kind: 'half-translated', tokens: [] }) === '');
+
 // ============================================================
 // 汇总
 // ============================================================
