@@ -1650,6 +1650,15 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 > 同理别把 `tsc` 和一堆测试串在一条 `&&` 里 —— 它一挂整条链都拿不到结果。
 > `tsx` 跑测试很快（秒级），不受影响。
 
+> ⚠️ **`pnpm lint:build`（ESLint）在本机跑不动 —— 别把它当成「跑过了」。**（2026-09-29 实测）
+> `eslint . --quiet` 跑了 **17 分钟零输出**（日志只有那两行 header），只能中止。
+> 它**不在 `verify:offline` 里**，所以「门禁全绿」从来不包含它 ——
+> 这也解释了为什么历史上没人发现它跑不动：**没人跑过**。
+> 要真跑它，先查 eslint 配置里是哪条 type-aware 规则拖的（或加 `--cache`、
+> 或只对改动文件跑），**不要**把它直接塞进 `verify:offline`：
+> 一条 17 分钟都跑不完的门禁会重演「跑不完的门禁等于没有门禁」那个错误。
+> ⇒ 目前 ESLint 的**实际保护为零**，机器语法错误的唯一门禁是 `pnpm ts-check`。
+
 > ⚠️ **`verify:local` 原先在本机（无 Key）是跑不完的 —— 已拆成 offline / online 两段**（2026-09-24）。
 > 原因：`&&` 链中间夹着 `test:translate`（**需要私钥**，缺 Key 时 `exit 1`），
 > 于是排在**它后面**的 `test:translate-prompt` / `test:zh-gate` / `test:feed-fetch` /
