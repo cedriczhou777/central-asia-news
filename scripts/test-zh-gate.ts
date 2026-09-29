@@ -545,6 +545,22 @@ try {
     src.includes("'latin-cyrillic'"),
     'kind 不区分的话，重试会给「汉字+字母」那套答非所问的示例',
   );
+
+  // ⚠️ 「接进闸门」只保证行为正确；**它有没有上线**是另一件事。
+  // 2026-09-29 上午就在这上面绕过远路：`git push` 即部署，但没有可观测指纹
+  // ⇒「没上线」和「上线了但没效果」分不开。探针必须**跑一次真判据**，
+  // 不能是手写的 `true`（闸被删掉之后它还是 true）。
+  const pushSrc = readFileSync(resolve(process.cwd(), 'src/app/api/wechat/push/route.ts'), 'utf8');
+  ok(
+    '★ `codeVersion` 里有本闸的**活体探针**（跑一次真判据，不是手写的 true）',
+    /cyrillicLatinGateProbe:\s*latinCyrillicTokens\(/.test(pushSrc),
+    '没有探针 = 「上没上线」只能靠猜，这正是 2026-09-29 上午绕远路的成因',
+  );
+  ok(
+    '★ 探针的入参是一个**线上真实命中词**（`Aйдос`，id=6787），不是编造的样例',
+    /cyrillicLatinGateProbe:[^,]*Aйдос/.test(pushSrc) && latinCyrillicTokens('Aйдос').length === 1,
+    '探针词若被改成干净词，值会变成 0，等于探针失效',
+  );
 } catch (err) {
   ok('能读到 translate.ts 做源码断言', false, err instanceof Error ? err.message : String(err));
 }

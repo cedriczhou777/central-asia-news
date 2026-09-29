@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
-import { beijingDate, extractFirstImage } from '@/lib/utils';
+import { beijingDate, extractFirstImage, latinCyrillicTokens } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 import { dedupeStories, isLlmJudgeEnabled, PAIR_CANDIDATE_MIN_SIM } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
@@ -661,6 +661,18 @@ export async function GET() {
        * ⚠️ 它没有独立开关：借图跑在总审内部，所以 `EDITOR_REVIEW=off` 会一并关掉。
        */
       coverBorrowMinSim: PAIR_CANDIDATE_MIN_SIM,
+      /**
+       * 「拉丁+西里尔同词」硬闸（2026-09-29）的**活体探针** —— 不是手写的 `true`。
+       *
+       * 它**当场跑一次判据**，入参 `Aйдос` 是线上真实命中词（id=6787 标题）。
+       * 所以 `1` 同时说明两件事：这一版带上了这个闸、**且它真的还能命中**。
+       *
+       * 为什么不写 `cyrillicGate: true`：上面那段注释已经讲过「手写的东西迟早会和
+       * 代码分叉，然后反过来误导排查」。一个手写的 `true` 在闸被删掉之后依然是
+       * `true` —— 那正是 2026-09-29 上午绕远路的原因（「没上线」和「上线了但没效果」
+       * 分不开）。跑一次真判据则不可能撒谎：判据被删会编译不过，被判据改坏值会变。
+       */
+      cyrillicLatinGateProbe: latinCyrillicTokens('Aйдос').length,
     },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿、summary.failures 是哪些国家失败、
