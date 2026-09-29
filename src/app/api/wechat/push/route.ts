@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
-import { beijingDate, extractFirstImage, latinCyrillicTokens } from '@/lib/utils';
+import { beijingDate, extractFirstImage, latinCyrillicTokens, stripCyrillicParentheticals } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 import { dedupeStories, isLlmJudgeEnabled, PAIR_CANDIDATE_MIN_SIM } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
@@ -673,6 +673,15 @@ export async function GET() {
        * 分不开）。跑一次真判据则不可能撒谎：判据被删会编译不过，被判据改坏值会变。
        */
       cyrillicLatinGateProbe: latinCyrillicTokens('Aйдос').length,
+      /**
+       * 「删冗余西里尔括注」确定性后处理（2026-09-29）的**活体探针** —— 同款理由。
+       *
+       * 返回的是**清理后的字符串**而不是布尔：`'吉尔吉斯斯坦国家税务局'`。
+       * 用字符串是因为它能一眼看出「删的是哪一种括注、留下了什么」——
+       * 一个 `true` 只能说明「函数存在」，说明不了「它删对了」。
+       * 入参是线上真实命中（id=6658 正文）。
+       */
+      cyrillicNoteStripProbe: stripCyrillicParentheticals('吉尔吉斯斯坦国家税务局（ГНС）'),
     },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿、summary.failures 是哪些国家失败、

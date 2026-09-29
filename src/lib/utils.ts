@@ -333,6 +333,139 @@ export function descendingMultiplePhrases(text: string): string[] {
 }
 
 /**
+ * 删掉「含西里尔字母、而且一个汉字都没有」的**括注**（`（…）` / `(…)`）。
+ *
+ * ⚠️ **这是确定性后处理，不是判据。** 它不判合格/不合格、不触发重试、**没有丢稿风险** ——
+ * 这正是它存在的理由：同类问题如果做成闸，代价是「重试 ×3 不过 ⇒ 静默丢稿」，
+ * 而它的危害只是读者看到一个多余的括注。两者的分量不匹配，所以只能这么解。
+ *
+ * ## 它修的是哪一类（2026-09-29 定量，样本 = 线上 7 天 3528 篇）
+ *
+ * 提示词第 6 条**早就逐字写着**「除引用原文标题（放在《》里）外，译文里不得出现西里尔字母」，
+ * 而实测仍有 210 篇（5.95%）留着西里尔。其中**括注**形态是整齐的一类，形态只有两种：
+ *
+ * | 形态 | 例 |
+ * |---|---|
+ * | 机构名 + 括注原文缩写 | `吉尔吉斯斯坦国家税务局（ГНС）`、`增值税（НДС）`、`议会（Жогорку Кенеш）` |
+ * | 中文译名 + 括注原文全称 | `基础设施发展基金（Фонд инфраструктурного развития）` |
+ *
+ * **实测本函数会改动 113 篇（3.20%）/ 142 个字段、共 162 处括注**
+ * （`pnpm analyze:cyrillic-note`，数字一律来自本文件的生产判据，仪器不另写正则）。
+ *
+ * **为什么删它是安全的**：干跑逐处过目，100 余种括注**全部**是「中文名（原文全称/缩写）」，
+ * 中文名**一定**在括注前面（161 处紧邻汉字，另 8 处隔着 `」`/`”`/`’`/空格）——
+ * **0 处删完会丢信息**，删完读起来还更干净。
+ * 反面样例是**内含汉字**的括注（实测 3 处：`（当地称「аркар」和「кулжа」）` id=4307、
+ * `（成员为 Arina Malinovskaya, Sofia Shulzhенко…）` id=5906、`（阿克亚к特）` id=3530），
+ * 那些**在提供信息**，判据里的「不含汉字」这一条就是为它们设的，三个都钉成了反例。
+ *
+ * ⚠️ **本函数只管括注那一半。** 另有 **904 处西里尔裸露在括注之外**
+ * （`外交部长 Жээнбек Кулубаев`、`Жапаров：到2026年底…`），这一半**删不得** ——
+ * 删了读者就不知道是谁了，等于用「不出现西里尔」换「丢事实」。
+ * 它的解法是一张「西里尔专名 → 中文」的表，属**另一件**没做的事。
+ *
+ * ## 为什么**只**动 `（）`/`()`，不动 `「」`/`“”`/`《》`
+ *
+ * 实测 `【】`／`[]`／`〔〕` 里含西里尔的是 **0 处**（不用管）；`「」` 有 55 处、`“”` 19 处、
+ * `《》` 1 处。这四类**故意不碰**：
+ * - `《》` 是提示词第 6 条**明确允许**放原文标题的地方（那 1 处 `《Q2 2026: …》` 是对的）；
+ * - `「」`／`“”` 在中文新闻里还有「引用原话」的用法，删掉引号内容可能删掉真信息，
+ *   而判据无法区分「机构名的原文」和「引用的原话」⇒ **按「宁漏不误杀」不动它**。
+ *
+ * 按此口径，本函数能**整篇清干净**「只含这一种形态」的那些篇（113 篇里有 12 篇
+ * 同时还有括注外的裸露西里尔，那 152 篇只有裸露西里尔 —— 见上面那句「只管括注那一半」）。
+ *
+ * ## 两条结构性排除（都不是预防性加码）
+ *
+ * 1. **HTML 标签内部不碰**：`content` 里有 `<img src="...">`，同批样本 2445 个 `<img src>`
+ *    中有 6 个文件名含西里尔（`Изображение-JPEG-4AF0…jpeg`）。标签是**代码**不是译文，
+ *    动它会直接损坏正文结构。
+ * 2. **`《》` 内部不碰**：理由如上。
+ *
+ * 实现上这两处用**等长以外**的占位符暂时摘出来（`\u0000N\u0000`），
+ * 并把 `\u0000` 排除在括注内部的字符类之外 —— 于是「括注里套着一个标签」这种病态写法
+ * **压根不会匹配**（宁可漏，不可误删）。
+ *
+ * ⚠️ **别把本函数接到闸门上**（`translated:false` 那条路）。它的定位是「交付前的清理」，
+ * 当前唯一的调用点是 `translate.ts` 的 `normalizeResult`。要改成闸，先回去读本注释第一段。
+ */
+const CYRILLIC_RE = /[\u0400-\u04ff]/;
+const HAN_RE = /[\u4e00-\u9fff]/;
+/** 占位符前缀：`\u0000` 不会出现在真实正文里，也不会出现在括注内部的字符类里。 */
+const STASH_PREFIX = '\u0000';
+/**
+ * 括注匹配。**这份正则必须只有一份** —— `stripCyrillicParentheticals`（生产）
+ * 与 `cyrillicParentheticalNotes`（仪器/体检）共用它。
+ *
+ * 两侧可选的 `[ \t]?`（**半角**空格）是顺手吃掉删掉括注后留下的那个空格：
+ * 半角形态写作 `公司 (УТЙ) 管理层`，只删 `(УТЙ)` 会留下**两个**空格；
+ * 全角形态 `公司（НДС）收入` 两侧没有空格，不受影响。
+ * 未删时返回的是整个 `whole`，所以「匹配到但保留」的情况下空格一个不少。
+ */
+const CYRILLIC_NOTE_RE = /[ \t]?[（(]([^（()）\u0000]*)[）)][ \t]?/g;
+
+/** 把「不许动」的区段（HTML 标签、`《》` 引文）摘成占位符，并给出还原函数。 */
+function maskProtected(text: string): { masked: string; restore: (s: string) => string } {
+  const stashed: string[] = [];
+  const masked = text
+    .replace(/<[^>]*>/g, (m) => {
+      stashed.push(m);
+      return `${STASH_PREFIX}${stashed.length - 1}${STASH_PREFIX}`;
+    })
+    .replace(/《[^》]*》/g, (m) => {
+      stashed.push(m);
+      return `${STASH_PREFIX}${stashed.length - 1}${STASH_PREFIX}`;
+    });
+  return {
+    masked,
+    restore: (s) =>
+      s.replace(new RegExp(`${STASH_PREFIX}(\\d+)${STASH_PREFIX}`, 'g'), (_m, i) => stashed[Number(i)]),
+  };
+}
+
+/**
+ * **体检用**：列出这段文本里「会被 {@link stripCyrillicParentheticals} 删掉」的括注内容。
+ *
+ * ⚠️ 存在的理由是「**判据只能有一份**」。仪器脚本若要自己写一条正则去数命中，
+ * 就会与生产函数分叉 —— 本项目已经因为「同一条判据两处各写一份」栽过三次
+ * （体检与生产不一致、闸 2 与闸 3 不一致、`isPushableText` 与 `pushExclusionReason` 分家）。
+ * 所以数命中、做干跑、写报告一律调这个函数，**不要另写正则**。
+ */
+export function cyrillicParentheticalNotes(text: string): string[] {
+  if (!text || !CYRILLIC_RE.test(text)) return [];
+  const { masked } = maskProtected(text);
+  const out: string[] = [];
+  for (const m of masked.matchAll(CYRILLIC_NOTE_RE)) {
+    if (isRedundantCyrillicNote(m[1])) out.push(m[1].trim());
+  }
+  return out;
+}
+
+export function stripCyrillicParentheticals(text: string): string {
+  if (!text || !CYRILLIC_RE.test(text)) return text;
+
+  const { masked, restore } = maskProtected(text);
+
+  // 括注内部的字符类里排除 `\u0000` ⇒ 括注含占位符（即内含标签/引文）时整个不匹配。
+  const stripped = masked.replace(CYRILLIC_NOTE_RE, (whole: string, inner: string) =>
+    isRedundantCyrillicNote(inner) ? '' : whole,
+  );
+  if (stripped === masked) return text; // 没有任何改动 ⇒ 原样返回，不做无谓还原
+
+  return restore(stripped);
+}
+
+/** 括注内容是否「纯冗余的西里尔原文」——判据见 `stripCyrillicParentheticals` 注释。 */
+function isRedundantCyrillicNote(inner: string): boolean {
+  const s = inner.trim();
+  if (!s) return false;
+  if (HAN_RE.test(s)) return false; // 括注里已有汉字 ⇒ 它在提供信息，不是冗余原文
+  // 要求 **≥2 个**西里尔字母：单个西里尔字母的括注（如 `（Б）` 指选项）含义不明，
+  // 按「宁漏不误杀」放过。
+  return (s.match(/[\u0400-\u04ff]/g) || []).length >= 2;
+}
+
+/**
  * 检测文本是否为中文：**汉字个数 ≥ minHan** 即视为已翻译为中文。
  *
  * ## ⚠️ 2026-09-23 改过判据（占比 → 绝对个数），改之前先读完

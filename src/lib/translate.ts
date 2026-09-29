@@ -1,4 +1,13 @@
-import { isChineseText, mixedScriptTokens, mixedScriptTokensLatin, latinCyrillicTokens, descendingMultiplePhrases, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
+import {
+  isChineseText,
+  mixedScriptTokens,
+  mixedScriptTokensLatin,
+  latinCyrillicTokens,
+  descendingMultiplePhrases,
+  stripCyrillicParentheticals,
+  MIN_HAN_TITLE,
+  MIN_HAN_CONTENT,
+} from './utils';
 import type { Category } from './data/types';
 
 /**
@@ -607,9 +616,35 @@ function normalizeResult(
   originalContent: string,
   provider: string
 ): { result: TranslateResult; reject?: GateReject } {
-  const titleZh = typeof parsed.title === 'string' ? parsed.title : originalTitle;
-  const summaryZh = typeof parsed.summary === 'string' ? parsed.summary : originalContent.substring(0, 100);
-  const contentZh = typeof parsed.content === 'string' ? parsed.content : originalContent;
+  // ---- 交付前的确定性清理（**先清理、再过闸** —— 顺序是量出来的，别改）----
+  //
+  // 删掉「含西里尔、且一个汉字都没有」的括注：`增值税（НДС）`、`议会（Жогорку Кенеш）`、
+  // `紧急情况部（MЧС）`。判据、边界、为什么不做成闸，写在
+  // `utils.stripCyrillicParentheticals` 的注释里。这里是**两条使用纪律**：
+  //
+  // 1. **只清理，不判合格**：它不参与 `ok`，也就不可能造成丢稿。
+  // 2. **`!ok` 的返回值不清理**：那时返回的是 `originalTitle` / `originalContent`
+  //    （原文回退），它们本来就该带西里尔。
+  //
+  // ## 为什么是「先清理、再过闸」而不是反过来
+  //
+  // 闸管的是「**要发出去的那份文字**合不合格」。而括注里藏着的缺陷**根本发不出去**
+  // （它会被删掉），拿它去触发重试没有意义 —— 而且是有害的：重试对这类错误无效
+  // （模型是系统性再犯，见 `buildRepairHint` 注释），三次用完就是**静默丢稿**。
+  //
+  // 实测（3528 篇线上语料，`pnpm analyze:cyrillic-note` 第 4 节）：
+  // **18 篇本来会被闸拦下、走「重试 ×3 → 可能丢稿」，清理后直接合格** ——
+  // 它们的命中**全部**长在冗余括注里，最典型的是「拉丁+西里尔」那一类：
+  // `白俄罗斯统一商品交易所（BUТБ）`（`BUТБ` 里 `U/Б/Т` 混排）、
+  // `紧急情况部（MЧС）`、`国家医疗基金（FOМС）`。删掉括注后读者看到的是完整中文名，
+  // 比「重试三次然后可能什么都没有」严格更好。
+  // 剩下的命中一篇不少地仍然触发重试 —— 清理没有让任何**真缺陷**漏过去。
+  const stripNote = (s: string) => stripCyrillicParentheticals(s);
+  const titleZh = stripNote(typeof parsed.title === 'string' ? parsed.title : originalTitle);
+  const summaryZh = stripNote(
+    typeof parsed.summary === 'string' ? parsed.summary : originalContent.substring(0, 100),
+  );
+  const contentZh = stripNote(typeof parsed.content === 'string' ? parsed.content : originalContent);
 
   // 语言闸：汉字个数够（见 utils.isChineseText 的说明，**不是**占比）
   const zhOk = isChineseText(titleZh, MIN_HAN_TITLE) && isChineseText(contentZh, MIN_HAN_CONTENT);
