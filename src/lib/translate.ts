@@ -1,4 +1,4 @@
-import { isChineseText, mixedScriptTokens, mixedScriptTokensLatin, descendingMultiplePhrases, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
+import { isChineseText, mixedScriptTokens, mixedScriptTokensLatin, latinCyrillicTokens, descendingMultiplePhrases, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
 import type { Category } from './data/types';
 
 /**
@@ -278,6 +278,15 @@ export const TRANSLATE_PROMPT = `你是一位面向国际投资者的中亚与�
    （⚠️ 城市名照样写中文「阿斯塔纳」，见第 6 条），
    **不要**改写成「查获 10 起手机走私案，单次查获 50 部」—— 那是把正文细节当标题，
    会让同一件事在成品里看起来像几条不同新闻。
+   ⚠️ **标题也必须遵守第 6 条的名词口径，而且要和正文用同一套写法。**
+   第 6 条那句「同一个实体，全篇只能有一种写法」**不是只管正文的** —— 标题同样是译文，
+   标题里出现的人名、机构名、项目名，写法一律照第 6 条办，并且要和你在 content 里
+   对**同一个实体**的写法对齐：
+     ✗ 标题写「托卡耶夫」，content 里写 Tokayev —— 同一个人，两处写法不一致
+     ✗ 标题写「哈萨克斯坦国家铁路」，content 里写 KTZ —— 同一机构，两处写法不一致
+     ✓ 标题与 content 都写「托卡耶夫」；都写 KTZ
+   （反过来一样：正文写拉丁，标题就必须写同一个拉丁写法。）
+   标题短，最容易只顾通顺、把这条忘掉 —— 请把它当成硬约束，不是建议。
 2. **summary（中文摘要）**：100 字以内，包含谁、做了什么、何时、何地、为什么。
 3. **content（中文综述）**：约 300 字的**事实性综述**，必须交代：时间、人物/机构、地点、关键数字（金额、规模、占比）、事件经过与因果关系。要求：
    - 像给投资者写的简报，不像散文。禁止文学化渲染、禁止抒情、禁止空话套话。
@@ -494,7 +503,7 @@ export function fallbackCategory(title: string, content: string): Category {
  * 质检拒绝的原因。**不是给日志看的花瓶** —— 它会被拼成重试时的修正指令，见 `buildRepairHint`。
  */
 export interface GateReject {
-  kind: 'mixed-script' | 'half-translated' | 'impossible-multiple';
+  kind: 'mixed-script' | 'half-translated' | 'impossible-multiple' | 'latin-cyrillic';
   /** 被拦下的词（截断到前几个） */
   tokens: string[];
   /**
@@ -530,19 +539,37 @@ export function buildRepairHint(reject: GateReject): string {
 
   // 块 1：专名写法（汉字 + 拉丁/西里尔 拼在一起）
   if (reject.tokens.length > 0) {
+    const isLatinCyr = reject.kind === 'latin-cyrillic';
     const what =
       reject.kind === 'half-translated'
         ? '专有名词被译了一半 —— 汉字后面残留了一段拉丁字母'
-        : '汉字与西里尔字母挤在同一个词里';
+        : isLatinCyr
+          ? '同一个词里同时混了拉丁字母和西里尔字母'
+          : '汉字与西里尔字母挤在同一个词里';
+    // ⚠️ 示例必须**按类**给：`latin-cyrillic` 命中的词里**一个汉字都没有**
+    // （`Kaрабалиева`／`Мырзахметov`／`MЧС`），拿「汉字+拉丁」的示例去教它
+    // 等于答非所问 —— 而重试只有一次机会。
+    const fix = isLatinCyr
+      ? [
+          '请把上面这些词改成**要么是完整的中文译名、要么是完整的拉丁写法** ——',
+          '**一个词里不许混两种字母**。正确示例：',
+          '  「Kaрабалиева」→「Qarabaliyeva」',
+          '  「Мырзахметov」→「Myrzakhmetov」',
+          '  「MЧС」→「MChS」或直接写中文「哈萨克斯坦紧急情况部」',
+          '  「TОО」→「TOO」或直接写中文「有限责任合伙」',
+        ]
+      : [
+          '请把上面这些专有名词改成**要么是完整的中文译名、要么是完整的拉丁写法**，',
+          '绝对不要再出现「汉字 + 字母」拼起来的残缺写法。正确示例：',
+          '  「斯皮塔梅en区」→「Spitamen 区」（该地名无通用中文译名 ⇒ 用完整拉丁写法）',
+          '  「阿克tau市」→「阿克套市」',
+          '  「霍贾and市」→「苦盏市」或「Khujand 市」',
+        ];
     blocks.push(
       [
         '⚠️ 你上一次的输出**没有通过质检**，原因：' + what + '。',
         '被拦下的词：' + reject.tokens.slice(0, 8).join('、'),
-        '请把上面这些专有名词改成**要么是完整的中文译名、要么是完整的拉丁写法**，',
-        '绝对不要再出现「汉字 + 字母」拼起来的残缺写法。正确示例：',
-        '  「斯皮塔梅en区」→「Spitamen 区」（该地名无通用中文译名 ⇒ 用完整拉丁写法）',
-        '  「阿克tau市」→「阿克套市」',
-        '  「霍贾and市」→「苦盏市」或「Khujand 市」',
+        ...fix,
       ].join('\n'),
     );
   }
@@ -605,6 +632,20 @@ function normalizeResult(
   const mixed = fields.flatMap((f) => mixedScriptTokens(f));
   const halfTranslated = fields.flatMap((f) => mixedScriptTokensLatin(f));
 
+  // (c) 「拉丁 + 西里尔」挤在同一个词里（2026-09-29 加）—— 上面两条的**盲区补丁**。
+  //
+  // ⚠️ 为什么前两条抓不到：它们的锚点都是**汉字**（「汉字+西里尔」「汉字+拉丁」），
+  // 而这一类的命中词里**一个汉字都没有**：`Kaрабалиева`、`Natалья`、`KTЖ`、
+  // `Aйдос Мырзахметов`、`Kosанов`、`MЧС`、`Akorда`、`Kazselezащиты`。
+  // 1152 篇抽样里现有两条闸抓到 **0** 篇，本判据抓到 22 篇 —— 完全是增量。
+  //
+  // 实测依据（进闸门槛与 `mixedScriptTokens` 当年相同，详见 `utils.latinCyrillicTokens` 注释）：
+  // 线上 6 天 **2837 篇**，命中 53 篇（1.87%），60 个词种**逐条人工判读全部是真缺陷、误报 0**。
+  // 两条结构排除（`@` 邮箱、`.<2-4 拉丁字母>` 文件扩展名）来自同一批实测 ——
+  // 样本里 2445 个 `<img src>` 有 6 个文件名含西里尔，这次侥幸没误杀（连字符把它切开了），
+  // 换个命名就会误杀一篇好稿。
+  const latinCyr = fields.flatMap((f) => latinCyrillicTokens(f));
+
   // 第三类闸（2026-09-29 加）：「下降 N 倍」在中文里逻辑不成立。
   //
   // 与上面两类并列而不是替代 —— 它的性质更硬：不是「写法习惯」问题，
@@ -619,13 +660,22 @@ function normalizeResult(
   const impossible = fields.flatMap((f) => descendingMultiplePhrases(f));
 
   const ok =
-    zhOk && mixed.length === 0 && halfTranslated.length === 0 && impossible.length === 0;
+    zhOk &&
+    mixed.length === 0 &&
+    halfTranslated.length === 0 &&
+    latinCyr.length === 0 &&
+    impossible.length === 0;
   if (zhOk && mixed.length > 0) {
     console.log(`[translate] 译文含「汉字+西里尔」混排词 ${mixed.slice(0, 6).join('/')}，判不合格并重试`);
   }
   if (zhOk && halfTranslated.length > 0) {
     console.log(
       `[translate] 译文含「汉字+拉丁」半译专名 ${halfTranslated.slice(0, 6).join('/')}，判不合格并重试`,
+    );
+  }
+  if (zhOk && latinCyr.length > 0) {
+    console.log(
+      `[translate] 译文含「拉丁+西里尔」混排词 ${[...new Set(latinCyr)].slice(0, 6).join('/')}，判不合格并重试`,
     );
   }
   if (zhOk && impossible.length > 0) {
@@ -648,13 +698,19 @@ function normalizeResult(
   // （见 `GateReject.impossibleMultiples` 的说明 —— 重试只有一次机会，
   // 只说清一类，另一类就会撑到三次用完然后丢稿）。
   const nameKind: GateReject['kind'] | undefined =
-    halfTranslated.length > 0 ? 'half-translated' : mixed.length > 0 ? 'mixed-script' : undefined;
+    halfTranslated.length > 0
+      ? 'half-translated'
+      : mixed.length > 0
+        ? 'mixed-script'
+        : latinCyr.length > 0
+          ? 'latin-cyrillic'
+          : undefined;
   const reject: GateReject | undefined = !zhOk
     ? undefined
     : nameKind || impossible.length > 0
       ? {
           kind: nameKind ?? 'impossible-multiple',
-          tokens: [...new Set([...halfTranslated, ...mixed])],
+          tokens: [...new Set([...halfTranslated, ...mixed, ...latinCyr])],
           ...(impossible.length > 0 ? { impossibleMultiples: [...new Set(impossible)] } : {}),
         }
       : undefined;

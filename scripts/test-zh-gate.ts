@@ -20,7 +20,7 @@
  */
 import {
   isChineseText, hanCount, hanRatio, mixedScriptTokens, mixedScriptTokensLatin,
-  mixedScriptTokensLatinCapitalized, descendingMultiplePhrases,
+  mixedScriptTokensLatinCapitalized, latinCyrillicTokens, descendingMultiplePhrases,
   MIN_HAN_TITLE, MIN_HAN_CONTENT,
 } from '../src/lib/utils';
 import { isPushableText, pushExclusionReason } from '../src/lib/article-format';
@@ -427,6 +427,127 @@ ok('锚点反向：同一句话改成「上调」不命中', descendingMultipleP
 // (6) 与同族判据一致：必须能处理**空串 / 无数字**而不抛
 ok('空串安全', descendingMultiplePhrases('').length === 0);
 ok('无数字安全', descendingMultiplePhrases('电价下调').length === 0);
+
+// ============================================================
+// 五、★「拉丁 + 西里尔」同词判据（2026-09-29 进闸）
+// ============================================================
+
+section('五、★「拉丁+西里尔」同词（latinCyrillicTokens）');
+
+// 为什么要单独一节：这条判据是**前两条闸的盲区补丁**。
+// `mixedScriptTokens`（汉字+西里尔）与 `mixedScriptTokensLatin`（汉字+拉丁）
+// 的锚点都是**汉字**，所以「名字被翻了一半、且那半截旁边没有汉字」这一类
+// （`Kaрабалиева`／`Aйдос`／`MЧС`）**两条闸一条都抓不到**。
+// 实测：1152 篇抽样里两条闸命中 0 篇，本判据 22 篇 —— 全是增量。
+//
+// 进闸依据（与 `mixedScriptTokens` 当年同标准）：线上 6 天 2837 篇，
+// 命中 53 篇 1.87%、60 个词种**逐条人工判读、误报 0**。详见 utils 的实测表。
+
+// ---- (1) 真实锚点：**全部取自线上语料**，不是编的样例 ----
+// 每条后面注明出处，改判据时拿这些回放，别凭想象。
+const lcMustCatch: Array<[string, string]> = [
+  ['Aйдос', 'id=6787 标题：国防部长 Aйдос Мырзахметов（标题级，最严重）'],
+  ['Мырзахметov', 'id=6195 正文：Tokayev 对 Мырзахметov 提出指示'],
+  ['Kosанов', 'id=5904 正文：国防部长科沙诺夫（Dauren Kosанов）'],
+  ['Kazselezащиты', 'id=6548 正文：土地保护机构 Kazselezащиты'],
+  ['Akorда', 'id=6197 正文：总统府（Akorда）'],
+  ['Aкорду', 'id=4761 正文：通讯社 Aкорду'],
+  ['MЧС', 'id=6549 正文：紧急情况委员会（MЧС РК）'],
+  ['MЧS', 'id=6548 正文：同一机构另写成了 MЧS（同一批里两种错法）'],
+  ['ENPФ', 'id=5379 摘要：国家养老基金（ENPФ）'],
+  ['NПЗ', 'id=4210 正文：炼油厂（NПЗ）'],
+  ['MFCА', 'id=5121 正文：国际金融中心（MFCА）'],
+  ['TОО', 'id=5907 摘要：TОО «ADC TAZA ALEM»'],
+  ['BUТБ', 'id=4555 正文：白俄罗斯统一商品交易所（BUТБ）'],
+  ['Tоксанбаева', 'id=6821 标题：运动员 Yasmina Tоксанбаева'],
+  ['Kыргызалтын', 'id=5965 正文：吉尔吉斯铝业（Kыргызалтын）'],
+  ['dastorкон', 'id=6132 正文：烤肉架（dastorкон）'],
+  ['Kuruлtyа', 'id=5898 正文：议会（Kuruлtyа）'],
+  ['N.O.Алиев', 'id=6963 标题：任命 N.O.Алиев'],
+  ['«Khовар»', 'id=6325 摘要：杜尚别消息社（Amit «Khовар»）'],
+  ['Janги', 'id=5439 正文：Janги Тошкент'],
+];
+for (const [w, why] of lcMustCatch) {
+  ok(`必须命中：${w}`, latinCyrillicTokens(w).includes(w), why);
+}
+
+// ---- (2) 句子级：在真实上下文里也要抓得到 ----
+ok(
+  '句子级：正文里夹在中文中间时仍命中',
+  latinCyrillicTokens('哈萨克斯坦计划在年底前确定第四个炼油厂（NПЗ）的参数').includes('NПЗ'),
+);
+ok(
+  '句子级：token 边界含 ASCII 逗号时仍命中（`Shulzhенко,` —— ASCII 逗号不在分隔符集合里）',
+  latinCyrillicTokens('Sofia Shulzhенко, Elizaveta Bezrukova').some((t) => t.startsWith('Shulzhенко')),
+  JSON.stringify(latinCyrillicTokens('Sofia Shulzhенко, Elizaveta Bezrukova')),
+);
+
+// ---- (3) ★ 反向断言：单文字系统与正常写法**一律不许命中** ----
+// 这些是「看着像、其实对」的写法；命中了就是误杀一篇好稿。
+const lcMustNotCatch: Array<[string, string]> = [
+  ['Мирзиёев', '纯西里尔（引用原文标题时合法）'],
+  ['Mirziyoyev', '纯拉丁（人名按规定写法）'],
+  ['托卡耶夫', '纯汉字'],
+  ['哈萨克斯坦总统 Tokayev 会见 Google 副总裁', '职务中文 + 人名拉丁 = 规定的写法，必须放行'],
+  ['米尔зиёё夫', '汉字+西里尔 ⇒ 归 mixedScriptTokens 管，不是本判据'],
+  ['斯皮塔梅en区', '汉字+拉丁 ⇒ 归 mixedScriptTokensLatin 管，不是本判据'],
+  ['CEO表示', '正常缩写'],
+  ['60kg', '计量'],
+  ['Egemen.kz', '域名'],
+  ['KEGOC', '本来就通行的拉丁缩写'],
+];
+for (const [s, why] of lcMustNotCatch) {
+  ok(`必须放行：${s}`, latinCyrillicTokens(s).length === 0, why);
+}
+
+// ---- (4) ★ 两条结构排除：都是实测出来的，不是预防性加码 ----
+// 排除只会让判据**漏**、不会让它**多杀** —— 下游是「重试→丢稿」时这是唯一安全的方向。
+// 排除 2 的依据：2837 篇里 2445 个 `<img src>`，其中 6 个文件名含西里尔（实测见 utils 注释）。
+ok(
+  '★ 排除 1：邮箱/句柄（`@`）不算混排',
+  latinCyrillicTokens('info@почта.кз').length === 0,
+  '含 `@` 就放行',
+);
+ok(
+  '★ 排除 2：文件扩展名（`.<2-4 拉丁字母>`）不算混排',
+  latinCyrillicTokens('фото.jpeg').length === 0,
+  '这是实测里差一点就误杀的那类：`фото-2-1.jpeg` 只因连字符恰好被切开才没命中',
+);
+ok(
+  '★ 排除 2 回放：实测那个图片文件名不命中',
+  latinCyrillicTokens('Изображение-JPEG-4AF0-A230-E1-0.jpeg').length === 0 &&
+    latinCyrillicTokens('https://astanatimes.com/x/фото.jpeg').length === 0,
+);
+// ⚠️ 反向的边界：上面的排除**不许**把真缺陷一起吞掉
+ok(
+  '★ 排除项不吞真缺陷：`Kosанов` 结尾不是扩展名，仍命中',
+  latinCyrillicTokens('Kosанов').length === 1,
+);
+ok('空串安全', latinCyrillicTokens('').length === 0);
+
+// ---- (5) 源码断言：**确实接进了闸门**（与放宽版那条方向相反）----
+// 为什么这条必要：判据写在 utils 里、测试也绿，但**没接进 normalizeResult**
+// 的话，线上一条都不会被拦 —— 那就是「测试全绿、功能为零」。
+try {
+  const src = readFileSync(resolve(process.cwd(), 'src/lib/translate.ts'), 'utf8');
+  ok(
+    '翻译层**确实**调用了 latinCyrillicTokens',
+    /\blatinCyrillicTokens\s*\(/.test(src),
+    '只在 utils 里定义、没在闸门里调用 = 判定永远为 0',
+  );
+  ok(
+    '闸门判定 `ok` 里带上了 latinCyr.length === 0',
+    /latinCyr\.length\s*===\s*0/.test(src),
+    '没进 ok 的话，命中也不会判不合格',
+  );
+  ok(
+    "命中时走 'latin-cyrillic' 这个 kind（修正指令据此换措辞）",
+    src.includes("'latin-cyrillic'"),
+    'kind 不区分的话，重试会给「汉字+字母」那套答非所问的示例',
+  );
+} catch (err) {
+  ok('能读到 translate.ts 做源码断言', false, err instanceof Error ? err.message : String(err));
+}
 
 // ============================================================
 // 汇总

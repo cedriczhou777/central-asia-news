@@ -223,6 +223,76 @@ export function mixedScriptTokensLatinCapitalized(text: string): string[] {
 }
 
 /**
+ * 找出「一个词里同时含**拉丁字母**和**西里尔字母**」的片段 ——
+ * 上面三条判据全都够不着的那个盲区。
+ *
+ * ## 为什么前三条都抓不到它
+ *
+ * | 函数 | 判据的锚点 | 对 `Kaрабалиева` 的反应 |
+ * |---|---|---|
+ * | `mixedScriptTokens` | **汉字** + 西里尔 | ✗ 没有汉字 |
+ * | `mixedScriptTokensLatin` | **汉字** + 小写拉丁片段 | ✗ 没有汉字 |
+ * | `mixedScriptTokensLatinCapitalized` | **汉字** + 拉丁片段 | ✗ 没有汉字 |
+ *
+ * 三条判据的锚点都是汉字 ⇒ 一整类「名字被翻译了一半、且那半截旁边**没有汉字**」的
+ * 缺陷全部漏过：`Kaрабалиева`、`Natалья`、`KTЖ`、`BUТБ`、`Guly Kожокулова`。
+ * 2026-09-24 首次量出这一类（当时以 `analyze:nouns` 的 T2 报告段呈现）。
+ *
+ * ## 判据：同一个 token 里既有拉丁字母又有西里尔字母
+ *
+ * 与前三者同族 —— 都是「**书写系统层面**自相矛盾」，不是风格问题：
+ * 一段中文译文里的**一个词**要么是汉字、要么是**一种**字母的完整转写；
+ * 一半拉丁一半西里尔，不可能对应任何正确的写法。
+ *
+ * 用 `\p{Script=Latin}` 而不是 `[A-Za-z]`，理由与 `mixedScriptTokensLatin` 相同：
+ * 后者会把带变音符的拉丁名切碎（`Alagözov` → `Alag` + `zov`）。
+ * 分隔符复用 `TOKEN_SPLIT_RE`（理由见那个常量的注释）：判据之间的边界必须一致。
+ *
+ * ## ⚠️ 2026-09-29 进闸前的实测（**这条判据的进闸依据，别凭印象推翻**）
+ *
+ * 样本 = 线上 6 天 2837 篇（`/api/articles?date=` 逐日抓，同 `analyze:cover-gaps` 的做法），
+ * 跑 `pnpm analyze:mixed-script`：
+ *
+ * | 指标 | 值 |
+ * |---|---|
+ * | 命中篇数 | 49 / 2837 = **1.73%** |
+ * | 不同词种 | 60（其中 **53 种不含汉字** ⇒ 现有闸完全看不见） |
+ * | 现有两条闸在同一样本上 | 汉字+西里尔 17 篇 / 汉字+拉丁 6 篇 |
+ * | 逐条人工判读 | **60/60 全是真缺陷，误报 0** |
+ *
+ * 命中样例（全部是「名字/机构名被翻了一半」）：
+ * `Aйдос Мырзахметов`（标题级）、`Kosанов`、`Мырзахметov`、`TОО`、`MЧС`／`MЧS`、
+ * `Akorда`／`Aкорду`、`Kazselezащиты`、`ENPФ`、`NПЗ`、`MFCА`、`Kыргызалтын`、
+ * `«Khовар»`／`«Xовар»`、`BUТБ`、`Tоксанбаева`、`dastorкон`、`Kuruлtyа`。
+ *
+ * 这个量级与 `mixedScriptTokens` 当年进闸的证据持平（1757 篇 / 156 种 / 0 误报），
+ * 所以按同一标准可以当**硬判据**。
+ *
+ * ## ⚠️ 两条**必须**保留的结构性排除（都是实测出来的，不是预防性加码）
+ *
+ * 排除只可能让判据**漏**、不会让它**多杀** —— 在下游是「重试→丢稿」的前提下，
+ * 这是唯一安全的方向（项目纪律：宁漏不误杀）。
+ *
+ * 1. **`@`** ⇒ 邮箱／句柄（`info@почта.кз` 这种会被 `@` 之外的规则粘连成一个 token）。
+ * 2. **结尾是 `.<2–4 个拉丁字母>`** ⇒ 文件扩展名。
+ *    ⚠️ 这一条是**真的要**：同一样本 2837 篇里有 **2445 个 `<img src>`，其中 6 个的文件名含西里尔**
+ *    （`Изображение-JPEG-4AF0-A230-E1-0.jpeg`、`фото-2-1.jpeg`、`foto-№-1-2-1536x1025.jpg`）。
+ *    这一次它们没被误杀，只是因为 `-` 恰好在 `TOKEN_SPLIT_RE` 里把名字切开了；
+ *    同一个站换个命名（`фото.jpeg`，不带连字符）就会变成「`фото` + `.jpeg`」一个 token ⇒ **误杀一篇好稿**。
+ *    判据靠「恰好」活着是不行的，所以按结构排掉。
+ */
+export function latinCyrillicTokens(text: string): string[] {
+  const out: string[] = [];
+  for (const tok of (text || '').split(TOKEN_SPLIT_RE)) {
+    if (!tok) continue;
+    if (tok.includes('@')) continue; // 邮箱/句柄，见上「排除 1」
+    if (/\.[A-Za-z]{2,4}$/.test(tok)) continue; // 文件扩展名，见上「排除 2」
+    if (/\p{Script=Latin}/u.test(tok) && /[\u0400-\u04ff]/.test(tok)) out.push(tok);
+  }
+  return out;
+}
+
+/**
  * 找出「下降类动词 + 数字 + 倍」这类**在中文里逻辑不成立**的说法（用户 2026-09-28 报的）。
  *
  * ## 为什么这是一个「结构性」判据，而不是阈值
@@ -333,18 +403,12 @@ export function similarity(a: string, b: string): number {
 }
 
 // 两条新闻是否为重复内容（标题+正文综合相似度超过阈值即视为重复）
-export function isDuplicateContent(
-  titleA: string, contentA: string,
-  titleB: string, contentB: string,
-  threshold = 0.6
-): boolean {
-  const tSim = similarity(titleA, titleB);
-  // 标题高度相似（大概率同一事件不同表述）
-  if (tSim >= 0.8) return true;
-  // 标题相近且正文也相近
-  const cSim = similarity(contentA, contentB);
-  return (tSim + cSim) / 2 >= threshold;
-}
+//
+// ⚠️ 2026-09-29 删除。保留注释是为了**防止它被重新写回来**（不是忘了删）：
+// 实测在 200 篇与 1000 篇两份线上快照上**零触发**，却会误合并
+// 「金价下跌」与「金价上涨」这类**方向相反**的新闻。
+// 真正的去重入口是 `same-event.ts` 的 `dedupeStories`（L0/L1/L1.5/L2 四层），
+// 别把这条阈值判据接回去。历史说明见 AGENTS.md 的「抓取放宽与内容去重」。
 
 // ----- 链接归一化（「同一原文」的唯一指纹）-----
 
