@@ -36,6 +36,8 @@ import {
   reviewDraft,
   type ReviewItem,
 } from '../src/lib/editor-review';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 let passed = 0;
 const failures: string[] = [];
@@ -482,6 +484,46 @@ async function endToEnd(): Promise<void> {
     ok('稿件少于 2 条时**不调模型**（ran=false）', r4.audit.ran === false && r4.audit.ok === true);
     ok('稿件少于 2 条时保持原样', r4.decision.finalIndices.length === 1);
   }
+}
+
+// ============================================================
+// 八、版本指纹：GET /api/wechat/push 的 codeVersion
+// ============================================================
+//
+// 2026-09-29 加这一节的原因值得写下来：那天排查「改动到底上线没有」走了一大圈
+// （先怀疑召回、再怀疑代码、最后才发现是部署没上线），唯一的依据是
+// 「`summary` 里有没有 `merges`」这种**字段存在性**——它只在「这次改动恰好加了字段」
+// 时成立。于是把「行为开关本身」暴露进 GET，并用断言钉住它不许被删。
+//
+// 断言用**源码级**（route 文件不好做单测），重点钉两件事：
+//   ① 这几个值必须**从代码现算**，不能手写常量 —— 手写的迟早和代码分叉，
+//      然后反过来误导排查（这正是它比 `BUILD_ID` 强的地方）；
+//   ② 「终审默认开关」必须在里面 —— 它是区分 `fe0f84a` 与 `312644b` 的那一位。
+
+section('八、版本指纹（GET 的 codeVersion）');
+
+{
+  const src = readFileSync(resolve(process.cwd(), 'src/app/api/wechat/push/route.ts'), 'utf8');
+  ok('GET 暴露了 codeVersion', /codeVersion\s*:/.test(src), '没找到 codeVersion —— 版本指纹又被删了？');
+  ok(
+    '含「终审默认开关」（区分 fe0f84a 与 312644b 的那一位）',
+    /editorReviewDefault:\s*isEditorReviewEnabled\(\)/.test(src),
+  );
+  ok('含「判组默认开关」（区分 640a76f 与 fe0f84a）', /dedupeLlmDefault:\s*isLlmJudgeEnabled\(\)/.test(src));
+  ok(
+    '提示词版本**从代码取**，不是手写字符串',
+    /editorPromptVersion:\s*EDITOR_PROMPT_VERSION/.test(src),
+    '写成了字面量 —— 那样提示词一改它就撒谎',
+  );
+  ok(
+    '护栏上限**从代码取**（调参后能确认线上拿到的是新值）',
+    /maxDrops:\s*MAX_DROPS/.test(src) && /maxFixes:\s*MAX_FIXES/.test(src),
+  );
+  ok(
+    '仍保留 lastRun（「进程年龄」指纹的载体：内存态，容器一重启就清零）',
+    /lastRun:\s*pushRunState/.test(src),
+    'lastRun 没了 —— 就少了一条不依赖「这次改动恰好加了字段」的版本证据',
+  );
 }
 
 // ============================================================

@@ -3,7 +3,7 @@ import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { beijingDate, extractFirstImage } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
-import { dedupeStories } from '@/lib/same-event';
+import { dedupeStories, isLlmJudgeEnabled } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
   pushExclusionReason,
@@ -16,6 +16,9 @@ import {
   crossCountryOverlaps,
   isEditorReviewEnabled,
   reviewDraft,
+  EDITOR_PROMPT_VERSION,
+  MAX_DROPS,
+  MAX_FIXES,
   type ReviewAudit,
   type ReviewItem,
 } from '@/lib/editor-review';
@@ -614,6 +617,38 @@ export async function GET() {
      * 任何一项 `ok: false` 都说明有人只改了 cron 或只改了 hours。
      */
     scheduleHoursCrossCheck: scheduleHoursCrossCheck(),
+    /**
+     * 版本指纹 —— **把「行为开关本身」报出来**（2026-09-29 新增）。
+     *
+     * ## 为什么需要它
+     *
+     * 「推了代码但线上没变化」的一整套排查（`DEPLOY_WECHAT_CLOUD.md`）
+     * 在过去只能靠**字段存在性**推断：`summary` 里有没有 `merges` / `judge`。
+     * 那个办法只在「这次改动恰好加了字段」时成立，改个常量就没得看了 ——
+     * 2026-09-29 为此绕了一大圈（先怀疑召回、再怀疑代码、最后才发现是部署没上线）。
+     *
+     * ## 为什么这几个值**不会腐烂**
+     *
+     * 它们都**从代码里现算**，不是手写的版本号：
+     * 谁把默认值 / 提示词版本 / 护栏上限改掉，这里的值**自动跟着变**，
+     * 不需要记得同步任何东西。这正是手写 `BUILD_ID` 做不到的
+     * （手写的东西迟早会和代码分叉，然后反过来误导排查）。
+     *
+     * 用法：`curl -s "$URL/api/wechat/push" | grep -A5 codeVersion`
+     * —— 一条 curl 同时回答了「新版本接管了吗」和「接管的是哪一版」。
+     * ⚠️ 它**不覆盖**没被这几个开关覆盖的改动；判断「是不是最新」仍应结合
+     * `lastRun` 的进程年龄（重启即清零）一起看。
+     */
+    codeVersion: {
+      /** L2 模型判组的默认值（2026-09-28 `fe0f84a` 起为 true；显式 off/0/false 才关） */
+      dedupeLlmDefault: isLlmJudgeEnabled(),
+      /** 整体总审（推送阶段 ②）的默认值（2026-09-29 `312644b` 起为 true） */
+      editorReviewDefault: isEditorReviewEnabled(),
+      /** 终审提示词版本 —— 改 `EDITOR_PROMPT` 时必须一起改它 */
+      editorPromptVersion: EDITOR_PROMPT_VERSION,
+      /** 终审护栏上限（调参后可以从这里确认线上拿到的是新值） */
+      editorGuards: { maxDrops: MAX_DROPS, maxFixes: MAX_FIXES },
+    },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿、summary.failures 是哪些国家失败、
     // **summary.skipped 是哪些国家被正常跳过及卡在哪一段**。

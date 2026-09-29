@@ -671,7 +671,17 @@ A: 翻译链路断了，文章在入库前被丢弃。检查：
 能在无副作用 GET 里看到」的字段：
 
 ```bash
-# 本项目实测可用的三条指纹
+# ★ 0. 首选用「行为开关指纹」：GET /api/wechat/push 的 codeVersion（2026-09-29 新增）
+curl -s "$URL/api/wechat/push?cb=$(date +%s)" | python3 -c "import json,sys;print(json.load(sys.stdin).get('codeVersion'))"
+# 期望（示例）：
+#   {'dedupeLlmDefault': True, 'editorReviewDefault': True,
+#    'editorPromptVersion': 'v1', 'editorGuards': {'maxDrops': 4, 'maxFixes': 6}}
+# 这几个值都**从代码现算**，谁改了默认值/提示词/上限它自动跟着变 ⇒ 不会腐烂。
+# ⚠️ 它当然也只能反映**已被部署的那一版**；`None` 说明线上那一版还没有这个字段。
+```
+
+```bash
+# 本项目实测可用的其他指纹
 curl -s "$URL/api/fetch-news?cb=$(date +%s)"     # 新代码含 lastRun；sources 里不应再有 tm
 curl -s -X POST "$URL/api/wechat/push" -H 'Content-Type: application/json' -d '{"hours":0}'
                                                  # 新代码含 failures 字段
@@ -686,18 +696,20 @@ curl -s -D - -o /dev/null "$URL/api/fetch-news?cb=$(date +%s)" \
 
 **另一条「进程年龄」指纹（2026-09-29 实测，比字段存在性更可靠）：**
 
-`GET /api/wechat/push` 与 `GET /api/fetch-news` 返回的 `lastRun` 是**纯内存态常量**
-（见 `push/route.ts` 的 `pushRunState`），**容器一重启就没了**。所以：
+`GET /api/wechat/push` 与 `GET /api/fetch-news` 返回的 `lastRun` 是**纯内存态**
+（见 `push/route.ts` 的 `pushRunState`），**容器一重启就归零**。所以：
 
 ```bash
 curl -s "$URL/api/wechat/push?cb=$(date +%s)" | python3 -c "import json,sys;print(json.load(sys.stdin)['lastRun'])"
-# null 或一个很新的 startedAt  ⇒ 进程是刚起的（说明确实换过版本）
+# startedAt 为 null / 空 ⇒ 进程是刚起的（说明确实换过版本）
 # 一个几小时/几天前的 startedAt ⇒ 进程从那时起就没被替换过
 ```
 
 ⚠️ 这条的边界：`lastRun` 只能证明「进程没换」，**不能证明「代码是哪一版」**。
-两者要一起看 —— 例如 2026-09-29 早上的观测是「`lastRun` 仍停在 09-28 23:55
-（进程没换）**且** `summary` 里没有 `merges`/`judge`（代码是旧的）」，两条互相印证。
+两者要一起看 —— 2026-09-29 的两次观测就是标准用法：
+判断「没上线」时是「`lastRun` 停在 09-28 23:55（进程没换）**且** `summary` 里没有
+`merges`/`judge`」；20 分钟后判断「已上线」时是「两个接口的 `lastRun` **同时**变成空」。
+**两条证据同时翻转才算钉死。**
 
 两个都满足，才能说「线上是旧版」。**只凭"感觉没变"就下结论，
 会把构建失败误判成流水线坏了。**
@@ -794,6 +806,35 @@ npx tsc --noEmit        # exit 0（**放后台跑**，冷缓存 3 分钟）
 > ⚠️ **纪律：部署没恢复之前，不要对线上行为下任何「改动没生效」的结论。**
 > 旧版本一直在正常服务，所以所有新字段（`merges` / `judge` / `review`）都不会出现 ——
 > 那不是「改动写错了」，而是「改动没上线」。这两件事的排查方向完全相反。
+
+**反过来：部署成功时长什么样（2026-09-29 11:57 实测，拿去对照）**
+
+构建日志末行变成 `check_eks_virtual_service : succ`（失败那次是
+`process, 等待pod启动就绪...`），然后**容器日志里出现完整的引导序列**：
+
+```
+> projects@0.1.0 start /app
+> bash ./scripts/start.sh
+Starting HTTP service on port 3000 for deploy...
+启动定时任务调度器...
+已注册公众号推送任务：0 7 * * * (早上 07:00（早报）)，窗口 … （12h，按时刻表固定）
+已注册公众号推送任务：0 19 * * * (晚上 19:00（晚报）)，窗口 … （12h，按时刻表固定）
+共注册 2 个定时任务
+> Server listening at http://<pod 名>:3000 as production
+```
+
+三件事要一起确认，缺一条都不能说「新版本生效了」：
+
+1. 末行是 `succ`；
+2. 引导序列走完（尤其是 **`Server listening`** 那一行，和**没有** `⚠️ 时刻表不一致`）；
+3. `lastRun` 被清零（见第 0 步的「进程年龄」指纹）。
+
+> 📌 另外会遇到一种**看着吓人其实正常**的日志：某个**别的**版本名（例如
+> `central-asia-news-119`）单独一行 `ELIFECYCLE  Command failed.`，时间点在切换之后。
+> 这是**旧实例被回收**时 `pnpm` 对被杀掉的生命周期脚本的常规报错
+> （它只会打这一行，**不会**有 `> projects@0.1.0 start` 之类的引导行）。
+> 判断依据：**线上还活着**（curl 还是 200、`lastRun` 是新的空态）⇒ 那就不是新版本启动失败。
+> 反过来，如果**当前版本名**的引导序列半路断了再跟一行 `ELIFECYCLE`，那才是真的启动失败。
 
 #### D. 兜底：绕开 Git 流水线
 
