@@ -15,31 +15,53 @@
 
 ### A. 阻塞在用户侧的动作
 
-0. ⚠️ **2026-09-28 那些改动根本没上线 —— 需要在云托管控制台看一眼部署记录。**（2026-09-29 新增）
-   现象：09-29 早报那轮（`2026-09-28T23:55:46.189Z` 起，时长 193s，`drafts` 5 国齐全、`failures` 空）
-   的 `summary` 里**没有 `merges`、没有 `judge`**，而 `skipped` 在。
+0. ⚠️ **部署失败在「等待 pod 启动就绪」—— 线上仍跑 `640a76f`，`fe0f84a` 起的所有提交都没上去。**
+   （2026-09-29 新增，当天已由用户提供部署日志收敛）
 
-   **这是源码级结论，不是猜的**（用 `git show <rev>:src/app/api/wechat/push/route.ts` 对比）：
-   - `640a76f`（09-27）的返回体里有 `skipped`、**没有** `merges`；
-   - `fe0f84a`（09-28 16:39 已推）的返回体里有 `merges`（第 830 行）与 `judge`（第 831 行）。
-   ⇒ 线上有 `skipped` 无 `merges`，说明**跑的是 `640a76f`，`fe0f84a` 及之后的提交都没上线**。
+   **已经确定的（不再需要猜）**：用户提供的那次部署日志显示
+   - `16:56:14 Image pushed successfully.`（tag `central-asia-news-120-20260928164710`）
+   - `16:56:18 check_build_image : succ`
+   - `16:56:19 check_eks_virtual_service : process, 等待pod启动就绪...` → **部署失败**
 
-   **影响**：用户报的「阿塞拜疆重复新闻」之所以还在，就是因为 L2 没上线
-   （那对重复实测 `similarity=0.4595 ≥ PAIR_CANDIDATE_MIN_SIM=0.35`，`candidatePairs()` 确实召回；
-   一旦 L2 上线并判「是」，它就会被合并）。同一个原因也让本轮的**整体总审**（阶段 ②，M 节）不会出现。
+   ⇒ **构建是成功的，镜像也推上去了；失败发生在部署阶段（pod 没就绪）。**
+   2026-09-29 用户手动触发的那次**同样失败**。
 
-   **要做**：打开微信云托管控制台 → 服务 → **部署**页签 → **部署记录**，
-   看**最新一条构建的时间戳与状态**。三种可能不能互相替代：
-   (A) 没有新构建记录 ⇒ GitHub 触发没到；
-   (B) 有记录但失败 ⇒ 看构建日志（本地**验不了**：本沙箱对其它 workspace 目录跑 `next build`
-   会撞删除保护，`EPERM unlink .next/node_modules/sharp-*`）；
-   (C) 构建成功但版本没切 ⇒ 手动切版本。
+   **代码已被排除**（三条本地证据）：
+   1. 本地复现云端的 `tsup` 步骤，产物与构建日志**逐字一致**：`dist/server.js 12.98 KB`，
+      外部 require 只有 `http` / `next` / `node-cron` / `url`。
+      **关键**：`dist/server.js` 只从 `src/server.ts` 打包，**不含任何 `src/app/api/**`**，
+      所以这批改动根本进不了容器启动路径。
+   2. 非 Next 的启动链路可加载，`waitBudgetCrossCheck()` / `scheduleHoursCrossCheck()` 全过。
+   3. `tsc --noEmit` exit 0；无新依赖；Next 16 的 `next build` **不跑 ESLint**。
+   （另：`git diff 640a76f fe0f84a` 里 `push/route.ts` / `same-event.ts` 的改动全在
+   `processPush` 函数体内或注释里，**没有模块级副作用**。）
+
+   **「线上是旧版」这条有两条独立证据**（互相印证）：
+   - `summary` 里**没有 `merges` / `judge`**，而 `skipped` 在
+     （源码对比：`640a76f` 的返回体有 `skipped` 无 `merges`；`fe0f84a` 起有 `merges`/`judge`）；
+   - `lastRun` **仍停在 `2026-09-28T23:55:46.189Z`** ⇒ 进程自那时起没被替换过
+     （`lastRun` 是纯内存态，重启即清零）。
+
+   **影响**：用户报的「阿塞拜疆重复新闻」还在，就是因为 L2 没上线
+   （那对重复实测 `similarity=0.4595 ≥ PAIR_CANDIDATE_MIN_SIM=0.35`，`candidatePairs()` 确实召回）。
+   同理，本轮的**整体总审**（阶段 ②，M 节）与 `summary.review` 也不会出现。
+
+   **要做**（全部在控制台，排查清单已写进 `DEPLOY_WECHAT_CLOUD.md` 的 **C′** 节）：
+   ① 端口三处是否一致（历史真踩过：控制台 5000、文件 3000 ⇒ Liveness probe failed ⇒ 直接部署失败）；
+   ② 那条失败记录的**原因文案**（健康检查未通过 / 实例启动失败 / 拉取镜像失败）；
+   ③ **服务 → 日志**：**一条日志都没有 ⇒ 卡在调度或拉镜像，与应用无关**
+   （应用侧崩溃一定留 stdout）；
+   ④ 规格与实例数（文件写 0.5 核 1G / 最小 0，控制台实际 1 核 2G / 最小 1，**控制台为准**）；
+   ⑤ 镜像 1.01GB，冷节点拉取 + 就绪超时是真实可能；
+   ⑥ 手动「重新部署」排除瞬时故障；仍失败走 `DEPLOY_WECHAT_CLOUD.md` 的 D 节（本地上传 tar.gz）。
+
    **为什么只能靠控制台**：`gh` CLI 本机没装（查不到 webhook 投递记录），
-   而响应头里**没有任何版本指纹**（只有 `server: cbrgw` 与 `x-cloudbase-*`）——
-   外部调用方无法自证线上是哪一版。这就是 L-4 记的那个缺口。
+   而响应头里**没有任何版本指纹**（只有 `server: cbrgw` 与 `x-cloudbase-*`）。
+   这就是 L-4 记的那个缺口。
 
-   本地已排除的原因：`tsc --noEmit` exit 0；Next 16.1.1 的 `next build` **不跑 ESLint**
-   （已 grep `node_modules/next/dist/build/*.js` 确认）；那两轮改动无新依赖、全部是增量。
+   ⚠️ **纪律：部署恢复之前，不要对线上行为下任何「改动没生效」的结论。**
+   旧版本在正常服务，所有新字段都不会出现 —— 那不是「改动写错了」，是「改动没上线」，
+   两者排查方向完全相反。
 
 1. **Telegram 绑自有域名** —— 12 个频道全不可用，根因是容器到不了 `*.workers.dev`（不是配置问题）。
    要做：Cloudflare 给 Worker 绑 Custom Domain → 云托管改 `TELEGRAM_WORKER_URL` → 验证 `GET /api/telegram-check` 的 `okCount=12`。

@@ -660,6 +660,7 @@ A: 翻译链路断了，文章在入库前被丢弃。检查：
 | A. Git 触发链路断了（授权失效 / 自动部署关了 / 分支绑错） | **根本没有新记录** |
 | B. 触发了，但构建失败 | 有一条**失败**状态的记录；旧版本继续接流量 |
 | C. 构建成功，但生效版本没切过去 | 有成功记录，但「当前版本」还是老的 |
+| D. 构建成功、镜像也推送成功，但**部署阶段失败**（pod 没就绪） | 有一条**失败**的记录，日志停在「等待pod启动就绪」 |
 
 所以第一步永远是：**控制台 → 部署（页签）→ 部署记录**，
 看最近一次构建的时间戳和状态。看到什么，再跳到对应那一步。
@@ -682,6 +683,21 @@ curl -s -D - -o /dev/null "$URL/api/fetch-news?cb=$(date +%s)" \
   | grep -iE 'cache-control|x-cloudbase-upstream-type'
 # 期望：cache-control: no-store ...  且  x-cloudbase-upstream-type: Tencent-CloudBaseRun
 ```
+
+**另一条「进程年龄」指纹（2026-09-29 实测，比字段存在性更可靠）：**
+
+`GET /api/wechat/push` 与 `GET /api/fetch-news` 返回的 `lastRun` 是**纯内存态常量**
+（见 `push/route.ts` 的 `pushRunState`），**容器一重启就没了**。所以：
+
+```bash
+curl -s "$URL/api/wechat/push?cb=$(date +%s)" | python3 -c "import json,sys;print(json.load(sys.stdin)['lastRun'])"
+# null 或一个很新的 startedAt  ⇒ 进程是刚起的（说明确实换过版本）
+# 一个几小时/几天前的 startedAt ⇒ 进程从那时起就没被替换过
+```
+
+⚠️ 这条的边界：`lastRun` 只能证明「进程没换」，**不能证明「代码是哪一版」**。
+两者要一起看 —— 例如 2026-09-29 早上的观测是「`lastRun` 仍停在 09-28 23:55
+（进程没换）**且** `summary` 里没有 `merges`/`judge`（代码是旧的）」，两条互相印证。
 
 两个都满足，才能说「线上是旧版」。**只凭"感觉没变"就下结论，
 会把构建失败误判成流水线坏了。**
@@ -720,6 +736,64 @@ HOME=/tmp/wb-build NEXT_TELEMETRY_DISABLED=1 ./node_modules/.bin/next build
 看「当前生效版本」是不是最新那个；再看新版本的健康检查有没有过。
 **探针失败会导致「不回滚、也不切流量」** —— 表现就是「构建成功、线上照旧」，
 比直接失败更难察觉。回上面「探针端口」一问检查端口三处是否一致。
+
+#### C′. 构建成功、镜像也推成功，但部署失败在「等待 pod 启动就绪」（2026-09-28/29 实测）
+
+**日志长这样**（三段，顺序固定）：
+
+```
+[16:56:14] Image pushed successfully.
+-----------构建central-asia-news-120-----------
+[16:47:11] create_build_image : creating
+[16:56:18] check_build_image : succ
+-----------服务central-asia-news部署central-asia-news-120-----------
+[16:56:19] create_eks_virtual_service : creating
+[16:56:19] check_eks_virtual_service : process, 等待pod启动就绪...   ← 停在这里，然后「部署失败」
+```
+
+**先排除代码，只要 3 分钟。** 依据是「服务入口的打包产物**完全没变**」：
+
+```bash
+# ① 本地复现云端的 tsup 步骤，与构建日志里的那三行逐字对比
+npx tsup src/server.ts --format cjs --platform node --target node20 --outDir dist --no-splitting --no-minify
+#   云端日志写的是「CJS dist/server.js 12.98 KB」；本地应当也是 12.98 KB
+grep -oE 'require\("[^"]+"\)' dist/server.js | sort -u
+#   期望（与 Dockerfile 第 22 行的注释一致）：http / next / node-cron / url —— 就这四个
+
+# ② 非 Next 的启动链路能被加载吗（node-cron + 时刻表 + 端口口径）
+HOME=/tmp/wb-start npx tsx -e "import('./src/lib/scheduler.ts').then(m=>{
+  const S=m.default??m; console.log(S.waitBudgetCrossCheck());
+  return import('./src/lib/publish-schedule.ts');
+}).then(p=>console.log(p.scheduleHoursCrossCheck()))"
+#   期望：两组自检 ok 全为 true。任何一条 false 都是真问题（不是环境问题）。
+
+# ③ 老两样
+npx tsc --noEmit        # exit 0（**放后台跑**，冷缓存 3 分钟）
+```
+
+> ⚠️ ①的结论最容易被人忽略：**`dist/server.js` 是 `tsup` 只从 `src/server.ts` 打包出来的，
+> 而它不包含任何 `src/app/api/**` 路由代码**（路由由 Next 在请求时按需加载）。
+> 所以「路由里改了什么」根本影响不到容器能不能启动 —— 只要 `dist/server.js` 的
+> 大小与外部 require 没变，代码就不是 pod 起不来的原因。别再往这条路查。
+
+三项都对 ⇒ **原因在平台侧**，按这个顺序查（全部在控制台，不用改代码）：
+
+1. **端口三处是否一致**（这一条历史上真的踩过，见 `container.config.json` 头部注释）：
+   控制台「端口」 vs `container.config.json` 的 `container.port` vs Dockerfile 的 `EXPOSE 3000`。
+   历史上出现过「文件 3000、控制台 5000 ⇒ 按 5000 起探针 ⇒ **Liveness probe failed 直接部署失败**」。
+   `scripts/start.sh` 现在会优先吃平台注入的 `PORT`，所以不一致也未必炸 —— 但这是第 1 个要看的地方。
+2. **那条失败记录的原因文案**：健康检查未通过 / 实例启动失败 / 拉取镜像失败 —— 三种对应完全不同的处置。
+3. **服务 → 日志（按版本过滤）**：pod 真起来过才有日志。
+   **一条日志都没有 ⇒ 卡在调度或拉镜像，跟应用无关**（应用侧的崩溃一定会留下 stdout）。
+4. **规格与实例数**：`container.config.json` 里写的（0.5 核 1G、最小 0）与控制台实际
+   （1 核 2G、最小 1）**对不上，控制台为准**。有人动过配置就会在这里露出来。
+5. **镜像 1.01GB**：构建日志会主动提示优化。冷节点拉一个 1GB 镜像 + 就绪超时，
+   是一个真实可能的成因（不是代码问题，但可以靠瘦身规避）。
+6. **手动「重新部署」一次**排除瞬时故障；仍然失败就走下面的 D 节（本地上传）。
+
+> ⚠️ **纪律：部署没恢复之前，不要对线上行为下任何「改动没生效」的结论。**
+> 旧版本一直在正常服务，所以所有新字段（`merges` / `judge` / `review`）都不会出现 ——
+> 那不是「改动写错了」，而是「改动没上线」。这两件事的排查方向完全相反。
 
 #### D. 兜底：绕开 Git 流水线
 
