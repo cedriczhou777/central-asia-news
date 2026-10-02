@@ -103,6 +103,12 @@ async function main() {
       `  ${name} → ${out ? `via=${out.via} 段落=${out.paragraphs} ${out.text.length} 字` : 'null（判定为抽不出正文）'}`,
     );
   }
+
+  // ⚠️ 必须显式退出。实测：结果全部打印完之后进程**不结束**
+  // （`rss-parser`/`fetch` 留下的连接池句柄），终端上表现为「探针还在跑」，
+  // 而它其实早就出完结论了 —— 排查的人会白等，CI 里还可能挂住整条流水线。
+  // 本目录其他脚本（`test-*.ts`）都带 `process.exit`，这里漏了。
+  process.exit(okCount > 0 ? 0 : 1);
 }
 
 main().catch((err) => {
