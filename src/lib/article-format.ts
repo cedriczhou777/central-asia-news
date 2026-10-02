@@ -647,8 +647,15 @@ export function isCountryRelevant(title: string, summary: string, countryCode: s
 // 三之二、选稿资格：这三条判据必须**只有一份实现**
 // ---------------------------------------------------------------------------
 
-/** 一篇稿子被挡在推送之外的原因。`null` = 合格。 */
-export type PushExclusion = 'untranslated' | 'category' | 'missing_source' | 'country';
+/**
+ * 一篇稿子被挡在推送之外的原因。`null` = 合格。
+ *
+ * ⚠️ `no_source_body` **不由 `pushExclusionReason` 返回** —— 它需要 `original_content`
+ * 这个字段，而该函数的签名只收「文本三件套」（见下方它自己的注释）。
+ * 但它确实会出现在 `summary.skipped` 的 `excludedByReason` 里，所以类型收在这里，
+ * 免得读日志的人以为出现了野字符串。判定本体是 `article-body.hasSourceBody()`。
+ */
+export type PushExclusion = 'untranslated' | 'category' | 'missing_source' | 'country' | 'no_source_body';
 
 /**
  * 这篇稿子的**文本**有没有资格被推送：标题和正文都必须是中文。

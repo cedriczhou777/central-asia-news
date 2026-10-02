@@ -11,6 +11,19 @@ function rowToApi(row: ArticleRow) {
     category: row.category,
     source: row.source_name,
     sourceUrl: row.source_url,
+    /**
+     * 原文正文（2026-10-02 加）。
+     *
+     * 为什么这个字段必须出现在这里：`scripts/diagnose-push-window.ts` 靠这个接口
+     * 复现「推送那一刻的漏斗」，而推送侧新增的第 0 条闸（`hasSourceBody`）判的正是
+     * 这个字段。不返回它，诊断脚本就只能把这个计数**恒定显示成 0** ——
+     * 那正是本项目栽过的那类坑（诊断与生产不一致 ⇒ 得出相反结论，见
+     * `article-format.pushExclusionReason` 注释里的事故三）。
+     *
+     * 安全性：它就是源站公开发布的正文文本，本来也随 `sourceUrl` 可查；
+     * 体积上实测多为 RSS 导语（中位数约 200 字），对列表接口可忽略。
+     */
+    originalContent: row.original_content,
     publishedAt: row.published_at,
     tags: row.tags || [],
     isFeatured: row.is_featured,

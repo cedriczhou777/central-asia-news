@@ -64,6 +64,7 @@ import {
   pushExclusionReason,
   type PushExclusion,
 } from '../src/lib/article-format';
+import { hasSourceBody } from '../src/lib/article-body';
 import { dedupeStoriesDeterministic } from '../src/lib/same-event';
 import { scheduledWindow } from '../src/lib/publish-schedule';
 import { compareByInvestmentRelevance, investmentRelevanceOf } from '../src/lib/investment-score';
@@ -87,6 +88,12 @@ interface ApiArticle {
   category: string | null;
   source: string | null;
   sourceUrl: string | null;
+  /**
+   * 原文正文。**必须有**：推送侧第 0 条闸（`hasSourceBody`）判的就是它
+   * （见 `article-format.ts` 里 `PushExclusion` 的说明和第 0 条闸的注释）。
+   * 漏了它，下面的 `no_source_body` 计数会恒为 0 —— 一个**不报错的错**。
+   */
+  originalContent: string | null;
   publishedAt: string | null;
 }
 
@@ -176,7 +183,15 @@ function fmtBeijing(d: Date): string {
   return `${s.slice(0, 10)} ${s.slice(11, 16)}`;
 }
 
+/**
+ * 各判据挡掉几篇的中文名。
+ *
+ * ⚠️ `no_source_body` **排在第一位**，因为它在生产里就是第 0 条闸
+ * （`wechat/push/route.ts` 的 `eligible` filter，跑在 `pushExclusionReason` 之前）——
+ * 顺序在这里也必须保持一致，否则「先被哪条挡掉」的归属会串。
+ */
 const REASON_LABEL: Record<PushExclusion, string> = {
+  no_source_body: '无原文正文（第 0 条闸）',
   untranslated: '非中文（未翻译/翻译退化）',
   category: '文体类（EXCLUDED_CATEGORIES）',
   missing_source: '源正文缺失',
@@ -273,7 +288,7 @@ async function main(): Promise<void> {
   for (const country of countryList) {
     const f: Funnel = {
       total: 0,
-      reason: { untranslated: 0, category: 0, missing_source: 0, country: 0 },
+      reason: { no_source_body: 0, untranslated: 0, category: 0, missing_source: 0, country: 0 },
       deterministicDrops: 0,
       dedupReasons: new Map(),
       eligible: 0,
@@ -298,10 +313,16 @@ async function main(): Promise<void> {
 
     // 第三步：逐条判据，分别记账（push 路由里是 filter，这里要保留原因明细）
     const eligible = scored.filter((a) => {
-      const reason = pushExclusionReason(
-        { title: a.title, content: a.content, summary: a.summary, category: a.category },
-        country.code,
-      );
+      // 第 0 条：库里没有原文正文的一律不推 —— 与生产同一处判据、同一个谓词
+      // （`hasSourceBody` 从 `article-body.ts` import，**不在这里照抄一份**）。
+      // 为什么必须先判它：它判的不是「内容好不好」，而是「这篇到底是不是新闻」；
+      // 阿塞拜疆那 5 个源 RSS 完全没有正文，旧代码照样拿去翻译 ⇒ 模型照着标题编正文。
+      const reason: PushExclusion | null = hasSourceBody(a.originalContent)
+        ? pushExclusionReason(
+            { title: a.title, content: a.content, summary: a.summary, category: a.category },
+            country.code,
+          )
+        : 'no_source_body';
       if (!reason) return true;
       f.reason[reason] += 1;
       const ex = f.examples.get(reason) || [];
@@ -332,9 +353,18 @@ async function main(): Promise<void> {
     const flag = country.code;
     console.log(`${flag} ${name} 窗口内 ${String(f.total).padStart(3)} 篇`);
     console.log(
-      `     非中文 ${f.reason.untranslated}  |  文体类 ${f.reason.category}  |  ` +
-        `源缺失 ${f.reason.missing_source}  |  国别无关 ${f.reason.country}`,
+      `     无原文正文 ${f.reason.no_source_body}  |  非中文 ${f.reason.untranslated}  |  ` +
+        `文体类 ${f.reason.category}  |  源缺失 ${f.reason.missing_source}  |  国别无关 ${f.reason.country}`,
     );
+    // 单独提示：这一格偏大说明**源站的 RSS 根本没给正文**，属于采集侧的问题
+    // （`fetch-news` 的补抓没能抓到，见 `article-body.ts`），
+    // 不是选稿判据调歪了 —— 别去动 `pushExclusionReason` 或 `maxPerCountry`。
+    if (f.reason.no_source_body > 0) {
+      console.log(
+        `     ⚠️ 其中 ${f.reason.no_source_body} 篇是**库里没有原文正文**（第 0 条闸）——` +
+          ` 去查那些源站的 RSS 有没有正文，别调选稿判据。`,
+      );
+    }
     console.log(
       `     ⇒ 合格候选 ${f.eligible} 篇，确定性去重剔除 ${f.deterministicDrops} 篇` +
         `（${f.deterministicDrops > 0 ? [...f.dedupReasons].map(([k, v]) => `${k} ${v}`).join('、') : '—'}）`,

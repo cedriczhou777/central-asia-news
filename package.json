@@ -25,6 +25,8 @@
     "analyze:source-language": "tsx scripts/analyze-source-language.ts",
     "verify:local": "pnpm verify:offline && pnpm verify:online",
     "test:feed-fetch": "tsx scripts/test-feed-fetch.ts",
+    "test:article-body": "tsx scripts/test-article-body.ts",
+    "probe:article-body": "tsx scripts/probe-article-body.ts",
     "analyze:feeds": "tsx scripts/analyze-feeds.ts",
     "test:zh-gate": "tsx scripts/test-zh-gate.ts",
     "test:cyrillic-strip": "tsx scripts/test-cyrillic-strip.ts",
@@ -36,7 +38,7 @@
     "analyze:cyrillic-note": "tsx scripts/analyze-cyrillic-note.ts",
     "probe:feeds": "tsx scripts/probe-feed-candidates.ts",
     "diagnose:push": "tsx scripts/diagnose-push-window.ts",
-    "verify:offline": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window",
+    "verify:offline": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window",
     "verify:online": "pnpm test:translate",
     "test:editor-review": "tsx scripts/test-editor-review.ts"
   },

@@ -10,6 +10,7 @@ import {
   isPushableText,
   sanitizeArticleContent,
 } from '@/lib/article-format';
+import { hasSourceBody, MIN_SOURCE_BODY_CHARS } from '@/lib/article-body';
 import { generateWechatHtml } from '@/lib/wechat-template';
 import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 import {
@@ -809,6 +810,14 @@ export async function GET(request: NextRequest) {
        */
       coverBorrowMinSim: PAIR_CANDIDATE_MIN_SIM,
       /**
+       * 「库里原文正文多长才算有原文」的下限（2026-10-02 新增）。
+       *
+       * 与采集侧 `article-body.MIN_SOURCE_BODY_CHARS` **是同一个常量**：
+       * 采集侧低于它就触发补抓、补不到就不入库；推送侧低于它就不推。
+       * 两边共用一个值，所以这里报出来就能确认线上拿到的确实是新口径。
+       */
+      minSourceBodyChars: MIN_SOURCE_BODY_CHARS,
+      /**
        * 「拉丁+西里尔同词」硬闸（2026-09-29）的**活体探针** —— 不是手写的 `true`。
        *
        * 它**当场跑一次判据**，入参 `Aйдос` 是线上真实命中词（id=6787 标题）。
@@ -991,7 +1000,26 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       // 逐条判据的剔除量在这里记账，最后进 `summary.skipped`（见 `PushSkip`）。
       const excludedByReason: Record<string, number> = {};
       const eligible = scoredArticles.filter((article) => {
-        // 四条判据本体在 `@/lib/article-format` 的 `pushExclusionReason` ——
+        // 第 0 条：**库里没有原文正文的一律不推**（2026-10-02 新增）。
+        //
+        // 为什么它必须排在 `pushExclusionReason` 前面：这条不是在挑「内容好不好」，
+        // 而是在挑「这篇到底是不是新闻」。实测阿塞拜疆 5 个源的 RSS 完全没有正文
+        // （见 `article-body.ts` 头部的对照表），旧代码照样拿去翻译 ——
+        // 模型只能照着标题编一整篇，库里实存「阿塞拜疆政府尚未对贝森特的指责做出
+        // 正式回应」这种原文里根本没有的句子。更糟的是总审也救不了它：
+        // 第七件事（与原文核对）拿到的是空原文，结构性失明。
+        //
+        // 为什么不塞进 `pushExclusionReason`：那个函数的签名只收文本三件套，
+        // 而 `dedupe-check` 是拿 `as never` 调它的 —— 塞进去会让那边
+        // `original_content` 恒为 `undefined`，于是**把全部稿子判掉**，
+        // 而且是静默的。改动进采集侧（`fetch-news` 的补抓）之后这种行只会越来越少，
+        // 这条闸的作用是**兜住上线前已经入库的存量**，让今晚那一轮就干净。
+        if (!hasSourceBody(article.original_content)) {
+          excludedByReason.no_source_body = (excludedByReason.no_source_body || 0) + 1;
+          console.warn(`[${country.name}] 无原文正文，不推：${article.title}`);
+          return false;
+        }
+        // 其余判据本体在 `@/lib/article-format` 的 `pushExclusionReason` ——
         // **不要在这里内联重写**。原因见那个函数的注释：诊断接口一度因为
         // 自己抄了一份（还抄漏了 `EXCLUDED_CATEGORIES`）而得出相反结论。
         const reason = pushExclusionReason(article, country.code);

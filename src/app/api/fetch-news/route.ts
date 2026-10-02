@@ -7,6 +7,12 @@ import { scoreInvestmentRelevance, isInvestmentTopic } from '@/lib/investment-sc
 import { countryList } from '@/lib/data/countries';
 import { RSS_SOURCES, type RSSSource } from '@/lib/data/rss-sources';
 import { fetchFeed, FeedFetchError, type FeedItem } from '@/lib/feed-fetch';
+import {
+  fetchArticleBody,
+  needsBodyFetch,
+  BODY_FETCH_GAP_MS,
+  MIN_SOURCE_BODY_CHARS,
+} from '@/lib/article-body';
 import { translateNews, resetTranslationStats, getTranslationStats, fallbackCategory } from '@/lib/translate';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
@@ -406,6 +412,43 @@ function extractImagesFromHtml(html: string): string[] {
   return images;
 }
 
+/**
+ * 正文补抓 —— RSS 只给了标题时，去文章页把正文取回来。
+ *
+ * 返回**可以拿去翻译的正文**；返回 `null` 表示「这条拿不到正文」，
+ * 调用方必须**丢弃它**，不许继续走翻译。
+ *
+ * ## 为什么返回 null 就一定要丢（2026-10-02 实测的根因）
+ *
+ * 实测 az 的 AZERTAC(en/ru)、Trend.az、APA、Qafqazinfo 这 5 个源的 RSS
+ * **一个字的正文都没有**（uz 的 Uznews.uz、Podrobno.uz 同样）。
+ * 旧代码对这种情况的处理是：`originalContent = ''` 然后**照样翻译** ——
+ * 于是模型照着标题编了一整篇。库里实存 `id 8766`（APA）写着
+ * 「…阿塞拜疆政府尚未对贝森特的指责做出正式回应」，原文里根本没有这句；
+ * `id 8765` 同一句重复两遍；`id 8740` 结尾直接是标题的回声。
+ *
+ * 而且这**不是提示词能救的**：总审的第七件事（与原文核对）拿到的是空原文，
+ * 结构性失明 —— 阿塞拜疆线上 `originalsSeen 4/15` 就是这么来的。
+ *
+ * ## 为什么要把计数交给调用方
+ *
+ * `bodyBackfilled` / `droppedNoBody` 是**漏斗字段**，归调用方的 `result` 管。
+ * 这里只做「取回」这一件事，保持无状态 —— 这样 RSS 与 Telegram 两条路径
+ * 共用同一份实现，不会各写一份然后分叉（这个项目已经栽过三次同样的跟头）。
+ */
+async function backfillBody(
+  description: string,
+  link: string | undefined,
+): Promise<{ text: string; backfilled: boolean } | null> {
+  if (!needsBodyFetch(description)) return { text: description, backfilled: false };
+  const body = await fetchArticleBody(link || '');
+  // 同一台站之间喘一口气：azertag 那类被 Cloudflare 罩着的站点，
+  // 连打会在几秒内把后面全部打成 403（见 article-body.ts 的对照实验）。
+  await new Promise((r) => setTimeout(r, BODY_FETCH_GAP_MS));
+  if (!body.ok) return null;
+  return { text: body.text, backfilled: true };
+}
+
 // 从文章原始 URL 获取 og:image 作为封面图（RSS 内容无图时的兜底）
 async function fetchOgImage(url: string): Promise<string> {
   if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) return '';
@@ -554,6 +597,19 @@ async function processFetchNews(
     /** 被 isInvestmentRelevant 丢掉的（与投资主题无关） */
     droppedTopic: number;
     /**
+     * 因为「RSS 没给正文、去抓原文页也没抓到」而丢弃的条数（2026-10-02 新增）。
+     *
+     * 为什么要丢而不是硬推：正文为空时翻译**照跑**，模型只能照着标题编一整篇。
+     * 库里实存 `id 8766`（APA）写着「阿塞拜疆政府尚未对贝森特的指责做出正式回应」
+     * —— 原文里根本没有这句。宁可不推，也不推一段编出来的东西。
+     *
+     * ⚠️ 这个数**偏大不是坏事**：它说明补正文没成功，要先去看源站是不是挡了我们
+     * （对照 `bodyBackfilled`：为 0 而它很大 ⇒ 源站在挡，例如 azertag 的 Cloudflare）。
+     */
+    droppedNoBody: number;
+    /** 靠抓原文页把正文补回来的条数。与 `droppedNoBody` 成对看：补回多少、丢了多少。 */
+    bodyBackfilled: number;
+    /**
      * 归属国被**改判**的条数 —— 目前只可能来自 `intl` 源（见 `resolveArticleCountry`）。
      *
      * 不放进 `dropped*`：改判后的稿子是合格候选，只是换了国家。
@@ -570,6 +626,10 @@ async function processFetchNews(
    *
    * 用工厂函数而不是在每个 push 点手写对象字面量：RSS / Telegram 两条路径各写一份时，
    * 加字段必然漏一处 —— 而漏掉的那处会静默给出 0，看起来像「这个源没问题」。
+   *
+   * ⚠️ 字段口径（含 `droppedNoBody` / `bodyBackfilled` 的完整说明）写在 `results`
+   * 的类型声明上，这里**不重复** —— 两处各写一份必然漂移，而漂移的表现是
+   * 「同一个数在两处含义不同」，看日志的人不会发现。
    */
   function emptySourceResult(source: string, country: string) {
     return {
@@ -580,6 +640,9 @@ async function processFetchNews(
       droppedJunk: 0,
       droppedCountry: 0,
       droppedTopic: 0,
+      /** 口径见 `results` 的类型声明（含「偏大不是坏事」那段）。 */
+      droppedNoBody: 0,
+      bodyBackfilled: 0,
       /** 归属国被改判的条数（仅 intl 源可能非零）—— 口径见 `results` 上的类型注释。 */
       reassigned: 0,
       errors: [] as string[],
@@ -678,13 +741,33 @@ async function processFetchNews(
         }
 
         // 检查是否与投资主题相关
-        if (isInvestmentRelevant(title, description)) {
-          const relevanceScore = scoreInvestmentRelevance(`${title} ${description}`);
-          addCandidate(resolvedCountry, { item, source, relevanceScore });
-          sourceCandidateCount++;
-        } else {
+        if (!isInvestmentRelevant(title, description)) {
           result.droppedTopic++;
+          continue;
         }
+
+        // 正文补抓 —— 放在最后一道筛之后：前面被丢掉的稿子不值得为它打一次外网请求。
+        //
+        // 顺序也是有讲究的：`resolveArticleCountry` / `isCountryRelevant` 在正文为空时
+        // 只能拿标题判，判得比有正文时粗。但那两道筛的误判方向是**偏严**（宁可丢），
+        // 所以先筛后补正文 → 最坏是少收一条；反过来则为几百条注定要丢的稿子白打请求。
+        const body = await backfillBody(description, item.link);
+        if (!body) {
+          // 拿不到正文就**不入库** —— 宁可不推，也不推一段模型照标题编出来的东西。
+          result.droppedNoBody++;
+          continue;
+        }
+        if (body.backfilled) {
+          // 覆盖回 `item`：下面的翻译循环读的就是这两个字段，
+          // 不改它们等于白抓（原文进了库，中文却还是照标题编的）。
+          item.contentSnippet = body.text;
+          item.content = body.text;
+          result.bodyBackfilled++;
+        }
+
+        const relevanceScore = scoreInvestmentRelevance(`${title} ${body.text}`);
+        addCandidate(resolvedCountry, { item, source, relevanceScore });
+        sourceCandidateCount++;
       }
 
       // 分母是「这个源贡献了多少候选」，所以不能再用 getCandidates(source.country) ——
@@ -749,16 +832,26 @@ async function processFetchNews(
           const description = article.summary || '';
           if (isJunkTitle(title)) continue;
           if (!isInvestmentRelevant(title, description)) continue;
+
+          // 与 RSS 路径同一套补抓逻辑（共用 `backfillBody`，不另写一份）。
+          // Worker 给的 `summary` 有时只有一句话，那种长度同样撑不起一篇报道。
+          const body = await backfillBody(description, article.url);
+          if (!body) {
+            result.droppedNoBody++;
+            continue;
+          }
+          if (body.backfilled) result.bodyBackfilled++;
+
           addCandidate(country, {
             item: {
               title,
               link: article.url,
               pubDate: article.publishedAt?.toISOString(),
-              content: article.content || article.summary || '',
-              contentSnippet: article.summary || '',
+              content: body.backfilled ? body.text : (article.content || article.summary || ''),
+              contentSnippet: body.text,
             },
             source: { name: `Telegram/${channel}`, url: article.url, country, language: 'en' },
-            relevanceScore: scoreInvestmentRelevance(`${title} ${description}`),
+            relevanceScore: scoreInvestmentRelevance(`${title} ${body.text}`),
           });
         }
         console.log(
@@ -1300,8 +1393,12 @@ async function processFetchNews(
       droppedJunk: r.droppedJunk,
       droppedCountry: r.droppedCountry,
       droppedTopic: r.droppedTopic,
-      /** 进入候选池的条数（= afterDate − 三个丢弃原因） */
-      candidates: r.afterDate - r.droppedJunk - r.droppedCountry - r.droppedTopic,
+      /** 抓原文页补回正文的条数（2026-10-02 新增）。为 0 而 `droppedNoBody` 很大 ⇒ 源站在挡我们。 */
+      bodyBackfilled: r.bodyBackfilled,
+      /** RSS 没给正文、抓页面也没抓到，因此**没入库**的条数。 */
+      droppedNoBody: r.droppedNoBody,
+      /** 进入候选池的条数（= afterDate − 四个丢弃原因，`droppedNoBody` 也算丢弃） */
+      candidates: r.afterDate - r.droppedJunk - r.droppedCountry - r.droppedTopic - r.droppedNoBody,
       /** 归属国被改判的条数（仅 intl 源可能非零，见 `resolveArticleCountry`） */
       reassigned: r.reassigned,
     })),
@@ -1315,6 +1412,11 @@ async function processFetchNews(
      *   · `droppedCountry` 偏大 → `isCountryRelevant` 里「提到了任何一个其它目标国就丢」
      *     这条互斥规则在该国身上过敏（中亚当地区新闻极易同时提到邻国）
      *   · `droppedTopic` 偏大  → 入库闸门词表对该国**语言**覆盖不足（如哈萨克语源）
+     *   · `droppedNoBody` 偏大 → **源站的 RSS 没给正文，而且去抓页面也没抓到**。
+     *     2026-10-02 起这种稿子**直接不入库**（正文为空时模型会照标题编一整天新闻，
+     *     且总审没有原文可核对）。要看的是 `bodyBackfilled` 有没有把量补回来；
+     *     若 `bodyBackfilled=0` 而 `droppedNoBody` 很大 ⇒ 源站在挡我们（例如
+     *     `azertag.az` 由 Cloudflare 罩着，见 `article-body.ts` 的对照实验）。
      *   · `fetched=0` 且 `sourceErrors` 有值 → 源本身不通（网络超时 / XML 畸形）
      *
      * ⚠️ `candidates` 是**入库前**的候选数：不减去批内去重与库内重复，
@@ -1329,6 +1431,8 @@ async function processFetchNews(
         const droppedJunk = rs.reduce((a, r) => a + r.droppedJunk, 0);
         const droppedCountry = rs.reduce((a, r) => a + r.droppedCountry, 0);
         const droppedTopic = rs.reduce((a, r) => a + r.droppedTopic, 0);
+        const droppedNoBody = rs.reduce((a, r) => a + r.droppedNoBody, 0);
+        const bodyBackfilled = rs.reduce((a, r) => a + r.bodyBackfilled, 0);
         const reassigned = rs.reduce((a, r) => a + r.reassigned, 0);
         return {
           country: cc,
@@ -1340,7 +1444,9 @@ async function processFetchNews(
           droppedJunk,
           droppedCountry,
           droppedTopic,
-          candidates: afterDate - droppedJunk - droppedCountry - droppedTopic,
+          droppedNoBody,
+          bodyBackfilled,
+          candidates: afterDate - droppedJunk - droppedCountry - droppedTopic - droppedNoBody,
           reassigned,
         };
       }),

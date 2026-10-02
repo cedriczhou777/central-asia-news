@@ -28,6 +28,12 @@
  *
  * ⚠️ **别在调用方再写一份过滤条件**。要加判据就加在这里，
  * 这样 `push` 与体检接口不可能漂移 —— 这正是本文件存在的理由。
+ *
+ * ⚠️ 但**不是所有**「不推」的理由都属于这里。2026-10-02 新增的 `no_source_body`
+ * （库里没有原文正文）刻意**不**由 `pushExclusionReason` 返回：它需要 `original_content`，
+ * 而这个函数的签名只收「文本三件套」，调用方 `dedupe-check` 又是拿 `as never` 调它的
+ * ⇒ 塞进来会让那边**把全部稿子静默判掉**。它是 push 路由里的**第 0 条闸**，
+ * 回归在 `scripts/test-article-body.ts` 第七节（含「永远别挪进来」的反向断言）。
  */
 import { pushExclusionReason, type PushExclusion } from '../src/lib/article-format';
 import { countryList } from '../src/lib/data/countries';
