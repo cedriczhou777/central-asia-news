@@ -1024,6 +1024,198 @@ export function parseVerdict(text: string): RawVerdict | null {
   }
 }
 
+// ============================================================
+// 线上体检用的**活体探针**（v3 两条 + v4 三条）
+// ============================================================
+//
+// 为什么放在这个文件里，而不是直接写在 `route.ts` 的 GET 里：
+// **探针本身必须能被离线回归验证。**
+//
+// 第一版把样本和探针都写在 GET 的返回对象字面量里，离线测不到 —— 结果三个探针里
+// 有两个的**期望值根本不可达**，而这一点只有把它打上线上、肉眼读返回值才看得出来：
+//   · `editorDupEvidenceProbe` 想要「删了 1 条」，实际永远返回
+//     「删了 0 条｜drops 整组作废：删完只剩 2 条 < 保留下限 5 条」
+//     —— 样本只有 3 条，删 1 条跌破 `MIN_KEEP`，逐条判据根本没机会说话；
+//   · `editorOriginalProbe` 的「截断标记=」那一格永远是「否」
+//     —— 它拿的是**本来就短**的假原文，测不出「截断时有没有留省略号」；
+//   · 而且 `dupEvidence` 不传 `order` ⇒ 即便删稿成功，拒绝清单里也会多出一条
+//     「order 缺失或不是数组」，期望值「删了 1 条｜无拒绝记录」照样不成立。
+//
+// **一个只会给假阴性的探针比没有探针更坏**：它和「判据又坏了」长得一模一样，
+// 而且会让人以为已经验过了。
+// ⇒ 修法不是把期望值改宽，而是把样本、期望值、以及「期望值可达」三件事
+//   一起搬进可测的位置（`scripts/test-editor-review.ts` 的第十二节）。
+
+/**
+ * v3 两条探针用的样本（3 条）。
+ *
+ * 为什么三条就够：那两条要证明的事情（JSON 契约里 order 示例的形状、抄示例的理由会被拦住）
+ * 与样本大小无关 —— `buildEditorPrompt` 只要有一位数字就能渲染出真实契约，
+ * `applyVerdict` 只要有一组标题就能走完判据。
+ *
+ * ⚠️ 标题里**故意不带任何真实新闻内容**：探针的输出会被贴进排查记录，
+ * 掺进真稿件会让「这是探针还是真实一审」变得分不清。
+ * ⚠️ **不要把它加到 6 条去**：`orderExample` 探针的期望值是 `[0, 1, 2]`，依赖它就是 3 条。
+ * 需要更多样本的判据请用下面的 `EDITOR_EVIDENCE_PROBE_ITEMS`。
+ */
+export const EDITOR_PROBE_ITEMS: ReviewItem[] = Array.from({ length: 3 }, (_, i) => ({
+  title: `探针第 ${i} 条（不含任何真实新闻内容）`,
+  summary: '探针摘要',
+  category: 'economy',
+  source: 'probe',
+  time: '1970-01-01 00:00',
+  hasImage: false,
+  relevance: 0,
+  contentPeek: '',
+  // v4：探针也带上原文，否则「原文有没有渲染进提示词」这件事本身就没法探。
+  // 用的是**假原文**（同样是占位内容），只为验证通道，不掺真实稿件。
+  originalTitle: `PROBE ORIGINAL TITLE ${i}`,
+  originalExcerpt: `PROBE ORIGINAL BODY ${i}`,
+  originalLang: 'xx',
+}));
+
+/**
+ * 「证据分型」探针（`editorDupEvidenceProbe` / `editorNotNewsQuoteProbe`）用的样本。
+ *
+ * 为什么这里**破例**用两条接近真实的标题：这两条探针要证明的不是「判据存在」，
+ * 而是「**同一份没有引文的理由，走 duplicate 能过、走 not_news 过不去**」——
+ * 相似度是 `duplicate` 那条判据的一部分，换一对不相干的标题就把结论变了一个问题。
+ * 这两条标题只含事件本身（已公开、也见于 AGENTS.md 的复盘），不含任何未公开信息。
+ *
+ * 量出来的值：`similarity(第0条, 第1条)` = **0.2105 ≥ `DUP_SIM_FLOOR`(0.15)**
+ * （与线上那一对同档；第十二节会把这两个数都断言住）。
+ *
+ * ⚠️⚠️ **条数不能少于 `MIN_KEEP + 1`（= 6）—— 这是踩过的坑，不是保险起见。**
+ * 第一版只放了 3 条，于是 `delete` 掉的第 1 条让「删完只剩 2 条 < 保留下限 5 条」，
+ * 整组作废 ⇒ 探针**永久返回「删了 0 条」**，而它想证明的「duplicate 放行了」一格子都没测到。
+ * 也就是说：样本数必须让「删 1 条」同时在**上限（≤ min(4, ⌊n/3⌋)）**和
+ * **保留下限（删完 ≥ 5）**两头都成立。第 2 条起的填充项存在的唯一目的就是这个。
+ */
+export const EDITOR_EVIDENCE_PROBE_ITEMS: ReviewItem[] = [
+  {
+    title: 'T-Kredit 和 Fintrend 被阿塞拜疆中央银行吊销许可证',
+    summary: '', category: 'policy', source: 'APA', time: '', hasImage: true, relevance: 0, contentPeek: '',
+  },
+  {
+    title: '阿塞拜疆两家非银行信贷机构被吊销许可证',
+    summary: '', category: 'policy', source: 'Qafqazinfo', time: '', hasImage: true, relevance: 0, contentPeek: '',
+  },
+  ...Array.from({ length: 4 }, (_, i) => ({
+    title: `无关的第 ${i + 3} 条（占位，只为凑够保留下限）`,
+    summary: '', category: 'policy', source: 'probe', time: '', hasImage: false, relevance: 0, contentPeek: '',
+  })),
+];
+
+/**
+ * 五个探针的**期望值**。
+ *
+ * 期望值本身也是要**被测**的东西 —— 第一版的教训就是「探针在跑、期望值不可达」。
+ * `scripts/test-editor-review.ts` 第十二节会同时断言「实际值 === 期望值」与样本规模。
+ */
+export const EDITOR_PROBE_EXPECT = {
+  orderExample: '[0, 1, 2]',
+  original: '原文标题=是 原文正文=是 语言=是 截断标记=是 超长被截=是',
+  dupEvidence: '删了 1 条｜无拒绝记录',
+  // 这两条的尾巴里带着量出来的引文长度，所以只钉前缀（`QUOTE_MIN` 改了不该让断言红）
+  dropGuardPrefix: '删了 0 条｜drops[1]（not_news）的理由里没有可核对的原文片段',
+  notNewsQuotePrefix: '删了 0 条｜drops[1]（not_news）的理由里没有可核对的原文片段',
+} as const;
+
+/** 删 1 条要合法：既在上限内、也在保留下限之上。样本不够时这条会返回 false（见样本的警告）。 */
+function probeDropBudgetOk(n: number): boolean {
+  const cap = Math.min(MAX_DROPS, Math.floor(n * MAX_DROP_RATIO));
+  return 1 <= cap && n - 1 >= MIN_KEEP;
+}
+
+/**
+ * 跑一遍全部活体探针，返回**字符串**（不是布尔）。
+ *
+ * 为什么一律返回字符串：一个 `true` 只能说明「这段代码存在」，
+ * 说明不了「它做对了」。字符串能一眼看出「量到了多少、是哪个判据拦的」。
+ *
+ * ⚠️ `order` 必须给**完整排列**：不给的话 `applyVerdict` 会正常地记一条
+ * 「order 缺失或不是数组 ⇒ 保持原序」，于是期望值「删了 1 条｜无拒绝记录」永远不成立。
+ */
+export function runEditorProbes(): Record<string, string> {
+  // ① order 示例的形状（v3）：模板写成 `"order": [{ORDER_EXAMPLE}]` 会渲染出 `[[0, 1, 2]]`，
+  //    模型照抄 ⇒ 排序全部作废，而报错看起来像「模型没给」。
+  const orderExample = (() => {
+    const p = buildEditorPrompt({ countryName: '探针', items: EDITOR_PROBE_ITEMS });
+    const m = p.match(/"order":\s*(\[[^\]\n]*\])/);
+    return m ? m[1] : '(没匹配到)';
+  })();
+
+  // ② 抄示例的那句空话删不掉稿（v3）。
+  //    ⚠️ kind 必须是 `not_news`：v4 把证据按 kind 分型后，同一条理由走 `duplicate`
+  //    会**先**撞上「没给出有效 sameAs」，于是这条探针就改测了另一道闸 ——
+  //    它仍然返回「删了 0 条」，**看起来一切正常**，但它声称在守的引文闸已经没人盯着了。
+  //    `not_news` 没有可指认的字段，引文是它唯一的证据 ⇒ 这条探针才真的落在引文闸上。
+  const dropGuard = (() => {
+    const r = applyVerdict(EDITOR_PROBE_ITEMS, {
+      drops: [
+        {
+          index: 1,
+          kind: 'not_news',
+          reason: '与第 2 条同为 9 月 27 日阿塞拜疆政府与 AIIB 的那场会谈',
+        },
+      ],
+    });
+    return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '没有拒绝记录（护栏可能失效了）'}`.slice(0, 140);
+  })();
+
+  // ③ 原文有没有真的进到提示词（v4 全部效力的开关）。
+  const original = (() => {
+    const p = buildEditorPrompt({ countryName: '探针', items: EDITOR_PROBE_ITEMS });
+    // 「截断标记」单独造一条**超长摘录**来验：`EDITOR_PROBE_ITEMS` 的假原文本来就很短
+    // （**理应不截断**），拿它去测「有没有留下省略号」永远是「否」——
+    // 那是一个测不出东西的格子（第一版就是这么写的）。
+    const over = ORIGINAL_EXCERPT_MAX + 1;
+    const pLong = buildEditorPrompt({
+      countryName: '探针',
+      items: [{ ...EDITOR_PROBE_ITEMS[0], originalExcerpt: 'X'.repeat(over) }],
+    });
+    return [
+      `原文标题=${p.includes('PROBE ORIGINAL TITLE 0') ? '是' : '否'}`,
+      `原文正文=${p.includes('PROBE ORIGINAL BODY 0') ? '是' : '否'}`,
+      `语言=${p.includes('[xx]') ? '是' : '否'}`,
+      `截断标记=${pLong.includes('（已截断）') ? '是' : '否'}`,
+      `超长被截=${pLong.includes('X'.repeat(over)) ? '否（没截断）' : '是'}`,
+    ].join(' ');
+  })();
+
+  // ④ v3 那个把模型正确判断拦掉的引文闸，现在放行了吗（duplicate 只认 sameAs）。
+  const dupEvidence = (() => {
+    const n = EDITOR_EVIDENCE_PROBE_ITEMS.length;
+    const r = applyVerdict(EDITOR_EVIDENCE_PROBE_ITEMS, {
+      order: Array.from({ length: n }, (_, i) => i),
+      drops: [
+        { index: 1, kind: 'duplicate', sameAs: 0, reason: '与第 0 条是同一件事的两家报道（无引文，靠 sameAs 作证）' },
+      ],
+    });
+    // 样本不够时先把「探针自己坏了」说出来 —— 否则这一格会被读成「护栏坏了」
+    const note = probeDropBudgetOk(n) ? '' : `（⚠️ 样本只有 ${n} 条，删 1 条过不了上限/保留下限 ⇒ 本探针无效）`;
+    return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '无拒绝记录'}${note}`.slice(0, 140);
+  })();
+
+  // ⑤ 反向证明引文闸没有被一起放开。
+  const notNewsQuote = (() => {
+    const n = EDITOR_EVIDENCE_PROBE_ITEMS.length;
+    const r = applyVerdict(EDITOR_EVIDENCE_PROBE_ITEMS, {
+      order: Array.from({ length: n }, (_, i) => i),
+      drops: [{ index: 1, kind: 'not_news', reason: '这一条不是新闻（故意不引用原文，应当被拒）' }],
+    });
+    return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '无拒绝记录（引文闸可能失效了）'}`.slice(0, 140);
+  })();
+
+  return {
+    editorOrderExampleProbe: orderExample,
+    editorDropGuardProbe: dropGuard,
+    editorOriginalProbe: original,
+    editorDupEvidenceProbe: dupEvidence,
+    editorNotNewsQuoteProbe: notNewsQuote,
+  };
+}
+
 /**
  * 跨国「同一件事」的**确定性**观测（只报不改）。
  *

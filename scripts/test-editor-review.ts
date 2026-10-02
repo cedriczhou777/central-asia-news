@@ -27,11 +27,15 @@ import {
   crossCountryOverlaps,
   DROP_KINDS,
   DUP_SIM_FLOOR,
+  EDITOR_EVIDENCE_PROBE_ITEMS,
+  EDITOR_PROBE_EXPECT,
+  EDITOR_PROBE_ITEMS,
   EDITOR_PROMPT,
   EDITOR_PROMPT_VERSION,
   fixRejectReason,
   isEditorReviewEnabled,
   MAX_DROPS,
+  MAX_DROP_RATIO,
   MAX_FIXES,
   MAX_TITLE_LEN,
   MIN_KEEP,
@@ -41,6 +45,7 @@ import {
   planCoverBorrows,
   QUOTE_MIN,
   reviewDraft,
+  runEditorProbes,
   type ReviewItem,
 } from '../src/lib/editor-review';
 import { pickDraftCover } from '../src/lib/draft-cover';
@@ -837,6 +842,8 @@ section('八、版本指纹（GET 的 codeVersion）');
 
 {
   const src = readFileSync(resolve(process.cwd(), 'src/app/api/wechat/push/route.ts'), 'utf8');
+  // v4 起探针的**实现**在库里（理由见下面的注释与第十二节），所以要同时读两份源码。
+  const editorSrc = readFileSync(resolve(process.cwd(), 'src/lib/editor-review.ts'), 'utf8');
   ok('GET 暴露了 codeVersion', /codeVersion\s*:/.test(src), '没找到 codeVersion —— 版本指纹又被删了？');
   ok(
     '含「终审默认开关」（区分 fe0f84a 与 312644b 的那一位）',
@@ -888,12 +895,12 @@ section('八、版本指纹（GET 的 codeVersion）');
   );
   ok(
     '❗ order 示例的**活体探针**在（09-29 排序全废就是因为没人看得见示例长什么样）',
-    /editorOrderExampleProbe/.test(src),
+    /editorOrderExampleProbe/.test(editorSrc),
     '探针没了 —— 模板再被写成 [[…]] 就又只能靠猜',
   );
   ok(
-    '❗ 抄示例护栏的**活体探针**在（正确值是「删了 0 条｜…最长引文 N 字 < 6…」）',
-    /editorDropGuardProbe/.test(src),
+    '❗ 抄示例护栏的**活体探针**在（正确值是「删了 0 条｜…原文片段…⇒ 拒绝」）',
+    /editorDropGuardProbe/.test(editorSrc),
     '探针没了 —— 护栏失效就完全不可见了',
   );
   ok(
@@ -913,25 +920,51 @@ section('八、版本指纹（GET 的 codeVersion）');
 
   // ---- v4（2026-10-01 晚报）新增的接线 ----
   //
-  // 这一轮新增的三条**全是「跑一遍真代码、返回一个字符串」的活体探针**，
-  // 不是手写的常量：那一轮排查「部署到底上线没有」绕了一大圈，教训就是
+  // 这一轮新增的探针**全部搬到了 `src/lib/editor-review.ts`**，理由是踩过一次：
+  // 写在 GET 的返回对象字面量里离线测不到 ⇒ 探针的期望值不可达这件事只有上线才知道
+  // （详见第十二节）。所以这里只断言**接线**，探针的**值**由第十二节直接跑一遍比对。
+  //
+  // ⚠️ 探针必须是「跑一遍真代码、返回一个字符串」，不是手写的常量：
   // 手写的 `true` 只能证明「有人写过这一行」，不能证明「线上跑的是这版逻辑」。
   ok(
+    '❗ 五个探针**接在** GET 的 codeVersion 上（实现在库里、值从库里现算）',
+    /\.\.\.runEditorProbes\(\)/.test(src),
+    '探针没接上 —— 线上体检会看不到任何判据现状',
+  );
+  ok(
+    '❗ 探针的实现放在**可离线测**的库里，不是写在 GET 的对象字面量里',
+    /export function runEditorProbes/.test(editorSrc) &&
+      !/editorDupEvidenceProbe:\s*\(\(\)\s*=>/.test(src),
+    '写回 route 文件里就等于放弃第十二节那套「期望值可达」的断言',
+  );
+  ok(
+    '期望值常量与实现同处一库（断言才能直接比对同一个真相来源）',
+    /export const EDITOR_PROBE_EXPECT/.test(editorSrc),
+  );
+  ok(
     '❗ 「原文进没进提示词」的活体探针在（v4 的核心改动，必须是跑出来的）',
-    /editorOriginalProbe/.test(src) &&
-      /editorOriginalProbe[\s\S]{0,400}buildEditorPrompt\(/.test(src),
+    /editorOriginalProbe:/.test(editorSrc) && /PROBE ORIGINAL BODY/.test(editorSrc),
     '探针没了 —— 「原文喂进总审了没有」就只能靠读代码猜',
   );
   ok(
+    '❗ 截断标记那一格用的是**超长**摘录（拿本来就短的原文去测，永远是「否」）',
+    /ORIGINAL_EXCERPT_MAX \+ 1/.test(editorSrc),
+    '第一版就是拿短原文测截断 ⇒ 那一格测不出任何东西',
+  );
+  ok(
     '❗ 证据分型的**两条**探针都在（一条证明 duplicate 放行，一条证明 not_news 仍要引文）',
-    /editorDupEvidenceProbe/.test(src) &&
-      /editorNotNewsQuoteProbe/.test(src) &&
-      /editorDupEvidenceProbe[\s\S]{0,500}applyVerdict\(/.test(src) &&
-      /editorNotNewsQuoteProbe[\s\S]{0,500}applyVerdict\(/.test(src),
+    /editorDupEvidenceProbe/.test(editorSrc) &&
+      /editorNotNewsQuoteProbe/.test(editorSrc) &&
+      /EDITOR_EVIDENCE_PROBE_ITEMS/.test(editorSrc),
     '只留一条的话，「duplicate 不再要引文」和「闸被整个拆了」分不开 —— 必须成对看',
   );
   ok(
-    '❗ 原文覆盖率能从线上查（?db=1 时才真去查库）',
+    '❗ 证据探针的样本数**必须在实现里被警告过**（第一版就是样本太少 ⇒ 探针永久假阴性）',
+    /EDITOR_EVIDENCE_PROBE_ITEMS[\s\S]{0,2600}MIN_KEEP/.test(editorSrc),
+    '样本那个「不能少于 MIN_KEEP+1 条」的警告被删了 —— 下一个人会顺手把它精简掉',
+  );
+  ok(
+    '❗ 原文覆盖率能**从线上查**（?db=1 时才真去查库）',
     /originalCoverage/.test(src) && /getArticlesByDateRange\(/.test(src),
     '没有这个口子，「原文喂进去了但库里本来就没原文」完全不可见（originalsSeen 会一直是 0）',
   );
@@ -939,6 +972,13 @@ section('八、版本指纹（GET 的 codeVersion）');
     '原文覆盖率默认必须是「未查询」这种字符串（探活不能被数据库拖慢，也不能写死 true）',
     /未查询/.test(src),
     '默认就查库会让探活变慢；默认写死一个值则等于撒谎',
+  );
+  ok(
+    '❗ 覆盖率按**洗净后**的长度量（用含 HTML 的原始长度会系统性高估，误导上限决策）',
+    /const strip = \(s: string \| null \| undefined\)/.test(src) &&
+      /overExcerptMax/.test(src) &&
+      /excerptMax: ORIGINAL_EXCERPT_MAX/.test(src),
+    '缺 overExcerptMax 就只能看 max：「截断会不会真的发生」看的是尾部越线条数，不是最长那条多长',
   );
 }
 
@@ -1440,6 +1480,118 @@ section('十一、草稿封面兜底（pickDraftCover）');
   ok(
     '往后找时跳过中间所有没图的条目',
     pickDraftCover([{ title: 'A' }, { title: 'B' }, { title: 'C', imageUrl: 'u' }])?.index === 2,
+  );
+}
+
+// ============================================================
+// 十二、活体探针**本身**：期望值必须可达（v4 踩过的坑）
+// ============================================================
+//
+// 探针是线上唯一能回答「部署的这一版到底在跑什么逻辑」的东西，
+// 所以**探针自己坏了**是最坏的一种故障：它和「判据坏了」长得一模一样，
+// 而且会让人以为已经验过了。
+//
+// 第一版把样本和探针写在 `route.ts` 的 GET 返回对象字面量里 ⇒ 离线测不到，
+// 于是三个 v4 探针里有两个的**期望值根本不可达**（详见 `editor-review.ts` 里那段说明）：
+//   · `editorDupEvidenceProbe`：样本 3 条 < 保留下限 5 ⇒ 永远「删了 0 条｜整组作废」；
+//   · `editorOriginalProbe`：截断那一格拿的是本来就短、理应不截断的原文 ⇒ 永远「否」；
+//   · 外加它不传 `order` ⇒ 即便删稿成功，也会多一条「order 缺失」污染期望值。
+// ⇒ 现在样本、期望值、可达性三者都在这一节被断言。**挪回 route 文件里就等于放弃这一节。**
+
+section('十二、活体探针（期望值可达性）');
+
+{
+  const probes = runEditorProbes();
+
+  // ---- (1) 先钉样本规模与前提条件：这是第一版失效的直接原因 ----
+  ok(
+    '❗ 证据探针样本 ≥ MIN_KEEP + 1 条（否则删 1 条被保留下限整组作废 ⇒ 探针永远返回 0）',
+    EDITOR_EVIDENCE_PROBE_ITEMS.length >= MIN_KEEP + 1,
+    `样本 ${EDITOR_EVIDENCE_PROBE_ITEMS.length} 条，MIN_KEEP=${MIN_KEEP}`,
+  );
+  {
+    const n = EDITOR_EVIDENCE_PROBE_ITEMS.length;
+    const cap = Math.min(MAX_DROPS, Math.floor(n * MAX_DROP_RATIO));
+    ok(
+      `「删 1 条」同时在两组限制之内（上限 cap=${cap}，删完剩 ${n - 1} ≥ ${MIN_KEEP}）`,
+      1 <= cap && n - 1 >= MIN_KEEP,
+      '前提不成立时，下面「删了 1 条」的期望值就是不可达的 —— 那正是第一版的形态',
+    );
+  }
+  // 样本那一对必须真的过得了相似度下限，否则这两条探针测的就不是「引文闸放行了」
+  {
+    const sim = similarity(EDITOR_EVIDENCE_PROBE_ITEMS[0].title, EDITOR_EVIDENCE_PROBE_ITEMS[1].title);
+    ok(
+      `证据探针样本那一对相似度 ${sim.toFixed(4)} ≥ DUP_SIM_FLOOR(${DUP_SIM_FLOOR})`,
+      sim >= DUP_SIM_FLOOR,
+      '样本标题被改过 ⇒ 这两条探针已经不是在测原来那件事了',
+    );
+    // 注释里写死了 0.2105（与线上那一对同档）。断言它，注释才不许撒谎。
+    ok(
+      '样本相似度就是注释里写的 0.2105（数字不能是编的）',
+      Math.abs(sim - 0.2105) < 0.0005,
+      `实测 ${sim.toFixed(4)} —— 改了标题就要同步改注释`,
+    );
+  }
+  ok('v3 探针样本仍是 3 条（orderExample 的期望值 `[0, 1, 2]` 依赖它）', EDITOR_PROBE_ITEMS.length === 3, `现在是 ${EDITOR_PROBE_ITEMS.length} 条`);
+
+  // ---- (2) 实际值 vs 期望值：逐个比对 ----
+  ok(
+    'order 示例探针 = 期望值',
+    probes.editorOrderExampleProbe === EDITOR_PROBE_EXPECT.orderExample,
+    `实际「${probes.editorOrderExampleProbe}」`,
+  );
+  ok(
+    '❗ 原文进提示词探针：五项全「是」',
+    probes.editorOriginalProbe === EDITOR_PROBE_EXPECT.original,
+    `实际「${probes.editorOriginalProbe}」`,
+  );
+  ok(
+    '❗❗ 证据探针 = 「删了 1 条｜无拒绝记录」（第一版这里永远是「删了 0 条｜整组作废」）',
+    probes.editorDupEvidenceProbe === EDITOR_PROBE_EXPECT.dupEvidence,
+    `实际「${probes.editorDupEvidenceProbe}」`,
+  );
+  ok(
+    '❗ not_news 探针 = 被引文闸拒（与上一条成对，才说明是「分型」不是「拆闸」）',
+    probes.editorNotNewsQuoteProbe.startsWith(EDITOR_PROBE_EXPECT.notNewsQuotePrefix),
+    `实际「${probes.editorNotNewsQuoteProbe}」`,
+  );
+  ok(
+    '抄示例探针仍以**引文闸**为由拒绝（kind 必须是 not_news，走 duplicate 会改测 sameAs 闸）',
+    probes.editorDropGuardProbe.startsWith(EDITOR_PROBE_EXPECT.dropGuardPrefix),
+    `实际「${probes.editorDropGuardProbe}」`,
+  );
+
+  // ---- (3) 语义断言：探针不能被悄悄换成测另一件事 ----
+  ok(
+    '证据探针**不是**被相似度闸拒的（否则它测的是另一件事）',
+    !probes.editorDupEvidenceProbe.includes('相似度'),
+    probes.editorDupEvidenceProbe,
+  );
+  ok(
+    '证据探针**不是**被保留下限作废的（**这就是第一版的失效形态**）',
+    !probes.editorDupEvidenceProbe.includes('保留下限'),
+    probes.editorDupEvidenceProbe,
+  );
+  ok(
+    '证据探针没有「样本不够」的告警尾巴（有就说明样本又被删少了）',
+    !probes.editorDupEvidenceProbe.includes('本探针无效'),
+    probes.editorDupEvidenceProbe,
+  );
+  ok(
+    '两条证据探针的结论**不同**（一条放行、一条拒绝 ⇒ 真的分型了）',
+    probes.editorDupEvidenceProbe !== probes.editorNotNewsQuoteProbe,
+  );
+  ok('五个探针一个不缺', [
+    'editorOrderExampleProbe',
+    'editorDropGuardProbe',
+    'editorOriginalProbe',
+    'editorDupEvidenceProbe',
+    'editorNotNewsQuoteProbe',
+  ].every((k) => k in probes));
+  ok(
+    '五个探针返回的都是**非空字符串**（不是手写的 true / 布尔）',
+    Object.values(probes).every((v) => typeof v === 'string' && v.length > 0),
   );
 }
 

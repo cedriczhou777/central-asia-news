@@ -13,8 +13,6 @@ import {
 import { generateWechatHtml } from '@/lib/wechat-template';
 import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 import {
-  buildEditorPrompt,
-  applyVerdict,
   crossCountryOverlaps,
   isEditorReviewEnabled,
   reviewDraft,
@@ -23,7 +21,9 @@ import {
   DUP_SIM_FLOOR,
   MAX_DROPS,
   MAX_FIXES,
+  ORIGINAL_EXCERPT_MAX,
   QUOTE_MIN,
+  runEditorProbes,
   type ReviewAudit,
   type ReviewItem,
 } from '@/lib/editor-review';
@@ -32,59 +32,15 @@ import { pickDraftCover } from '@/lib/draft-cover';
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
 
-/**
- * `codeVersion` 的两个**活体探针**用的极小样本（2026-09-29 新增）。
- *
- * 为什么放在模块级：探针在**每次 GET** 上跑，要便宜到可以忽略 —— 这里只是三个对象字面量，
- * 进程启动时算一次就不再变。
- *
- * 为什么三条就够：两个探针要证明的事情（JSON 契约里 order 示例的形状、抄示例的理由会被拦住）
- * 与样本大小无关 —— `buildEditorPrompt` 只要有一位数字就能渲染出真实契约，
- * `applyVerdict` 只要有一组标题就能走完判据。
- *
- * ⚠️ 标题里**故意不带任何真实新闻内容**：探针的输出会被贴进排查记录，
- * 掺进真稿件会让「这是探针还是真实一审」变得分不清。
- */
-const PROBE_ITEMS: ReviewItem[] = Array.from({ length: 3 }, (_, i) => ({
-  title: `探针第 ${i} 条（不含任何真实新闻内容）`,
-  summary: '探针摘要',
-  category: 'economy',
-  source: 'probe',
-  time: '1970-01-01 00:00',
-  hasImage: false,
-  relevance: 0,
-  contentPeek: '',
-  // v4：探针也带上原文，否则「原文有没有渲染进提示词」这件事本身就没法探。
-  // 用的是**假原文**（同样是占位内容），只为验证通道，不掺真实稿件。
-  originalTitle: `PROBE ORIGINAL TITLE ${i}`,
-  originalExcerpt: `PROBE ORIGINAL BODY ${i}`,
-  originalLang: 'xx',
-}));
-
-/**
- * v4 的「证据分型」活体探针用的样本（**只有这一处用了真实标题，是有意的**）。
- *
- * 为什么这里破例用真实标题：它要证明的不是「判据存在」，而是
- * **「阿塞拜疆那对真重复，在被拒绝的理由下能通过」** —— 相似度是这个判据的一部分，
- * 换一对编出来的标题就把结论变了一个问题。而这一对标题**已经出现在用户截图和
- * AGENTS.md 里**，不含任何未公开信息。
- *
- * 量出来的值：`similarity` = 0.2105（≥ `DUP_SIM_FLOOR` 0.15）。
- */
-const EVIDENCE_PROBE_ITEMS: ReviewItem[] = [
-  {
-    title: 'T-Kredit 和 Fintrend 被阿塞拜疆中央银行吊销许可证',
-    summary: '', category: 'policy', source: 'APA', time: '', hasImage: true, relevance: 0, contentPeek: '',
-  },
-  {
-    title: '阿塞拜疆两家非银行信贷机构被吊销许可证',
-    summary: '', category: 'policy', source: 'Qafqazinfo', time: '', hasImage: true, relevance: 0, contentPeek: '',
-  },
-  {
-    title: '无关的第三条（占位）',
-    summary: '', category: 'policy', source: 'probe', time: '', hasImage: false, relevance: 0, contentPeek: '',
-  },
-];
+// 活体探针的样本与期望值已挪到 `@/lib/editor-review` 的 `EDITOR_PROBE_ITEMS` /
+// `EDITOR_EVIDENCE_PROBE_ITEMS` / `EDITOR_PROBE_EXPECT` / `runEditorProbes()`。
+//
+// ⚠️ 为什么必须挪（这是踩过一次的坑）：写在 GET 的返回对象字面量里，**离线回归测不到** ——
+// 于是「探针的期望值根本不可达」这件事只有打上线上才看得出来（第一版三个 v4 探针里
+// 有两个是这样：样本 3 条 < 保留下限 5 条 ⇒ 永远返回「删了 0 条」；
+// 「截断标记」那一格拿的是本来就短、**理应不截断**的假原文 ⇒ 永远是「否」）。
+// 一个只会给假阴性的探针比没有探针更坏：它和「判据又坏了」长得一模一样。
+// 细节见 `editor-review.ts` 里那段说明与回归脚本第十二节。
 
 // 投资相关性评分（含中英文关键词、标题加权、分档权重）统一在
 // `@/lib/investment-score`。**不要再在本文件里重建关键词表** ——
@@ -731,14 +687,34 @@ export async function GET(request: NextRequest) {
         const k = (r.original_language || '(空)').trim() || '(空)';
         langs[k] = (langs[k] || 0) + 1;
       }
-      const lens = withOrig.map((r) => (r.original_content || '').trim().length).sort((a, b) => a - b);
+      // ⚠️ 长度必须按**洗净后**的量，不能用 `original_content` 的原始长度。
+      // 第一次上线量的是原始长度（median 191 / max 630），但**真正进提示词的是
+      // 去掉 HTML 标签后的文本**（`toReviewItem` 会洗一遍）—— 用原始长度会系统性高估，
+      // 于是「要不要调大 `ORIGINAL_EXCERPT_MAX`」这个问题会被一个偏大的数字误导。
+      const strip = (s: string | null | undefined) =>
+        (s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const lens = withOrig.map((r) => strip(r.original_content).length).sort((a, b) => a - b);
+      const pct = (p: number) =>
+        lens.length ? lens[Math.min(lens.length - 1, Math.floor(lens.length * p))] : null;
       originalCoverage = {
         window: `最近 12 小时（${from} ~ ${to}）`,
         total: rows.length,
         withOriginalContent: withOrig.length,
-        /** 中位数长度 —— 一眼看出「原文是不是只有一句导语」。实测中亚源多在 100~350 字 */
-        originalLenMedian: lens.length ? lens[Math.floor(lens.length / 2)] : null,
+        /** 中位数长度（**洗净后**）—— 一眼看出「原文是不是只有一句导语」 */
+        originalLenMedian: pct(0.5),
+        /** p90 与 max（洗净后）：尾部有多长，决定截断风险 */
+        originalLenP90: pct(0.9),
         originalLenMax: lens.length ? lens[lens.length - 1] : null,
+        /**
+         * ★ **会被截断的条数** —— 这个数才是「要不要调 `ORIGINAL_EXCERPT_MAX`」的依据。
+         *
+         * 为什么不能只看 max：截断的后果不是「少看几个字」，而是模型的**分支判据**要走
+         * 「原文里看不到 ⇒ 先看是不是被截断了」那条路；万一它没走，就会把一条真实稿子
+         * 判成「凭空添加」—— **误删**。所以要看的是**尾部有多少条真的越过了上限**。
+         * 这个数长期不为 0 且不小，就该把上限调大（成本只是每篇多几百字）。
+         */
+        overExcerptMax: lens.filter((n) => n > ORIGINAL_EXCERPT_MAX).length,
+        excerptMax: ORIGINAL_EXCERPT_MAX,
         byLanguage: langs,
         /**
          * 两条样本：**标题 + 原文开头 90 字**。
@@ -749,7 +725,7 @@ export async function GET(request: NextRequest) {
           title: r.title,
           lang: r.original_language,
           originalTitle: r.original_title,
-          head: (r.original_content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90),
+          head: strip(r.original_content).slice(0, 90),
         })),
       };
     } catch (err) {
@@ -853,93 +829,9 @@ export async function GET(request: NextRequest) {
        * 入参是线上真实命中（id=6658 正文）。
        */
       cyrillicNoteStripProbe: stripCyrillicParentheticals('吉尔吉斯斯坦国家税务局（ГНС）'),
-      /**
-       * ★ v3 的核心活体探针 ①：**提示词里 JSON 契约的 order 示例长什么样**。
-       *
-       * 返回的是**字符串**（`'[0, 1, 2]'`），不是布尔 —— 同 `cyrillicNoteStripProbe` 的理由：
-       * 一个 `true` 只能说明「模板存在」，说明不了「模板对」。
-       *
-       * 它存在的唯一理由是 2026-09-29 晚报那次事故：模板写成了 `"order": [{ORDER_EXAMPLE}]`，
-       * 渲染出 `[[0, 1, 2]]`，模型照抄 ⇒ 五国排序**全部作废**，而报错看起来像「模型没给」。
-       * 现在：只要这里出现**任何**连续的 `[[`，或出现 `(没匹配到)`，就是模板又被改坏了。
-       * 正确值形如 `[0, 1, 2]`。
-       */
-      editorOrderExampleProbe: (() => {
-        const p = buildEditorPrompt({ countryName: '探针', items: PROBE_ITEMS });
-        const m = p.match(/"order":\s*(\[[^\]\n]*\])/);
-        return m ? m[1] : '(没匹配到)';
-      })(),
-      /**
-       * ★ v3 的核心活体探针 ②：**照抄提示词示例的理由，会被当场拦住吗**。
-       *
-       * 入参是 2026-09-29 晚报**五国同时给出**的那句理由（当时配在 5 条互不相干的稿子上，
-       * 把 5 条真稿子静默删掉了）。正确值是 `删了 0 条｜…最长引文 N 字 < 6…⇒ 拒绝`。
-       *
-       * 为什么把**拒绝理由**也带出来：只报「删了 0 条」分不清是护栏工作、
-       * 还是碰巧撞上了别的判据（例如「没给 sameAs」）。带上理由，
-       * 就能一眼看出**是哪一个判据、量到了多少**。这正是 `cyrillicNoteStripProbe` 的套路。
-       */
-      editorDropGuardProbe: (() => {
-        const r = applyVerdict(PROBE_ITEMS, {
-          drops: [
-            {
-              index: 1,
-              kind: 'duplicate',
-              reason: '与第 2 条同为 9 月 27 日阿塞拜疆政府与 AIIB 的那场会谈',
-            },
-          ],
-        });
-        return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '没有拒绝记录（护栏可能失效了）'}`.slice(0, 120);
-      })(),
-      /**
-       * ★ v4 的活体探针 ①：**原文有没有真的进到提示词里**。
-       *
-       * 这是 v4 全部效力的开关。`original_content` 从 2026-09 起就在库里、
-       * 但读取端从来没有取过它 —— 「字段存在」和「数据到位」是两件事，
-       * 手写一个 `originalsWired: true` 恰好会把二者混为一谈（本项目最反对的那种证据）。
-       *
-       * 返回**字符串**：`原文标题=是 原文正文=是 语言=是 截断标记=否`。
-       * 任何一项为否 ⇒ 第七件事在线上是个空转的判据，别去读它的结论。
-       */
-      editorOriginalProbe: (() => {
-        const p = buildEditorPrompt({ countryName: '探针', items: PROBE_ITEMS });
-        return [
-          `原文标题=${p.includes('PROBE ORIGINAL TITLE 0') ? '是' : '否'}`,
-          `原文正文=${p.includes('PROBE ORIGINAL BODY 0') ? '是' : '否'}`,
-          `语言=${p.includes('[xx]') ? '是' : '否'}`,
-          `截断标记=${p.includes('（已截断）') ? '是' : '否'}`,
-        ].join(' ');
-      })(),
-      /**
-       * ★ v4 的活体探针 ②：**v3 那个把自己判断拦掉的引文闸，现在放行了吗**。
-       *
-       * 入参是 2026-10-01 晚阿塞拜疆那对真重复（`similarity` = 0.2105），
-       * 给的 reason **故意不含任何 ≥6 字的引文** —— 这正是当晚那份提案的形状。
-       *
-       * 期望值：`删了 1 条`（v3 在这里会输出「删了 0 条｜…最长引文 4 字 < 6…⇒ 拒绝」，
-       * 用户截图报的「阿塞拜疆又出现两条重复」就是那一行造成的）。
-       * ⚠️ 若它又变成 0，先看理由：是 `sameAs` 没带上、还是相似度掉了 ——
-       * 两种情况指向的回归点不同。
-       */
-      editorDupEvidenceProbe: (() => {
-        const r = applyVerdict(EVIDENCE_PROBE_ITEMS, {
-          drops: [{ index: 1, kind: 'duplicate', sameAs: 0, reason: '与第 0 条是同一件事的两家报道（无引文，靠 sameAs 作证）' }],
-        });
-        return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '无拒绝记录'}`.slice(0, 120);
-      })(),
-      /**
-       * ★ v4 的活体探针 ③：**引文闸对 not_news 仍然有效吗**（反向证明没有被一起放开）。
-       *
-       * 只测「duplicate 放行了」是不够的：那会养出一个「什么都放行」的死闸。
-       * 这条用同一条不含引文的理由、把 kind 换成 `not_news` —— 期望值 `删了 0 条`。
-       * 两条探针一起看才说明「分型」而不是「拆闸」。
-       */
-      editorNotNewsQuoteProbe: (() => {
-        const r = applyVerdict(EVIDENCE_PROBE_ITEMS, {
-          drops: [{ index: 1, kind: 'not_news', reason: '这一条不是新闻（故意不引用原文，应当被拒）' }],
-        });
-        return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '无拒绝记录（引文闸可能失效了）'}`.slice(0, 120);
-      })(),
+      // v3 + v4 的五个活体探针：实现在 `@/lib/editor-review` 的 `runEditorProbes()`，
+      // 期望值在 `EDITOR_PROBE_EXPECT`，且**期望值可达**由离线回归第十二节断言。
+      ...runEditorProbes(),
     },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
     // 人工排查时 summary.drafts 是成功建的草稿、summary.failures 是哪些国家失败、
