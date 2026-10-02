@@ -54,7 +54,37 @@ const PROBE_ITEMS: ReviewItem[] = Array.from({ length: 3 }, (_, i) => ({
   hasImage: false,
   relevance: 0,
   contentPeek: '',
+  // v4：探针也带上原文，否则「原文有没有渲染进提示词」这件事本身就没法探。
+  // 用的是**假原文**（同样是占位内容），只为验证通道，不掺真实稿件。
+  originalTitle: `PROBE ORIGINAL TITLE ${i}`,
+  originalExcerpt: `PROBE ORIGINAL BODY ${i}`,
+  originalLang: 'xx',
 }));
+
+/**
+ * v4 的「证据分型」活体探针用的样本（**只有这一处用了真实标题，是有意的**）。
+ *
+ * 为什么这里破例用真实标题：它要证明的不是「判据存在」，而是
+ * **「阿塞拜疆那对真重复，在被拒绝的理由下能通过」** —— 相似度是这个判据的一部分，
+ * 换一对编出来的标题就把结论变了一个问题。而这一对标题**已经出现在用户截图和
+ * AGENTS.md 里**，不含任何未公开信息。
+ *
+ * 量出来的值：`similarity` = 0.2105（≥ `DUP_SIM_FLOOR` 0.15）。
+ */
+const EVIDENCE_PROBE_ITEMS: ReviewItem[] = [
+  {
+    title: 'T-Kredit 和 Fintrend 被阿塞拜疆中央银行吊销许可证',
+    summary: '', category: 'policy', source: 'APA', time: '', hasImage: true, relevance: 0, contentPeek: '',
+  },
+  {
+    title: '阿塞拜疆两家非银行信贷机构被吊销许可证',
+    summary: '', category: 'policy', source: 'Qafqazinfo', time: '', hasImage: true, relevance: 0, contentPeek: '',
+  },
+  {
+    title: '无关的第三条（占位）',
+    summary: '', category: 'policy', source: 'probe', time: '', hasImage: false, relevance: 0, contentPeek: '',
+  },
+];
 
 // 投资相关性评分（含中英文关键词、标题加权、分档权重）统一在
 // `@/lib/investment-score`。**不要再在本文件里重建关键词表** ——
@@ -451,6 +481,15 @@ interface PushReview extends ReviewAudit {
    */
   needsImage: string[];
   /**
+   * 总审指出「**原文本身就缺要素**（出处 / 时间 / 人物）」的标题（v4 新增，只报不改）。
+   *
+   * 它与 `needsImage` 同一性质：给人工看的信号，不动任何内容。
+   * 存在的理由是把用户反复报的「要素不全」拆成两半 —— 写进这里的是「**原文里就没有**」
+   * 的那一半（RSS 只给了导语），另一半（原文有、中文丢了）会走 `fixes` 被直接改掉。
+   * 两半混在一起时永远修不对：一半是提示词问题，另一半要**去抓正文页**。
+   */
+  thinSource: string[];
+  /**
    * 本轮**借到封面**的稿件（2026-09-29 新增，见 `planCoverBorrows`）。
    *
    * 只记「哪条借到了、从哪条借的、相似度多少」。借图**不写入数据库**，
@@ -493,8 +532,14 @@ function toReviewItem(a: {
   cover_image?: string | null;
   relevanceScore?: number;
   published_at?: unknown;
+  original_title?: string | null;
+  original_content?: string | null;
+  original_language?: string | null;
 }): ReviewItem {
   const content = sanitizeArticleContent(a.content || '');
+  // v4：原文也要过一遍标签清洗 —— RSS 的 `content:encoded` 里常带 `<img>` 和
+  // 段落标签，直接塞进提示词会让模型把标签当成正文的一部分（并可能照抄进 fixes）。
+  const original = String(a.original_content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   return {
     title: a.title || '',
     summary: a.summary || '',
@@ -504,6 +549,11 @@ function toReviewItem(a: {
     hasImage: Boolean(a.cover_image) || /<img/i.test(content),
     relevance: typeof a.relevanceScore === 'number' ? a.relevanceScore : 0,
     contentPeek: content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200),
+    // ⚠️ 截断交给 `renderItems`（用的是 `ORIGINAL_EXCERPT_MAX`），这里**不要**再截一次：
+    // 两处各截一次的话，改上限时只改一处就会静默失效 —— 本项目已经因为「同一判据两处各写一份」踩过三次。
+    originalTitle: a.original_title || '',
+    originalExcerpt: original,
+    ...(a.original_language ? { originalLang: String(a.original_language) } : {}),
   };
 }
 
@@ -649,10 +699,68 @@ export async function POST(request: NextRequest) {
   });
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  /**
+   * 可选诊断：`?db=1` 时**读一次库**，报出「最近 12 小时的文章里，有多少条真的带原文」。
+   *
+   * ## 为什么需要它（v4 新增）
+   *
+   * `codeVersion.editorOriginalProbe` 只能证明**渲染通道**是通的（`ReviewItem` → 提示词）；
+   * 它证明不了**数据到位**（库里 `original_content` 到底有没有值）。
+   * 而第七件事的效力同时依赖这两件事 —— 一半由探针证明，另一半只能靠**读一次真数据**。
+   *
+   * 这与 `<cyrillicNoteStripProbe>` 那些探针的分工是同一套思路：
+   * 能用一个字符串证明的事情，就不要写一个 `true`；不能用一个字符串证明的事情，
+   * 就**去拿真数据**，也不要写一个 `true`。
+   *
+   * ## 为什么必须靠参数触发，不能每次都算
+   *
+   * 这个接口会被调度器/健康检查反复打（见下面 `no-store` 的注释），
+   * 每次多一次全表区间查询是纯浪费。而它的用途是**发版后核对一次**：
+   * `curl "$URL/api/wechat/push?db=1" | grep -A12 originalCoverage`。
+   */
+  let originalCoverage: unknown = '（未查询：加 ?db=1 才查库）';
+  if (request.nextUrl.searchParams.get('db') === '1') {
+    try {
+      const to = new Date().toISOString();
+      const from = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+      const rows = await getArticlesByDateRange(from, to);
+      const withOrig = rows.filter((r) => (r.original_content || '').trim().length > 0);
+      const langs: Record<string, number> = {};
+      for (const r of rows) {
+        const k = (r.original_language || '(空)').trim() || '(空)';
+        langs[k] = (langs[k] || 0) + 1;
+      }
+      const lens = withOrig.map((r) => (r.original_content || '').trim().length).sort((a, b) => a - b);
+      originalCoverage = {
+        window: `最近 12 小时（${from} ~ ${to}）`,
+        total: rows.length,
+        withOriginalContent: withOrig.length,
+        /** 中位数长度 —— 一眼看出「原文是不是只有一句导语」。实测中亚源多在 100~350 字 */
+        originalLenMedian: lens.length ? lens[Math.floor(lens.length / 2)] : null,
+        originalLenMax: lens.length ? lens[lens.length - 1] : null,
+        byLanguage: langs,
+        /**
+         * 两条样本：**标题 + 原文开头 90 字**。
+         * 抽样本而不是只报计数，是为了让「字段非空」和「内容可用」分开 ——
+         * 这个项目已经因为「只看计数就下结论」错过一次（见 `orderRaw`）。
+         */
+        samples: withOrig.slice(0, 2).map((r) => ({
+          title: r.title,
+          lang: r.original_language,
+          originalTitle: r.original_title,
+          head: (r.original_content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90),
+        })),
+      };
+    } catch (err) {
+      originalCoverage = `查询失败：${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
   return NextResponse.json({
     message: '微信公众号推送接口',
     usage: 'POST /api/wechat/push with optional { hours: 24, period: "morning" | "evening" | "manual" }',
+    originalCoverage,
     /**
      * 已注册的早晚报时刻表（来自 `lib/publish-schedule.ts`）。
      *
@@ -782,6 +890,55 @@ export async function GET() {
           ],
         });
         return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '没有拒绝记录（护栏可能失效了）'}`.slice(0, 120);
+      })(),
+      /**
+       * ★ v4 的活体探针 ①：**原文有没有真的进到提示词里**。
+       *
+       * 这是 v4 全部效力的开关。`original_content` 从 2026-09 起就在库里、
+       * 但读取端从来没有取过它 —— 「字段存在」和「数据到位」是两件事，
+       * 手写一个 `originalsWired: true` 恰好会把二者混为一谈（本项目最反对的那种证据）。
+       *
+       * 返回**字符串**：`原文标题=是 原文正文=是 语言=是 截断标记=否`。
+       * 任何一项为否 ⇒ 第七件事在线上是个空转的判据，别去读它的结论。
+       */
+      editorOriginalProbe: (() => {
+        const p = buildEditorPrompt({ countryName: '探针', items: PROBE_ITEMS });
+        return [
+          `原文标题=${p.includes('PROBE ORIGINAL TITLE 0') ? '是' : '否'}`,
+          `原文正文=${p.includes('PROBE ORIGINAL BODY 0') ? '是' : '否'}`,
+          `语言=${p.includes('[xx]') ? '是' : '否'}`,
+          `截断标记=${p.includes('（已截断）') ? '是' : '否'}`,
+        ].join(' ');
+      })(),
+      /**
+       * ★ v4 的活体探针 ②：**v3 那个把自己判断拦掉的引文闸，现在放行了吗**。
+       *
+       * 入参是 2026-10-01 晚阿塞拜疆那对真重复（`similarity` = 0.2105），
+       * 给的 reason **故意不含任何 ≥6 字的引文** —— 这正是当晚那份提案的形状。
+       *
+       * 期望值：`删了 1 条`（v3 在这里会输出「删了 0 条｜…最长引文 4 字 < 6…⇒ 拒绝」，
+       * 用户截图报的「阿塞拜疆又出现两条重复」就是那一行造成的）。
+       * ⚠️ 若它又变成 0，先看理由：是 `sameAs` 没带上、还是相似度掉了 ——
+       * 两种情况指向的回归点不同。
+       */
+      editorDupEvidenceProbe: (() => {
+        const r = applyVerdict(EVIDENCE_PROBE_ITEMS, {
+          drops: [{ index: 1, kind: 'duplicate', sameAs: 0, reason: '与第 0 条是同一件事的两家报道（无引文，靠 sameAs 作证）' }],
+        });
+        return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '无拒绝记录'}`.slice(0, 120);
+      })(),
+      /**
+       * ★ v4 的活体探针 ③：**引文闸对 not_news 仍然有效吗**（反向证明没有被一起放开）。
+       *
+       * 只测「duplicate 放行了」是不够的：那会养出一个「什么都放行」的死闸。
+       * 这条用同一条不含引文的理由、把 kind 换成 `not_news` —— 期望值 `删了 0 条`。
+       * 两条探针一起看才说明「分型」而不是「拆闸」。
+       */
+      editorNotNewsQuoteProbe: (() => {
+        const r = applyVerdict(EVIDENCE_PROBE_ITEMS, {
+          drops: [{ index: 1, kind: 'not_news', reason: '这一条不是新闻（故意不引用原文，应当被拒）' }],
+        });
+        return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '无拒绝记录（引文闸可能失效了）'}`.slice(0, 120);
       })(),
     },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
@@ -1092,6 +1249,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         const drops: PushReview['drops'] = [];
         const fixes: PushReview['fixes'] = [];
         const needsImageTitles: string[] = [];
+        const thinSourceTitles: string[] = [];
         const borrows: PushReview['imagesBorrowed'] = [];
 
         if (decision) {
@@ -1132,6 +1290,17 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
             const a = pc.articles[ni];
             if (a?.title) needsImageTitles.push(a.title);
           }
+          // v4：「原文本身就缺要素」的条目。**只报不改** —— 这一条不许去动内容，
+          // 因为「补一个原文没有的出处」正是用户最不能接受的那类错误。
+          for (const ti of decision.thinSource) {
+            const a = pc.articles[ti];
+            if (a?.title) thinSourceTitles.push(a.title);
+          }
+          if (thinSourceTitles.length > 0) {
+            console.log(
+              `[${pc.country.name}][总审] 原文本身缺要素（出处/时间/人物）的条目 ${thinSourceTitles.length} 条：${thinSourceTitles.join('｜')}`,
+            );
+          }
           pc.articles = decision.finalIndices.map((idx) => pc.articles[idx]).filter(Boolean);
 
           // 借图：把刚被删掉的重复稿的封面，挪给「本来一张图都没有」的幸存稿。
@@ -1161,7 +1330,11 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
 
         console.log(
           `[${pc.country.name}] 总审：${before} → ${pc.articles.length} 篇` +
-            `（删 ${drops.length} / 改字 ${fixes.length} / 借图 ${borrows.length} / 重排 ${audit.orderAccepted ? '是' : '否'}）` +
+            `（删 ${drops.length} / 改字 ${fixes.length} / 借图 ${borrows.length} / 重排 ${audit.orderAccepted ? '是' : '否'}` +
+            // v4：原文覆盖面。第七件事的效力全挂在这个数上 —— 它若为 0，
+            // 「与原文核对」就只是个漂亮的判据（见 `ReviewAudit.originalsSeen`）。
+            ` / 原文可核对 ${audit.originalsSeen ?? 0}/${audit.itemCount ?? before}` +
+            ` / 原文缺要素 ${audit.thinSources ?? 0}）` +
             (audit.ok ? '' : `｜未生效：${audit.error || '未知原因'}`),
         );
 
@@ -1174,6 +1347,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           drops,
           fixes,
           needsImage: needsImageTitles,
+          thinSource: thinSourceTitles,
           imagesBorrowed: borrows,
           verdict: decision?.verdict ?? '',
         });

@@ -35,6 +35,7 @@ import {
   MAX_FIXES,
   MAX_TITLE_LEN,
   MIN_KEEP,
+  ORIGINAL_EXCERPT_MAX,
   parseVerdict,
   PLACEHOLDER_TOKENS,
   planCoverBorrows,
@@ -133,10 +134,15 @@ ok('提示词有版本号（改了提示词要能分辨）', EDITOR_PROMPT_VERSI
 // 「两次结论不同」也就分不清是换了提示词还是换了模型 —— 那正是这个字段存在的唯一理由。
 // 改动提示词时把它 +1，并同步这条断言（`AGENTS.md` 的改动清单里提到过）。
 ok(
-  '提示词版本号与 v3 对齐（改了提示词必须先改版本号）',
-  EDITOR_PROMPT_VERSION === 'v3',
+  '提示词版本号与 v4 对齐（改了提示词必须先改版本号）',
+  EDITOR_PROMPT_VERSION === 'v4',
   `现在是 ${EDITOR_PROMPT_VERSION} —— 若你刚改了提示词，请把 EDITOR_PROMPT_VERSION +1 并同步这条断言`,
 );
+// v4 的触发条件是**用户拿着截图逐条报错**（2026-10-01 晚报）：凭空年份、量级错、
+// 州名错、张冠李戴的国名、标题与正文自相矛盾…… 这些**没有一条**能靠「中文自洽性」查到，
+// 全都要求拿原文对照。而总审从来没看过原文 ⇒ v4 的第一件事就是把原文喂进去。
+// 这条哨兵存在的意义：`summary.review[].promptVersion` 若撒谎，
+// 「同一批稿子两次结论不同」就分不清是换了提示词还是换了模型。
 
 // ============================================================
 // 二、正常路径：合规的处置必须**真的被执行**
@@ -279,7 +285,9 @@ section('三之三、护栏 · drops 的逐条合规');
     { name: 'kind 为空', raw: { index: 1, reason: '这条太无聊' }, needle: 'kind 非法' },
     { name: '理由为空', raw: { index: 1, kind: 'duplicate', reason: '' }, needle: '具体理由' },
     { name: '理由太短（「重复」两个字不算具体）', raw: { index: 1, kind: 'duplicate', reason: '重复' }, needle: '具体理由' },
-    // v3 起新增的两格：抄示例占位符、以及「指不出与第几条重复」
+    // 抄示例占位符、以及「指不出与第几条重复」这两格。
+    // ⚠️ v4 起第二格（缺 sameAs）从「附加理由」升级成了**该 kind 唯一的证据要求** ——
+    //    见第十之二节：duplicate 这件事只认 sameAs，不再额外要引文。
     { name: '理由照抄了示例占位符', raw: { index: 1, kind: 'duplicate', sameAs: 0, reason: `与第 0 条同为「${PLACEHOLDER_TOKENS[0]}」` }, needle: '占位符' },
     { name: 'duplicate 却指不出与第几条重复（没有 sameAs）', raw: { index: 1, kind: 'duplicate', reason: dupReason(0, '阿塞拜疆与亚洲基础设施投资银行') }, needle: 'sameAs' },
   ];
@@ -475,7 +483,7 @@ section('五、提示词（buildEditorPrompt）');
 
   // ② 第五件事（真实性）—— 用户明确要求「审新闻的真实性」，
   //    而 v1 的四个 job 里没有一个管这件事。
-  ok('提示词里是「六件事」（真实性 + 国家归属这两件事真的加进去了）', prompt.includes('六件事'));
+  ok('提示词里是「七件事」（真实性 + 国家归属 + 与原文核对这三件事真的加进去了）', prompt.includes('七件事'));
   ok(
     '明说「无法联网、不要试图核实是否属实」（不夸口做不到的事）',
     // ⚠️ 断言不能写整句 —— 提示词里「不要」两侧有 `**` 加粗标记，整句子串匹配不到。
@@ -579,6 +587,124 @@ section('五、提示词（buildEditorPrompt）');
 }
 
 // ============================================================
+// 五之二、v4：原文必须**真的**进提示词（第七件事的全部判据挂在这上面）
+// ============================================================
+//
+// 2026-10-01 用户贴了 8 张截图，逐条报错。把那 7 条缺陷按「为什么 v3 没抓到」分一下类，
+// 会得到一张很难看的表 —— **其中 5 条根本不是「中文不自洽」**：
+//
+//   ② 凭空年份（原文没写 2023）      ③ 量级/序数错（100 миң 写成 100 万；第三阶段写成第二阶段）
+//   ④ 量词错（1200 орундуу 写成 1200 座学校）  ⑤ 张冠李戴的国名+州名（吉尔吉斯斯坦稿写成东哈州）
+//   ⑥ 州名/地名不按约定俗成译（Чүй→楚州、Манас→曼纳斯）
+//
+// 这些错误的共同形态是：**中文读起来完全自洽**。你从中文里怎么查都查不出来 ——
+// 因为判据不在中文里，在原文里。而总审从上线起就**从来没看过原文**：
+// `original_content` / `original_language` / `original_title` 从 2026-09 就写进库了，
+// 但**没有任何一行代码读过它们**（这一类缺口最难发现：不报错、不告警，
+// 只表现为「判据上线了但没有效果」）。
+//
+// 所以这一节测的不是「提示词里说了第七件事」，而是**那根线接上了没有**：
+//   字段 → ReviewItem → renderItems → 提示词。
+
+section('五之二、v4 · 原文进提示词（字段→ReviewItem→renderItems）');
+
+{
+  const withOriginals = mkItems(3).map((it, i) => ({
+    ...it,
+    originalTitle: `Оригинал заголовок ${i}`,
+    originalExcerpt: `原文正文第 ${i} 条：Ош шаарында 1200 орундуу жаңы мектеп курулду`,
+    originalLang: 'ky',
+  }));
+  const p = buildEditorPrompt({ countryName: '吉尔吉斯斯坦', items: withOriginals });
+  ok(
+    '❗ 原文**标题**进了提示词',
+    p.includes('Оригинал заголовок 0'),
+    '原文没进提示词 ⇒ 第七件事在提示词里再漂亮也只是文字',
+  );
+  ok(
+    '❗ 原文**正文**进了提示词',
+    p.includes('原文正文第 0 条'),
+    '只喂标题不够：国名、量级、序数都写在正文里（实测 Economist.kg 的「贾拉拉巴德州」在**最后一段**）',
+  );
+  ok('标出了原文语种（模型据此判断该用西里尔还是拉丁写专名）', p.includes('[ky]'));
+  ok(
+    '每条都有一行「原文：」（读者/事后审计能按序号对上）',
+    (p.match(/原文：/g) || []).length >= 3,
+    `只找到 ${(p.match(/原文：/g) || []).length} 处`,
+  );
+
+  // 原文缺失时必须**明说缺失**。静默留空最危险：模型会把「我们没喂」读成「原文里没有」，
+  // 于是把一条真实稿子判成「凭空添加」⇒ 误删。缺材料只能报，不能当证据。
+  const p2 = buildEditorPrompt({ countryName: '吉尔吉斯斯坦', items: mkItems(3) });
+  ok(
+    '❗ 原文缺失时**明写**「无法核对」',
+    p2.includes('（原文缺失，无法核对'),
+    '静默留空 ⇒ 模型会把「没喂原文」当成「原文里没有」，然后开始判凭空添加',
+  );
+  ok('并且明确禁止据此判「凭空添加」', p2.includes('不许据此判'));
+
+  // 截断标记是**判据的一部分**，不是排版。第七件事的分支判据是
+  // 「原文里看不到 ⇒ 先看是不是被截断了」；省略号一没，这条分支就失效。
+  const long = mkItems(1).map((it) => ({
+    ...it,
+    originalExcerpt: 'О'.repeat(ORIGINAL_EXCERPT_MAX + 50),
+  }));
+  const p3 = buildEditorPrompt({ countryName: '哈萨克斯坦', items: long });
+  ok(
+    `超长原文被截断到 ${ORIGINAL_EXCERPT_MAX} 字（不是整篇灌进去把提示词撑爆）`,
+    !p3.includes('О'.repeat(ORIGINAL_EXCERPT_MAX + 1)),
+  );
+  ok(
+    '❗ 截断处**留了省略号**（没它模型会把「被截断」误判成「原文里没有」）',
+    p3.includes('（已截断）'),
+    '截断标记丢了 —— 第七件事的分支判据就没了依据',
+  );
+
+  // 第七件事的判据文字本身。这些都是**反例断言**：它们钉的是「不许模型干什么」。
+  // ⚠️ `prompt` 在上一节的作用域里，这里得自建一个（用带原文的那批，更接近线上）。
+  const prompt = buildEditorPrompt({ countryName: '吉尔吉斯斯坦', items: withOriginals });
+  ok(
+    '原文核对是**独立的一件事**（不是挂在第五件事下面的附带）',
+    prompt.includes('与原文核对'),
+  );
+  ok(
+    '逐项对照的**四类硬信息**都点了名（地名/机构人名/数字/年月）',
+    ['国名 / 州名 / 城市名', '机构名 / 人名', '数字', '年份 / 日期'].every((k) =>
+      prompt.includes(k),
+    ),
+    '缺哪一类，那一类就会继续漏',
+  );
+  ok(
+    '❗ 明确了**量级**与**序数**都要单独对一遍（不是「数字对得上」就够）',
+    prompt.includes('量级') && prompt.includes('序数'),
+    '②③两条缺陷都是这一条没写：「100 миң → 100 万」是量级错，「үчүнчү фаза → 第二阶段」是序数错',
+  );
+  ok(
+    '❗ 把「译文里凭空出现一个年份」点名为**致命**（读者会以为在拿三年前的旧数据当新闻）',
+    prompt.includes('凭空') && prompt.includes('三年前'),
+    'Spot.uz 那条巴西劳务移民的稿子，原文只有「по итогам года」，译文里出现了「2023 年」',
+  );
+  ok(
+    '判定的**两个分支**都在：原文有而中文错 ⇒ 改；原文本来就查不到 ⇒ 只报',
+    prompt.includes('thinSource') && prompt.includes('禁止你补'),
+    '少任何一个分支，模型都会往「编一个出来」的方向走 —— 那比缺要素严重得多',
+  );
+  ok(
+    '❗ 明令**不许为了「要素齐全」补原文没有的来源/数字/日期**',
+    prompt.includes('绝对不许为了'),
+    '这是薄弱材料稿唯一安全的处置：报出来，别编',
+  );
+  ok(
+    '把「原文是摘录、可能被截断」写进了判据（防止把截断误判成凭空）',
+    prompt.includes('被截断'),
+  );
+  ok(
+    '给了「拿不准就不要报」的止损语（漏报只少改一处，误报可能删掉真新闻）',
+    prompt.includes('拿不准就不要报'),
+  );
+}
+
+// ============================================================
 // 六、跨国重复：只观测、不改
 // ============================================================
 
@@ -658,6 +784,38 @@ async function endToEnd(): Promise<void> {
     const r4 = await reviewDraft({ countryName: 'X', items: mkItems(1), ask: async () => { throw new Error('不该被调用'); } });
     ok('稿件少于 2 条时**不调模型**（ran=false）', r4.audit.ran === false && r4.audit.ok === true);
     ok('稿件少于 2 条时保持原样', r4.decision.finalIndices.length === 1);
+
+    // (5) v4：原文与「材料薄」的报告必须能一路走出 reviewDraft。
+    //     只在 applyVerdict 里活着不算 —— 那正是「字段在库里、没人读」的同一种失误
+    //     （判据写了，但链路上某一环没接）。
+    const r5 = await reviewDraft({
+      countryName: '吉尔吉斯斯坦',
+      items: mkItems(8).map((it, i) =>
+        i === 2 ? { ...it, originalExcerpt: 'Ош шаарында 1200 орундуу жаңы мектеп' } : it,
+      ),
+      ask: async () => ({
+        ok: true as const,
+        text: JSON.stringify({
+          order: [0, 1, 2, 3, 4, 5, 6, 7],
+          drops: [],
+          fixes: [],
+          needsImage: [],
+          thinSource: [2],
+          verdict: '有一条材料偏薄',
+        }),
+      }),
+    });
+    ok(
+      '❗ thinSource 走出了 reviewDraft（不是只在 applyVerdict 里活着）',
+      JSON.stringify(r5.decision.thinSource) === JSON.stringify([2]),
+      JSON.stringify(r5.decision.thinSource),
+    );
+    ok(
+      '审计带出「有几条真的带上了原文」= 1',
+      r5.audit.originalsSeen === 1,
+      `originalsSeen=${r5.audit.originalsSeen}`,
+    );
+    ok('原文缺失的条目不会被当成失败（thinsource/原文都是**只报**）', r5.audit.ok === true && r5.decision.finalIndices.length === 8);
   }
 }
 
@@ -751,6 +909,36 @@ section('八、版本指纹（GET 的 codeVersion）');
     'drops 审计带出 sameAs + 对应标题（事后能核对「它说和谁重复」）',
     /sameAsTitle:/.test(src),
     '事故当晚五国的 reason 全是抄来的空话，而审计里没有任何字段能回答「它指谁」',
+  );
+
+  // ---- v4（2026-10-01 晚报）新增的接线 ----
+  //
+  // 这一轮新增的三条**全是「跑一遍真代码、返回一个字符串」的活体探针**，
+  // 不是手写的常量：那一轮排查「部署到底上线没有」绕了一大圈，教训就是
+  // 手写的 `true` 只能证明「有人写过这一行」，不能证明「线上跑的是这版逻辑」。
+  ok(
+    '❗ 「原文进没进提示词」的活体探针在（v4 的核心改动，必须是跑出来的）',
+    /editorOriginalProbe/.test(src) &&
+      /editorOriginalProbe[\s\S]{0,400}buildEditorPrompt\(/.test(src),
+    '探针没了 —— 「原文喂进总审了没有」就只能靠读代码猜',
+  );
+  ok(
+    '❗ 证据分型的**两条**探针都在（一条证明 duplicate 放行，一条证明 not_news 仍要引文）',
+    /editorDupEvidenceProbe/.test(src) &&
+      /editorNotNewsQuoteProbe/.test(src) &&
+      /editorDupEvidenceProbe[\s\S]{0,500}applyVerdict\(/.test(src) &&
+      /editorNotNewsQuoteProbe[\s\S]{0,500}applyVerdict\(/.test(src),
+    '只留一条的话，「duplicate 不再要引文」和「闸被整个拆了」分不开 —— 必须成对看',
+  );
+  ok(
+    '❗ 原文覆盖率能从线上查（?db=1 时才真去查库）',
+    /originalCoverage/.test(src) && /getArticlesByDateRange\(/.test(src),
+    '没有这个口子，「原文喂进去了但库里本来就没原文」完全不可见（originalsSeen 会一直是 0）',
+  );
+  ok(
+    '原文覆盖率默认必须是「未查询」这种字符串（探活不能被数据库拖慢，也不能写死 true）',
+    /未查询/.test(src),
+    '默认就查库会让探活变慢；默认写死一个值则等于撒谎',
   );
 }
 
@@ -904,8 +1092,11 @@ section('九、借图（planCoverBorrows）');
 // ⚠️ 这一节的价值不在「护栏工作」（那是上面几节的事），而在**方向**：
 // 它同时证明「抄示例 → 删不掉」和「真重复 → 照样删得掉」。只测前者会得到一道
 // 「一律不删」的废闸 —— 那种闸看起来最安全，实际上等于把总审关掉。
+//
+// v4 补记：这道「一律不删」的废闸**真的发生过**。v3 的引文闸在 2026-10-01 把阿塞拜疆
+// 一次**正确**的重复删除拦掉了（见第十之二节）。所以这一节现在对每条理由走**三条路径**。
 
-section('十、v3 · 「抄示例理由」那 5 次误删必须被挡住（线上实测数据）');
+section('十、v3/v4 · 「抄示例理由」那 5 次误删必须被挡住（线上实测数据）');
 
 {
   const ECHO = '与第 2 条同为 9 月 27 日阿塞拜疆政府与 AIIB 的那场会谈';
@@ -926,13 +1117,55 @@ section('十、v3 · 「抄示例理由」那 5 次误删必须被挡住（线�
     // 6 条：删 1 条既在上限内（cap = min(4, floor(6/3)=2) = 2）、也在保留下限之上，所以
     // 一旦护栏失效，`appliedDrops` 会变成 1 —— 断言会红，不会静默放过。
     const items = mkItems(6, [t.dropped, t.other, `${t.c} 的第三条稿件`, `${t.c} 的第四条稿件`, `${t.c} 的第五条稿件`, `${t.c} 的第六条稿件`]);
-    const r = applyVerdict(items, { drops: [{ index: 0, kind: 'duplicate', reason: ECHO }] });
-    ok(`[${t.c}] 抄示例的理由 ⇒ 一条都不删`, r.audit.appliedDrops === 0, JSON.stringify(r.audit));
+    //
+    // ⚠️ v4 起「抄示例的理由」会被**三条不同的闸**拦，取决于它冒充哪种 kind。
+    //    旧版本只测第一条路径（引文闸），而那恰好是 v4 拆掉的那条：
+    //    v4 把闸按 kind 分了型（duplicate 看 sameAs、not_news/unreliable 看引文），
+    //    于是「同一条空话理由」走 duplicate 时**不再经过引文闸**。
+    //    如果这里还只断言「留痕里有『原文片段』」，它会红 —— 而它红得**没有意义**：
+    //    真正该守住的是「同一条空话，无论冒充哪种 kind，都删不掉」。
+    //    所以三条路径都要走一遍。少测一条，就少一道「这道闸被拆了」的监测。
+    const sim = similarity(items[0].title, items[1].title);
     ok(
-      `[${t.c}] 留痕说清了是「没有可核对的原文片段」`,
-      r.audit.rejections.some((x) => x.includes('原文片段')),
-      JSON.stringify(r.audit.rejections),
+      `[${t.c}] 前置条件：这一对毫不相干（sim=${sim.toFixed(4)} < ${DUP_SIM_FLOOR}）`,
+      sim < DUP_SIM_FLOOR,
+      '夹具变了 ⇒ 下面第三条路径测的就不是「相似度闸」了',
     );
+
+    // 路径①：冒充 duplicate、**指不出与谁重复** ⇒ sameAs 闸
+    {
+      const r = applyVerdict(items, { drops: [{ index: 0, kind: 'duplicate', reason: ECHO }] });
+      ok(`[${t.c}] 抄示例 + 指不出与谁重复 ⇒ 一条都不删`, r.audit.appliedDrops === 0, JSON.stringify(r.audit));
+      ok(
+        `[${t.c}] 留痕说清了是「缺 sameAs」`,
+        r.audit.rejections.some((x) => x.includes('sameAs')),
+        JSON.stringify(r.audit.rejections),
+      );
+    }
+
+    // 路径②：冒充 duplicate、**乱指一个序号** ⇒ 相似度闸兜底
+    {
+      const r = applyVerdict(items, {
+        drops: [{ index: 0, kind: 'duplicate', sameAs: 1, reason: ECHO }],
+      });
+      ok(`[${t.c}] 抄示例 + 乱指序号 ⇒ 一条都不删（相似度闸兜底）`, r.audit.appliedDrops === 0, JSON.stringify(r.audit));
+      ok(
+        `[${t.c}] 留痕说清了是相似度不足`,
+        r.audit.rejections.some((x) => x.includes('相似度')),
+        JSON.stringify(r.audit.rejections),
+      );
+    }
+
+    // 路径③：冒充 not_news ⇒ 引文闸（这是 v3 唯一测过的那条，v4 保留）
+    {
+      const r = applyVerdict(items, { drops: [{ index: 0, kind: 'not_news', reason: ECHO }] });
+      ok(`[${t.c}] 抄示例 + 冒充 not_news ⇒ 一条都不删`, r.audit.appliedDrops === 0, JSON.stringify(r.audit));
+      ok(
+        `[${t.c}] 留痕说清了是「没有可核对的原文片段」`,
+        r.audit.rejections.some((x) => x.includes('原文片段')),
+        JSON.stringify(r.audit.rejections),
+      );
+    }
   }
 
   // ---- 第五国（tj）：抄的那句**真的是**批内一条标题，引文闸放行 ⇒ 由相似度闸兜底 ----
@@ -1022,6 +1255,150 @@ section('十、v3 · 「抄示例理由」那 5 次误删必须被挡住（线�
     });
     ok('改写值照抄了占位符 ⇒ 拒绝（否则标题会变成一句「（只改正错处）」）', r.audit.appliedFixes === 0, JSON.stringify(r.audit));
     ok('留痕说清了是占位符回抄', r.audit.rejections.some((x) => x.includes('占位符')), JSON.stringify(r.audit.rejections));
+  }
+}
+
+// ============================================================
+// 十之二、v4 · 证据分型：一种判断只要一份「机器能核对」的证据
+// ============================================================
+//
+// 这一节是**用户截图直接催生的**，而且事故形态很丢人：**我们的护栏把我们的正确答案拦掉了**。
+//
+// 2026-10-01 晚报，阿塞拜疆那批里 APA 与 Qafqazinfo 各发了一条「政府吊销两家非银行
+// 信贷机构许可证」。模型**正确**提出删掉后一条，并且给了 `sameAs` ——
+// 却被「reason 里必须有 ≥6 字引文」这道闸拒掉。用户截图报的
+// 「阿塞拜疆又出现两条重复」，**直接原因就是这道闸**。
+// 而它指的那一对标题实测相似度 **0.2105 ≥ DUP_SIM_FLOOR(0.15)**：
+// 它的证据**完全够**，我们却额外又要了一份（两道闸叠加 = 双重受罚）。
+//
+// 原则：**一种判断只需要一份机器能核对的证据，不必凑两份。**
+//   · `duplicate` 有 `sameAs` —— 有字段可指认，代码当场量相似度 ⇒ 引文是多余的；
+//   · `not_news` / `unreliable` 没有任何字段可指认 ⇒ 引文是唯一证据。
+//
+// ⚠️ 必须**双向**测，两条一起看才说明是「分型」而不是「拆闸」：
+//    · 只测「duplicate 不再要引文」⇒ 谁都能删；
+//    · 只测「not_news 仍要引文」⇒ 回到双重受罚（就是这次的事故）。
+
+section('十之二、v4 · 证据分型（duplicate 看 sameAs、其余看引文）');
+
+{
+  // 真实锚点：`mkItems` 的第 0/1 条就是 09-29 线上那对 AIIB 会谈（阿塞拜疆两篇日报的稿子），
+  // 若夹具被改动，下面的前置断言会红。
+  const items8 = mkItems(8);
+  const anchor = similarity(items8[0].title, items8[1].title);
+  ok(
+    `前置条件：锚点相似度 ${anchor.toFixed(4)} ≥ DUP_SIM_FLOOR(${DUP_SIM_FLOOR})（与线上被误杀那对的 0.2105 同档）`,
+    anchor >= DUP_SIM_FLOOR,
+    '夹具变了 —— 下面「放行」测的就不是正常路径了',
+  );
+
+  // ---- (1) 反向：duplicate 只给 sameAs、**不给引文** ⇒ 必须放行（被误杀的就是这一形态）----
+  {
+    const r = applyVerdict(items8, {
+      // 顺带给一个合法 order：这一格要断言「零拒绝痕」，不传 order 会多出一条
+      // 「order 缺失」的合法拒绝，把这条断言污染掉。
+      order: [1, 0, 2, 3, 4, 5, 6, 7],
+      drops: [{ index: 1, kind: 'duplicate', sameAs: 0, reason: '与第 0 条是同一件事的两家报道（此处故意不引用原文）' }],
+    });
+    ok(
+      '❗ duplicate 只给 sameAs、不给引文 ⇒ **放行**（v3 会在这里误杀，那正是用户报的「又出现两条重复」）',
+      r.audit.appliedDrops === 1,
+      JSON.stringify(r.audit.rejections),
+    );
+    ok(
+      '被采纳的重复删稿**不留拒绝痕**（留痕说明它又被引文闸蹭了一下）',
+      r.audit.rejections.length === 0,
+      JSON.stringify(r.audit.rejections),
+    );
+    ok('sameAs 被带进决策（事后能回答「它说和谁重复」）', r.decision.drops[0]?.sameAs === 0);
+  }
+
+  // ---- (2) 正向：分型**不是拆闸** —— 没有可指认字段的 kind，引文仍是唯一证据 ----
+  {
+    const r = applyVerdict(mkItems(8), {
+      drops: [{ index: 1, kind: 'not_news', reason: '这一条是推广稿，不是新闻（故意不引用任何原文）' }],
+    });
+    ok(
+      '❗ not_news 没有引文 ⇒ **仍然删不掉**（分型不是拆闸）',
+      r.audit.appliedDrops === 0 && r.audit.rejections.some((x) => x.includes('原文片段')),
+      JSON.stringify(r.audit.rejections),
+    );
+
+    const r2 = applyVerdict(mkItems(8), {
+      drops: [{ index: 1, kind: 'not_news', reason: `「${items8[1].title.slice(0, 8)}」这种通稿不是新闻` }],
+    });
+    ok(
+      'not_news 引了中文稿原话（≥6 字）⇒ 放行',
+      r2.audit.appliedDrops === 1,
+      JSON.stringify(r2.audit.rejections),
+    );
+  }
+
+  // ---- (3) 没有 sameAs 的 duplicate ⇒ 仍然拒（否则「重复」两个字就能删稿）----
+  {
+    const r = applyVerdict(mkItems(8), {
+      drops: [{ index: 1, kind: 'duplicate', reason: '这条重复了（但指不出跟谁重复）' }],
+    });
+    ok(
+      'duplicate 指不出与谁重复 ⇒ 仍然删不掉',
+      r.audit.appliedDrops === 0 && r.audit.rejections.some((x) => x.includes('sameAs')),
+      JSON.stringify(r.audit.rejections),
+    );
+  }
+
+  // ---- (4) ★ v4：引文允许来自**本条原文**（第七件事明说「或该条【原文】里的原话」）----
+  //
+  // 护栏和提示词必须是**同一条判据**。v3 的 `longestQuotedSpan` 只在中文稿里找引文，
+  // 于是「原文写的是 1200 орундуу мектеп（一座 1200 个名额的学校），中文写成了 1200 座学校」
+  // 这种**完全合规**的理由会被误杀 —— 它引的正是原文。
+  {
+    const withOrig = mkItems(8).map((it, i) =>
+      i === 1 ? { ...it, originalExcerpt: 'Ош шаарында 1200 орундуу жаңы мектептин курулушу аяктады' } : it,
+    );
+    const r = applyVerdict(withOrig, {
+      drops: [
+        {
+          index: 1,
+          kind: 'unreliable',
+          reason: '原文写的是「1200 орундуу мектеп」（一座 1200 个名额的学校），中文写成了 1200 座学校',
+        },
+      ],
+    });
+    ok(
+      '❗ 引文本条**原文**也算证据（v3 只在中文稿里找引文 ⇒ 会误杀这条完全合规的理由）',
+      r.audit.appliedDrops === 1,
+      JSON.stringify(r.audit.rejections),
+    );
+  }
+
+  // ---- (5) 审计：原文覆盖率与「材料薄」的报告 ----
+  {
+    const mixed = mkItems(3).map((it, i) => (i === 0 ? { ...it, originalExcerpt: 'Ош шаарында жаңы мектеп' } : it));
+    const a = applyVerdict(mixed, {});
+    ok(
+      '审计报出「有几条真的带上了原文」（它若长期为 0，第七件事就是空转）',
+      a.audit.originalsSeen === 1,
+      `originalsSeen=${a.audit.originalsSeen}`,
+    );
+
+    const r = applyVerdict(mkItems(8), { thinSource: [0, 5, 5, 99, 'x'] });
+    ok(
+      'thinSource 过闸成「合法且去重」的序号',
+      JSON.stringify(r.decision.thinSource) === JSON.stringify([0, 5]),
+      JSON.stringify(r.decision.thinSource),
+    );
+    ok('thinSource 是**只报不改**：不影响删留与顺序', r.decision.finalIndices.length === 8 && r.decision.drops.length === 0);
+    ok('审计报了 thinSource 的条数（不用去翻数组）', r.audit.thinSources === 2, `thinSources=${r.audit.thinSources}`);
+
+    const r2 = applyVerdict(mkItems(8), {
+      drops: [{ index: 1, kind: 'duplicate', sameAs: 0, reason: dupReason(0, '阿塞拜疆与亚洲基础设施投资银行') }],
+      thinSource: [1],
+    });
+    ok(
+      '❗ 被删的那条**也照样**出现在 thinSource 里（它一样材料薄，抹掉反而少一个信号）',
+      JSON.stringify(r2.decision.thinSource) === JSON.stringify([1]),
+      JSON.stringify(r2.decision.thinSource),
+    );
   }
 }
 

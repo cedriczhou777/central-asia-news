@@ -905,7 +905,12 @@ async function processFetchNews(
           const translated = await translateNews(
             originalTitle,
             originalContent,
-            source.language
+            source.language,
+            // ⚠️ 用**桶的**国家名（这一轮 `country`），不是 `source.country` ——
+            // 与下面入库时 `country_code` 的口径一致（见那行注释）。
+            // 传错国家名的后果不是「标签错」，而是提示词里那句硬事实错，
+            // 于是第 6 条的两条判据（国名只许写原文有的 / 本国元首写中文）会跟着错。
+            countryList.find((c) => c.code === country)?.name || country,
           );
 
           // 翻译失败（结果非中文）则跳过该篇，绝不以原文入库，避免推送英文

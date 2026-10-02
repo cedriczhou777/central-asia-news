@@ -61,7 +61,10 @@ async function main() {
   console.log('开始翻译测试样本...\n');
 
   const startedAt = Date.now();
-  const result = await translateNews(SAMPLE_TITLE, SAMPLE_CONTENT, 'en');
+  // 第 4 个参数（国名）在 2026-10-01 起是**必传**的：提示词会把
+  // 「这篇稿子来自：<国名>」当成硬事实注入，用来堵「吉尔吉斯斯坦的稿子写成哈萨克斯坦东哈州」
+  // 这一类张冠李戴。样本讲的是乌兹别克斯坦，这里就传乌兹别克斯坦。
+  const result = await translateNews(SAMPLE_TITLE, SAMPLE_CONTENT, 'en', '乌兹别克斯坦');
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
 
   console.log(`\n──────── 结果（耗时 ${elapsed}s）────────`);

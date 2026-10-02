@@ -446,7 +446,14 @@ export async function getArticlesByDateRange(
     // `source_url` / `original_title` 是选稿端「同一件事」去重的身份字段，
     // 必须一起取出来 —— 少了它们，推送端只能用中文标题猜，链接和原文两条
     // 确定性判据全部失效（2026-09-21 之前就是这个状态）。
-    .select('id, title, summary, content, country_code, category, source_name, source_url, original_title, published_at, tags')
+    //
+    // ⚠️ `original_content` / `original_language` 是**总审第七件事（与原文核对）**的输入
+    // （2026-10-01 起）。它们从写库那天起就一直在表里（见 `InsertArticleRow`），
+    // 但**读取端到这一天为止从来没有取过** —— 于是「让大模型拿着原文审稿」这件事
+    // 在材料层面一直没成立过：总审只能审「中文之间自不自洽」。
+    // 单独占一行注释是因为「这个字段明明在库里，只是没人读」这种缺口最难发现：
+    // 它不报错、不报警，只表现为「判据上线了但没有效果」。
+    .select('id, title, summary, content, country_code, category, source_name, source_url, original_title, original_content, original_language, published_at, tags')
     .gte('published_at', startDate)
     .lte('published_at', endDate)
     .order('published_at', { ascending: false });

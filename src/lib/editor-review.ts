@@ -34,9 +34,10 @@
  * | 模型能做什么 | 代码的护栏 | 违反时 |
  * |---|---|---|
  * | 重排序 | `order` 必须是 `0..N-1` 的**完整排列** | 整个 order 作废，保持原序 |
- * | 合并/删除 | 每个 drops 必须有 `kind` + 具体 `reason`，且 **reason 必须逐字引用 ≥6 字原文**（`QUOTE_MIN`）、不许出现示例占位符；判 `duplicate` 还**必须给 `sameAs`**，代码当场量两条标题的相似度（`DUP_SIM_FLOOR`）；条数上限 `MAX_DROPS`、比例上限 `MAX_DROP_RATIO`、保留下限 `MIN_KEEP` | 逐条拒绝，只采信合规的那些 |
+ * | 合并/删除 | 每个 drops 必须有 `kind` + 具体 `reason`，且不许出现示例占位符；**证据按 kind 分型**：`duplicate` 必须给 `sameAs` 并由代码当场量两条标题的相似度（`DUP_SIM_FLOOR`），`not_news` / `unreliable` 必须**逐字引用 ≥6 字**本条原文（中文或原文皆可，`QUOTE_MIN`）；条数上限 `MAX_DROPS`、比例上限 `MAX_DROP_RATIO`、保留下限 `MIN_KEEP` | 逐条拒绝，只采信合规的那些 |
  * | 改 title/summary | `before` 必须与当前文本**逐字相同**；`after` 非空、长度有界、无换行/标签、无示例占位符；**且必须通过翻译层的书写系统闸与倍数闸** | 逐条拒绝 |
  * | 指出缺图 | 只记录，不动内容（**不改写文字**） | — |
+ * | 指出「原文本身就缺要素」 | 只记录，不动内容（**禁止补一个原文没有的出处**） | — |
  * | —— 缺图的**补图** | 见 `planCoverBorrows`：**只**把「刚被删掉的重复稿」的封面挪给没图的幸存稿 | 匹配不到就不挪 |
  *
  * ⚠️ **「reason 必须引用原文」和「duplicate 必须给 sameAs」这两条是 2026-09-29 晚报换来的**
@@ -128,8 +129,43 @@ export function isEditorReviewEnabled(): boolean {
  *      的占位符 —— 并且要被护栏挡住（`PLACEHOLDER_TOKENS`）。
  *   2. **凡是要模型「指出是哪一个/哪一处」的判据，都必须落成一个可核对的字段。**
  *      「写清和哪一条重复」是**无法核对**的要求，等于没要求；`sameAs: 3` 才是。
+ *
+ * - `v4`（2026-10-01 晚）：**用户第二次报「同上，还是没做到」，而这次的原因不在判据，在材料。**
+ *   10-01 晚报那一轮 v3 已经在线（`orderAccepted: true` × 5，排序第一次生效），
+ *   但用户截图报的 6 个内容缺陷**全部穿过了总审**。逐条把它们与**原文**对完之后，
+ *   真因只有一句话：**总审从头到尾没看过原文**。
+ *
+ *   | 用户报的 | 中文稿写成 | 原文实际是 | 为什么没抓到 |
+ *   |---|---|---|---|
+ *   | ② 凭空年份 | 「**2023 年**共有 66.1 万名劳务移民回国」 | Spot.uz 原文只有 `661 тыс.` 与 `в 2026 году`，**通篇没有 2023** | 总审看不到原文，`2023` 无从核对 |
+ *   | ③ 量级/序数错 | 「**第二阶段**计划招募 **100 万名**女孩」 | Kabar 原文 `үчүнчү фазасы`（**第三**阶段）`100 миң`（= **10 万**） | 同上；且标题写对、正文写错，内部一致性检查也看不出来 |
+ *   | ④ 量词错 | 「奥什市 … **1200 座新学校**竣工」 | 原文 `1200 **орундуу** жаңы мектеп`（1200 **个名额**的新学校） | `орун` 不在提示词的 `мест` 词表里（`translate.ts` 第 7(b)） |
+ *   | ⑤ 国名凭空 | 「该电站位于**哈萨克斯坦东哈萨克斯坦州**」 | Economist.kg 原文 `в **Джалал-Абадской области**`、`на реке Нарын` | 总审看不到原文 |
+ *   | ⑥ 国名/地名凭空 | 「**托卡耶夫政府**完成**丘州** 10 公里公路沥青铺设」 | Kabar 原文 `**Чүй облусунда**`（**楚河州**）+ `Транспорт … министрлиги`，**没有托卡耶夫** | 总审看不到原文；且「托卡耶夫」在翻译提示词里当示例出现了 **3 次** |
+ *   | ① 要素缺失 | 「研究强调…研究还指出…」（无出处、无时间、无人物） | Gazeta.uz 原文点名 `Jahon banki bosh iqtisodchisining o‘rinbosari Ayhan Kose`、`Research Talks`、论文名 | **这一条不是模型偷懒：RSS 只给了导语**，翻译器拿到的原文本身就是那句导语 |
+ *
+ *   v4 的两处改动：
+ *   1. **把原文喂进总审**（新增第七件事「与原文核对」，并新增报告字段 `thinSource`）。
+ *      `original_content` **从 2026-09 起就存在库里**，只是从来没有任何代码读过它 ——
+ *      于是「引入大模型充分理解后审稿」在过去只能做到一半：**它在审中文之间的自洽，
+ *      审不了中英之间的忠实**。而所有「凭空多出来的国名 / 年份 / 量级 / 序数」都属于后者。
+ *      第七件事把「要素不全」拆成两半，因为**两半的修法不同**：
+ *        · 原文有、中文丢了 ⇒ **翻译错误** ⇒ 由 `fixes` 改（本层的活）；
+ *        · 原文本身就没有 ⇒ **材料问题** ⇒ 写进 `thinSource` 报出来，**禁止编**。
+ *   2. **修掉 v3 自己的误杀**：`duplicate` 同时被两道闸要求（引文 + sameAs），
+ *      于是 10-01 阿塞拜疆那一轮**模型正确提出了删掉重复稿，被引文闸拒了**，
+ *      用户看到的「阿塞拜疆又出现两条重复」就是这么来的。
+ *      两种 kind 的**可核对证据本来就不一样**：`duplicate` 有 `sameAs`（代码当场量相似度），
+ *      `not_news` / `unreliable` 没有任何字段可指认，只能靠引文。⇒ 改成「按 kind 各要一份」。
+ *
+ *   ⚠️ **① 的残留缺口必须写清楚，别把它算成这一版的疗效**：
+ *   RSS 给的原文**本身就只是导语**（实测 Spot.uz 119 字 / Kabar 255 字 / Gazeta.uz 324 字），
+ *   而「这项研究是谁做的」写在正文中段。所以第七件事能做的是
+ *   **把「材料缺失」如实报出来**（`thinSource`），**不是变出一个出处**。
+ *   要真正补上出处，只有一条路：**去抓正文页**（`sourceUrl` 就在库里）——
+ *   那是下一件事，不在这一版。
  */
-export const EDITOR_PROMPT_VERSION = 'v3';
+export const EDITOR_PROMPT_VERSION = 'v4';
 
 // ----- 护栏常量（导出是为了被回归脚本断言，别内联）-----
 
@@ -143,6 +179,22 @@ export const MIN_KEEP = 5;
 export const MAX_FIXES = 6;
 /** 标题长度上限（微信标题超过这个长度会被截断，改长了等于没改） */
 export const MAX_TITLE_LEN = 64;
+
+/**
+ * 喂给总审的**原文摘录**截断长度（v4 新增）。
+ *
+ * 为什么是 500 而不是中文那侧的 200：中文那侧看的是「有没有逻辑矛盾」，
+ * 200 字够；原文这侧做的是**逐词校对**（国名 / 州名 / 数字量级 / 序数 / 年份），
+ * 这些恰恰经常出现在段落中后段 —— 实测 Economist.kg 那条
+ * 「电站位于**贾拉拉巴德州**纳伦河上」就写在正文最后一句的 🧭 段落里。
+ *
+ * 成本上界：5 国 × 15 篇 × 500 字 ≈ 3.75 万字/轮，比中文侧（2.2 万字）
+ * 多一倍但同量级 —— 这个代价换来的是「只由代码能查的事，模型现在能自己查了」。
+ * 真正省事的是：`original_content` 来自 RSS，本来就只存了导语
+ * （实测 Spot.uz 119 字、Kabar 255 字、Gazeta.uz 324 字），
+ * 所以**多数条目的摘录根本到不了 500 字** —— 这个上限是防超长 feed 的保险，不是常态。
+ */
+export const ORIGINAL_EXCERPT_MAX = 500;
 /** 允许的删除类型 */
 export const DROP_KINDS = ['duplicate', 'not_news', 'unreliable'] as const;
 export type DropKind = (typeof DROP_KINDS)[number];
@@ -207,7 +259,19 @@ export const PLACEHOLDER_TOKENS = [
   '（一句话总评）',
 ] as const;
 
-/** 喂给总审的一条稿件。**刻意不含 content 全文** —— 见 `buildEditorPrompt` 的说明。 */
+/**
+ * 喂给总审的一条稿件。**刻意不含中文 content 全文** —— 见 `buildEditorPrompt` 的说明。
+ *
+ * ⚠️ v4 起**带上原文**（`originalTitle` / `originalExcerpt` / `originalLang`）。
+ * 这是「忠实性」这件事唯一的物质前提：没有原文，总审只能审「中文之间自不自洽」，
+ * 审不出「中文里凭空多了一个国名 / 一个年份 / 一个量级」—— 而 10-01 晚报用户报的
+ * 6 条内容缺陷**全部**属于后者。原文来自库里的 `original_content`
+ * （写库端一直在写，`db-articles.ts` 的读取端一直没取，见 v4 说明）。
+ *
+ * 为什么是 `Excerpt`（截断）而不是全文：与中文那侧同一个取舍（成本与注意力），
+ * 但截断长度给得比 `contentPeek` 宽 —— 校对国名/数字要看到**成句的上下文**，
+ * 200 字往往只够看一个导语。截断长度是常量 `ORIGINAL_EXCERPT_MAX`。
+ */
 export interface ReviewItem {
   title: string;
   summary: string;
@@ -219,6 +283,12 @@ export interface ReviewItem {
   relevance: number;
   /** 正文摘要（截断），给模型判断「数字/逻辑是否自洽」用 */
   contentPeek: string;
+  /** **原文标题**（未翻译），校对专名用。缺失时为空串。 */
+  originalTitle?: string;
+  /** **原文正文摘录**（截断），校对国名/数字/量级用。缺失时为空串。 */
+  originalExcerpt?: string;
+  /** 原文语言代码（ru / ky / kk / az / en / tg…），给模型判断该按哪种语言读 */
+  originalLang?: string;
 }
 
 /** 模型**提议**的处置。所有字段都可能越界，必须逐条过闸（见 `applyVerdict`）。 */
@@ -227,6 +297,8 @@ export interface RawVerdict {
   drops?: unknown;
   fixes?: unknown;
   needsImage?: unknown;
+  /** v4：模型认定「原文本身就缺要素（出处/时间/人物），不是翻译的错」的原索引 */
+  thinSource?: unknown;
   verdict?: unknown;
 }
 
@@ -251,6 +323,19 @@ export interface ReviewDecision {
   fixes: Array<{ index: number; field: 'title' | 'summary'; before: string; after: string; why: string }>;
   /** 模型指出「重要但缺图」的原索引 */
   needsImage: number[];
+  /**
+   * v4：模型指出「**原文本身就缺要素**」的原索引 —— 出处 / 时间 / 人物在原文里就查不到。
+   *
+   * 存在的唯一理由：把用户反复报的「要素不全」这句话**拆成两半**，
+   * 因为两半的修法完全不同，混在一起就永远修不对：
+   *   · **原文有、中文丢了** ⇒ 翻译层的错 ⇒ 由 `fixes` 改，属于本层的活；
+   *   · **原文本身就没有** ⇒ **RSS 只给了导语**，翻译器手里根本没有出处可写
+   *     （实测 Spot.uz 的 feed 摘要 119 字、Kabar 255 字、Gazeta.uz 324 字，
+   *     而「研究是谁做的」写在正文中段）⇒ 本层**补不出来，也不许编**，
+   *     只能报出来。要真正补全得去抓正文页（另一件事，见 v4 说明里的残留缺口）。
+   * 这个字段是只读的**报告**，不会改动任何内容 —— 与 `needsImage` 同一性质。
+   */
+  thinSource: number[];
   /** 总评（一句话） */
   verdict: string;
 }
@@ -283,6 +368,19 @@ export interface ReviewAudit {
   orderRaw?: string;
   /** 逐条被拒的原因，如「order 不是完整排列（缺 3 个/多了 1 个）」 */
   rejections: string[];
+  /**
+   * v4：喂进去的稿件里，**有几条真的带上了原文**（`originalExcerpt` 非空）。
+   *
+   * 为什么必须报这个数：第七件事（与原文核对）的**全部效力**依赖这一项，
+   * 而它依赖的是库里的 `original_content` —— 那是写库端写的、读取端到 v4 才开始用的字段。
+   * 所以「第七件事上线了」和「第七件事有东西可校」是两件事：
+   * 前者看 `codeVersion.editorPromptVersion`，后者**只能看这个数**。
+   * 它若长期偏低，「原文核对」就是个空转的判据 —— 那种「看起来做了、其实没生效」
+   * 的状态在本项目已经出现过一次（见 `orderRaw` 的注释），所以必须在审计里现形。
+   */
+  originalsSeen?: number;
+  /** 模型指出「原文本身就缺要素」的条数（只报不改，见 `ReviewDecision.thinSource`） */
+  thinSources?: number;
   /** 命中的跨国重复（只报不改，见 `crossCountryOverlaps`） */
   crossCountryOverlaps?: Array<{ withCountry: string; title: string; otherTitle: string; sim: number }>;
 }
@@ -295,7 +393,7 @@ export interface ReviewAudit {
  * ## 为什么把「你的身份」写得那么重
  *
  * 用户的原话是「真正思考和理解…以一个专业的新闻人身份…以一个投资者来阅读的角度」。
- * 「你是编辑」这种身份设定不是为了文采 —— 它直接决定模型怎么处理那六件事：
+ * 「你是编辑」这种身份设定不是为了文采 —— 它直接决定模型怎么处理那七件事：
  *   - **编辑**会问「这条为什么值得读者花时间」⇒ 排序；
  *   - **编辑**会问「这两条是不是同一件事」⇒ 合并；
  *   - **编辑**会问「这条换成我，我会不会发」⇒ 第五之二件事（形态根本不是新闻的）；
@@ -303,6 +401,8 @@ export interface ReviewAudit {
  *     `500 座教学楼` 这类**逻辑不成立**的表述（而不是「翻译得像不像」）；
  *   - **投资者**会问「这条消息本身可信吗」⇒ 第五件事（内部一致性 / 明显不可信）；
  *   - **驻当地记者**会问「这是我们国家的事吗、这个人是谁」⇒ 第六件事（国家归属与专名）；
+ *   - **拿着原文逐词校对的编辑**会问「这个词、这个数字、这个年份，原文里到底有没有」
+ *     ⇒ 第七件事（v4 新增，忠实性）；
  *   - **终审**会问「我改错了谁负责」⇒ 「不确定就不要改」。
  *
  * ## 为什么要显式告诉它「{COUNTRY}」是哪一国
@@ -312,13 +412,18 @@ export interface ReviewAudit {
  * 只有先知道「你审的这一篇属于吉尔吉斯斯坦」才判得出来。
  * 而稿件的归属来自 **RSS 源**、不是内容 —— 所以这一条**必须由提示词给**，模型推不出来。
  * 改动前它只知道「你在审其中一国的那一篇」，但**不知道是哪一国**。
+ * ⚠️ v4 之后这一条**降级为辅助、但保留**：它只能看出「矛盾」，
+ * 看不出「读起来完全自洽的凭空」—— 后者（`哈萨克斯坦东哈萨克斯坦州`）要靠第七件事。
  *
- * ## 为什么只喂 summary + 正文前 200 字，不喂全文
+ * ## 为什么只喂中文 summary + 正文 200 字，却要喂 500 字原文
  *
- * 5 国 × 15 篇 × 300 字全文 ≈ 2.2 万字/轮，而**判断这六件事并不需要全文**：
- * 重复看标题+摘要就够，逻辑/数字问题在摘要和正文开头就暴露（`500 座教学楼`
- * 和 `下调1.5倍` 两条都是**标题级**错误）。真要全文，得为它单独设计一次调用。
- * ⚠️ 这个取舍的后果是：**正文中后段的错误抓不到** —— 已知的覆盖缺口，别当成没 bug。
+ * 这个**不对称是 v4 特意保留的**，不是疏忽：
+ *   - 中文那侧看的是「有没有逻辑矛盾」——摘要加开头 200 字就够（`500 座教学楼`、
+ *     `下调1.5倍` 两条都是**标题级**错误）；
+ *   - 原文那侧做的是**逐词校对**（国名 / 州名 / 量级 / 序数 / 年份），这四类信息
+ *     经常落在段落中后段 —— 实测 Economist.kg 那条「电站位于贾拉拉巴德州纳伦河上」
+ *     就写在正文最后一段。给短了，第七件事会因为**看不到**而误判成「凭空添加」。
+ * ⚠️ 两侧都有的缺口照旧：**中文正文中后段的错**仍然抓不到 —— 已知缺口，别当成没 bug。
  */
 export const EDITOR_PROMPT = `你是一位资深中文财经媒体的**终审编辑**，负责一份面向**国际投资者**的
 「中亚与高加索投资资讯日报」的最后一关。这份日报按国家分成若干篇，你审的是**其中一国的那一篇**。
@@ -330,7 +435,7 @@ export const EDITOR_PROMPT = `你是一位资深中文财经媒体的**终审编
 {ITEMS}
 
 {OTHER_COUNTRIES}
-【你要做的六件事，按优先级】
+【你要做的七件事，按优先级】
 
 **一、合并「同一件事」（最重要）**
 同一件事被不同媒体各写一遍时，**只保留信息最完整的那一条**，其余进 drops（kind: "duplicate"）。
@@ -407,12 +512,49 @@ export const EDITOR_PROMPT = `你是一位资深中文财经媒体的**终审编
 - **标题与摘要讲的不是同一件事**。
 - **通篇与本国无关**：一条挂在「{COUNTRY}」名下的稿子，通篇在讲别的国家。
 
+⚠️ 上面这一件只判「矛盾」。**光看中文，一个凭空添进去的国名是可以自洽的** ——
+它读起来毫无破绽。真正能判定它的是下一条。
+
+**七、与原文核对（忠实性）—— 每一条的原文就在它下面**
+**这一条是本轮新增，也是用户反复要求的那一条。** 对方是专业读者，他手里可能就有原文。
+
+对每一条，把它下面的「原文」和中文稿**逐项对照**，只查这四类**硬信息**：
+
+- **(a) 国名 / 州名 / 城市名**：中文里出现的地名，原文里必须有。
+- **(b) 机构名 / 人名**：中文里出现的部门、企业、人物，原文里必须有。
+- **(c) 数字**：不只要「数对」，还要**量级与序数对**。原文「100 миң」（10 万）写成「100 万」是**量级错**；
+  原文「үчүнчү фаза」（第三阶段）写成「第二阶段」是**序数错**。两种都必须改。
+- **(d) 年份 / 日期**：中文里出现的**任何**年份与日期，原文里必须有。
+  ⚠️ 这一条最容易犯也最致命：原文写「по итогам года」（按本年度结果）、「в 2026 году」，
+  译文里凭空出现一个「2023 年」—— 读者会以为你在拿三年前的旧数据当新闻。
+
+判定只有两种，**别混**：
+- **原文里有、中文写错了（或多写了原文没有的东西）⇒ 这是翻译错误，必须改。**
+  用 fixes 改 title / summary（**只改那一个错的局部**：一个国名、一个数字、一个年份）；
+  改不动、或错在整条的立意上 ⇒ drops（kind: "unreliable"）。
+- **原文里本来就查不到（原文自己就没写出处 / 没写时间 / 没写人物）⇒ 这不是翻译的错，也禁止你补。**
+  把序号写进 thinSource，让它出现在审计里。
+  ⚠️ **绝对不许为了「要素齐全」而补一个原文没有的来源、数字或日期** —— 那比缺要素严重得多。
+  典型：一篇讲「某研究指出…」的稿子，原文通篇只说「研究」，没写是谁的研究、什么时候发布的 ⇒
+  这一条的出处**在原始 feed 里就不存在**，你要做的是把它标出来，不是替它编一个。
+
+⚠️ **你看的是原文摘录，不是全文**（摘录长度有限，可能被截断）。所以：
+  · 原文里**有** ⇒ 可以据此判「中文错了」；
+  · 原文里**看不到** ⇒ **先看是不是被截断了**：如果摘录以省略号结尾、或明显不完整，
+    就**不要**判「凭空添加」；只有摘录完整、且通篇找不到依据时，才能判。
+  · **拿不准就不要报。** 漏报一条只是少改一处，误报一次可能删掉一条真新闻。
+
 【硬约束，违反会被直接丢弃】
 1. order 必须是 **0 到 {LAST} 之间全部序号的一个完整排列**，不重不漏（共 {N} 个数字）。
    如果你不想改顺序，就原样输出 {ORDER_EXAMPLE}。
-2. drops 的每一条必须同时给：kind（duplicate / not_news / unreliable）、**具体的** reason，
-   并且 **reason 里要逐字引用至少 6 个字的原文片段**（标题或摘要里的原话），说明你到底看到了什么；
-   判 duplicate 还**必须给 sameAs**（与它重复的那条的序号）。写不出具体理由就别删。
+2. drops 的每一条必须同时给：kind（duplicate / not_news / unreliable）和**具体的** reason。
+   另外，**不同 kind 的可核对证据不一样，缺了会被代码当场丢掉**：
+     · kind = duplicate：**必须给 sameAs**（你认定与它重复的那条的序号）。
+       代码会当场量这两条标题的相似度，指得不着边会被拒 ——
+       所以「指得出来」本身就是这条的证据，**不必再额外凑引文**。
+     · kind = not_news / unreliable：**reason 里必须逐字引用至少 6 个字的本条原文**
+       （中文稿里的原话，或该条【原文】里的原话）。这两种判断没有可指认的字段，只能靠引文。
+   证据给不出，就别删。
 3. fixes 的 before 必须与你看到的原文**逐字完全相同**（用来确认你改的是你以为的那条）。
 4. **不确定就不要动。** 你的职责是**审**，不是**写**：不许新增原文没有的事实，
    不许把一条新闻改写成另一条新闻，不许补全你没看到的数字或条件。
@@ -428,16 +570,37 @@ export const EDITOR_PROMPT = `你是一位资深中文财经媒体的**终审编
   "drops": [{"index": 5, "kind": "duplicate", "sameAs": 2, "reason": "（≥6 字的原文片段）（为什么）"}],
   "fixes": [{"index": 1, "field": "title", "before": "（逐字抄这里）", "after": "（只改正错处）", "why": "（错在哪）"}],
   "needsImage": [0, 3],
+  "thinSource": [4],
   "verdict": "（一句话总评）"
 }`;
 
-/** 把待审清单渲染成提示词里的文本。 */
+/**
+ * 把待审清单渲染成提示词里的文本。
+ *
+ * v4 起每条多两行「原文」：原文标题 + 原文摘录（`ORIGINAL_EXCERPT_MAX` 截断）。
+ * 截断时**必须留下省略号**，否则第七件事的分支判据（「看不到 ⇒ 先看是不是被截断了」）
+ * 就没有依据 —— 模型会把「被截断」误当成「原文里没有」，进而把一条真实的稿子判成
+ * 「凭空添加」。这条省略号是判据的一部分，不是排版。
+ *
+ * 原文缺失（老数据、或该源没写 `original_content`）时明确写「（原文缺失）」：
+ * 让模型知道**它无从核对**，而不是让它以为原文是空的 ⇒ 否则它会开始臆测。
+ */
 function renderItems(items: ReviewItem[]): string {
   return items
     .map((it, i) => {
       const img = it.hasImage ? '有图' : '无图';
       const peek = it.contentPeek ? `\n   正文开头：${it.contentPeek}` : '';
-      return `${i}. [${it.category}] ${it.title}\n   摘要：${it.summary}\n   来源：${it.source}｜时间：${it.time}｜${img}｜相关性分：${it.relevance}${peek}`;
+      const lang = it.originalLang ? `[${it.originalLang}] ` : '';
+      const raw = (it.originalExcerpt || '').trim();
+      const oTitle = (it.originalTitle || '').trim();
+      let origin = '\n   原文：' + lang + '（原文缺失，无法核对 —— 不许据此判「凭空添加」）';
+      if (oTitle || raw) {
+        const rawShown = raw
+          ? raw.slice(0, ORIGINAL_EXCERPT_MAX) + (raw.length > ORIGINAL_EXCERPT_MAX ? '…（已截断）' : '')
+          : '（原文正文缺失）';
+        origin = `\n   原文：${lang}${oTitle || '（原文标题缺失）'}\n   原文正文：${rawShown}`;
+      }
+      return `${i}. [${it.category}] ${it.title}\n   摘要：${it.summary}\n   来源：${it.source}｜时间：${it.time}｜${img}｜相关性分：${it.relevance}${peek}${origin}`;
     })
     .join('\n');
 }
@@ -573,9 +736,14 @@ function longestCommonSubstring(a: string, b: string): number {
  * 这是 v3 加的核心护栏（见 `QUOTE_MIN` 的量法）。它挡的不是「理由写得好不好」，
  * 而是「**这句理由是不是抄来的**」：抄来的理由里不会有本批稿件的原文。
  *
- * 允许的引文来源：**被删这条自己的**标题/摘要/正文开头，**以及**其它稿件的标题
- * （判 duplicate 时你要指的是「另一条」，那自然引它的标题）。
+ * 允许的引文来源：**被删这条自己的**标题/摘要/正文开头/**原文标题与原文摘录**，
+ * **以及**其它稿件的标题（判 duplicate 时你要指的是「另一条」，那自然引它的标题）。
  * 为什么**不含**别人的摘要：那会把可引用面摊得过大，等于给抄来的理由留后门。
+ *
+ * ⚠️ v4 必须把原文加进来：第七件事明确允许「引用本条原文里的原话」当证据，
+ * 而原文是西里尔/拉丁文字 —— `normalizeForQuote` 认这些字符，但**来源里没有它**，
+ * 于是模型给的一条**完全正确**的引文会被这道闸判成「没引用」。
+ * 这是「护栏和提示词必须是同一条判据」的又一次具体表现（见 QUOTE_MIN 的注释）。
  */
 function longestQuotedSpan(reason: string, items: ReviewItem[], idx: number): number {
   const r = normalizeForQuote(reason);
@@ -585,6 +753,8 @@ function longestQuotedSpan(reason: string, items: ReviewItem[], idx: number): nu
     self?.title ?? '',
     self?.summary ?? '',
     self?.contentPeek ?? '',
+    self?.originalTitle ?? '',
+    self?.originalExcerpt ?? '',
     ...items.filter((_, i) => i !== idx).map((x) => x.title),
   ];
   let best = 0;
@@ -613,6 +783,9 @@ export function applyVerdict(
   const n = items.length;
   const rejections: string[] = [];
   const audit: ReviewAudit = { promptVersion, ran: true, ok: true, itemCount: n, rejections };
+  // v4：先记「有几条真的带上了原文」。第七件事的全部效力都挂在这个数上 ——
+  // 它若为 0，第七件事在提示词里再漂亮也只是文字（见 originalsSeen 的注释）。
+  audit.originalsSeen = items.filter((it) => (it.originalExcerpt || '').trim().length > 0).length;
 
   // ---- drops ----
   const rawDrops = Array.isArray(raw.drops) ? raw.drops : [];
@@ -637,7 +810,7 @@ export function applyVerdict(
       rejections.push(`drops[${idx}] 没有给出具体理由（「${reason}」）`);
       continue;
     }
-    // ---- v3 的三道新闸（都在下面注释里给了量出来的依据）----
+    // ---- v3 的三道新闸 + v4 的证据分型（依据都在各常量的注释里）----
     //
     // ① 照抄示例里的占位符。这一条正是 09-29 事故的形态：模型不肯自己想，
     //    直接把提示词示例当答案交上来。占位符**照着抄就没有信息**，所以直接拒。
@@ -646,23 +819,29 @@ export function applyVerdict(
       rejections.push(`drops[${idx}] 的理由照抄了提示词示例的占位符（${echoed}）⇒ 拒绝`);
       continue;
     }
-    // ② 理由必须能对着文本指认（逐字引用 ≥QUOTE_MIN 字原文）。
-    //    量过：09-29 那 5 条误删的理由与被删稿自身文本的引文是 0~5 字，全部 ≤4 字。
+    //
+    // ② + ③ **证据分型**（v4 改：原来是「引文 AND sameAs」，现在按 kind 各要一份）。
+    //
+    // 为什么必须改（2026-10-01 晚报，一次「把自己的正确判断拦掉」的实测）：
+    //   阿塞拜疆那一轮，模型**正确**提出了删掉第 6 条（Qafqazinfo 的 T-Kredit 稿，
+    //   与第 9 条 APA 的同一件事），却被「理由里必须有 ≥6 字引文」这道闸拒掉 ——
+    //   用户截图报的「阿塞拜疆又出现两条重复」，直接原因就是这道闸。
+    //   而它指的那一对标题相似度实测 **0.2105 ≥ DUP_SIM_FLOOR 0.15**：
+    //   也就是说**它的证据完全够，只是我们额外又要了一份**（两道闸叠加成了双重受罚）。
+    //
+    // 原则：**一种判断只需要一份「机器能核对」的证据，不必凑两份。**
+    //   · `duplicate` 有 `sameAs` —— 有字段可指认，代码当场量相似度 ⇒ 引文是多余的；
+    //   · `not_news` / `unreliable` 没有任何字段可指认 ⇒ 引文是唯一证据。
+    // 配套纪律：**护栏必须双向测**。只测「抄来的理由被拒」，就会养出「什么都不删」的死闸 ——
+    // 引文闸在 az 上干的正是这件事（见 `scripts/test-editor-review.ts` 第十节的反向用例）。
     const quoted = longestQuotedSpan(reason, items, idx);
-    if (quoted < QUOTE_MIN) {
-      rejections.push(
-        `drops[${idx}] 的理由里没有可核对的原文片段（最长引文 ${quoted} 字 < ${QUOTE_MIN}）⇒ 拒绝`,
-      );
-      continue;
-    }
-    // ③ 判 duplicate 必须指名道姓，并且**代码当场量一遍**那两条像不像。
-    //    量过：真锚点 0.2188 / 0.5625，假锚点 0.1020 —— 所以下限取 0.15（见 DUP_SIM_FLOOR）。
     let sameAs: number | undefined;
     if (kind === 'duplicate') {
+      // 量过：真锚点 0.2105 / 0.2188 / 0.5625，假锚点 0.1020 ⇒ 下限 0.15（见 DUP_SIM_FLOOR）。
       const sa = typeof o.sameAs === 'number' ? o.sameAs : NaN;
       if (!Number.isInteger(sa) || sa < 0 || sa >= n || sa === idx) {
         rejections.push(
-          `drops[${idx}] 是 duplicate 但没给出有效的 sameAs（与哪一条重复的序号，收到 ${String(o.sameAs)}）⇒ 拒绝`,
+          `drops[${idx}] 是 duplicate 但没给出有效的 sameAs（与哪一条重复的序号，收到 ${JSON.stringify(o.sameAs)}）⇒ 拒绝｜理由原文：「${reason.slice(0, 80)}」`,
         );
         continue;
       }
@@ -674,6 +853,12 @@ export function applyVerdict(
         continue;
       }
       sameAs = sa;
+    } else if (quoted < QUOTE_MIN) {
+      // not_news / unreliable 没有可指认的字段 ⇒ 引文是唯一证据。
+      rejections.push(
+        `drops[${idx}]（${kind}）的理由里没有可核对的原文片段（最长引文 ${quoted} 字 < ${QUOTE_MIN}）⇒ 拒绝｜理由原文：「${reason.slice(0, 80)}」`,
+      );
+      continue;
     }
     if (dropSet.has(idx)) continue;
     dropSet.add(idx);
@@ -754,8 +939,18 @@ export function applyVerdict(
     // ⚠️ 必须逐字匹配。这一条是防「模型对错条目」的主要手段：
     // 它抄的 before 如果对不上，说明它心里的那条和我们以为的那条不是同一条。
     if (before.trim() !== (current || '').trim()) {
+      // 报错信息里**必须能看出差在哪**。旧写法两边各截 24 字 ——
+      // 2026-10-01 阿塞拜疆那条恰好**前 20 字一模一样**，于是日志长这样：
+      //   「模型抄的是「阿塞拜疆政府吊销了"T-Kredit"和"Fin」，实际是「阿塞拜疆政府吊销了"T-Kredit"和"Fin」」
+      // 两段字面完全相同 ⇒ 读日志的人以为护栏抽风，实际是第 24 字之后才分叉。
+      // 教训与 `orderRaw` 同一条：拒绝信息要留下**能自己判读的原物**，不是它的摘要。
+      const a = before.trim();
+      const b = (current || '').trim();
+      let p = 0;
+      while (p < a.length && p < b.length && a[p] === b[p]) p++;
+      const at = `第 ${p + 1} 字起分叉`;
       rejections.push(
-        `fixes[${idx}].${field} 的 before 与原文不符（模型抄的是「${before.slice(0, 24)}」，实际是「${(current || '').slice(0, 24)}」）`,
+        `fixes[${idx}].${field} 的 before 与原文不符（${at}；模型给的「${a.slice(0, 60)}」／实际「${b.slice(0, 60)}」）`,
       );
       continue;
     }
@@ -790,12 +985,25 @@ export function applyVerdict(
     .filter((x) => !dropSet.has(x))
     .slice(0, 5);
 
+  // ---- thinSource（v4，只报不改）----
+  // 过闸口径与 needsImage 同款，但**不去掉被删的条目**：这条报告的价值正在于
+  // 「这一批稿子里有几条本身材料就薄」—— 被删的那条也一样薄，抹掉反而少了一个信号。
+  const thinSource = [
+    ...new Set(
+      (Array.isArray(raw.thinSource) ? raw.thinSource : []).filter(
+        (x): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0 && x < n,
+      ),
+    ),
+  ].slice(0, n);
+  audit.thinSources = thinSource.length;
+
   return {
     decision: {
       finalIndices,
       drops: [...dropRecords].sort((a, b) => a.index - b.index),
       fixes,
       needsImage: [...new Set(needsImage)],
+      thinSource,
       verdict: typeof raw.verdict === 'string' ? raw.verdict.slice(0, 40) : '',
     },
     audit,
@@ -962,6 +1170,7 @@ export async function reviewDraft(args: {
     drops: [],
     fixes: [],
     needsImage: [],
+    thinSource: [],
     verdict: '',
   });
 

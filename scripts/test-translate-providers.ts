@@ -174,7 +174,8 @@ async function main() {
     [ZHIPU, () => errorResponse(401, 'invalid api key')],
     [DEEPSEEK, () => okResponse()],
   ]);
-  const r401 = await translateNews('Тест', 'Содержание новости', 'ru');
+  // 国名是必传参数（2026-10-01 起）：这里只测降级链，国名随便给一个俄罗斯即可。
+  const r401 = await translateNews('Тест', 'Содержание новости', 'ru', '俄罗斯');
 
   check('401 每个智谱型号只打 1 次（旧版会打 3 次）', [countByModel(MODEL_ZHIPU), countByModel(MODEL_ZHIPU_FALLBACK)], [1, 1]);
   check('401 后降级到 deepseek', r401.provider, 'deepseek');
@@ -186,7 +187,7 @@ async function main() {
     [ZHIPU, () => errorResponse(429, 'rate limit exceeded')],
     [DEEPSEEK, () => okResponse()],
   ]);
-  await translateNews('Тест', 'Содержание новости', 'ru');
+  await translateNews('Тест', 'Содержание новости', 'ru', '俄罗斯');
   check('429 每个智谱型号各重试满 3 次', [countByModel(MODEL_ZHIPU), countByModel(MODEL_ZHIPU_FALLBACK)], [3, 3]);
 
   // ── 用例 6：404（型号不存在）不重试 ───────────────────────────
@@ -195,7 +196,7 @@ async function main() {
     [ZHIPU, () => errorResponse(404, 'model not found')],
     [DEEPSEEK, () => okResponse()],
   ]);
-  await translateNews('Тест', 'Содержание новости', 'ru');
+  await translateNews('Тест', 'Содержание новости', 'ru', '俄罗斯');
   check('404（型号代号过期）每个智谱型号只打 1 次', [countByModel(MODEL_ZHIPU), countByModel(MODEL_ZHIPU_FALLBACK)], [1, 1]);
 
   // ── 用例 7：两个通道都不可用时如实返回 translated=false ─────────
@@ -204,7 +205,7 @@ async function main() {
     [ZHIPU, () => errorResponse(401, 'invalid api key')],
     [DEEPSEEK, () => errorResponse(402, 'Insufficient Balance')],
   ]);
-  const rAllFail = await translateNews('Тест', 'Содержание новости', 'ru');
+  const rAllFail = await translateNews('Тест', 'Содержание новости', 'ru', '俄罗斯');
   check('全通道失败时 translated=false（不入库）', rAllFail.translated, false);
   check('全通道失败时 provider=none', rAllFail.provider, 'none');
 
