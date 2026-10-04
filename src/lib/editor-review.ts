@@ -175,8 +175,11 @@ export function isEditorReviewEnabled(): boolean {
  *   | `fixes`（改字） | kz 1 / az 8 / kg 4 | kz **0** / az **3** / kg **2** | 全是 `before` 对不上：模型写了「摘要：…」前缀，或把原句概括了一遍 |
  *   | `drops`（删稿） | kz 5 / az 5 | kz 2 / az 1 | `not_news` 的 `reason` 写的是一句**概括**，回到清单里逐字搜不到 |
  *
- *   两道闸本身**没有误杀**：被拒的每一条，`before` / 引文确实不是清单里那串字。
- *   所以这一版**一行判据代码都没动**，只把「逐字复制」这四个字展开写清楚：
+ *   那批被拒的每一条，`before` / 引文确实不是清单里那串字 —— 当时据此写下「两道闸本身
+ *   **没有误杀**」。⚠️ **这句话在 2026-10-04 被量出是错的**（见下面的 g2）：
+ *   它只证明了「**没有放过错的**」，没证明「**没有丢掉对的**」。两件事不同，
+ *   而当时手上只有前者。**「没有误杀」这种结论，必须双向测才能说** —— 记在这里当反例。
+ *   这一版**一行判据代码都没动**，只把「逐字复制」这四个字展开写清楚：
  *   1. 硬约束 3 从一行（「必须与当前值逐字相同」）扩成**禁止清单**——
  *      不许加前缀、不许缩写、不许改写、不许补删标点、不许截断，并附本轮**真实**的两个反例。
  *   2. 硬约束 2 加了 ✗/✓ 对照，并点名「**概括不算引文**」——
@@ -192,6 +195,30 @@ export function isEditorReviewEnabled(): boolean {
  *   RSS 里根本没有正文，总审拿到的【原文】是空的 ⇒ 第七件事在那几条上**仍然无物可校**。
  *   那是**采集侧**的活（`article-body.ts` 补正文 + 推送侧 `no_source_body` 闸兜底），
  *   不在总审这一层能修的范围里 —— 别把它的疗效记到 v5 头上。
+ *
+ * - `g2`（2026-10-04，**只改代码、不动提示词**）：把 `fixes` 的 `before` 判据从
+ *   「逐字相等」改成「**定位成不成立**」。触发条件是 10-04 定时那一轮的真实数据，
+ *   外加对 v5 那个「没有误杀」结论的复核。
+ *
+ *   17 条 `fixes` 被拒 5 条，逐条量完发现**必须分成三类**（表在 `FIX_LOCATE_FLOOR` 里）：
+ *
+ *   | 类 | 条数 | 形态 | 处置 |
+ *   |---|---|---|---|
+ *   | A 幻觉 | 2 | 模型抄的是**另一条的原文逐字**（`otherMax = 1.0000`，index 指错）| **必须继续拒**，且点名它指的是第几条 |
+ *   | B 走样 | 3 | 同一行：压缩改写 / 提前截断 / 中间漏字（sim 0.24–0.63，`sim > otherMax`）| **应当采纳** —— 这是 g1 丢掉的 |
+ *   | C sameAs | 5 | `drops` 的相似度闸，已核实是**模型指错行**、不是函数坏了 | **不动** |
+ *
+ *   所以这一版只放宽了 fixes 那一处，而且放宽的方式**不是调阈值**，是换判据：
+ *   A 类那两条的 `otherMax` 是 **1.0000**，说明「模型抄了别条的原文」是**确定性可判**的
+ *   ⇒ 判据从「像不像本行」变成「**最像哪一行**」，A 类照样挡住，B 类被捞回来。
+ *
+ *   ⚠️ 两件必须同时记住的事：
+ *   1. **提示词一个字没改，`EDITOR_PROMPT_VERSION` 仍是 v5** —— 因为「逐字复制」依然是
+ *      我们要的最强证据，只是代码不再把「没照抄」等同于「改错条目」。为了让两轮数据
+ *      可比，闸单独记一版 `EDITOR_GATE_VERSION = 'g2'`（它会出现在 `review[].gateVersion`
+ *      和线上 `codeVersion` 里）。
+ *   2. **`drops` 那侧一个字没动。** 复核结论是它判得对（详见 `FIX_LOCATE_FLOOR` 上方的
+ *      C 类说明）—— 别因为「fixes 放宽了」就顺手去动它。
  */
 export const EDITOR_PROMPT_VERSION = 'v5';
 
@@ -266,6 +293,66 @@ export const DUP_SIM_FLOOR = 0.15;
  * 为了不让模型白费力气，提示词里**同一条判据也明写了**（硬约束 2）：提示词和护栏共用一条判据。
  */
 export const QUOTE_MIN = 6;
+
+/**
+ * 「模型说的 index 可不可信」——靠它抄的 `before` **在清单里最像哪一条**来判。
+ *
+ * ## 为什么不能继续用「逐字相等」一票否决
+ *
+ * `fixes` 的 `before` **从不参与写入**（落库的 `before` 是真实的 `current`，见 `applyVerdict`），
+ * 它唯一的用途是**交叉核对 index**：模型说「改第 6 条」，它抄的那串字对不对得上第 6 条？
+ * ⇒ 所以这里该判的是「**定位成不成立**」，不是「有没有照抄」。
+ *
+ * v5 把它判成了后者（`before.trim() !== current.trim()` ⇒ 拒，下面叫 g1），代价是
+ * **把判对的也丢掉了**：10-04 定时那一轮 17 条 `fixes` 里，有 3 条是
+ * 「模型判对、改法也对，只是复现不出原文」。
+ *
+ * ## 实测：两类不是靠阈值分开的，是靠「最像谁」分开的
+ *
+ * 用生产同一个 `similarity`（字符 bigram Jaccard，`src/lib/utils.ts`）量 10-04 那一轮
+ * 全部 5 条被拒的 `before`（`scripts/tmp-measure-fix-locate.ts` 一次性量的，已删）：
+ *
+ * | 用例（都取自线上真实拒绝记录） | sim（像本行） | otherMax（像别行） | 真相 |
+ * |---|---|---|---|
+ * | kz `fixes[6]`：`before` 讲的是敖德萨/里海，本行是 Digital Bridge 论坛 | 0.0348 | **1.0000** | **模型抄的是另一条的原文**（index 指错）|
+ * | az `fixes[4]`：`before` 是 OPEC+ 那条的标题，本行是混凝土产量 | 0.0930 | **1.0000** | 同上 |
+ * | kz `fixes[8]`：把摘要压缩成一句 | 0.2429 | 0.1129 | 同一行，只是没照抄 |
+ * | uz `fixes[5]`：前 54 字逐字，后接句号截断 | 0.3981 | 0.2537 | 同上 |
+ * | tj `fixes[5]`：中间漏了「完成」二字 | 0.6349 | 0.1222 | 同上 |
+ *
+ * ★ 关键就在那两个 **1.0000**：幻觉类抄的是**另一条的原文逐字**。
+ * 于是判据可以是**确定性的**（② 先做逐字比对），不必依赖一条脆弱的分界线：
+ *
+ *   ① `before` 与本行相同 → 采纳（最强证据）
+ *   ② `before` 与**别的某一行**相同 → 拒绝，**并点名它其实在改第几条**
+ *   ③ `sim >= FIX_LOCATE_FLOOR` 且 `sim > otherMax` → 采纳（本行就是最像的）
+ *   ④ 其余 → 拒绝，且分开报「最像第 k 条」/「谁都不像」
+ *
+ * ② 的存在让 `otherMax` 那两行从「阈值判断」变成「铁证」；③ 则把 g1 丢掉的 3 条捞回来。
+ *
+ * `FIX_LOCATE_FLOOR = 0.15` 只用来兜住 ③ 的**退化情形**：清单里只有一两条时
+ * `otherMax` 会是 0，「本行最像」这句话就没有信息量了。实测 B 类最低 0.2429、
+ * A 类最高 0.0930，0.15 落在中间，两侧余量都 >60%。
+ *
+ * ⚠️ 它与 `DUP_SIM_FLOOR` **数值相同但不是同一个判据**（一个判「两条稿子是不是一件事」，
+ * 一个判「这段字更像哪一行」）。别因为数值巧合就合并成一个常量 ——
+ * 合并之后任何一侧调参会静默改掉另一侧的语义。
+ */
+export const FIX_LOCATE_FLOOR = 0.15;
+
+/**
+ * 「改字定位闸」的版本号。**与 `EDITOR_PROMPT_VERSION` 分开**，理由很具体：
+ *
+ * `EDITOR_PROMPT_VERSION` 记的是**提示词**（同一份提示词配不同的闸，结论会不一样），
+ * 而这一版的改动**一个字都没动提示词**（提示词仍然要求逐字复制 —— 那依然是我们要的
+ * 最强证据，只是代码不再把「没照抄」等同于「改错条目」）。若不单独记一版，
+ * 后人拿 `promptVersion: v5` 的两轮数据做 A/B 时，会把**两套闸的结果混在一起比**，
+ * 而那正是 `promptVersion` 这个字段存在的唯一理由。
+ *
+ * - `g1`（v5 同期）：`before` 必须与本行逐字相同，否则拒。
+ * - `g2`（2026-10-04）：按 `locateFixTarget` 判「定位成不成立」。
+ */
+export const EDITOR_GATE_VERSION = 'g2';
 
 /**
  * 提示词 JSON 示例里的**占位符**。
@@ -347,8 +434,27 @@ export interface ReviewDecision {
    * 一句空话，而**没有任何字段**能回答「它到底在说和谁重复」。
    */
   drops: Array<{ index: number; kind: string; reason: string; sameAs?: number }>;
-  /** 采纳的文字修正（`index` 是**原索引**） */
-  fixes: Array<{ index: number; field: 'title' | 'summary'; before: string; after: string; why: string }>;
+  /**
+   * 采纳的文字修正（`index` 是**原索引**）。
+   *
+   * `before` 存的是**本行真实的值**（不是模型给的那串）—— 上面 `locateFixTarget` 的注释
+   * 解释了为什么：模型的 `before` 只是定位证据，从不参与写入。所以 `before → after`
+   * 这个对子永远可以按字面理解成「这一行被改成了什么」。
+   *
+   * `how`（g2 起）说明这次定位是靠哪一条成立的：
+   *   · `exact`   —— 模型逐字复制了原文（最强证据，提示词要的就是这个）；
+   *   · `nearest` —— 模型没照抄完整，但它抄的那串在清单里最像本行（g2 新增的放行路径）。
+   * 分出来是为了能回答「提示词里那条『逐字复制』到底还有多少人在遵守」——
+   * 只看 `appliedFixes` 是分不出「照抄了」和「走样了但定位成立」的。
+   */
+  fixes: Array<{
+    index: number;
+    field: 'title' | 'summary';
+    before: string;
+    after: string;
+    why: string;
+    how: 'exact' | 'nearest';
+  }>;
   /** 模型指出「重要但缺图」的原索引 */
   needsImage: number[];
   /**
@@ -371,6 +477,12 @@ export interface ReviewDecision {
 /** 每一条被拒绝的处置都要留痕 —— 否则「模型提了但没生效」完全不可见。 */
 export interface ReviewAudit {
   promptVersion: string;
+  /**
+   * 「改字定位闸」的版本（`g1` 逐字相等 / `g2` 按定位判定）。与 `promptVersion` **分开**记，
+   * 理由见 `EDITOR_GATE_VERSION`：g2 一个字都没动提示词，但两套闸对同一份提示词的输出
+   * 会给出不同的采纳数 —— 不分开放，后人没法拿两轮数据做 A/B。
+   */
+  gateVersion?: string;
   ran: boolean;
   ok: boolean;
   provider?: string;
@@ -814,6 +926,81 @@ function longestQuotedSpan(reason: string, items: ReviewItem[], idx: number): nu
 }
 
 /**
+ * `locateFixTarget` 的结论。
+ *
+ * `pointsAt` 只在「模型其实指的是**别的条目**」时有值 —— 它是这条判据最有价值的产出：
+ * 旧写法报的是「before 与原文不符」，读日志的人（包括我自己）会以为是护栏抽风；
+ * 报出「它抄的其实是第 3 条」才一眼看得出是**模型指错了行**。
+ */
+export type FixLocate =
+  | { ok: true; how: 'exact' | 'nearest' }
+  | { ok: false; reason: string; pointsAt?: number };
+
+/**
+ * 判断「模型说改第 `index` 条」可不可信。判据、实测表、以及为什么不能一票否决
+ * 全在 `FIX_LOCATE_FLOOR` 的注释里。
+ *
+ * `values` 传**全量**条目的该字段（含被删的那些）—— 模型看到的清单就是全量，
+ * 它抄错行时抄的也可能是**被删掉的那条**。
+ */
+export function locateFixTarget(
+  before: string,
+  index: number,
+  values: Array<string | null | undefined>,
+): FixLocate {
+  const a = (before || '').trim();
+  const at = (k: number) => String(values[k] ?? '').trim();
+  const current = at(index);
+
+  // ① 最强证据：逐字相同。
+  if (a === current) return { ok: true, how: 'exact' };
+
+  // ② 它抄的那串是不是**别的某一行**的原文（逐字相同）—— 「改错条目」的铁证。
+  //    这一刀必须**先于**相似度做：10-04 两条幻觉的 otherMax 都是 1.0000，
+  //    而「最高相似度」是个连续量，逐字相等是确定性的。
+  if (a !== '') {
+    for (let k = 0; k < values.length; k++) {
+      if (k === index) continue;
+      if (a === at(k)) {
+        return {
+          ok: false,
+          pointsAt: k,
+          reason: `before 是**第 ${k} 条**的原文（不是第 ${index} 条）⇒ 拒绝（它改的其实是那一条）`,
+        };
+      }
+    }
+  }
+
+  const sim = similarity(a, current);
+  let otherMax = 0;
+  let otherAt = -1;
+  for (let k = 0; k < values.length; k++) {
+    if (k === index) continue;
+    const s = similarity(a, at(k));
+    if (s > otherMax) {
+      otherMax = s;
+      otherAt = k;
+    }
+  }
+
+  // ③ 本行就是清单里最像的那一行 ⇒ 它确实在说这一条，只是没把原文照抄完整。
+  if (sim >= FIX_LOCATE_FLOOR && sim > otherMax) return { ok: true, how: 'nearest' };
+
+  // ④ 分不开的两种：最像别的行（指错行）／谁都不像（报了串来历不明的话）。
+  if (otherMax > sim) {
+    return {
+      ok: false,
+      pointsAt: otherAt,
+      reason: `before 最像**第 ${otherAt} 条**（相似度 ${otherMax.toFixed(4)} > 本行 ${sim.toFixed(4)}）⇒ 拒绝（它指的是那一条）`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `before 既不像本行（相似度 ${sim.toFixed(4)}）也不像清单里任何一条（最高 ${otherMax.toFixed(4)}）⇒ 拒绝（无法定位它要改哪一条）`,
+  };
+}
+
+/**
  * 把模型的原始返回**过闸**成可执行的处置。
  *
  * ⚠️ 这个函数是纯函数（不调模型、不碰 IO），**必须保持纯** ——
@@ -827,7 +1014,14 @@ export function applyVerdict(
 ): { decision: ReviewDecision; audit: ReviewAudit } {
   const n = items.length;
   const rejections: string[] = [];
-  const audit: ReviewAudit = { promptVersion, ran: true, ok: true, itemCount: n, rejections };
+  const audit: ReviewAudit = {
+    promptVersion,
+    gateVersion: EDITOR_GATE_VERSION,
+    ran: true,
+    ok: true,
+    itemCount: n,
+    rejections,
+  };
   // v4：先记「有几条真的带上了原文」。第七件事的全部效力都挂在这个数上 ——
   // 它若为 0，第七件事在提示词里再漂亮也只是文字（见 originalsSeen 的注释）。
   audit.originalsSeen = items.filter((it) => (it.originalExcerpt || '').trim().length > 0).length;
@@ -981,21 +1175,28 @@ export function applyVerdict(
     }
     const current = field === 'title' ? items[idx].title : items[idx].summary;
     const before = typeof o.before === 'string' ? o.before : '';
-    // ⚠️ 必须逐字匹配。这一条是防「模型对错条目」的主要手段：
-    // 它抄的 before 如果对不上，说明它心里的那条和我们以为的那条不是同一条。
-    if (before.trim() !== (current || '').trim()) {
-      // 报错信息里**必须能看出差在哪**。旧写法两边各截 24 字 ——
-      // 2026-10-01 阿塞拜疆那条恰好**前 20 字一模一样**，于是日志长这样：
-      //   「模型抄的是「阿塞拜疆政府吊销了"T-Kredit"和"Fin」，实际是「阿塞拜疆政府吊销了"T-Kredit"和"Fin」」
-      // 两段字面完全相同 ⇒ 读日志的人以为护栏抽风，实际是第 24 字之后才分叉。
-      // 教训与 `orderRaw` 同一条：拒绝信息要留下**能自己判读的原物**，不是它的摘要。
+    // g2（2026-10-04）：这里原来是 `before.trim() !== current.trim()` 一票否决（g1）。
+    // 量到它把「判对但复现不出原文」的也丢了（17 条里 3 条）⇒ 改成判「定位成不成立」。
+    // 判据、实测表、以及为什么幻觉那条仍然挡得住，全在 `FIX_LOCATE_FLOOR` 的注释里。
+    //
+    // ⚠️ 传的是**全量**条目的该字段（含被删的那些）：模型看到的清单就是全量，
+    // 它抄错行时抄的也可能是那条马上要被删掉的稿子。
+    const located = locateFixTarget(
+      before,
+      idx,
+      items.map((it) => (field === 'title' ? it.title : it.summary)),
+    );
+    if (!located.ok) {
+      // 拒绝信息里**必须能自己判读**，两样东西缺一不可：
+      //   · 「它其实指的是哪一条」（g2 新增）—— 幻觉与走样的唯一分界，也是最有价值的一句；
+      //   · 分叉位置 + 两段原物（g1 挣来的，2026-10-01 阿塞拜疆那条**前 20 字一模一样**，
+      //     旧写法两边各截 24 字 ⇒ 日志里两段字面相同，读的人以为护栏抽风）。
       const a = before.trim();
       const b = (current || '').trim();
       let p = 0;
       while (p < a.length && p < b.length && a[p] === b[p]) p++;
-      const at = `第 ${p + 1} 字起分叉`;
       rejections.push(
-        `fixes[${idx}].${field} 的 before 与原文不符（${at}；模型给的「${a.slice(0, 60)}」／实际「${b.slice(0, 60)}」）`,
+        `fixes[${idx}].${field} ${located.reason}｜第 ${p + 1} 字起分叉；模型给的「${a.slice(0, 60)}」／本条实际「${b.slice(0, 60)}」`,
       );
       continue;
     }
@@ -1016,7 +1217,14 @@ export function applyVerdict(
       continue;
     }
     touched.add(key);
-    fixes.push({ index: idx, field, before: current || '', after, why: String(o.why ?? '').slice(0, 120) });
+    fixes.push({
+      index: idx,
+      field,
+      before: current || '',
+      after,
+      why: String(o.why ?? '').slice(0, 120),
+      how: located.how,
+    });
     if (fixes.length >= MAX_FIXES) {
       if (rawFixes.length > MAX_FIXES) rejections.push(`fixes 超过上限 ${MAX_FIXES} 条 ⇒ 只采纳前 ${MAX_FIXES} 条`);
       break;
@@ -1161,6 +1369,9 @@ export const EDITOR_PROBE_EXPECT = {
   orderExample: '[0, 1, 2]',
   original: '原文标题=是 原文正文=是 语言=是 截断标记=是 超长被截=是',
   dupEvidence: '删了 1 条｜无拒绝记录',
+  // g2 的**双向**探针：A 必须拒（且点名第 1 条）、B 必须采纳。
+  // 写死字面量是有意的 —— 它同时是「这个探针还在、且两条路都还对」的哨兵。
+  fixLocate: 'A:拒绝·指第1条 B:采纳(nearest)',
   // 这两条的尾巴里带着量出来的引文长度，所以只钉前缀（`QUOTE_MIN` 改了不该让断言红）
   dropGuardPrefix: '删了 0 条｜drops[1]（not_news）的理由里没有可核对的原文片段',
   notNewsQuotePrefix: '删了 0 条｜drops[1]（not_news）的理由里没有可核对的原文片段',
@@ -1252,12 +1463,38 @@ export function runEditorProbes(): Record<string, string> {
     return `删了 ${r.audit.appliedDrops} 条｜${r.audit.rejections[0] ?? '无拒绝记录（引文闸可能失效了）'}`.slice(0, 140);
   })();
 
+  // ⑥ g2「改字定位闸」的**双向**活体探针（2026-10-04 新增）。
+  //
+  // 为什么必须双向：g1 的教训就是「只证明了**没放过错的**、没证明**没丢掉对的**」。
+  // 所以这一格一次报两条**都取自 10-04 线上真实被拒记录**的用例：
+  //   · A（幻觉）az `fixes[4]`：它的 `before` 是**另一条**的标题 ⇒ 必须拒，且点名第 1 条；
+  //   · B（走样）tj `fixes[5]`：它的 `before` 中间漏了「完成」二字 ⇒ 必须采纳。
+  // 两格都对，才说明这一版**既有放宽、又没把幻觉放进来** —— 只看一格的话，
+  // 一个「什么都不拒」的坏闸和一个「什么都不放」的死闸都能显示成正常。
+  const fixLocate = (() => {
+    const azRows = [
+      '阿塞拜疆混凝土结构产量增长3.4倍，沥青产量下降',
+      '“OPEC+ 阿塞拜疆等七国讨论世界石油市场形势及履行产量承诺”',
+    ];
+    const a = locateFixTarget(azRows[1], 0, azRows);
+    const tj = locateFixTarget(
+      '塔吉克斯坦政府计划在 2026 年播种 611,772 公顷，截至 10 月 25 日已播种 116,648 公顷，完成',
+      0,
+      ['塔吉克斯坦政府计划在 2026 年播种 611,772 公顷，截至 10 月 25 日已完成 116,648 公顷，完成率为 19.2%。这也'],
+    );
+    return (
+      `A:${a.ok ? '❗采纳了（幻觉没挡住）' : `拒绝·指第${a.pointsAt}条`} ` +
+      `B:${tj.ok ? `采纳(${tj.how})` : '❗拒绝（走样没捞回来）'}`
+    );
+  })();
+
   return {
     editorOrderExampleProbe: orderExample,
     editorDropGuardProbe: dropGuard,
     editorOriginalProbe: original,
     editorDupEvidenceProbe: dupEvidence,
     editorNotNewsQuoteProbe: notNewsQuote,
+    editorFixLocateGateProbe: fixLocate,
   };
 }
 

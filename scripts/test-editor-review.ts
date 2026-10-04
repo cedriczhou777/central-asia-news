@@ -16,7 +16,10 @@
  *   ③ 模型整个失败时**一条都不改**（不然「模型今天不行」= 静默丢稿）。
  *
  * ⚠️ 其中最容易被后人删掉的两条，单独说明：
- *   - `fixes` 的 `before` 必须逐字匹配。它是**唯一**能发现「模型改错了条目」的手段。
+ *   - `fixes` 的 `before` 判据。它是**唯一**能发现「模型改错了条目」的手段。
+ *     ⚠️ 2026-10-04（g2）从「逐字匹配」改成「按定位判定」后，这条的**双向**变成了重点：
+ *     既要不放过「抄了别条原文」的（A 类），又要不丢掉「判对但没照抄完整」的（B 类）。
+ *     只测一个方向的话，坏闸和死闸都显示成正常 —— 见三之四节。
  *   - 终审写出的文字必须**通过翻译层那几道闸**（`descendingMultiplePhrases` /
  *     书写系统闸）。否则会出现荒谬的循环：翻译层刚拦下 `下调1.5倍`，总审又写回来。
  */
@@ -28,12 +31,15 @@ import {
   DROP_KINDS,
   DUP_SIM_FLOOR,
   EDITOR_EVIDENCE_PROBE_ITEMS,
+  EDITOR_GATE_VERSION,
   EDITOR_PROBE_EXPECT,
   EDITOR_PROBE_ITEMS,
   EDITOR_PROMPT,
   EDITOR_PROMPT_VERSION,
+  FIX_LOCATE_FLOOR,
   fixRejectReason,
   isEditorReviewEnabled,
+  locateFixTarget,
   MAX_DROPS,
   MAX_DROP_RATIO,
   MAX_FIXES,
@@ -142,6 +148,14 @@ ok(
   '提示词版本号与 v5 对齐（改了提示词必须先改版本号）',
   EDITOR_PROMPT_VERSION === 'v5',
   `现在是 ${EDITOR_PROMPT_VERSION} —— 若你刚改了提示词，请把 EDITOR_PROMPT_VERSION +1 并同步这条断言`,
+);
+// ⚠️ g2 的哨兵。**与上面那条分开**是有意的：g2 一个字都没动提示词，
+// 但换了判据 ⇒ 两轮数据的采纳数不可比。不多记一版，「两次结论不同」就分不清是
+// 换了提示词、换了模型、还是换了闸 —— 那正是 `promptVersion` 这个字段存在的唯一理由。
+ok(
+  '闸版本号与 g2 对齐（改了 `locateFixTarget` 的判据必须先改版本号）',
+  EDITOR_GATE_VERSION === 'g2',
+  `现在是 ${EDITOR_GATE_VERSION} —— 若你刚改了定位判据，请把 EDITOR_GATE_VERSION +1 并同步这条断言`,
 );
 // v4 的触发条件是**用户拿着截图逐条报错**（2026-10-01 晚报）：凭空年份、量级错、
 // 州名错、张冠李戴的国名、标题与正文自相矛盾…… 这些**没有一条**能靠「中文自洽性」查到，
@@ -308,7 +322,7 @@ section('三之三、护栏 · drops 的逐条合规');
   ok('同一条被提了两次 ⇒ 只算一次', r.audit.appliedDrops === 1, JSON.stringify(r.audit));
 }
 
-section('三之四、护栏 · fixes 的 before 必须逐字匹配（防改错条目）');
+section('三之四、护栏 · fixes 的 before 按「定位」判定（g2；防改错条目 + 不再丢掉判对的）');
 
 {
   const items = mkItems(8);
@@ -316,13 +330,89 @@ section('三之四、护栏 · fixes 的 before 必须逐字匹配（防改错�
   const r1 = applyVerdict(items, {
     fixes: [{ index: 4, field: 'title', before: '这行字和原文完全不同', after: '电价降至原来的 1/1.5', why: '改倍数' }],
   });
-  ok('before 与原文不符 ⇒ 拒绝', r1.audit.appliedFixes === 0, JSON.stringify(r1.audit));
-  ok('并留痕说清「模型抄的和实际不是同一条」', r1.audit.rejections.some((x) => x.includes('before 与原文不符')), JSON.stringify(r1.audit.rejections));
+  ok('before 既不像本行也不像别条 ⇒ 拒绝', r1.audit.appliedFixes === 0, JSON.stringify(r1.audit));
+  // g2 起拒绝信息**必须分开报两种**，不能再一律说「与原文不符」——
+  // 那句话把「模型指错了行」和「模型没照抄完整」说成一回事，
+  // 2026-10-04 我自己就是被它误导，把三类不同的东西读成了一类。
+  ok(
+    '并留痕说清是「无法定位」还是「指的是别条」',
+    r1.audit.rejections.some((x) => x.includes('无法定位它要改哪一条')),
+    JSON.stringify(r1.audit.rejections),
+  );
+
+  // ★★ A 类（幻觉）：模型抄的是**另一条的原文逐字** —— 线上实测这种 `otherMax = 1.0000`。
+  //    这是「改错条目」的铁证，必须拒，而且**要点名它其实在改第几条**
+  //    （不点名的话，读日志的人只能看到「对不上」，没法判断是模型错了还是闸门抽风）。
+  const rAlien = applyVerdict(items, {
+    fixes: [{ index: 4, field: 'title', before: items[0].title, after: '电价降至原来的 1/1.5', why: '改倍数' }],
+  });
+  ok(
+    '❗ before 是**别条的原文** ⇒ 拒绝（防把 after 写到错的行上）',
+    rAlien.audit.appliedFixes === 0,
+    JSON.stringify(rAlien.audit),
+  );
+  ok(
+    '❗❗ 并且**点名**它指的是第 0 条（旧写法只会说一句「与原文不符」）',
+    rAlien.audit.rejections.some((x) => x.includes('是**第 0 条**的原文')),
+    JSON.stringify(rAlien.audit.rejections),
+  );
+
+  // ★★ B 类（走样）：模型**确实在改本条**，只是没把原文照抄完整。
+  //    g1 会把它整条丢掉 —— 这正是 2026-10-04 量出来的 3 条真损耗。
+  const trunc = target.title.slice(0, 15);
+  const rNear = applyVerdict(items, {
+    fixes: [{ index: 4, field: 'title', before: trunc, after: '电价降至原来的 1/1.5', why: '改倍数' }],
+  });
+  ok(
+    '❗ 走样但**本行最像** ⇒ 采纳（g1 在这里把判对的丢掉了）',
+    rNear.audit.appliedFixes === 1,
+    `before「${trunc}」⇒ ${JSON.stringify(rNear.audit.rejections)}`,
+  );
+  ok(
+    '并且记下这次定位是 `nearest`（不是照抄）',
+    rNear.decision.fixes[0]?.how === 'nearest',
+    JSON.stringify(rNear.decision.fixes),
+  );
 
   const r2 = applyVerdict(items, {
     fixes: [{ index: 4, field: 'title', before: target.title, after: '电价降至原来的 1/1.5（约低 33%）', why: '改倍数' }],
   });
   ok('before 逐字相同 ⇒ 采纳', r2.audit.appliedFixes === 1, JSON.stringify(r2.audit));
+  ok('并记下这次定位是 `exact`（提示词要的就是这一种）', r2.decision.fixes[0]?.how === 'exact');
+
+  // ---- 纯函数层：直接把判据本身钉住（与上面那条串链分开测）----
+  // 为什么要分开：`applyVerdict` 前面还有 `index` 越界、`field` 合法性、占位符等闸，
+  // 某天有人在前面加一道，这些用例就会**改测别的东西**而仍然全绿。
+  // 本项目踩过同款（把探针写成 duplicate 之后，它被 sameAs 闸接走了，还一直返回「删了 0 条」）。
+  ok(
+    'FIX_LOCATE_FLOOR 钉在 0.15（实测 B 类最低 0.2429 / A 类最高 0.0930，两侧余量都 >60%）',
+    FIX_LOCATE_FLOOR === 0.15,
+    `现在是 ${FIX_LOCATE_FLOOR} —— 调它之前先重量那两类，别凭手感挪`,
+  );
+  const rows = [
+    '阿斯塔纳 Digital Bridge 2026 国际技术论坛第二天在哈萨克斯坦首都阿斯塔纳开幕',
+    '对敖德萨的袭击、里海的风险以及奥姆鲁兹海峡的问题迫使寻找新的路线',
+    '哈萨克斯坦与蒙古政府间委员会第十次会议举行，双方同意发展贸易与交通联系',
+  ];
+  const lExact = locateFixTarget(rows[0], 0, rows);
+  ok('判据层：本行逐字相同 ⇒ exact', lExact.ok === true && lExact.how === 'exact', JSON.stringify(lExact));
+  const lAlien = locateFixTarget(rows[1], 0, rows);
+  ok(
+    '❗ 判据层：抄的是别条原文 ⇒ 拒，且 pointsAt = 1',
+    !lAlien.ok && lAlien.pointsAt === 1,
+    JSON.stringify(lAlien),
+  );
+  const lNear = locateFixTarget(rows[2].slice(0, 14), 2, rows);
+  ok(
+    '❗ 判据层：前 14 字截断 ⇒ 本行最像 ⇒ nearest',
+    lNear.ok === true && lNear.how === 'nearest',
+    JSON.stringify(lNear),
+  );
+  ok('判据层：空 before ⇒ 拒（不许把空串当「没过闸」的漏网）', locateFixTarget('', 2, rows).ok === false);
+  ok(
+    '判据层：清单只有一条时 otherMax = 0，退化情形由 FIX_LOCATE_FLOOR 兜住',
+    locateFixTarget('完全不相干的一串字', 0, ['阿斯塔纳轻轨客流量超 1000 万']).ok === false,
+  );
 
   // 允许首尾空白差异（模型偶尔会带上换行/空格），但不允许内容差异
   const r3 = applyVerdict(items, {
@@ -841,8 +931,13 @@ async function endToEnd(): Promise<void> {
 //   | fixes | kz 1 / az 8 / kg 4 | kz 0 / az 3 / kg 2 | `before` 对不上（加了「摘要：」前缀，或把原句概括了） |
 //   | drops | kz 5 / az 5 | kz 2 / az 1 | `not_news` 的 reason 写的是**概括**，逐字搜不到 |
 //
-// 被拒的每一条，`before` / 引文**确实不是**清单里那串字 —— 说明闸门没误杀，
-// 是模型不知道「逐字」在代码眼里等于「字节级相同」。
+// 被拒的每一条，`before` / 引文**确实不是**清单里那串字 —— 当时据此写下「闸门没误杀」。
+// ⚠️ **2026-10-04（g2）量出那句话是错的**：它只证明了「没放过错的」，
+// 没证明「没丢掉对的」。同一份数据里 5 条被拒的 `fixes` 逐条过相似度后分成三类：
+//   · A 幻觉 2 条 —— before 是**别条的原文逐字**（`otherMax = 1.0000`）⇒ 闸门拦得对；
+//   · B 走样 3 条 —— 同一行，只是压缩/截断/漏字 ⇒ **闸门丢掉了判对的**；
+//   · C drops 的 sameAs 5 条 —— 已核实是模型指错行，不是函数坏了。
+// ⇒ 「没有误杀」这种结论**必须双向测**才能说，只有单向证据时不要写。
 //
 // ⇒ 这类改动**没有可跑的代码路径**（判据没变，行为一模一样），
 //    所以只能钉提示词文本。下面每一条都对着上面某个被拒的真实原因。
@@ -1008,7 +1103,7 @@ section('八、版本指纹（GET 的 codeVersion）');
   // ⚠️ 探针必须是「跑一遍真代码、返回一个字符串」，不是手写的常量：
   // 手写的 `true` 只能证明「有人写过这一行」，不能证明「线上跑的是这版逻辑」。
   ok(
-    '❗ 五个探针**接在** GET 的 codeVersion 上（实现在库里、值从库里现算）',
+    '❗ 探针**接在** GET 的 codeVersion 上（实现在库里、值从库里现算）',
     /\.\.\.runEditorProbes\(\)/.test(src),
     '探针没接上 —— 线上体检会看不到任何判据现状',
   );
@@ -1048,6 +1143,35 @@ section('八、版本指纹（GET 的 codeVersion）');
     '❗ 原文覆盖率能**从线上查**（?db=1 时才真去查库）',
     /originalCoverage/.test(src) && /getArticlesByDateRange\(/.test(src),
     '没有这个口子，「原文喂进去了但库里本来就没原文」完全不可见（originalsSeen 会一直是 0）',
+  );
+
+  // ---- g2（2026-10-04）新增的接线 ----
+  //
+  // 为什么这一版特别需要接线断言：它**一个字都没动提示词**，所以
+  // 「`editorPromptVersion` 变没变」**不能**用来判断它上没上线。
+  // 也就是说旧指纹对它完全失明 —— 这正是技能里那条
+  // 「新加的行为开关必须自己带一个可观测指纹」的教科书情形。
+  ok(
+    '❗❗ g2 的闸版本号进了线上指纹（提示词没改，所以老指纹对它失明）',
+    /editorGateVersion:\s*EDITOR_GATE_VERSION/.test(src),
+    '闸版本没进指纹 ⇒ 「新闸没上线」和「上线了但没放宽」永远分不开',
+  );
+  ok(
+    '❗ g2 的定位闸探针是**跑真判据**出来的字符串，不是手写的布尔',
+    /export const EDITOR_GATE_VERSION/.test(editorSrc) &&
+      /editorFixLocateGateProbe/.test(editorSrc) &&
+      /locateFixTarget\(/.test(editorSrc),
+    '写成 `fixLocateGate: true` 的话，闸被删掉之后它依然是 true，照样把排查引到错路上',
+  );
+  ok(
+    '`fixes` 的定位方式（exact/nearest）随结果一起带出来（能看到提示词的「逐字复制」还剩下多少人在遵守）',
+    /how:\s*located\.how/.test(editorSrc) && /how:\s*f\.how/.test(src),
+    '不记的话，「照抄了」和「走样了但定位成立」在审计里长得一模一样',
+  );
+  ok(
+    '闸版本也会出现在 review[].gateVersion（异常路径同样是 unknown，不是省略）',
+    /gateVersion:\s*EDITOR_GATE_VERSION/.test(editorSrc) && /gateVersion:\s*'unknown'/.test(src),
+    '异常那一轮没走到判据，留 unknown 才能和「读不到字段」区分开',
   );
   ok(
     '原文覆盖率默认必须是「未查询」这种字符串（探活不能被数据库拖慢，也不能写死 true）',
@@ -1641,6 +1765,19 @@ section('十二、活体探针（期望值可达性）');
     '抄示例探针仍以**引文闸**为由拒绝（kind 必须是 not_news，走 duplicate 会改测 sameAs 闸）',
     probes.editorDropGuardProbe.startsWith(EDITOR_PROBE_EXPECT.dropGuardPrefix),
     `实际「${probes.editorDropGuardProbe}」`,
+  );
+  // ★★ g2：**双向**探针。只钉一格的话，「什么都不拒」的坏闸和「什么都不放」的死闸
+  //     都会显示成正常 —— g1 的教训正是「只证明了没放过错的、没证明没丢掉对的」。
+  ok(
+    '❗❗ g2 定位闸探针 = 「A 拒（且点名第 1 条）+ B 采纳」（双向都必须对）',
+    probes.editorFixLocateGateProbe === EDITOR_PROBE_EXPECT.fixLocate,
+    `实际「${probes.editorFixLocateGateProbe}」—— 若 A 变成「采纳了」说明幻觉放行了；` +
+      `若 B 变成「拒绝」说明放宽没生效（提示词改了却忘了同步这条期望值？）`,
+  );
+  ok(
+    'g2 探针的 A 那一格**点出了**它其实指第 1 条（旧写法只会说「与原文不符」）',
+    probes.editorFixLocateGateProbe.includes('指第1条'),
+    probes.editorFixLocateGateProbe,
   );
 
   // ---- (3) 语义断言：探针不能被悄悄换成测另一件事 ----

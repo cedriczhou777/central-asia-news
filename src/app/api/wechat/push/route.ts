@@ -19,6 +19,7 @@ import {
   reviewDraft,
   planCoverBorrows,
   EDITOR_PROMPT_VERSION,
+  EDITOR_GATE_VERSION,
   DUP_SIM_FLOOR,
   MAX_DROPS,
   MAX_FIXES,
@@ -425,8 +426,15 @@ interface PushReview extends ReviewAudit {
     /** 上面那个索引对应的标题 —— 写出来是为了让人**不用回数据库**就能核对它指得对不对 */
     sameAsTitle?: string;
   }>;
-  /** 被总审改过文字的字段 */
-  fixes: Array<{ field: string; before: string; after: string; why: string }>;
+  /**
+   * 被总审改过文字的字段。
+   *
+   * `how`（g2 起，与 `@/lib/editor-review` 的 `ReviewDecision['fixes']` 同款）说明这次
+   * 定位是靠哪一条成立的：`exact` = 模型逐字复制了原文，`nearest` = 没照抄完整、
+   * 但它抄的那串在清单里最像本行。**分出来是为了能回答「提示词里那条『逐字复制』
+   * 还有多少人在遵守」** —— 只看条数是分不出「照抄了」和「走样了但定位成立」的。
+   */
+  fixes: Array<{ field: string; before: string; after: string; why: string; how?: 'exact' | 'nearest' }>;
   /**
    * 总审指出「值得读者点开看、但一张图都没有」的标题。
    *
@@ -792,6 +800,12 @@ export async function GET(request: NextRequest) {
       editorReviewDefault: isEditorReviewEnabled(),
       /** 终审提示词版本 —— 改 `EDITOR_PROMPT` 时必须一起改它 */
       editorPromptVersion: EDITOR_PROMPT_VERSION,
+      /**
+       * g2：「改字定位闸」的版本。与 `editorPromptVersion` **分开**报 ——
+       * g2 一个字都没动提示词，但两套闸对同一份提示词的采纳数不同，
+       * 不分开放就没法拿两轮数据做 A/B（详见 `EDITOR_GATE_VERSION` 的注释）。
+       */
+      editorGateVersion: EDITOR_GATE_VERSION,
       /** 终审护栏上限（调参后可以从这里确认线上拿到的是新值） */
       editorGuards: {
         maxDrops: MAX_DROPS,
@@ -838,8 +852,10 @@ export async function GET(request: NextRequest) {
        * 入参是线上真实命中（id=6658 正文）。
        */
       cyrillicNoteStripProbe: stripCyrillicParentheticals('吉尔吉斯斯坦国家税务局（ГНС）'),
-      // v3 + v4 的五个活体探针：实现在 `@/lib/editor-review` 的 `runEditorProbes()`，
+      // v3 + v4 + g2 的**六个**活体探针：实现在 `@/lib/editor-review` 的 `runEditorProbes()`，
       // 期望值在 `EDITOR_PROBE_EXPECT`，且**期望值可达**由离线回归第十二节断言。
+      // g2 新增的 `editorFixLocateGateProbe` 是**双向**的（一条必须拒、一条必须采纳）——
+      // 只看单向的话，「什么都不拒」的坏闸和「什么都不放」的死闸都会显示成正常。
       ...runEditorProbes(),
     },
     // 上一轮推送的状态。调度器靠 running / finishedAt 判断「推完了没」；
@@ -1157,6 +1173,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           console.error(`[${pc.country.name}] 总审异常，本轮不改动该国任何内容：`, err);
           audit = {
             promptVersion: 'unknown',
+            // 版本号在异常路径上也要留痕：这一轮**没走到判据**，所以既不是 v5 也不是 g2。
+            // 留空串而不是省略，是为了让「读不到 gateVersion」和「gateVersion 是空」区分开。
+            gateVersion: 'unknown',
             ran: false,
             ok: false,
             error: msg,
@@ -1180,8 +1199,13 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
             if (!target) continue;
             if (f.field === 'title') target.title = f.after;
             else target.summary = f.after;
-            fixes.push({ field: f.field, before: f.before, after: f.after, why: f.why });
-            console.log(`[${pc.country.name}][总审改字] ${f.field}：「${f.before}」→「${f.after}」（${f.why}）`);
+            fixes.push({ field: f.field, before: f.before, after: f.after, why: f.why, how: f.how });
+            console.log(
+              `[${pc.country.name}][总审改字] ${f.field}：「${f.before}」→「${f.after}」（${f.why}）` +
+                // 定位方式是「照抄」还是「走样但定位成立」，日志里也要能看出来 ——
+                // 前者变少说明提示词的「逐字复制」在退化，那是个**预警**，不是单纯的统计。
+                `｜定位=${f.how}`,
+            );
           }
           // 「借图」的捐赠者必须在这里抓 —— 下面重排/剔除之后，这些对象就不在数组里了。
           const donors: Array<{ title: string; imageUrl: string }> = [];
