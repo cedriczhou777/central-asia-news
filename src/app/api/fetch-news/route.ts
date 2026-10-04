@@ -938,6 +938,32 @@ async function processFetchNews(
             if (resolveArticleCountry(t, d, source.country) !== country) continue;
             if (!isCountryRelevant(t, d, country, source.country)) continue;
 
+            // ★ 兜底路径**必须和第一轮走同一套补正文**（2026-10-02 补）。
+            //
+            // 为什么这条不能省：漏了它的后果与本项目反复踩的
+            // 「同一条判据在两处各写一份、其中一处漏了」**完全一样**，而且更隐蔽 ——
+            //   兜底抓回来的条目正文仍然是空的 ⇒ 翻译照跑、模型照编 ⇒
+            //   推送侧的第 0 条闸再把它挡掉 ⇒
+            //   **「兜底保证每国至少 N 篇」这个机制被静默架空**：
+            //   日志上只会看到「本国候选不足，已兜底补充 N 篇」，而最后一条也没推出去。
+            // 兜底**刻意不过** `isInvestmentRelevant`（它的存在就是为了在投资相关不足时
+            // 用最新新闻把配额填满），所以这里只补正文、不加别的过滤。
+            const fbBody = await backfillBody(d, item.link);
+            // 计数挂在**这个源那一行**上（兜底循环里没有 `result` 变量，
+            // 而它抓的正是同一个源的 feed ⇒ 按 source+country 找回那一行）。
+            const fbOwner = results.find(
+              (r) => r.source === source.name && r.country === source.country,
+            );
+            if (!fbBody) {
+              if (fbOwner) fbOwner.droppedNoBody++;
+              continue;
+            }
+            if (fbBody.backfilled) {
+              item.contentSnippet = fbBody.text;
+              item.content = fbBody.text;
+              if (fbOwner) fbOwner.bodyBackfilled++;
+            }
+
             selectedCandidates.push({
               item,
               source,

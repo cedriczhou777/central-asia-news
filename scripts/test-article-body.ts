@@ -40,6 +40,8 @@ import {
   sourceBodyLength,
 } from '../src/lib/article-body';
 import { pushExclusionReason, type PushExclusion } from '../src/lib/article-format';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 let passed = 0;
 const failures: string[] = [];
@@ -424,6 +426,83 @@ section('七、与推送侧的契约（`PushExclusion` 里必须有 no_source_bo
     pushExclusionReason({ title: '哈萨克斯坦铁路项目开工', content: zhBody, category: 'economy' }, 'kz') !==
       'no_source_body',
     '把它挪进 pushExclusionReason ⇒ dedupe-check 用 as never 调用时会把全部稿子静默判掉',
+  );
+}
+
+// ============================================================
+// 八、接线断言：**每一条抓取路径**都得走补正文，一条都不能漏
+// ============================================================
+//
+// ⚠️ 这一节是**源码断言**，不是行为断言 —— 因为「漏接一处」的失效方式
+// 恰恰是行为上看不出来的：漏掉的那条路径照样能抓、照样能翻、照样能入库，
+// 只是正文是空的，然后被推送侧的第 0 条闸挡掉。
+//
+// 2026-10-02 实测踩到过：`fetch-news` 有三条抓取路径
+// （① RSS 主循环 ② Telegram ③ **国家配额不足时的「最新新闻兜底」**），
+// 我给前两条接了 `backfillBody`，**漏了第三条**。而第三条正是 kg / tj 那类
+// 「投资相关常年不足、靠兜底才有稿子」的国家唯一的来源 ——
+// 漏了它等于把「兜底保证每国至少 N 篇」这个机制静默架空：
+// 日志上写着「已兜底补充 N 篇」，最后一条也推不出去。
+
+section('八、接线断言（三条抓取路径都必须补正文；推送侧必须有第 0 条闸）');
+
+{
+  const fetchSrc = readFileSync(resolve(__dirname, '../src/app/api/fetch-news/route.ts'), 'utf8');
+  const pushSrc = readFileSync(resolve(__dirname, '../src/app/api/wechat/push/route.ts'), 'utf8');
+
+  // 取回/抽取的实现只此一份（在 `article-body.ts` 里）；fetch-news 只有一个
+  // 薄壳 `backfillBody` 负责「决定要不要抓 + 抓完喘口气 + 记账」。
+  // 出现第二份「自己解析正文」的实现，就是分叉的开始。
+  ok(
+    '抓取实现从 article-body 导入（不是在本文件里再写一份抽取逻辑）',
+    fetchSrc.includes("from '@/lib/article-body'") && /import\s*\{[\s\S]*?fetchArticleBody[\s\S]*?\}\s*from\s*'@\/lib\/article-body'/.test(fetchSrc),
+    "fetch-news 没有从 '@/lib/article-body' 导入 fetchArticleBody",
+  );
+  ok(
+    '补正文的薄壳只有一处定义（三处调用、一份实现）',
+    (fetchSrc.match(/async function backfillBody\s*\(/g) || []).length === 1,
+    `找到 ${(fetchSrc.match(/async function backfillBody\s*\(/g) || []).length} 处定义`,
+  );
+
+  // 路径 ②：Telegram
+  const tgStart = fetchSrc.indexOf('Telegram/');
+  ok('（切片自检）切得出 Telegram 路径', tgStart > 0);
+  const tgSlice = fetchSrc.slice(tgStart, tgStart + 4000);
+  ok('Telegram 路径接了补正文', tgSlice.includes('backfillBody'));
+
+  // 路径 ③：国家配额兜底 —— **这条就是 2026-10-02 漏掉的那条**
+  const fbStart = fetchSrc.indexOf('将用最新新闻补充');
+  ok('（切片自检）切得出「最新新闻兜底」路径', fbStart > 0);
+  const fbSlice = fetchSrc.slice(fbStart, fetchSrc.indexOf('补充抓取失败', fbStart) + 200);
+  ok(
+    '❗❗ 国家配额兜底路径也接了补正文（漏了它＝兜底机制静默架空）',
+    fbSlice.includes('backfillBody'),
+    '「candidates < minPerCountry 就用最新新闻补充」这条路径又漏了补正文 —— 兜底回来的条目正文是空的，' +
+      '翻译会照标题编，然后被推送侧第 0 条闸整条挡掉',
+  );
+  ok('兜底路径的补抓/丢弃也记账（挂在同一个源那一行上）', fbSlice.includes('droppedNoBody') && fbSlice.includes('bodyBackfilled'));
+
+  // 路径 ①：RSS 主循环。锚点用 `result.droppedTopic++` ——
+  // 它是主循环里**独有**的写法（兜底路径刻意不过 isInvestmentRelevant、
+  // Telegram 路径也不用 result.droppedTopic），比用 `isInvestmentRelevant` 稳
+  // （后者在 import / 注释 / 函数定义处都会出现，容易切错地方变成恒真断言）。
+  const mainStart = fetchSrc.indexOf('result.droppedTopic++');
+  ok('（切片自检）切得出 RSS 主循环', mainStart > 0);
+  const mainSlice = fetchSrc.slice(mainStart, mainStart + 1200);
+  ok('RSS 主循环接着就报了 droppedNoBody（说明补正文在那个位置）', mainSlice.includes('result.droppedNoBody++'));
+  ok('RSS 主循环接了补正文', mainSlice.includes('backfillBody'));
+
+  // 推送侧：没有第 0 条闸的话，上面三条路径白接（存量行照样会推出编的内容）
+  ok(
+    '❗❗ 推送侧有第 0 条闸（无原文正文一律不推）',
+    /hasSourceBody\(\s*article\.original_content\s*\)/.test(pushSrc),
+    '找不到 `hasSourceBody(article.original_content)` —— 这道闸被删了的话，库里没有原文的行会照常推送',
+  );
+  ok('第 0 条闸记的账是本模块导出的那个原因名', pushSrc.includes("excludedByReason.no_source_body"));
+  ok(
+    '❗ 第 0 条闸**跑在** pushExclusionReason 之前（顺序反了会先被别的判据抢走归属）',
+    pushSrc.indexOf('hasSourceBody(article.original_content)') <
+      pushSrc.indexOf('const reason = pushExclusionReason(article, country.code)'),
   );
 }
 

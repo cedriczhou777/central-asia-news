@@ -370,6 +370,12 @@ export async function GET(request: NextRequest) {
       /**
        * 上面那些是**按什么原因**挡掉的（`untranslated` / `category` / `missing_source` / `country`）。
        *
+       * ⚠️ 这里**不会有** `no_source_body`（第 5 个排除原因）：它由 push 路由的
+       * 第 0 条闸产出，而本接口是拿 `as never` 调 `pushExclusionReason` 的 ——
+       * 它连 `original_content` 都拿不到。**这是刻意的**：那条闸一旦挪进
+       * `pushExclusionReason`，这里会把**每一行**判掉，而且是静默的
+       * （见 `PushExclusion` 的注释与 `test-article-body.ts` 第七节的反向断言）。
+       *
        * 为什么要把明细报出来：判据链已经因为「只补一部分」栽过两次
        * （漏了选稿三条判据、漏了 `isChineseText`）。只报总数时，
        * 「补漏有没有补全」只能靠读代码相信；报了明细就能直接核对
