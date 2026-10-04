@@ -79,8 +79,38 @@
  */
 
 import { askLlmJson } from './translate';
-import { PAIR_CANDIDATE_MIN_SIM } from './same-event';
 import { similarity, mixedScriptTokens, mixedScriptTokensLatin, mixedScriptTokensLatinCapitalized, descendingMultiplePhrases } from './utils';
+
+/**
+ * 「借图」配对用的标题相似度下限 —— **故意与 `same-event` 的召回下限分开。**
+ *
+ * ## 为什么不能复用 `PAIR_CANDIDATE_MIN_SIM`（2026-10-05 拆开）
+ *
+ * 那个常量 2026-10-05 从 0.35 降到了 **0.20**（理由见 `same-event.ts` 的长注释：
+ * 线上 39 条 az 稿子只召回到 1 对候选，模型根本没被问到几对）。
+ * 但**借图不能跟着降**，两道闸的职责完全不同：
+ *
+ * | | 召回（`candidatePairs`） | 借图（`planCoverBorrows`） |
+ * |---|---|---|
+ * | 判错的后果 | 多问一对、多花一点 token；模型还会自己判否 | **把 A 新闻的照片配到 B 新闻上** —— 事实错误 |
+ * | 有没有第二道闸 | **有**：模型逐对二选一 | **没有**：`sim ≥ 下限` 就直接挪用 |
+ *
+ * 也就是说：召回侧的下限是「**值得问一下**」的门槛，可以低；
+ * 借图侧的下限是「**直接采信它们是同一件事**」的门槛，必须高。
+ * 借图那边唯一的既成判断是「总审把捐赠者当 duplicate 删掉了」，
+ * 而下限是这条判断之外**唯一**的护栏 —— 它一松，配错图就没人兜得住了。
+ *
+ * ## 0.35 这个值本身
+ *
+ * 它与 `same-event` 注释里那批**已被真实语料回测过**的锚点同源
+ * （人名音译差异 0.37 / 数字有出入 0.43）。⚠️ 别改成「跟着召回下限走」——
+ * 2026-09-29 的教训是 `crossCountryOverlaps` 的阈值当初拍了个 0.5，
+ * 恰好把唯一那条真实锚点（0.4595）漏掉。**阈值不能拍，也不能跨职责复用。**
+ *
+ * 这个常量同时被 `/api/wechat/push` 的 `codeVersion.coverBorrowMinSim` 报出来 ——
+ * 于是「线上跑的借图下限是多少」是一次 curl 就能查到的事实，不用读代码。
+ */
+export const COVER_BORROW_MIN_SIM = 0.35;
 
 /**
  * `EDITOR_REVIEW` 是否打开总审。**默认开**，只有显式 `off` / `0` / `false` 才关。
@@ -269,9 +299,11 @@ export type DropKind = (typeof DROP_KINDS)[number];
  * | 假重复 `tj` 「费尔干纳和平论坛」（模型指的第 2 条）←→「美国协助…返乡移民战略」 | **0.1020** | 挡下 |
  *
  * 取 0.15：低于**最难的那对真锚点**（0.2188）留出余量，高于**已知的假锚点**（0.1020）。
- * ⚠️ 为什么不用 `PAIR_CANDIDATE_MIN_SIM`（0.35）：那是**候选生成**的下限，
- * 而这里要判的是「模型已经认定它们是一件事」—— 用 0.35 会把真锚点 0.2188 挡掉，
- * 等于让这道闸去否决正确答案。**两道闸的职责不同，阈值就不能复用。**
+ * ⚠️ 为什么不用召回下限（`PAIR_CANDIDATE_MIN_SIM`，2026-10-05 起是 0.20）：那是
+ * **候选生成**的下限，而这里要判的是「模型已经认定它们是一件事」——
+ * 用 0.35 会把真锚点 0.2188 挡掉，等于让这道闸去否决正确答案；
+ * 而用 0.20 又太松（它比真锚点还低）。**三道闸（召回 / 判为同一件事 / 借图）
+ * 职责各不同，阈值就不能复用。**
  *
  * ⚠️ **已知残余缺口**（量出来就得写下来）：那 5 条误删里，`uz` 与同批某条的
  * 最高相似度是 0.1667 —— **高于这个下限**。所以单靠相似度挡不住它；
@@ -1568,12 +1600,17 @@ export interface CoverBorrow {
  * 3. **只挪封面，不动正文，绝不生成图、绝不搜图库。**（`article-format.ts` 现在
  *    正是把 unsplash/picsum 当**编造图**在拦。）
  *
- * ## 阈值用的是既有的 `PAIR_CANDIDATE_MIN_SIM`，不是新拍的
+ * ## 阈值用的是 {@link COVER_BORROW_MIN_SIM}（0.35），**不是**召回下限
  *
- * 配对用 `similarity(标题)`，下限直接复用 `same-event.ts` 里那个**已被真实语料回测过**的
- * 0.35（它的注释里列了「人名音译差异 0.37 / 数字有出入 0.43」这些最难的锚点）。
+ * 配对用 `similarity(标题)`，下限取 0.35 —— 与 `same-event` 注释里那批
+ * **已被真实语料回测过**的锚点同源（人名音译差异 0.37 / 数字有出入 0.43）。
+ *
+ * ⚠️ **2026-10-05 起它不再复用 `PAIR_CANDIDATE_MIN_SIM`**：那个常量降到了 0.20
+ * （召回侧只要「值得问一下」，模型还会判否），而借图**没有第二道闸** ——
+ * 松到 0.20 就等于「标题有两成像就把图挪过去」。理由写在 `COVER_BORROW_MIN_SIM` 上。
+ *
  * ⚠️ 这条纪律来自 2026-09-29 的教训：`crossCountryOverlaps` 的阈值当初拍了个 0.5，
- * 恰好把唯一那条真实锚点（0.4595）漏掉。**阈值不能拍。**
+ * 恰好把唯一那条真实锚点（0.4595）漏掉。**阈值不能拍，也不能跨职责复用。**
  *
  * ## 为什么**不**做跨国（实测过，不是省事）
  *
@@ -1589,7 +1626,7 @@ export function planCoverBorrows(args: {
   donors: Array<{ title: string; imageUrl: string }>;
   minSim?: number;
 }): CoverBorrow[] {
-  const minSim = args.minSim ?? PAIR_CANDIDATE_MIN_SIM;
+  const minSim = args.minSim ?? COVER_BORROW_MIN_SIM;
   const taken = new Set<number>();
   const out: CoverBorrow[] = [];
 

@@ -26,12 +26,14 @@
  * 而「仅跨国」只多 **2 篇（1%）**。
  * ⇒ 这个数字直接决定了「不做跨国路径」这个决定，也决定了「别把缺图率下降当成疗效指标」。
  *
- * ⚠️ 这里算的是**上限**：判据只用 `PAIR_CANDIDATE_MIN_SIM` 的标题相似度，
+ * ⚠️ 这里算的是**上限**：判据只用 `COVER_BORROW_MIN_SIM` 的标题相似度，
+ * （⚠️ 2026-10-05 起它与召回下限 `PAIR_CANDIDATE_MIN_SIM` **不是同一个值** ——
+ *   召回降到 0.20、借图仍是 0.35。本脚本量的是**借图**，所以必须用前者。）
  * 真正采纳还要总审**确实把重复那条删掉**（`kind === 'duplicate'`）。
  */
 import { readFileSync } from 'fs';
 import { similarity } from '../src/lib/utils';
-import { PAIR_CANDIDATE_MIN_SIM } from '../src/lib/same-event';
+import { COVER_BORROW_MIN_SIM } from '../src/lib/editor-review';
 
 type A = { id: number; title: string; content: string | null; country: string };
 
@@ -71,7 +73,7 @@ for (const a of noImg) {
   const best = (pool: A[]) =>
     pool
       .map((b) => ({ b, s: similarity(a.title, b.title) }))
-      .filter((x) => x.s >= PAIR_CANDIDATE_MIN_SIM)
+      .filter((x) => x.s >= COVER_BORROW_MIN_SIM)
       .sort((x, y) => y.s - x.s)[0];
 
   const same = best(withImg.filter((b) => b.country === a.country));

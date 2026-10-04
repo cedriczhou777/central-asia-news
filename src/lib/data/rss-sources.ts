@@ -41,7 +41,40 @@
  * - 被 Cloudflare 拦、从本机返回 403 的阿塞拜疆媒体**别加**：
  *   azernews.az / oxu.az / 1news.az / minval.az / news.day.az / musavat.com / report.az。
  *   （2026-09-19 补测：abc.az / turan.az / news.az / sfera.az 均 404；
- *   interfax.az / aze.media 不可达。）
+ *   interfax.az / aze.media 不可达。
+ *   2026-10-05 又测了 7 个，**全军覆没**：`caliber.az/rss`、`azvision.az/rss`、
+ *   `baku.ws/rss` 三个 **403**（Cloudflare）；`qaynarinfo.az/feed/` XML 畸形、
+ *   `yeniavaz.com/rss` 返回网页、`news.milli.az/rss` 404；
+ *   `azerbaycan24.com/rss` 本机 25s 超时（未定论）。）
+ *
+ * ## ★ 2026-10-05 az 入源的最终结论：**不加，且不是「先不加」**
+ *
+ * 用户第 5 条要求「阿塞拜疆主流媒体入源（5 个已知盲源，现在靠补正文兜着）」。
+ * 这一条按**实测**收口，理由是三条独立的证据，缺一条都不够：
+ *
+ *  ① **候选侧：没有可加的源。** 又测 7 个 az 站点，可用 0 个（见上段）。
+ *     2026-09-24 起已测过的 az 站点累计 16 个，**一个都没通过**。
+ *  ② **现网侧：az 并不缺稿。** 2026-10-05 干跑（`POST {"skipTranslation":true}`）
+ *     实测 az `fetched=335 / afterDate=221 / candidates=41`，候选数**全项目第二**
+ *     （49 kz > 41 az > 36 uz > 22 kg > 9 tj）。它不缺源。
+ *  ③ **正文侧：盲源已经被补上了，不是「兜着」。** 同一次干跑 az
+ *     **`droppedNoBody = 0`**、`bodyBackfilled = 26` —— 那 5 个盲源
+ *     （AZERTAC en/ru、Trend.az、APA、Qafqazinfo）逐源 backfilled 5/6/7/3/5，
+ *     **没有一条**因为「没正文」被丢。
+ *
+ * ⚠️ 这里要纠正一个**读数**（AGENTS P-1 的「az 条目有正文的比例只有 18%」）：
+ * 那个 18% 说的是 **RSS 自己带的正文**（`hasSourceBody(contentSnippet || content)`），
+ * 是「feed 的属性」；而**漏斗结果**是 `droppedNoBody = 0`。
+ * 两者不矛盾 —— 中间的差就是 `article-body.ts` 的补抓。
+ * 也就是说盲源的代价是**每轮多 26 次页面抓取**（且要赌源站不挡），**不是丢稿**。
+ * 判据必须用后者：**别再用「RSS 正文率低」当「az 缺稿」的证据。**
+ *
+ * 收口条件（哪天可以推翻：「az 不再加源」不是信仰，是可证伪的）：
+ * 任一次干跑出现 az `droppedNoBody > 0` 且 `bodyBackfilled` 明显补不上，
+ * 或者 az `candidates` 掉到与 tj 同档（个位数），才重新开候选清单。
+ * 在那之前，给 az 加源的唯一效果是**把用户抱怨的重复再放大**。
+ * 另：`pnpm probe:feeds az` 会顺带报每个候选「自己带不带正文」，
+ * 只有「自带正文」的源才可能替得掉盲源 —— 只看条目数的源一律不收。
  *
  * ## 2026-09-24 大批量候选探测（`pnpm probe:feeds`，31 个候选）
  *
@@ -132,6 +165,12 @@ export const RSS_SOURCES: RSSSource[] = [
   // （同一条 Unibank 绿色信贷被三家 az 媒体各写一篇）**正是多源的产物**。
   // 给 az 加源只会让 L2 的漏合并更显眼，不会减少重复。
   // → 结论：**先修去重，再扩源**；扩源要挑真正薄的国家（tj / uz），不是均匀铺。
+  //
+  // ★ 2026-10-05 定案（用户第 5 条「5 个已知盲源」）：维持不加，**已用实测收口**。
+  // 三条证据：① 新测 7 个 az 站点可用 0 个（累计 16 个全灭，见文件头）；
+  // ② az 干跑候选 41 条，全项目第二，不缺稿；
+  // ③ az `droppedNoBody=0` / `bodyBackfilled=26` —— 5 个盲源全被补抓兜住，**没丢稿**。
+  // 详见文件头「2026-10-05 az 入源的最终结论」。
   { name: 'AZERTAC', url: 'https://azertag.az/en/rss', country: 'az', language: 'en' },
   { name: 'AZERTAC (ru)', url: 'https://azertag.az/ru/rss', country: 'az', language: 'ru' },
   { name: 'Trend.az', url: 'https://www.trend.az/rss/', country: 'az', language: 'en' },

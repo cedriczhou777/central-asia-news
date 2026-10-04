@@ -53,7 +53,10 @@
  * 混在一起查会查错方向。
  */
 import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint, buildPrompt } from '../src/lib/translate';
+import { COUNTRY_CURRENCY } from '../src/lib/proper-nouns';
 import { RSS_SOURCES } from '../src/lib/data/rss-sources';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 // ----- 极简断言（与其它 scripts/test-*.ts 同款，便于一起读输出）-----
 
@@ -432,7 +435,7 @@ for (const en of ['Astana', 'Almaty', 'Bishkek', 'Dushanbe', 'Baku', 'Khujand'])
 
 section('三、结构性不变量');
 
-for (const ph of ['{LANG}', '{TITLE}', '{CONTENT}', '{CATEGORIES}', '{COUNTRY}']) {
+for (const ph of ['{LANG}', '{TITLE}', '{CONTENT}', '{CATEGORIES}', '{COUNTRY}', '{CURRENCIES}']) {
   ok(`占位符 ${ph} 仍在（缺了就原样发给模型）`, P.includes(ph));
 }
 
@@ -463,6 +466,40 @@ for (const ph of ['{LANG}', '{TITLE}', '{CONTENT}', '{CATEGORIES}', '{COUNTRY}']
   ok(
     '换一个国名能渲染出对应的值（不是硬编码）',
     other.includes('这篇稿子来自：哈萨克斯坦') && !other.includes('这篇稿子来自：吉尔吉斯斯坦'),
+  );
+}
+
+// ★★ `{CURRENCIES}` 是 2026-10-05 新增的（用户反复报的术语错：阿塞拜疆写坚戈、
+// 吉尔吉斯写苏姆、甚至「吉尔吉斯坚戈」）。
+//
+// ⚠️ 它的特殊性在于：**这张表是代码生成的，闸门读同一张表**。
+// 老提示词里只有一句平铺枚举「坚戈、马纳特、苏姆、美元」——
+// 连「索姆」「索莫尼」都没有，模型当然会拿它见过的「苏姆」去填吉尔吉斯斯坦
+// （线上实测 7 天 21 篇）。所以下面这些断言钉的是**「表进了提示词、且逐国正确」**。
+{
+  const rendered = buildPrompt('Тест', 'Содержание', 'ky', '吉尔吉斯斯坦');
+  ok('❗ 渲染后不留 `{CURRENCIES}`', !rendered.includes('{CURRENCIES}'));
+  for (const [code, spec] of Object.entries(COUNTRY_CURRENCY) as Array<
+    [string, { zh: string; code: string }]
+  >) {
+    ok(
+      `货币表注入后含「${spec.zh}（${spec.code}）」（${code}）`,
+      rendered.includes(`${spec.zh}（${spec.code}）`),
+      '表没注入 ⇒ 模型又只能靠猜',
+    );
+  }
+  ok(
+    '❗ 注入的是**生成式**的表（与闸门同源，不是手写在模板里）',
+    /\.replace\('\{CURRENCIES\}', currencyPromptTable\(\)\)/.test(
+      readFileSync(resolve(process.cwd(), 'src/lib/translate.ts'), 'utf8'),
+    ),
+    '手写的表迟早与 `COUNTRY_CURRENCY` 分叉 ⇒ 提示词说 A、闸门按 B 判，每篇都过不了闸',
+  );
+  ok('提示词写了「原文里是什么货币就写什么货币」', rendered.includes('原文里是什么货币就写什么货币'));
+  ok('提示词禁掉了「吉尔吉斯斯坦坚戈」这类拼接货币', rendered.includes('不存在的货币名'));
+  ok(
+    '❗ 提示词把「苏丹」讲成了元首称号（不是国家）',
+    rendered.includes('苏丹') && /元首称号/.test(rendered) && rendered.includes('苏丹国王'),
   );
 }
 
@@ -714,6 +751,66 @@ ok(
 
 // 空 reject（理论上的兜底）不得吐出一段没有信息的文案
 ok('没有任何问题时指令为空串（不是一段空话）', buildRepairHint({ kind: 'half-translated', tokens: [] }) === '');
+
+// ============================================================
+// 八、术语类的修正指令（2026-10-05 加）
+// ============================================================
+//
+// ⚠️ 这一块的写法与上面两块**刻意不同**：给的是**机械的 wrong→right 替换指令**，
+// 而不是「请重写一遍」。因为货币错是**系统性**的（模型不知道吉尔吉斯斯坦用索姆），
+// 泛泛的话对它无效。下面这些断言钉的就是「它到底说清了没有」。
+
+section('八、术语类的修正指令');
+
+{
+  const hintCur = buildRepairHint({
+    kind: 'currency-mismatch',
+    tokens: [],
+    currency: {
+      own: '索姆',
+      ownCode: 'KGS',
+      foreign: [{ word: '苏姆', country: 'uz', zh: '苏姆', code: 'UZS' }],
+      reason: '探针用',
+    },
+  });
+  ok('货币类：点名了本条所属国的货币', hintCur.includes('索姆'), hintCur.slice(0, 120));
+  ok('货币类：点名了被写错的那个词', hintCur.includes('苏姆'));
+  ok('❗ 货币类：给的是替换指令（「替换成」），不是「请重写」', hintCur.includes('替换成'));
+  ok('货币类：强调「每一处」都替换（不能只改标题）', hintCur.includes('每一处'));
+  ok('货币类：提醒不许因为不熟就换掉原文的货币', /原文写?什么货币/.test(hintCur));
+  ok('货币类：提醒不许写出拼接货币（吉尔吉斯斯坦坚戈）', hintCur.includes('并不存在的货币'));
+  ok('货币类：同样声明「不要写进 content」', hintCur.includes('不要写进 content'));
+
+  const hintNoun = buildRepairHint({
+    kind: 'wrong-noun',
+    tokens: [],
+    wrongNouns: [{ wrong: '阿利穆拉特', right: '阿拉木图', why: 'Almaty 的通行译名' }],
+  });
+  ok('错译写法类：给了 wrong→right 的字面映射', hintNoun.includes('阿利穆拉特') && hintNoun.includes('阿拉木图'));
+  ok('错译写法类：带上了「为什么错」', hintNoun.includes('通行译名'));
+
+  // 三类问题同时出现 → **一次说全**（重试只有一次机会）
+  const hintTri = buildRepairHint({
+    kind: 'half-translated',
+    tokens: ['阿克tau市'],
+    impossibleMultiples: ['下调1.5倍'],
+    currency: {
+      own: '马纳特',
+      ownCode: 'AZN',
+      foreign: [{ word: '坚戈', country: 'kz', zh: '坚戈', code: 'KZT' }],
+      reason: '探针用',
+    },
+    wrongNouns: [{ wrong: '苏丹国王', right: '阿曼苏丹', why: '苏丹本身就是元首称号' }],
+  });
+  ok(
+    '❗ 四类问题同时命中时，修正指令**四块都带**（不是二选一）',
+    hintTri.includes('阿克tau市') &&
+      hintTri.includes('下调1.5倍') &&
+      hintTri.includes('马纳特') &&
+      hintTri.includes('苏丹国王'),
+    '只说一类，另一类会撑到三次用完然后丢稿',
+  );
+}
 
 // ============================================================
 // 汇总

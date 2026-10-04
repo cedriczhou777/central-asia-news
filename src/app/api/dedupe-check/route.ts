@@ -386,6 +386,23 @@ export async function GET(request: NextRequest) {
       sampleSize?: number;
       /** 本轮问给模型的候选对数（pair 形态才有） */
       candidatePairs?: number;
+      /**
+       * **下限之上共有多少对**（截断前，pair 形态才有）。
+       *
+       * `candidateAboveFloor > candidatePairs` ⇒ 这一轮发生了截断 ——
+       * 「有一批够像的对没被问到」。2026-10-05 新增：在此之前只报 `candidatePairs`，
+       * 于是「只有 7 对够像」与「有 200 对、只问了 7 对」在报告里长得**一模一样**，
+       * 而这恰恰是「用户报的重复为什么没合并」的核心分叉点。
+       */
+      candidatesAboveFloor?: number;
+      /**
+       * **优先档之上共有多少对**（截断前，pair 形态才有）。
+       *
+       * ⚠️ 与 `candidatesAboveFloor` 的判读不同（2026-10-05 分档后）：
+       * 下限那条超标属**预期**（低分对没挤进名额），这一条超标才是**真的漏**
+       * （连最像的那批都没装下）。这两个数字必须一起看，否则会得出相反结论。
+       */
+      candidatesAbovePriority?: number;
       /** 模型判为「同一件事」的对数（pair 形态才有） */
       judgedPairs?: number;
       /** 被确定性判据（反向极性）拦下、**没问模型**的对数 */
@@ -483,6 +500,8 @@ export async function GET(request: NextRequest) {
         excludedByReason,
         sampleSize: slice.length,
         candidatePairs: llm.candidateCount,
+        candidatesAboveFloor: llm.candidatesAboveFloor,
+        candidatesAbovePriority: llm.candidatesAbovePriority,
         judgedPairs: llm.pairs?.length,
         vetoedPairs: llm.vetoed?.length,
         declinedPairs: llm.declined?.length,

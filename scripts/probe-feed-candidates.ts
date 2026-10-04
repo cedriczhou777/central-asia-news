@@ -38,6 +38,7 @@
  */
 import { RSS_SOURCES } from '../src/lib/data/rss-sources';
 import { fetchFeed, FeedFetchError } from '../src/lib/feed-fetch';
+import { hasSourceBody } from '../src/lib/article-body';
 
 /**
  * 候选清单。**加候选前先想清「哪个国家需要更多源」** ——
@@ -87,10 +88,32 @@ const CANDIDATES: Array<{ name: string; url: string; country: string; lang: stri
   { name: 'Eurasianet', url: 'https://eurasianet.org/rss.xml', country: 'intl', lang: 'en', why: '中亚区域深度报道' },
   { name: 'CABAR.asia', url: 'https://cabar.asia/feed', country: 'intl', lang: 'ru', why: '中亚分析平台' },
 
-  // ── 阿塞拜疆：**故意不加** ───────────────────────────────────
-  // az 已有 8 个 RSS 源（全项目最多），而用户报的三条重复（Unibank 绿色信贷）
-  // 正是「同一事件被多家 az 媒体各写一篇」的产物。
-  // 再给 az 加源只会让 L2 的漏合并更显眼，不会减少重复。
+  // ── 阿塞拜疆：**默认不加**，但保留一批「只测正文」的候选 ──────────
+  //
+  // ⚠️ 2026-09-24 的结论仍然有效：az 已有 8 个 RSS 源（全项目最多），而用户报的
+  // 重复正是「同一条 Unibank 绿色信贷被三家 az 媒体各写一篇」——多源**制造**重复。
+  // 所以这一批的**默认判据是「不收」**，列在这里只为了取一个数：
+  // 它们各自**自己带不带正文**（见 `bodyItems`）。
+  //
+  // 为什么要取这个数（2026-10-05，用户第 5 条）：
+  // 现有 8 个 az 源里 **5 个完全不带正文**（AZERTAC en/ru、Trend.az、APA、Qafqazinfo，
+  // AGENTS P-1），条目有正文的比例只有 18%，其余靠 `article-body.ts` 补抓页面兜着。
+  // 「加源」在这里**只有在一种情形下**才成立：新源**自带正文**、
+  // 且能替掉那 5 个盲源之一（同一条新闻有正文版可收）。
+  // 若探出来这批也全是「条目不少、正文 0 条」，那结论就是**维持不加** ——
+  // 因为再补一个盲源，等于把「补抓页面」这条兜底再赌一次。
+  //
+  // 判读：`正文 0/N` 一律不收（不管 N 多大）；`正文 N/N` 才值得单独讨论替源。
+  { name: 'Caliber.az', url: 'https://caliber.az/rss', country: 'az', lang: 'en', why: '独立分析向媒体；只测「自带正文否」，默认不收' },
+  { name: 'AzVision', url: 'https://azvision.az/rss', country: 'az', lang: 'az', why: '通社，有英文版；只测正文' },
+  { name: 'Baku.ws', url: 'https://baku.ws/rss', country: 'az', lang: 'az', why: '本地门户；只测正文' },
+  { name: 'Qaynarinfo', url: 'https://qaynarinfo.az/feed/', country: 'az', lang: 'az', why: '本地新闻站；只测正文' },
+  { name: 'YeniAvaz', url: 'https://www.yeniavaz.com/rss', country: 'az', lang: 'az', why: '本地新闻站；只测正文' },
+  { name: 'Azerbaycan24', url: 'https://azerbaycan24.com/rss', country: 'az', lang: 'az', why: '本地新闻站；只测正文' },
+  { name: 'Milli.az', url: 'https://news.milli.az/rss', country: 'az', lang: 'az', why: '本地新闻站；只测正文' },
+  // ⛔ 已实测、**别再测**（写在这里是为了不再重复踩）：azernews.az / oxu.az / 1news.az /
+  //    minval.az / news.day.az / musavat.com / report.az 被 Cloudflare 拦（403）；
+  //    abc.az / turan.az / news.az / sfera.az 全 404；interfax.az / aze.media 不可达。
 ];
 
 /** 本机探测超时。比生产的 60s 短，是为了让整批跑得完；超时**不下结论**。 */
@@ -106,6 +129,20 @@ const STALE_DAYS = 7;
 function pad(s: string, n: number) {
   const w = [...s].reduce((a, c) => a + (/[\u4e00-\u9fff\uff00-\uffef]/.test(c) ? 2 : 1), 0);
   return s + ' '.repeat(Math.max(0, n - w));
+}
+
+/**
+ * 正文栏的**结论标记**：这一栏必须自己会说话。
+ *
+ * 「正文 0/12」和「正文 12/12」并排看时，纯数字很容易被扫过去 ——
+ * 而这两者对这个项目的意义**完全相反**：前者是「收录了也没材料，全靠补抓赌源站」，
+ * 后者是「自给自足」。分级只做**呈现**，判据仍是 `hasSourceBody`（60 字）。
+ */
+function bodyTag(r: Result): string {
+  if (r.items === 0) return '';
+  if (r.bodyItems === 0) return '　⛔ 完全不带正文（入库靠补抓，源站一挡就全丢）';
+  if (r.bodyItems / r.items < 0.5) return '　⚠️ 半数以上条目无正文';
+  return '';
 }
 
 /** 从条目里尽力取一个时间。各源字段不统一，取到哪个用哪个。 */
@@ -132,6 +169,28 @@ interface Result {
   detail: string;
   items: number;
   newestDays: number | null;
+  /**
+   * 条目里**带正文**的条数（用应用自己的判据 `hasSourceBody`，阈值 60 字）。
+   *
+   * ## 为什么这个数必须报出来（2026-10-05 补，为阿塞拜疆入源）
+   *
+   * 「能不能解析出条目」和「有没有正文」是**两件事**，而这个脚本原先只报前者。
+   * 阿塞拜疆的根因恰恰是后者：8 个源里 **5 个完全不带正文**
+   * （AZERTAC en/ru、Trend.az、APA、Qafqazinfo，见 AGENTS P-1），
+   * 条目有正文的比例只有 **18%**，其余靠入库时补抓页面兜着 ——
+   * 而补抓要看源站脸色（`bodyBackfilled = 0` 就是「源站在挡我们」）。
+   *
+   * 所以要给 az 加源，判据必须是**新源自己带正文**（在那 5 个盲源之外补上
+   * 真正有材料的源），而不是「条目数够多」。这一列就是那个判据。
+   */
+  bodyItems: number;
+}
+
+/** 条目里「原文」的取法，与 `fetch-news` 同源（`contentSnippet || content`）。 */
+function rawBodyOf(item: Record<string, unknown>): string {
+  const snip = typeof item.contentSnippet === 'string' ? item.contentSnippet : '';
+  const content = typeof item.content === 'string' ? item.content : '';
+  return snip || content;
 }
 
 async function probeOne(c: (typeof CANDIDATES)[number]): Promise<Result> {
@@ -141,22 +200,23 @@ async function probeOne(c: (typeof CANDIDATES)[number]): Promise<Result> {
     const items = (feed.items ?? []) as Array<Record<string, unknown>>;
     const dates = items.map(itemDate).filter((d): d is Date => d !== null);
     const newest = dates.length ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
+    const bodyItems = items.filter((it) => hasSourceBody(rawBodyOf(it))).length;
 
     if (items.length === 0) {
-      return { ...base, verdict: '空 feed', detail: `解析成功但 0 条（Content-Type ${meta.contentType || '空'}，${meta.bytes}B）`, items: 0, newestDays: null };
+      return { ...base, verdict: '空 feed', detail: `解析成功但 0 条（Content-Type ${meta.contentType || '空'}，${meta.bytes}B）`, items: 0, newestDays: null, bodyItems: 0 };
     }
     // 「一条日期都取不到」必须**先于**「有多旧」判断，而且必须单列一档：
     // 本项目按 `published_at` 做窗口过滤，取不到日期就等于整个源会被窗口丢掉 ——
     // 它比「僵尸 feed」更隐蔽（僵尸至少还有日期，能在漏斗里看出来）。
     if (newest === null) {
-      return { ...base, verdict: '疑似僵尸', detail: `${items.length} 条但**没有一条能取到日期**（窗口过滤会把它们全丢）`, items: items.length, newestDays: null };
+      return { ...base, verdict: '疑似僵尸', detail: `${items.length} 条但**没有一条能取到日期**（窗口过滤会把它们全丢）`, items: items.length, newestDays: null, bodyItems };
     }
     // 到这里 TS 才知道 newest 非空 —— 所以天数在这里才算，不提前算成 `number | null`。
     const newestDays = (Date.now() - newest.getTime()) / 86400000;
     if (newestDays > STALE_DAYS) {
-      return { ...base, verdict: '疑似僵尸', detail: `最新一条在 ${newestDays.toFixed(0)} 天前（${meta.bytes}B / ${meta.ms}ms / UA ${meta.usedUa}）`, items: items.length, newestDays };
+      return { ...base, verdict: '疑似僵尸', detail: `最新一条在 ${newestDays.toFixed(0)} 天前（${meta.bytes}B / ${meta.ms}ms / UA ${meta.usedUa}）`, items: items.length, newestDays, bodyItems };
     }
-    return { ...base, verdict: '建议收录', detail: `${items.length} 条，最新 ${newestDays.toFixed(1)} 天前（${meta.bytes}B / ${meta.ms}ms / UA ${meta.usedUa.slice(0, 18)}）`, items: items.length, newestDays };
+    return { ...base, verdict: '建议收录', detail: `${items.length} 条，最新 ${newestDays.toFixed(1)} 天前（${meta.bytes}B / ${meta.ms}ms / UA ${meta.usedUa.slice(0, 18)}）`, items: items.length, newestDays, bodyItems };
   } catch (err) {
     if (err instanceof FeedFetchError) {
       const m = err.meta;
@@ -169,9 +229,10 @@ async function probeOne(c: (typeof CANDIDATES)[number]): Promise<Result> {
           : err.message.replace(/\s+/g, ' ').slice(0, 150),
         items: 0,
         newestDays: null,
+        bodyItems: 0,
       };
     }
-    return { ...base, verdict: '不要收录', detail: String(err).slice(0, 150), items: 0, newestDays: null };
+    return { ...base, verdict: '不要收录', detail: String(err).slice(0, 150), items: 0, newestDays: null, bodyItems: 0 };
   }
 }
 
@@ -220,7 +281,10 @@ async function main() {
     const sameHost = existingHost.has(new URL(r.url).hostname.replace(/^www\./, '').toLowerCase());
     const dupNote = dup ? '　⛔ 已在 RSS_SOURCES 里（重复）' : sameHost ? '　ℹ️ 域名已有源（不同路径，可能是重复内容）' : '';
     console.log(`${pad(r.verdict, 12)}${pad(r.country, 6)}${pad(r.name, 22)}${r.detail}${dupNote}`);
-    console.log(`${' '.repeat(40)}└─ ${r.why}`);
+    // 正文栏**只对解析出条目的源有意义**：0 条的源（空 feed / 不是 feed / 待容器验证）
+    // 报「正文 0/0」是噪音，会把「没解析出来」误读成「解析出来但没正文」。
+    const bodyNote = r.items > 0 ? `　正文 ${r.bodyItems}/${r.items}${bodyTag(r)}` : '';
+    console.log(`${' '.repeat(40)}└─ ${r.why}${bodyNote ? `\n${' '.repeat(40)}   ${bodyNote.trim()}` : ''}`);
   }
 
   const count = (v: Verdict) => results.filter((r) => r.verdict === v).length;
@@ -229,7 +293,40 @@ async function main() {
       `建议收录 ${count('建议收录')}　疑似僵尸 ${count('疑似僵尸')}　空 feed ${count('空 feed')}　` +
       `不是 feed ${count('不是 feed')}　待容器验证 ${count('待容器验证')}`,
   );
+
+  // ── 正文小计：**这一栏才是给阿塞拜疆入源做判据的** ───────────────
+  //
+  // 如果只看「建议收录 N 个」就加源，会重演 az 的旧错：源解析得动、条目也不少，
+  // 但**一条正文都不带**，入库全靠补抓页面（`bodyBackfilled = 0` 时就是全丢）。
+  // 所以按国家分组报「带正文的源 / 有条目的源」，并单列「零正文源」的名字。
+  const withItems = results.filter((r) => r.items > 0);
+  const perCountry = new Map<string, { srcs: number; bodySrcs: number; items: number; bodyItems: number; zero: string[] }>();
+  for (const r of withItems) {
+    const g = perCountry.get(r.country) ?? { srcs: 0, bodySrcs: 0, items: 0, bodyItems: 0, zero: [] };
+    g.srcs += 1;
+    g.items += r.items;
+    g.bodyItems += r.bodyItems;
+    if (r.bodyItems > 0) g.bodySrcs += 1;
+    else g.zero.push(r.name);
+    perCountry.set(r.country, g);
+  }
+  if (perCountry.size) {
+    console.log(`\n──────── 正文覆盖（判定「值不值得加」的真正依据）────────`);
+    for (const [c, g] of [...perCountry].sort((a, b) => b[1].items - a[1].items)) {
+      const pct = g.items ? Math.round((g.bodyItems / g.items) * 100) : 0;
+      console.log(
+        `  ${pad(c, 6)}带正文的源 ${g.bodySrcs}/${g.srcs}　条目正文 ${g.bodyItems}/${g.items}（${pct}%）` +
+          (g.zero.length ? `　⚠️ 零正文：${g.zero.join('、')}` : ''),
+      );
+    }
+  }
+
   console.log(`\n⚠️ 「建议收录」也**先别全加**：按国家看哪个最薄再决定 —— 加源会制造重复，不是均匀铺。`);
+  console.log(
+    `⚠️ 而给 **az** 加源的判据不是条目数，是上面那栏**「带正文的源」**：\n` +
+      `   现有 8 个 az 源里 5 个不带正文（AGENTS P-1），补的必须是**自己带正文**的源，\n` +
+      `   否则等于把「补抓页面」这条兜底再赌一次。`,
+  );
 }
 
 main().catch((err) => {

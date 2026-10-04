@@ -52,6 +52,7 @@ import {
   QUOTE_MIN,
   reviewDraft,
   runEditorProbes,
+  COVER_BORROW_MIN_SIM,
   type ReviewItem,
 } from '../src/lib/editor-review';
 import { pickDraftCover } from '../src/lib/draft-cover';
@@ -1042,7 +1043,9 @@ section('八、版本指纹（GET 的 codeVersion）');
   );
   ok(
     '含「借图配对下限」（它**存在**就说明这一版带上了借图）',
-    /coverBorrowMinSim:\s*PAIR_CANDIDATE_MIN_SIM/.test(src),
+    /coverBorrowMinSim:\s*COVER_BORROW_MIN_SIM/.test(src),
+    '2026-10-05 起借图下限是**自己的**常量，不再复用召回下限 —— ' +
+      '见 COVER_BORROW_MIN_SIM 的注释（召回有模型兜底，借图没有）',
   );
   // 借图的两条接线上限：捐赠者只许来自「被判重复」的稿子，且只能插进正文开头。
   // 这两条都是**安全边界**（拿错图的后果比没图严重），所以用源码断言钉住。
@@ -1244,7 +1247,7 @@ section('九、借图（planCoverBorrows）');
   // ① 「同类事件、不同地点」——最危险的一类：挪了图就是**另一场事故的照片**
   const n1a = '希杰兹恩发生交通事故';
   const n1b = '巴尔达地区发生交通事故，造成人员死亡';
-  ok('负例①相似度确实低于下限（前置条件）', similarity(n1a, n1b) < PAIR_CANDIDATE_MIN_SIM, String(similarity(n1a, n1b)));
+  ok('负例①相似度确实低于下限（前置条件）', similarity(n1a, n1b) < COVER_BORROW_MIN_SIM, String(similarity(n1a, n1b)));
   ok(
     '❗同类事件、不同地点 ⇒ **不借**（挪了就是另一场事故的照片）',
     planCoverBorrows({
@@ -1255,7 +1258,19 @@ section('九、借图（planCoverBorrows）');
   // ② 同一场论坛的两条不同侧记（0.3103）—— 看着像，但没到「同一件事」的判据
   const n2a = '阿塞拜疆外长在纽约举行 37 场双边会议';
   const n2b = '阿塞拜疆外长在纽约与联合国秘书长会晤';
-  ok('负例②相似度确实低于下限（前置条件）', similarity(n2a, n2b) < PAIR_CANDIDATE_MIN_SIM, String(similarity(n2a, n2b)));
+  const n2Sim = similarity(n2a, n2b);
+  ok('负例②相似度确实低于**借图**下限（前置条件）', n2Sim < COVER_BORROW_MIN_SIM, String(n2Sim));
+  /**
+   * ★ 这一条是「两个常量必须分开」的**活证据**：0.3103 落在两条线之间 ——
+   * 它**过得了召回下限**（会被问给模型，由模型判断），但**过不了借图下限**
+   * （没有任何第二道闸，所以直接不借）。
+   * 如果哪天有人把两者合并成一个常量，这一条会立刻变红 —— 那正是它的用途。
+   */
+  ok(
+    '★ 该对**高于召回下限、低于借图下限** ⇒ 两个常量不能合并',
+    n2Sim > PAIR_CANDIDATE_MIN_SIM && n2Sim < COVER_BORROW_MIN_SIM,
+    `sim=${n2Sim}；召回下限=${PAIR_CANDIDATE_MIN_SIM}，借图下限=${COVER_BORROW_MIN_SIM}`,
+  );
   ok(
     '相似但未到下限 ⇒ **不借**',
     planCoverBorrows({
@@ -1304,14 +1319,31 @@ section('九、借图（planCoverBorrows）');
   );
   ok('另一条找不到匹配对象时不会被硬塞', two.every((b) => b.targetIndex === 0));
 
-  // 阈值必须是**复用的既有常量**，不是新拍的数
+  // 阈值必须是**量出来的既有常量**，不是新拍的数；而且**不能与召回下限合并**
   ok(
-    '默认下限 === PAIR_CANDIDATE_MIN_SIM（复用回测过的常量，不是新拍一个数）',
+    '默认下限 === COVER_BORROW_MIN_SIM（量出来的常量，不是新拍一个数）',
     planCoverBorrows({
       survivors: [{ title: s1, hasImage: false }],
       donors: [{ title: d1, imageUrl: 'u' }],
       // 不传 minSim，走默认
-    }).length === 1 && PAIR_CANDIDATE_MIN_SIM === 0.35,
+    }).length === 1 && COVER_BORROW_MIN_SIM === 0.35,
+    `COVER_BORROW_MIN_SIM=${COVER_BORROW_MIN_SIM}`,
+  );
+  // TS 把两个 `const` 的数值收窄成**字面量类型**（0.35 / 0.2），于是 `!==` 被判成
+  // 「两个类型无交集、恒真」（TS2367）。可这里要的恰恰是**运行期**这条断言：谁把两个
+  // 常量改成相等，这行必须红。显式放宽成 `number` 只是让**编译器看到的类型**
+  // 与运行期一致（值没变、判据没变），不是绕开检查。
+  const coverBorrowWide: number = COVER_BORROW_MIN_SIM;
+  const pairRecallWide: number = PAIR_CANDIDATE_MIN_SIM;
+  ok(
+    '★ 借图下限**不再等于**召回下限（2026-10-05 拆分；合并会同时踩坏两侧）',
+    coverBorrowWide !== pairRecallWide,
+    `借图 ${coverBorrowWide} vs 召回 ${pairRecallWide}`,
+  );
+  ok(
+    '★ 失败方向正确：借图下限**必须高于**召回下限（借图没有第二道闸，只能更严）',
+    coverBorrowWide > pairRecallWide,
+    `借图 ${coverBorrowWide} vs 召回 ${pairRecallWide}`,
   );
   ok(
     '显式调高下限能挡住（参数真的生效）',

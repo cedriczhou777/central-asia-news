@@ -27,6 +27,8 @@ import {
   clusterPairs,
   dedupeStories,
   dedupeStoriesDeterministic,
+  dedupeNearTitles,
+  isNearSameTitleText,
   filterOversizedGroups,
   hasOppositePolarity,
   identityKeys,
@@ -38,10 +40,13 @@ import {
   JUDGE_TEMPERATURE,
   PAIR_CANDIDATE_MIN_SIM,
   PAIR_MAX_CANDIDATES,
+  PAIR_PRIORITY_SIM,
   parseEventGroups,
   parsePairVerdict,
   TITLE_IDENTICAL_MIN_SIM,
   TITLE_MAX,
+  TITLE_NEAR_MIN_CHARS,
+  TITLE_NEAR_MIN_SIM,
   type StoryLike,
 } from '../src/lib/same-event';
 import { promptBuilderFor } from '../src/lib/judge-prompts';
@@ -604,6 +609,382 @@ section('candidatePairs · ★ 覆盖优先（2026-09-24：修「按 sim 截断�
 }
 
 // ------------------------------------------------------------
+// ★ 顺序修复（2026-10-05）：名额不够时，被截掉的必须是**最不像**的
+// ------------------------------------------------------------
+
+section('candidatePairs · ★ 2026-10-05：覆盖轮按相似度排序');
+
+{
+  /**
+   * ## 这条测的是什么
+   *
+   * 线上实测（`pnpm analyze:pair-recall 7` 第 3 节）：把下限从 0.35 降到 0.20 会
+   * **丢掉 82 对**，而丢掉的恰恰是**最像的那些** —— 最高分那对是
+   * `0.8400`「阿塞拜疆**与**乌兹别克斯坦国防部签署双边军事合作计划」
+   * ↔「阿塞拜疆**和**乌兹别克斯坦国防部签署双边军事合作计划」。
+   *
+   * 成因：覆盖轮**按条目在数组里的位置**遍历。名额不够时，前面那些**不太像**的条目
+   * 先把名额吃光，排在后面的高分对一对都问不到。**方向是反的。**
+   *
+   * ## 构造（必须让**旧算法**在这个构造下真的漏掉，否则这条测试等于没测）
+   *
+   * 6 条「彼此弱相关」的填充稿排在**前面**，一对「极像」的稿子排在**最后**，
+   * 名额只给 3 对：
+   *
+   *   · 旧算法按位置走：i=0 选 (0,1) 覆盖 2 条、i=2 选 (2,3) 覆盖 2 条、
+   *     i=4 选 (4,5) 覆盖 2 条 ⇒ 3 个名额在**还没走到第 6 条**时就用完了，
+   *     那对 0.84 的稿子一对都问不到；
+   *   · 新算法按「各自最高分」降序走：0.84 那对先占位，被截掉的是最不像的填充对。
+   */
+  const HIGH_A = '阿塞拜疆与乌兹别克斯坦国防部签署双边军事合作计划';
+  const HIGH_B = '阿塞拜疆和乌兹别克斯坦国防部签署双边军事合作计划';
+  /**
+   * 6 条填充稿：**彼此**共享一个模板（`公布一季度…数据`）⇒ 互相 0.4–0.6；
+   * 而那对稿子跟它们**只**共享「阿塞拜疆」⇒ 相似度落到下限之下、不产生跨对。
+   *
+   * 这两件事都是构造能复现缺陷的**必要条件**：
+   *   · 填充对必须过得了下限（否则覆盖轮跳过它们、不占名额，旧算法照样能走到最后）；
+   *   · 填充×极像的跨对必须**不过**下限（否则 `bestOf[填充]` 会指向那条极像的稿子，
+   *     旧算法反而会「顺手」把它选进来 —— 第一版构造就是这么失效的）。
+   */
+  const FILLER = [
+    '阿塞拜疆经济部公布一季度 GDP 数据',
+    '阿塞拜疆央行公布一季度通胀数据',
+    '阿塞拜疆铁路公布一季度客运数据',
+    '阿塞拜疆农业公布一季度出口数据',
+    '阿塞拜疆海关公布一季度贸易数据',
+    '阿塞拜疆统计委公布一季度就业数据',
+  ].map((title) => ({ title }));
+  const items = [...FILLER, { title: HIGH_A }, { title: HIGH_B }];
+  const highIdx = [FILLER.length, FILLER.length + 1];
+  const CAP = 3;
+
+  // 前置条件：那对稿子必须**真的**比所有填充对都像（否则构造已不再复现缺陷）
+  const highSim = similarity(HIGH_A, HIGH_B);
+  let maxFillerSim = 0;
+  for (let i = 0; i < FILLER.length; i++) {
+    for (let j = i + 1; j < FILLER.length; j++) {
+      maxFillerSim = Math.max(maxFillerSim, similarity(FILLER[i].title, FILLER[j].title));
+    }
+  }
+  ok(
+    '前置条件：极像的那对确实比所有填充对都像（构造有效）',
+    highSim > maxFillerSim,
+    `极像 ${highSim.toFixed(4)} vs 填充最高 ${maxFillerSim.toFixed(4)}`,
+  );
+
+  const chosen = candidatePairs(items, 0.2, CAP);
+  const touchesHigh = (pairs: Array<{ a: number; b: number }>) =>
+    pairs.some((p) => highIdx.includes(p.a) || highIdx.includes(p.b));
+
+  // 旧算法（按条目位置遍历覆盖轮）—— 在测试里现算一遍做对照
+  const all: Array<{ a: number; b: number; sim: number }> = [];
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const sim = similarity(items[i].title, items[j].title);
+      if (sim >= 0.2) all.push({ a: i, b: j, sim });
+    }
+  }
+  all.sort((x, y) => y.sim - x.sim || x.a - y.a || x.b - y.b);
+  const bestOf = new Array<number>(items.length).fill(-1);
+  for (let k = 0; k < all.length; k++) {
+    if (bestOf[all[k].a] < 0) bestOf[all[k].a] = k;
+    if (bestOf[all[k].b] < 0) bestOf[all[k].b] = k;
+  }
+  const legacy: typeof all = [];
+  const legacyPicked = new Set<number>();
+  const legacyCovered = new Set<number>();
+  for (let i = 0; i < items.length && legacy.length < CAP; i++) {
+    if (legacyCovered.has(i)) continue;
+    const k = bestOf[i];
+    if (k < 0) continue;
+    legacyPicked.add(k);
+    legacy.push(all[k]);
+    legacyCovered.add(all[k].a);
+    legacyCovered.add(all[k].b);
+  }
+
+  ok(
+    '对照：**旧**顺序确实漏掉那对极像的稿子（证明这次改动不是白改）',
+    !touchesHigh(legacy),
+    '若这里变 true，说明构造已不再复现缺陷 —— 要换构造，而不是删掉这条断言',
+  );
+  ok(
+    '★ 新顺序**问到**了那对极像的稿子（0.84 不再被 0.3 的挤掉）',
+    touchesHigh(chosen),
+    `实际选到 ${JSON.stringify(chosen.map((c) => c.sim.toFixed(3)))}`,
+  );
+  ok(
+    '★ 被截掉的确实是**最不像**的那些：选中的最低分 ≥ 未入选项里的最高分',
+    Math.min(...chosen.map((c) => c.sim)) >=
+      Math.max(0, ...all.filter((p) => !chosen.some((c) => c.a === p.a && c.b === p.b)).map((p) => p.sim)),
+    '这就是「按相似度截断」的定义 —— 旧实现不满足它',
+  );
+  ok('名额仍然用满', chosen.length === CAP, String(chosen.length));
+}
+
+// ------------------------------------------------------------
+// ★ 2026-10-05：优先档 —— 降阈只许做加法（单调性）
+// ------------------------------------------------------------
+
+section('candidatePairs · ★ 优先档：降阈不得让原本会问的对变得问不到');
+{
+  /**
+   * ## 这条测的是什么
+   *
+   * 下限从 0.35 降到 0.20 之后，`analyze:pair-recall` 第 3 节复量出**28 对**
+   * 「原本会问、降阈后反而问不到」——最高分的还是 0.6786
+   * 「阿塞拜疆 Azeri Light 原油价格**上涨 5.5 美元**」↔「…**接近125美元**」
+   * （同批 145 对抢 40 个名额）。
+   *
+   * ## 机制（不是猜的，是 `/tmp` 探针在随机构造上搜出来的最小样例）
+   *
+   * **覆盖轮会把名额花在「低分对」上**：名额只剩 1 个时，覆盖轮先给某个**还没覆盖**的
+   * 条目配它自己最高分的那一对（可能只有 0.2381）；而真正像的那对 (3,4) 因为
+   * 两端**都已经**被更高的对覆盖过，覆盖轮轮不到它 —— 它本来只能在**填充轮**被捞起来，
+   * 而填充轮已经没有名额了。**于是「像」输给了「覆盖」。**
+   *
+   * 分档之所以能修好：优先档的池子里**根本没有** 0.2381 那种对，
+   * 它的覆盖轮 + 填充轮都在高分池内进行 ⇒ 高分对不可能被低分对挤出去。
+   *
+   * ## 构造（下面这个 6 条 / 上限 3 的样例是搜出来的，不是编的）
+   *
+   * 三条 ≥0.35 的对里，(3,4) **不是任何一端的最高分**（0 与 3 之间有 0.5），
+   * 所以它只能靠填充轮；而低分对 (2,5) 只要抢到覆盖轮的最后一个名额就把它挤掉。
+   * 对照断言（legacy）必须**在旧实现下真的漏**，否则这条测试等于没测 ——
+   * 若它变 true，说明构造已不再复现缺陷，要换构造，**不是删掉断言**。
+   */
+  const items = [
+    { title: '总统原油乌兹别克斯坦' },
+    { title: '卢布巴库投资会谈' },
+    { title: '德国总理阿塞拜疆接近阿斯塔纳项目' },
+    { title: '原油项目乌兹别克斯坦' },
+    { title: '乌兹别克斯坦卢布投资投资' },
+    { title: '接近投资会谈阿塞拜疆项目' },
+  ];
+  const CAP = 3;
+  const keyOf = (p: { a: number; b: number }) => `${p.a}|${p.b}`;
+
+  // —— 前置条件：让这个构造「为什么有效」可核对 ——
+  const sim03 = similarity(items[0].title, items[3].title);
+  const sim04 = similarity(items[0].title, items[4].title);
+  const sim34 = similarity(items[3].title, items[4].title);
+  ok(
+    '前置条件：三条对都过得了优先档（0.35），且 (0,3) 明显更像',
+    sim03 >= PAIR_PRIORITY_SIM && sim04 >= PAIR_PRIORITY_SIM && sim34 >= PAIR_PRIORITY_SIM && sim03 > sim34,
+    `(0,3)=${sim03.toFixed(4)} (0,4)=${sim04.toFixed(4)} (3,4)=${sim34.toFixed(4)}`,
+  );
+
+  // —— 对照：分档**之前**的单池实现在这个构造下真的漏 ——
+  const refSinglePool = (minSim: number, maxPairs: number) => {
+    const all: Array<{ a: number; b: number; sim: number }> = [];
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const s = similarity(items[i].title, items[j].title);
+        if (s >= minSim) all.push({ a: i, b: j, sim: s });
+      }
+    }
+    all.sort((x, y) => y.sim - x.sim || x.a - y.a || x.b - y.b);
+    const bestOf = new Array<number>(items.length).fill(-1);
+    for (let k = 0; k < all.length; k++) {
+      if (bestOf[all[k].a] < 0) bestOf[all[k].a] = k;
+      if (bestOf[all[k].b] < 0) bestOf[all[k].b] = k;
+    }
+    const coverOrder = Array.from({ length: items.length }, (_, i) => i)
+      .filter((i) => bestOf[i] >= 0)
+      .sort((i, j) => all[bestOf[j]].sim - all[bestOf[i]].sim || i - j);
+    const out: typeof all = [];
+    const picked = new Set<number>();
+    const covered = new Set<number>();
+    for (const i of coverOrder) {
+      if (out.length >= maxPairs) break;
+      if (covered.has(i)) continue;
+      const k = bestOf[i];
+      picked.add(k);
+      out.push(all[k]);
+      covered.add(all[k].a);
+      covered.add(all[k].b);
+    }
+    for (let k = 0; k < all.length && out.length < maxPairs; k++) {
+      if (picked.has(k)) continue;
+      picked.add(k);
+      out.push(all[k]);
+    }
+    return out;
+  };
+  const legacyBase = new Set(refSinglePool(PAIR_PRIORITY_SIM, CAP).map(keyOf));
+  const legacyWide = new Set(refSinglePool(PAIR_CANDIDATE_MIN_SIM, CAP).map(keyOf));
+  const legacyLost = [...legacyBase].filter((k) => !legacyWide.has(k));
+  ok(
+    '对照：**单池**实现下，降阈确实丢掉了高分对（证明这条测试不是白写）',
+    legacyLost.length > 0,
+    `丢掉 ${JSON.stringify(legacyLost)}；若这里变 false，说明构造已不再复现缺陷 —— 要换构造，而不是删掉这条断言`,
+  );
+  ok(
+    '对照：丢掉的那一对**不是**任何一端的最高分（这正是它只能靠填充轮的原因）',
+    legacyLost.includes('3|4') && sim34 < sim03,
+    `legacyLost=${JSON.stringify(legacyLost)} (3,4)=${sim34.toFixed(4)} < (0,3)=${sim03.toFixed(4)}`,
+  );
+
+  // —— ★ 当前实现：恒等式必须成立 ——
+  const base = candidatePairs(items, PAIR_PRIORITY_SIM, CAP);
+  const wide = candidatePairs(items, PAIR_CANDIDATE_MIN_SIM, CAP);
+  const baseS = new Set(base.map(keyOf));
+  const wideS = new Set(wide.map(keyOf));
+  const missing = [...baseS].filter((k) => !wideS.has(k));
+  ok(
+    '★ 单调性：candidatePairs(0.20, cap) ⊇ candidatePairs(0.35, cap)',
+    missing.length === 0,
+    `0.35 口径选出 ${JSON.stringify([...baseS])}；0.20 口径漏掉 ${JSON.stringify(missing)}`,
+  );
+  ok(
+    '★ (3,4) 那对不再被低分对挤掉（这就是「降阈只做加法」的可观测形态）',
+    wideS.has('3|4'),
+    `0.20 口径实际选出 ${JSON.stringify(wide.map((p) => `${keyOf(p)}@${p.sim.toFixed(4)}`))}`,
+  );
+
+  // —— 另一侧：补充档**不是**摆设（有名额时低分对仍要进来）——
+  const wide4 = new Set(candidatePairs(items, PAIR_CANDIDATE_MIN_SIM, CAP + 1).map(keyOf));
+  ok(
+    '另一侧：名额多一个 ⇒ 补充档（0.20–0.35）的对仍然进得来',
+    [...wide4].some((k) => !baseS.has(k)),
+    `cap=${CAP + 1} 时选出 ${JSON.stringify([...wide4])}`,
+  );
+
+  // —— 常量本身的关系：三个数不许互相赋值（借图那个见 test-editor-review）——
+  ok('PAIR_PRIORITY_SIM === 0.35（= 改动前的旧下限原值）', PAIR_PRIORITY_SIM === 0.35, String(PAIR_PRIORITY_SIM));
+  ok(
+    '★ 优先档下限**高于**召回下限（否则分档没有意义）',
+    PAIR_PRIORITY_SIM > PAIR_CANDIDATE_MIN_SIM,
+    `${PAIR_PRIORITY_SIM} vs ${PAIR_CANDIDATE_MIN_SIM}`,
+  );
+  ok(
+    '上限 === 48（实测一周最大 44 对，40 会截掉真重复）',
+    PAIR_MAX_CANDIDATES === 48,
+    String(PAIR_MAX_CANDIDATES),
+  );
+}
+
+// ------------------------------------------------------------
+// ★ 2026-10-05：推送端专属的近同名闸（same_title_near）
+// ------------------------------------------------------------
+
+section('近同名闸 · ★ 推送端专属：0.75 + 长度下限 15 字');
+
+{
+  /**
+   * ## 为什么要有这道闸
+   *
+   * 0.95 那道（`TITLE_IDENTICAL_MIN_SIM`）实测**几乎不起作用**：30 天 8468 篇里，
+   * 同一推送窗口内中译标题 `sim ≥ 0.90` 只有 **1 对**，而 `0.70–0.90` 有 **44 对**。
+   * 于是「同一件事被两家媒体各写一遍」绝大多数只能靠模型 —— 而模型会漏：
+   * 线上实测（`GET /api/dedupe-check?days=1&llm=1`）它把下面**第一条正例**判成了「否」。
+   *
+   * ## 正例全部取自线上真实数据（30 天 45 对逐条看过，45/45 同一件事）
+   *
+   * 不是编的标题 —— 编的标题只能证明「我实现的判据和我编的标题一致」。
+   */
+  const POS: Array<[string, string, string]> = [
+    [
+      '★ 线上被模型判「否」的那对（本闸的直接动机）',
+      '阿曼苏丹 Haitham bin Tariq Al Said 将对哈萨克斯坦进行国事访问',
+      '阿曼苏丹 Haitham bin Tariq Al Said 将于10月5日至6日对哈萨克斯坦进行国事访问',
+    ],
+    [
+      '专名音译差一个字母 + 多/少一个词',
+      '美国投资者 Shervin Pishevar 想在哈萨克斯坦开设 Sofreh Capital 办公室',
+      '美国投资者 Shervin Pishewar 在哈萨克斯坦开设 Sofreh Capital 办公室',
+    ],
+    [
+      '多/少两个字（「诊断」）',
+      '哈萨克斯坦 Saran 工厂将生产 Samsung Medison 超声波诊断设备',
+      '哈萨克斯坦 Saran 工厂将生产 Samsung Medison 超声波设备',
+    ],
+    [
+      '虚词之差（与 / 和）',
+      '阿塞拜疆与乌兹别克斯坦国防部签署双边军事合作计划',
+      '阿塞拜疆和乌兹别克斯坦国防部签署双边军事合作计划',
+    ],
+    [
+      '动词同义（参观 / 视察）',
+      '阿利耶夫总统参观 ADEX 2026 与 Securex Caspian 展览',
+      '阿利耶夫总统视察 ADEX 2026 与 Securex Caspian 展览',
+    ],
+    ['括号后缀「（更新）」', '阿塞拜疆大奖赛第三场练习赛结束', '阿塞拜疆大奖赛第三场练习赛结束（更新）'],
+  ];
+  for (const [why, a, b] of POS) {
+    ok(`正例：${why}｜sim=${similarity(a, b).toFixed(4)}`, isNearSameTitleText(a, b));
+  }
+
+  // ---- 反例 ①：短标题差一个实体词，相似度**自己**就到 0.80 ----
+  // 这是长度下限存在的**唯一理由**，所以既断言「危险是真实的」，也断言「闸门挡得住」。
+  const SHORT_A = '托卡耶夫会见德国总统';
+  const SHORT_B = '托卡耶夫会见德国总理';
+  const shortSim = similarity(SHORT_A, SHORT_B);
+  ok(
+    '反例①前置条件：这对**短**标题的相似度确实 ≥ 阈值（危险是真实的，不是假想）',
+    shortSim >= TITLE_NEAR_MIN_SIM,
+    `${shortSim.toFixed(4)} ≥ ${TITLE_NEAR_MIN_SIM}，长度 ${SHORT_A.length}/${SHORT_B.length}`,
+  );
+  ok(
+    '★ 反例①：长度下限把它们挡下（德国总统 ≠ 德国总理，两条不同的会见）',
+    !isNearSameTitleText(SHORT_A, SHORT_B),
+    `长度下限 ${TITLE_NEAR_MIN_CHARS}，本条 ${Math.min(SHORT_A.length, SHORT_B.length)}`,
+  );
+  ok(
+    '反例①：`same_title`（0.95）本来也拦不住它们 ⇒ 这条必须由长度下限兜，不能删',
+    !isSameTitleText(SHORT_A, SHORT_B),
+  );
+
+  // ---- 反例 ②：0.70–0.75 档**故意**留给模型 ----
+  const MID_A = '阿塞拜疆与塞尔维亚讨论战略伙伴关系';
+  const MID_B = '阿塞拜疆与塞尔维亚战略伙伴关系关系';
+  const midSim = similarity(MID_A, MID_B);
+  ok(
+    '反例②前置条件：这对确实落在 0.70–0.75 档',
+    midSim >= 0.7 && midSim < TITLE_NEAR_MIN_SIM,
+    midSim.toFixed(4),
+  );
+  ok(
+    '★ 反例②：本闸**不**处理 0.70–0.75（该档已出现实体词级替换，交给模型）—— 这是阈值取 0.75 而非 0.70 的可观测后果',
+    !isNearSameTitleText(MID_A, MID_B),
+  );
+
+  // ---- 反例 ③：松阈值下三条守卫更省不得 ----
+  ok(
+    '反例③：方向相反（涨/跌）优先于阈值',
+    !isNearSameTitleText('阿塞拜疆原油价格上涨 5.5 美元', '阿塞拜疆原油价格下跌 5.5 美元'),
+  );
+  ok('反例③：占位标题不互相合并', !isNearSameTitleText('无标题', '无标题'));
+
+  // ---- 常量关系 ----
+  ok(
+    'TITLE_NEAR_MIN_SIM === 0.75，且**松于** 0.95 那道（它们是两道闸，不是同一个数改了一次）',
+    TITLE_NEAR_MIN_SIM === 0.75 && TITLE_NEAR_MIN_SIM < TITLE_IDENTICAL_MIN_SIM,
+    `${TITLE_NEAR_MIN_SIM} / ${TITLE_IDENTICAL_MIN_SIM}`,
+  );
+  ok('TITLE_NEAR_MIN_CHARS === 15（= 实测 45 对里最短的那条）', TITLE_NEAR_MIN_CHARS === 15, String(TITLE_NEAR_MIN_CHARS));
+
+  // ---- ★ 边界：只在推送端 ----
+  // 入库端丢的行**事后不可追**（`fetch-news` 的闸 2 注释写死了这条规矩），
+  // 所以同一对稿子在 `dedupeStoriesDeterministic`（入库端也跑）里**必须原样保留**，
+  // 只有 `dedupeNearTitles`（推送端专属）才合并。这两条断言是那道边界的唯一守卫。
+  const pool = [{ title: POS[0][1] }, { title: POS[0][2] }];
+  ok(
+    '★ 边界：`dedupeStoriesDeterministic`（入库端同样跑）**不**做近同名合并',
+    dedupeStoriesDeterministic(pool).kept.length === 2,
+    `实际保留 ${dedupeStoriesDeterministic(pool).kept.length} 条`,
+  );
+  const near = dedupeNearTitles(pool);
+  ok(
+    '★ 边界：`dedupeNearTitles`（推送端专属）合并，且 reason = `same_title_near`',
+    near.kept.length === 1 && near.drops.length === 1 && near.drops[0]?.reason === 'same_title_near',
+    JSON.stringify(near.drops.map((d) => d.reason)),
+  );
+  ok('保序：保留的是**第一条**（与其它确定性闸一致，不按长度挑）', near.kept[0]?.title === POS[0][1]);
+}
+
+// ------------------------------------------------------------
 // ★ 判组提示词的校准：正例 / 反例 / 兜底句都不许被删
 // ------------------------------------------------------------
 
@@ -928,14 +1309,29 @@ async function llmPipelineChecks(): Promise<void> {
 
   // --- ② 模型「全答是」时，簇护栏必须整簇丢弃（一条都不删）---
   {
-    // 5 条几乎同题 → 两两都成候选 → 全答是会连成一个 5 条的簇
+    /**
+     * ⚠️ 2026-10-05 换过构造 —— 旧构造（5 条只差一个动词的「会见中国外长…」）**已经到不了这一段**：
+     * 它们两两 ≥0.75，会被新的**近同名闸**在 L2 之前就确定性合并掉，
+     * 于是「模型全答是」这个场景根本走不到超大簇护栏。
+     *
+     * 换成的 5 条是**同话题、不同措辞**（两两 sim 0.15–0.26），近同名闸放行、
+     * 但彼此都过得了召回下限 —— 这才是这条护栏**真正的适用区间**：
+     * 模型手里的 0.2–0.75 那一档，靠相似度传递连成大簇。
+     * 换句话说：near-identical 归确定性闸，语义相近但措辞不同归模型 + 簇护栏。
+     */
     const items = [
-      '哈萨克斯坦总统会见中国外交部长讨论经贸合作',
-      '哈萨克斯坦总统会见中国外交部长商讨经贸合作',
-      '哈萨克斯坦总统会见中国外交部长洽谈经贸合作',
-      '哈萨克斯坦总统会见中国外交部长商议经贸合作',
-      '哈萨克斯坦总统会见中国外交部长研究经贸合作',
+      '哈萨克斯坦与中国举行外长会谈讨论经贸与投资合作',
+      '哈萨克斯坦与中国举行外长会谈讨论能源与投资项目',
+      '哈萨克斯坦与中国举行外长会谈讨论交通与运输合作',
+      '哈萨克斯坦与中国举行外长会谈讨论农业与粮食合作',
+      '哈萨克斯坦与中国举行外长会谈讨论数字与技术合作',
     ].map((title) => ({ title }));
+    // 前置条件：新构造必须**整批通过**近同名闸，否则这条用例又会被短路
+    ok(
+      '前提：这 5 条不会被近同名闸吃掉（否则这条用例测不到簇护栏）',
+      dedupeNearTitles(items).kept.length === 5,
+      `实际保留 ${dedupeNearTitles(items).kept.length} 条`,
+    );
     const { seen, ask } = fakeAsk((p) => {
       // 把提示词里出现的每个编号都判成「是」
       const idx = [...p.matchAll(/^(\d+) \|/gm)].map((m) => Number(m[1]));

@@ -3,7 +3,14 @@ import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { beijingDate, extractFirstImage, latinCyrillicTokens, stripCyrillicParentheticals } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
-import { dedupeStories, isLlmJudgeEnabled, PAIR_CANDIDATE_MIN_SIM } from '@/lib/same-event';
+import {
+  dedupeStories,
+  isLlmJudgeEnabled,
+  PAIR_CANDIDATE_MIN_SIM,
+  PAIR_MAX_CANDIDATES,
+  PAIR_PRIORITY_SIM,
+  TITLE_NEAR_MIN_SIM,
+} from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
   pushExclusionReason,
@@ -18,6 +25,7 @@ import {
   isEditorReviewEnabled,
   reviewDraft,
   planCoverBorrows,
+  COVER_BORROW_MIN_SIM,
   EDITOR_PROMPT_VERSION,
   EDITOR_GATE_VERSION,
   DUP_SIM_FLOOR,
@@ -376,7 +384,11 @@ interface PushSkip {
  */
 interface PushMerge {
   country_code: string;
-  /** `same_url` / `same_original` / `same_text` / `same_title` = 确定性；`llm_same_event` = 模型判的 */
+  /**
+   * `same_url` / `same_original` / `same_text` / `same_title` = 确定性（入库端同样跑）；
+   * **`same_title_near` = 推送端特有的近同名闸（阈值 0.75，见 `TITLE_NEAR_MIN_SIM`）**；
+   * `llm_same_event` = 模型判的。
+   */
   reason: string;
   kept: string;
   dropped: string;
@@ -818,11 +830,37 @@ export async function GET(request: NextRequest) {
         quoteMin: QUOTE_MIN,
       },
       /**
-       * 「借图」（`planCoverBorrows`）的配对下限 —— 从常量现算，所以它**存在**本身就说明
-       * 这一版代码带上了借图。2026-09-29 新增。
+       * **推送端专属**的「近同名」下限（2026-10-05 新增，与召回下限**不同职责**）。
+       *
+       * 它存在 ⇒ 这一版带上了第五道确定性闸（`same_title_near`），
+       * 产出的合并记录里会出现这个 reason。取值范围只可能来自
+       * `TITLE_NEAR_MIN_SIM`（现算，不手写）。
+       */
+      titleNearMinSim: TITLE_NEAR_MIN_SIM,
+      /**
+       * 「借图」（`planCoverBorrows`）的配对下限。2026-09-29 新增。
+       *
+       * ⚠️ **2026-10-05 起它不再等于 `PAIR_CANDIDATE_MIN_SIM`** —— 那两个职责被拆开了：
+       * 召回侧降到 0.20（结果由模型兜），借图侧保持 0.35（**没有**第二道闸，
+       * 松了就是「把 A 新闻的图挪到 B 新闻上」）。详见 `COVER_BORROW_MIN_SIM`。
+       * 所以这一项现在是**借图自己的值**；召回的两个值在下面单独报。
        * ⚠️ 它没有独立开关：借图跑在总审内部，所以 `EDITOR_REVIEW=off` 会一并关掉。
        */
-      coverBorrowMinSim: PAIR_CANDIDATE_MIN_SIM,
+      coverBorrowMinSim: COVER_BORROW_MIN_SIM,
+      /**
+       * 「同一件事」召回的**下限 / 优先档下限 / 单轮上限**
+       * （2026-10-05 新增：下限 0.35→0.20、上限 12→48、并拆出优先档 0.35）。
+       *
+       * 为什么要把它们报出来：这几个数**以前只在源码里**，而它们恰恰是
+       * 「用户报的重复为什么没被合并」的第一嫌疑人。2026-10-05 的排查绕了远路
+       * （先按日期分组量出 200 条/批的假数据，再按推送窗口重量才看清真相），
+       * 根因之一就是「线上跑的到底是多少」不能一次 curl 查到。
+       */
+      pairRecall: {
+        minSim: PAIR_CANDIDATE_MIN_SIM,
+        prioritySim: PAIR_PRIORITY_SIM,
+        maxPairs: PAIR_MAX_CANDIDATES,
+      },
       /**
        * 「库里原文正文多长才算有原文」的下限（2026-10-02 新增）。
        *
@@ -1076,10 +1114,42 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         ok: llmJudge.ok,
         ...(llmJudge.error ? { error: llmJudge.error } : {}),
         ...(llmJudge.candidateCount !== undefined ? { candidateCount: llmJudge.candidateCount } : {}),
+        /**
+         * 下限之上 / 优先档之上**共有**多少对（截断前）。
+         *
+         * ⚠️ 两者的判读**完全不同**（2026-10-05 分档后）：
+         *   · `candidatesAboveFloor > candidateCount` = **预期行为**：低分对没挤进名额
+         *     （分档要的就是这个），不必处理；
+         *   · `candidatesAbovePriority > candidateCount` = **真的漏**：连最像的那批
+         *     都没装下，该动的是上限。
+         * 混在一起看会得出相反结论 —— 旧的单条告警就是这么误导人的。
+         */
+        ...(llmJudge.candidatesAboveFloor !== undefined
+          ? { candidatesAboveFloor: llmJudge.candidatesAboveFloor }
+          : {}),
+        ...(llmJudge.candidatesAbovePriority !== undefined
+          ? { candidatesAbovePriority: llmJudge.candidatesAbovePriority }
+          : {}),
         ...(llmJudge.pairs ? { mergedPairs: llmJudge.pairs.length } : {}),
       });
       if (llmJudge.error) {
         console.warn(`[${country.name}] 「同一件事」模型判组未生效，本轮只做了链接/原文去重：${llmJudge.error}`);
+      }
+      // 截断发生时留一行日志。⚠️ 只对**优先档**告警（判读见上面 judgeRuns 的注释）：
+      // 下限被截断属预期 —— 分档要的就是「低分对不挤占名额」。旧的单条告警把两者
+      // 混在一起，会把正常现象报成故障，也会把真故障淹掉。
+      if (
+        llmJudge.candidatesAbovePriority !== undefined &&
+        llmJudge.candidateCount !== undefined &&
+        llmJudge.candidatesAbovePriority > llmJudge.candidateCount
+      ) {
+        console.warn(
+          `[${country.name}] ⚠️ 优先档（sim ≥ ${PAIR_PRIORITY_SIM}）候选对被上限截断：` +
+            `优先档之上 ${llmJudge.candidatesAbovePriority} 对，` +
+            `问给模型 ${llmJudge.candidateCount} 对（上限 ${PAIR_MAX_CANDIDATES}）。` +
+            `这是**真的漏**（最像的那批里有没问到的）—— 要动的是上限；` +
+            `若用户仍报重复，先看这里。`,
+        );
       }
 
       // 今日精选：取完去重后的前 N 篇（宽松上限，只防文章过长，不写死篇数）

@@ -77,7 +77,14 @@ export interface StoryLike {
   publishedAt?: string | null;
 }
 
-export type DedupReason = 'same_url' | 'same_original' | 'same_text' | 'same_title' | 'llm_same_event';
+export type DedupReason =
+  | 'same_url'
+  | 'same_original'
+  | 'same_text'
+  | 'same_title'
+  /** 推送端专属：中译标题近似（`sim ≥ TITLE_NEAR_MIN_SIM`），见 `dedupeNearTitles` */
+  | 'same_title_near'
+  | 'llm_same_event';
 
 export interface DedupDrop<T> {
   /** 被保留下来的那一条（组内排最前的） */
@@ -114,6 +121,22 @@ export interface DedupResult<T> {
     pairs?: Array<{ a: number; b: number; sim: number }>;
     /** pair 形态：本轮问了多少个候选对 */
     candidateCount?: number;
+    /**
+     * pair 形态：**下限之上共有多少对**（截断前）。
+     *
+     * `candidatesAboveFloor > candidateCount` ⇒ 这一轮发生了截断（有一批够像的对
+     * 因为名额上限没被问到）。2026-10-05 新增 —— 在此之前这件事**完全不可见**，
+     * 而用户报的重复恰好全是这一形态。见 `PairJudgeResult.candidatesAboveFloor`。
+     */
+    candidatesAboveFloor?: number;
+    /**
+     * pair 形态：**优先档之上共有多少对**（截断前，见 {@link PAIR_PRIORITY_SIM}）。
+     *
+     * 它 > `candidateCount` 才说明**真的漏了**（连最像的那批都没装下）；
+     * 只有 `candidatesAboveFloor` 超标属预期（低分对没挤进来）。两者分开报，
+     * 是为了让「上限该不该再调大」这个问题有答案，而不是靠感觉。
+     */
+    candidatesAbovePriority?: number;
     /** pair 形态：被确定性判据（反向极性）拦下、没问模型的对 */
     vetoed?: Array<{ a: number; b: number; sim: number }>;
     /** pair 形态：问了模型、但模型判「否」的对（用来发现**漏合并**） */
@@ -260,15 +283,116 @@ export const TITLE_IDENTICAL_MIN_SIM = 0.95;
  * 里的同名过滤只是省循环，**不是**防线的本体。
  */
 export function isSameTitleText(ta: string, tb: string): boolean {
+  return titleDupAt(ta, tb, TITLE_IDENTICAL_MIN_SIM);
+}
+
+/** `isSameTitleText` / `isNearSameTitleText` 共用的本体：占位标题 + 反向极性 + 阈值。 */
+function titleDupAt(ta: string, tb: string, minSim: number): boolean {
   if (!ta || !tb) return false;
   if (ta === '无标题' || tb === '无标题') return false;
   if (hasOppositePolarity(ta, tb)) return false;
-  return similarity(ta, tb) >= TITLE_IDENTICAL_MIN_SIM;
+  return similarity(ta, tb) >= minSim;
 }
 
 /** 中译标题近似相同 ⇒ 同一条新闻（见 {@link TITLE_IDENTICAL_MIN_SIM} 的取舍说明）。 */
 export function isSameTitle(a: StoryLike, b: StoryLike): boolean {
   return isSameTitleText(a.title || '', b.title || '');
+}
+
+/**
+ * **近同名**的下限（2026-10-05 新增）—— 比 {@link TITLE_IDENTICAL_MIN_SIM}(0.95) 松。
+ *
+ * ## 为什么需要第二条线（用户报的重复，一半落在这一档）
+ *
+ * 0.95 那道闸实测**几乎不起作用**：30 天 8468 篇里，同一推送窗口内中译标题
+ * `sim ≥ 0.90` 的只有 **1 对**，而 `0.70–0.90` 有 **44 对**。
+ * 也就是说「同一件事被两家媒体各写一遍」的绝大多数**不可能**被 0.95 拦到，
+ * 全压在 L2 模型身上 —— 而模型恰恰会漏：线上实测（`dedupe-check?days=1&llm=1`）
+ * 它把 `0.7600`「阿曼苏丹 Haitham bin Tariq Al Said 将**于10月5日至6日**对
+ * 哈萨克斯坦进行国事访问」↔「…**将**对哈萨克斯坦进行国事访问」判成了「**否**」。
+ * 这就是用户投诉里那条「阿曼的苏丹」。
+ *
+ * ## 为什么取 0.75（量出来的，不是拍的）
+ *
+ * 30 天窗口内 `sim ≥ 0.70` 的对共 **45 对**，**逐条人工看过，45/45 都是同一件事**
+ * （换词、加/减修饰语、专名音译差异、「参观/视察」「出席/参与」这类动词替换、
+ * 括号里的「（更新）」、同一词的重复字）。
+ *
+ * 取 0.75 而不是 0.70，是因为 0.75 是**实测里最低的、每一条差异都只落在
+ * 「虚词 / 拼写 / 括号 / 动词同义」**这一档的阈值 —— 而 0.70–0.75 那 26 对里已经出现
+ * 实体词级别的替换（`矿业冶金/矿产冶金`、`统一作用/联合作用`），那属于**语义**判断，
+ * 该由模型判，而模型现在**一定会被问到**（优先档下限 0.35，见 {@link PAIR_PRIORITY_SIM}）。
+ * 阈值卡在两个职责的分界上，而不是「越低越好」。
+ *
+ * 取 0.75 还有个具体好处：用户投诉的那条「阿曼的苏丹」正好落在里面 ——
+ * 线上实测它 `sim = 0.7600`，**模型把它判成了「否」**（见上），这一层不依赖模型。
+ *
+ * ⚠️ 若日后仍有 0.70–0.75 档的重复被报上来，**降这个数之前先重跑
+ * `pnpm analyze:pair-recall 30`**，把 0.70–0.75 那一档重新逐条看过 ——
+ * 不要因为「又报了一次」就把阈值往下推，那正是本项目栽过的坑（拍阈值）。
+ *
+ * ⚠️ **这道闸只在推送端跑，入库端不跑**（见 `dedupeNearTitles`）。理由是**可逆性不对称**：
+ * 入库端丢的行事后不可追（`fetch-news` 的闸 2 注释已经写死了这条规矩），
+ * 而推送端丢的只是「今天不展示这一条」，行还在库里、明天还在候选里。
+ * 两道线的阈值不同**是有意的**，不是「判据分叉」。
+ */
+export const TITLE_NEAR_MIN_SIM = 0.75;
+
+/**
+ * 近同名闸的**最短标题长度**（两标题都要够长才算）。
+ *
+ * 为什么需要这条：`similarity` 是字符双字组的 Jaccard，**短标题里差一个字就能顶到 0.8**。
+ * 算给你看（实测，不是估）——「托卡耶夫会见德国总统」↔「托卡耶夫会见德国总理」：
+ * 10 个字里只有末字的双字组 `总统`/`总理` 不同 ⇒ **0.8000 ≥ 0.75**，
+ * 而这是**两条不同的会见**（德国总统 vs 德国总理）。光靠阈值挡不住它。
+ *
+ * 取 **15**：实测 30 天里 ≥0.70 的那 45 对，**最短的一条是 15 字**
+ * （「阿塞拜疆大奖赛第三场练习赛结束」↔「…（更新）」= 0.8750）——
+ * 也就是说下限不是拍的，是「不比实测里最短的真重复更短」。
+ * 顺带把上面那个 10 字的反例挡住（并把「施泰因迈尔/舒尔茨」那类
+ * 带全名的不同会见留在更低分档，实测它们只有 0.39–0.63）。
+ */
+export const TITLE_NEAR_MIN_CHARS = 15;
+
+/**
+ * 近同名判据（文本级）。
+ *
+ * 守卫与 {@link isSameTitleText} **完全相同**（同一个 `titleDupAt`，空标题 / 占位标题 /
+ * 反向极性），只换阈值 —— 三条守卫在松阈值下**更**不能省；另外多一条长度下限
+ * （见 {@link TITLE_NEAR_MIN_CHARS}），因为在短标题上相似度会虚高。
+ */
+export function isNearSameTitleText(ta: string, tb: string): boolean {
+  if (!titleDupAt(ta, tb, TITLE_NEAR_MIN_SIM)) return false;
+  return Math.min(ta.length, tb.length) >= TITLE_NEAR_MIN_CHARS;
+}
+
+/** {@link isNearSameTitleText} 的对象形态。 */
+export function isNearSameTitle(a: StoryLike, b: StoryLike): boolean {
+  return isNearSameTitleText(a.title || '', b.title || '');
+}
+
+/**
+ * 推送侧的「近同名」去重（**只在推送端调用**）。
+ *
+ * 与 `dedupeStoriesDeterministic` 的关系：那是**四条身份判据**（链接 / 原文指纹 /
+ * 正文逐字 / 标题逐字 0.95），入库端与推送端共用；这一条是**推送端专属**的第五条，
+ * 阈值 0.75 + 长度下限 12 字，见 {@link TITLE_NEAR_MIN_SIM} 里为什么这么定、为什么只在这一端跑。
+ *
+ * 保序保留**第一条**（与其它确定性闸一致）。不搞「留更长的标题」这类聪明：
+ * 那会让「留哪条」依赖长度而非顺序，出问题时无法从输入顺序复现。
+ */
+export function dedupeNearTitles<T extends StoryLike>(items: T[]): {
+  kept: T[];
+  drops: DedupDrop<T>[];
+} {
+  const kept: T[] = [];
+  const drops: DedupDrop<T>[] = [];
+  for (const item of items) {
+    const hit = kept.find((p) => isNearSameTitle(p, item));
+    if (hit) drops.push({ kept: hit, dropped: item, reason: 'same_title_near' });
+    else kept.push(item);
+  }
+  return { kept, drops };
 }
 
 /**
@@ -373,18 +497,120 @@ const MAX_GROUP_SIZE = 4;
 /**
  * pair 形态：候选对的标题相似度下限。低于它的对不值得问模型。
  *
- * 0.35 是**召回下限**，故意放低 —— 这一步只要「不漏」，判得准不准是模型的职责。
- * 用线上 1000 篇真实数据核过（`pnpm tsx scripts/peek-pairs.ts`）：
- * 下限上面的候选对里，真正同一件事的都在，包括几类最难的 ——
- * 人名音译差异（「奥伦巴耶夫」/「奥里姆巴耶夫」0.37）、
- * 数字有出入（「75亿美元」/「76亿美元」0.43）、
- * 同一政策的两种译法（「17.5%降至12%」/「17.5%下调至12%」0.75）、
- * 以及提示词里那对「团结的力量」/「团结之力」0.71。
+ * 0.20 是**召回下限**，故意放低 —— 这一步只要「不漏」，判得准不准是模型的职责。
+ *
+ * ## 2026-10-05：0.35 → 0.20，这是**量出来的**，不是拍的
+ *
+ * 量法：`pnpm analyze:pair-recall 7`（只读，按**推送窗口**分组 —— 注意不是按日期，
+ * 因为用户报的重复是「同一份草稿里两条」，那就必须落在同一个窗口里）。
+ *
+ * 决定性的那两个数来自 `GET /api/dedupe-check?days=1&llm=1&limit=200`（真实线上数据，
+ * 5 个国家各跑一次真实 L2 判定）：
+ *
+ * | 国家 | 送进 L2 的条目 | `candidatePairs` 召回到 | 结果 |
+ * |---|---|---|---|
+ * | kz | 30 | **7** | 7 对里 6 对判「是」，合并成 4 组（0.84 / 0.76 / 0.41 / 0.41） |
+ * | uz | 28 | **3** | 3 对里 1 对判「是」（0.71） |
+ * | az | 39 | **1** | 唯一那对 sim 0.38，判「否」 |
+ * | kg | 7 | **0** | —— |
+ * | tj | 9 | **0** | —— |
+ *
+ * 两个结论：
+ *
+ * 1. **模型判得不差**：它把 0.41 以上的对都合并了，判「否」的全在 0.38–0.45 这条模糊带。
+ *    所以「漏合并」的主因**不在模型**，而在**它根本没被问到几对** ——
+ *    az 39 条稿子只召回到 1 对，kg/tj 一对都没有。
+ * 2. 而下限 0.35 正是卡住召回的那道闸：同一批数据在 0.20 上，候选对数量大约翻一倍。
+ *
+ * ## 为什么「只降下限」是**错**的（差点就这么干了）
+ *
+ * 先量了降阈的代价（`scripts/analyze-pair-recall.ts` 第 3 节）：0.35 → 0.20 会
+ * **丢掉 82 对**，而且丢掉的恰恰是**最像的那些**：
+ *
+ *   · `0.8400`「阿塞拜疆**与**乌兹别克斯坦国防部签署双边军事合作计划」
+ *     ↔「阿塞拜疆**和**乌兹别克斯坦国防部签署双边军事合作计划」
+ *   · `0.7778`「…召开**第三次**人工智能发展委员会会议」↔「…召开人工智能发展委员会**第三次**会议」
+ *   · `0.7143`「阿利耶夫：…发挥**统一**作用」↔「**阿里耶夫**：…发挥**联合**作用」
+ *
+ * 成因在 {@link candidatePairs} 的**覆盖轮顺序**：它按**条目顺序**（= 调用方给的
+ * 投资相关性降序）走，名额一满就停 —— 于是「谁被问到」由列表位置决定，
+ * 而不是由「有多像」决定。降阈让更多条目有资格抢名额，反而把高分对挤了出去。
+ * ⇒ 所以这一版必须**同时**改顺序（见 `candidatePairs`）和上限（见
+ * {@link PAIR_MAX_CANDIDATES}），三者是一套。
+ *
+ * ## 为什么不设得更低
+ *
+ * 0.20 以下噪声爆炸：同一窗口里 `0.12–0.20` 段有 **7605 对**，模型问不完，
+ * 而它们里真正同一件事的极少。0.20 是「再低就只剩噪声」的那一档。
+ * 注意：因为上限是**按相似度截断**的，下限设得比「名额能装下的量」更低是**无成本**的
+ * —— 多出来的对只会被截掉。所以这个数只影响「最小可信度」，不影响成本。
  */
-export const PAIR_CANDIDATE_MIN_SIM = 0.35;
+export const PAIR_CANDIDATE_MIN_SIM = 0.2;
 
-/** pair 形态：单轮最多问多少对（控制提示词长度与延迟）。 */
-export const PAIR_MAX_CANDIDATES = 12;
+/**
+ * 「优先档」下限：**高于它的对必须被问到**，不许被降阈新增的低分对挤掉。
+ *
+ * ## 为什么上限之外还需要第二根线（2026-10-05 补）
+ *
+ * 下限从 0.35 降到 0.20 之后，`analyze:pair-recall` 第 3 节量出一个**反直觉的副作用**：
+ * 名额（{@link PAIR_MAX_CANDIDATES}）是固定的，降阈把更多低分对放进同一个池子，
+ * 于是**高分对被低分对挤掉** —— 实测丢掉 28 对，最高分的是 `0.6786`
+ * 「阿塞拜疆 Azeri Light 原油价格**上涨 5.5 美元**」↔「…**接近125美元**」
+ * （同批 145 对抢 40 个名额，三条同源报价稿一对都没问到）。
+ *
+ * **「降低下限」永远不该让「原来会问的对」变得问不到** —— 这是单调性，不是偏好：
+ * 0.35 这一档是**旧行为已经承诺过**的范围，降阈只能在它**之外**加，
+ * 不能在它**之内**换。所以选对分两档：
+ *
+ *   1. **优先档**（`sim ≥ PAIR_PRIORITY_SIM`）：**独享**名额，走完整的覆盖轮 + 相似度填充；
+ *   2. **补充档**（`PAIR_CANDIDATE_MIN_SIM ≤ sim < PAIR_PRIORITY_SIM`）：
+ *      只吃优先档**剩下**的名额。
+ *
+ * 于是这条恒等式必然成立，并由 `test-dedup` 断言（双向：构造一个「单池实现会违反」的用例）：
+ *
+ *   `candidatePairs(items, minSim, cap) ⊇ candidatePairs(items, PAIR_PRIORITY_SIM, cap)`
+ *
+ * 取 **0.35 = 旧下限原值**。理由不是「0.35 有多好」，而是「它是改动前**已经承诺过**
+ * 的那条线」：拿旧值当分档线，这一改动对旧行为才是**纯增量**（可证、可测），
+ * 而不是拿一件新的直觉去换一件旧的直觉。
+ *
+ * ⚠️ 它与 `COVER_BORROW_MIN_SIM`、`DUP_SIM_FLOOR` **数值相同但不是同一个东西**：
+ * 这里判的是「名额分配」的先后，借图那条判的是「能不能直接采信是同一件事」，
+ * `DUP_SIM_FLOOR` 判的是「编辑说的 sameAs 锚点是否可信」。三者不许互相赋值。
+ */
+export const PAIR_PRIORITY_SIM = 0.35;
+
+/**
+ * pair 形态：单轮最多问多少对（控制提示词长度与延迟）。
+ *
+ * ## 2026-10-05：12 → 40，同样是量出来的
+ *
+ * 12 这个数在**线上根本用不满**：实测每国每轮召回到的是 7 / 3 / 1 / 0 / 0 对
+ * （见 {@link PAIR_CANDIDATE_MIN_SIM} 的表）。所以 12 不是当前的瓶颈 ——
+ * 但它**曾经**是（2026-09-24 的 Unibank 三条就是被 12 挤掉的），
+ * 而下限一降，候选数就上来了，12 会立刻变成瓶颈。
+ *
+ * 取 48 的依据（2026-10-05 同日由 40 再上调，见下）：
+ *   · 线上单轮候选对数量级在 1–10（0.35 口径），降到 0.20 后约 ×2；
+ *   · 实测一周 65 轮（`analyze:pair-recall` 的「每批候选名额压力」表）里
+ *     **≥0.35 的对数最大 = 44**（`kz 2026-10-02 早报`）—— 40 会截掉其中 4 对，
+ *     而那一批截掉的恰好是同一簇（托卡耶夫 Digital Bridge 系列）里的真重复。
+ *     取 48 = 44 加一个批次的正常波动余量，让**实测范围内所有 ≥0.35 的对都问得到**；
+ *   · 提示词长度：每行 `编号 | 标题A || 标题B`（标题截断 80 字）≈ 170 字符，
+ *     48 行 ≈ 8.2 KB —— 对 200K 上下文的模型不成问题；
+ *   · 输出是一个 48 元素以内的短数组，仍然「解析简单、模型不容易跑偏」。
+ *
+ * ⚠️ **上限不该被当护栏用。** 它的职责只是「控制单次请求的长度」；
+ * 「哪些对值得问」由下限 + 优先档 + 排序决定。历史上把 12 当护栏用，
+ * 结果就是静默丢掉最像的那几对（用户报的重复）。所以这里同时报
+ * `candidatesAboveFloor` / `candidatesAbovePriority`（下限之上 / 优先档之上的总对数）
+ * —— 它们**大于**上限时说明还在截断，那时该看的是「被截掉的是不是低分对」，
+ * 而不是继续往上调这个数。
+ *
+ * 补充档（0.20 ≤ sim < 0.35）**只吃优先档剩下的名额**，所以上限调大并不等于
+ * 低分对变多：优先档先占满，低分对只在还有余量时进来（见 {@link PAIR_PRIORITY_SIM}）。
+ */
+export const PAIR_MAX_CANDIDATES = 48;
 
 /*
  * ## 为什么这里**没有**「判是比例过高就熔断」这条护栏
@@ -392,7 +618,7 @@ export const PAIR_MAX_CANDIDATES = 12;
  * 2026-09-21 曾按直觉加过一条：判「是」的比例超过候选数一半就整轮不采信。
  * 随后拿线上 1000 篇真实数据算了一遍接受率，发现它必然误伤：
  *
- * 因为候选是**按相似度降序截断**的（`PAIR_MAX_CANDIDATES = 12`），
+ * 因为候选是**按相似度降序截断**的（上限见 `PAIR_MAX_CANDIDATES`），
  * 留下来的天然就是最像的那些对，真重复占多数是**正常现象**，不是模型退化。
  * 实测乌兹别克斯坦单轮 12 对里 11 对确实讲同一件事（接受率 0.92）——
  * 按 0.5 熔断会把这一整轮的**正确**判定全部丢掉。
@@ -452,7 +678,7 @@ export function hasOppositePolarity(a: string, b: string): boolean {
 /**
  * 生成「值得让模型看两眼」的候选对（下标对）。
  *
- * 这一步是**召回**，不是判定：门槛刻意放低（默认 0.35），
+ * 这一步是**召回**，不是判定：门槛刻意放低（默认 0.20），
  * 宁可多问几对，也不要把真正同一件事的两条漏在候选之外。
  * 判定交给模型（precision），职责分离。
  *
@@ -466,24 +692,69 @@ export function hasOppositePolarity(a: string, b: string): boolean {
  * 这个缺陷在 L2 关着时是**休眠**的（`candidatePairs` 根本不被调用），
  * 但一旦打开开关就会静默漏掉本该问到的对。典型受害者就是 2026-09-24 用户截图里
  * 那三条 Unibank（`id` 4638/4663/4673）—— 它们 sim 只有 0.375/0.387/0.400，
- * **过得了 0.35 这条线**，却排不进「最像的 12 对」。
+ * **过得了下限这条线**，却排不进「最像的 12 对」。
  * 所以这一步必须排在「打开 `SAME_EVENT_JUDGE`」**之前**。
  *
  * 两轮：
- *   1. **覆盖轮** —— 按 `items` 的顺序逐条检查（调用方已按重要性排好：push 端传进来的
- *      是投资相关性降序），谁还没被任何已选中的对覆盖，就选**它自己最高分的那一对**。
- *      ⇒ 「重要的条目至少被问过一次」。
+ *   1. **覆盖轮** —— 谁还没被任何已选中的对覆盖，就选**它自己最高分的那一对**。
+ *      ⇒ 「每个条目至少被问过一次」。
  *   2. **填充轮** —— 还有名额就按 `sim` 降序把其余的对填满，不浪费预算。
  *
  * 结果条数不变（= min(候选对数, maxPairs)），只是**留下哪几对**变了。
  * 排序也变成本函数内部确定性：同分时按 `(a, b)` 兜底，
  * 避免「同样的输入两次给出不同候选集」让判定稳定性实验失去意义。
+ *
+ * ## ★ 2026-10-05：覆盖轮的**遍历顺序**改成「按该条目最高分的对，降序」
+ *
+ * 旧实现在覆盖轮里**按条目在数组里的位置**遍历（`i = 0..n-1`）。
+ * 那在「名额够覆盖所有条目」时无所谓（选出来的集合一样），
+ * 但**名额不够时它就是拿列表位置当优先级** —— 名额被前几个条目吃光，
+ * 后面条目里**最像的那几对**（甚至 0.84）一对都问不到。
+ *
+ * 实测（`analyze:pair-recall` 第 3 节，7 天线上数据）：把下限从 0.35 降到 0.20
+ * 会**丢掉 82 对**，其中最高分的是 `0.8400`「阿塞拜疆**与**乌兹别克斯坦国防部签署…」
+ * ↔「阿塞拜疆**和**乌兹别克斯坦国防部签署…」。**一对 0.84 的稿子被一对 0.36 的挤掉**，
+ * 这个方向是反的。
+ *
+ * 新顺序：**先把「最高分的对」问掉，再轮到次高分**。它同时保住两件事：
+ *   · 名额不够时，被截掉的一定是**最不像**的（旧实现在这一点上完全随机，取决于列表顺序）；
+ *   · 名额够时，覆盖轮仍然覆盖到每个条目（这是 2026-09-24 那次修复的目的，不能丢）。
+ *
+ * ⚠️ 这只是**顺序**变好，**不改变**「名额够不够」这个根本问题 ——
+ * 所以 2026-10-05 同时把上限从 12 提到 40（见 {@link PAIR_MAX_CANDIDATES}）。
+ * 两者是一套：只改顺序，Unibank 那种「低分对全被高分模板稿挤掉」仍会复发。
+ *
+ * `aboveFloor` / `abovePriority` 是**截断前的总对数**（下限之上 / 优先档之上）。
+ * 它们 > `maxPairs` 时说明这一轮还在截断 —— 报出来是为了让「截断有没有发生」
+ * 变成可数的数字，而不是靠调大上限猜。**它们不参与任何判定。**
+ *
+ * ## ★ 2026-10-05（同日第二次）：分两档选，保证「降阈只做加法」
+ *
+ * 光改顺序（上一段）**没能**消除「高分对给低分对让路」：`analyze:pair-recall`
+ * 第 3 节复量，从 82 对降到 **28 对** —— 仍是最像的那批（最高 0.6786）。
+ * 根因不是顺序，是**名额被两个档位共用**。所以按 {@link PAIR_PRIORITY_SIM} 切开：
+ *
+ *   · 优先档 `sim ≥ PAIR_PRIORITY_SIM` → `pickPairs(high, maxPairs)`，**独享**名额；
+ *   · 补充档 `[minSim, PAIR_PRIORITY_SIM)` → `pickPairs(rest, 剩余名额)`，
+ *     并**跳过优先档已覆盖的条目**（它已经有一条被问过的对了，
+ *     再给它配一个低分对是拿名额换重复信息）。
+ *
+ * 于是 `candidatePairs(items, minSim, cap) ⊇ candidatePairs(items, PAIR_PRIORITY_SIM, cap)`
+ * 成为**构造性**事实（两次调用走的是同一个 `pickPairs(high, cap)`），不是「希望如此」。
+ * `test-dedup` 里有断言 + 一个「单池实现会违反它」的对照用例。
  */
-export function candidatePairs<T extends StoryLike>(
+export function selectCandidatePairs<T extends StoryLike>(
   items: T[],
   minSim = PAIR_CANDIDATE_MIN_SIM,
   maxPairs = PAIR_MAX_CANDIDATES,
-): Array<{ a: number; b: number; sim: number }> {
+  prioritySim = PAIR_PRIORITY_SIM,
+): {
+  chosen: Array<{ a: number; b: number; sim: number }>;
+  aboveFloor: number;
+  abovePriority: number;
+} {
+  // 优先档不能低于召回下限（调用方可能只想按一个下限选，如分析脚本传 0.35）。
+  const priority = Math.max(minSim, prioritySim);
   const all: Array<{ a: number; b: number; sim: number }> = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
@@ -491,40 +762,96 @@ export function candidatePairs<T extends StoryLike>(
       if (sim >= minSim) all.push({ a: i, b: j, sim });
     }
   }
-  if (all.length === 0) return [];
+  if (all.length === 0) return { chosen: [], aboveFloor: 0, abovePriority: 0 };
   all.sort((x, y) => y.sim - x.sim || x.a - y.a || x.b - y.b);
 
-  // 每个条目「自己最高分的那一对」——all 已降序，所以第一次遇到它的那一对就是最高分
-  const bestOf = new Array<number>(items.length).fill(-1);
-  for (let k = 0; k < all.length; k++) {
-    if (bestOf[all[k].a] < 0) bestOf[all[k].a] = k;
-    if (bestOf[all[k].b] < 0) bestOf[all[k].b] = k;
+  // `all` 已降序 ⇒ 优先档是它的前缀。用 filter 而不是 slice 是为了不依赖这个前提。
+  const high = all.filter((p) => p.sim >= priority);
+  const tier1 = pickPairs(high, items.length, maxPairs, EMPTY_ITEM_SET);
+
+  // 补充档：优先档之外的那些（`all` 降序，filter 保序）。两档不相交 ⇒ 与 tier1 不重复。
+  const rest = all.filter((p) => p.sim < priority);
+  const tier2 = pickPairs(rest, items.length, maxPairs - tier1.chosen.length, tier1.covered);
+
+  return {
+    chosen: [...tier1.chosen, ...tier2.chosen],
+    aboveFloor: all.length,
+    abovePriority: high.length,
+  };
+}
+
+/** 复用的空集合（`pickPairs` 只读它），避免每次调用都建一个。 */
+const EMPTY_ITEM_SET: ReadonlySet<number> = new Set<number>();
+
+/**
+ * 覆盖轮 + 填充轮的实现 —— {@link selectCandidatePairs} 的两档**共用同一份代码**
+ * （这是「降阈只做加法」能成立的原因：优先档走的就是 `minSim = 优先档下限` 时的全部逻辑）。
+ *
+ * `pool` 必须**已按 `sim` 降序**（调用方保证）：因此「第一次遇到某个条目」
+ * 就等于「它最高分的那一对」，不需要第二次比较。
+ *
+ * 返回 `covered` 给调用方 —— 第二档要跳过第一档已经覆盖过的条目。
+ */
+function pickPairs(
+  pool: Array<{ a: number; b: number; sim: number }>,
+  itemCount: number,
+  budget: number,
+  alreadyCovered: ReadonlySet<number>,
+): { chosen: Array<{ a: number; b: number; sim: number }>; covered: Set<number> } {
+  const chosen: Array<{ a: number; b: number; sim: number }> = [];
+  const covered = new Set<number>();
+  if (budget <= 0 || pool.length === 0) return { chosen, covered };
+
+  // 每个条目「自己最高分的那一对」——pool 已降序，第一次遇到它的那一对就是最高分
+  const bestOf = new Array<number>(itemCount).fill(-1);
+  for (let k = 0; k < pool.length; k++) {
+    if (bestOf[pool[k].a] < 0) bestOf[pool[k].a] = k;
+    if (bestOf[pool[k].b] < 0) bestOf[pool[k].b] = k;
   }
 
-  const chosen: Array<{ a: number; b: number; sim: number }> = [];
-  const picked = new Set<number>();
-  const covered = new Set<number>();
+  /**
+   * 覆盖轮的遍历顺序：**按各条目最高分那一对的相似度降序**，同分按条目下标兜底。
+   *
+   * ⚠️ 只排**有对可选的**条目（`bestOf >= 0`）—— 跟谁都不够像的条目本来
+   * 也占不到名额，排进来只会让顺序多一层无意义的抖动。
+   * 已被上一档覆盖过的条目同样排除（见 `alreadyCovered`）。
+   */
+  const coverOrder = Array.from({ length: itemCount }, (_, i) => i)
+    .filter((i) => bestOf[i] >= 0 && !alreadyCovered.has(i))
+    .sort((i, j) => pool[bestOf[j]].sim - pool[bestOf[i]].sim || i - j);
 
-  // 轮 1：覆盖
-  for (let i = 0; i < items.length && chosen.length < maxPairs; i++) {
+  const picked = new Set<number>();
+
+  // 轮 1：覆盖（顺序见 `coverOrder`）
+  for (const i of coverOrder) {
+    if (chosen.length >= budget) break;
     if (covered.has(i)) continue;
     const k = bestOf[i];
-    if (k < 0) continue; // 这条跟谁都不够像，覆盖不了，交给别的条目占名额
     picked.add(k);
-    const p = all[k];
+    const p = pool[k];
     chosen.push(p);
     covered.add(p.a);
     covered.add(p.b);
   }
 
   // 轮 2：按相似度填满剩余名额
-  for (let k = 0; k < all.length && chosen.length < maxPairs; k++) {
+  for (let k = 0; k < pool.length && chosen.length < budget; k++) {
     if (picked.has(k)) continue;
     picked.add(k);
-    chosen.push(all[k]);
+    chosen.push(pool[k]);
   }
 
-  return chosen;
+  return { chosen, covered };
+}
+
+/** {@link selectCandidatePairs} 的薄壳 —— 只要选出来的对，不要统计量。 */
+export function candidatePairs<T extends StoryLike>(
+  items: T[],
+  minSim = PAIR_CANDIDATE_MIN_SIM,
+  maxPairs = PAIR_MAX_CANDIDATES,
+  prioritySim = PAIR_PRIORITY_SIM,
+): Array<{ a: number; b: number; sim: number }> {
+  return selectCandidatePairs(items, minSim, maxPairs, prioritySim).chosen;
 }
 
 /**
@@ -689,6 +1016,17 @@ export interface JudgeOptions {
    * 生产链路（`fetch-news` / `wechat/push`）**不要传** —— 钉住通道等于放弃降级。
    */
   only?: string;
+  /**
+   * 覆盖召回下限 / 优先档下限 / 单轮上限（见 {@link PAIR_CANDIDATE_MIN_SIM} /
+   * {@link PAIR_PRIORITY_SIM} / {@link PAIR_MAX_CANDIDATES}）。
+   *
+   * 存在的理由和 `promptVersion`、`only` 一样：**让「召回层」也能被单独钉住做对照**。
+   * 召回与判定是两级，只钉提示词版本的话，「这次多合并了两条」照样分不清是
+   * 提示词更准了还是召回放得更宽了。生产链路**不传**，永远走当前默认值。
+   */
+  minSim?: number;
+  maxPairs?: number;
+  prioritySim?: number;
 }
 
 /** 模型调用出口的签名：只吃提示词，返回文本或错误（与 `askLlmJson` 的返回同形）。 */
@@ -804,6 +1142,25 @@ export interface PairJudgeResult {
   pairs: Array<{ a: number; b: number; sim: number }>;
   /** 这次送进去问了几对（含被极性拦下的；被拦的不占 `pairs`/`declined`） */
   candidateCount: number;
+  /**
+   * **下限之下限之上的总对数**（`candidatePairs` 截断**之前**）。只有从 `items` 自己召回的
+   * {@link judgeSameEventPairs} 才有；照单全收的 {@link judgeExplicitPairs} 恒为 undefined。
+   *
+   * 为什么必须报出来：它 > `candidateCount` 就说明**这一轮发生了截断** ——
+   * 也就是「有一批够像的对没被问到」。2026-10-05 之前这件事是**完全不可见**的
+   * （只看 `candidateCount` 分不清「只有 7 对够像」和「有 200 对、只问了 7 对」），
+   * 而用户报的重复恰恰全是「够像却没被问到」。
+   */
+  candidatesAboveFloor?: number;
+  /**
+   * pair 形态：**优先档之上共有多少对**（{@link PAIR_PRIORITY_SIM} 的口径，截断前）。
+   *
+   * 它 > `candidateCount` ⇒ 连**优先档**都发生了截断（上限不够装），
+   * 那就是「最像的那批里有没被问到的」—— 与 `candidatesAboveFloor` 的区别是：
+   * 后者超标只说明「低分对没挤进来」（预期行为，不必处理），
+   * 这一条超标才是**真的漏**（2026-10-05 分档后新增，用来把两者分开）。
+   */
+  candidatesAbovePriority?: number;
   /** 没问模型就被确定性判据（反向极性）拦下的对 */
   vetoed: Array<{ a: number; b: number; sim: number }>;
   /**
@@ -914,7 +1271,16 @@ export async function judgeSameEventPairs<
   items: T[],
   options: JudgeOptions = {},
 ): Promise<PairJudgeResult> {
-  return judgeExplicitPairs(candidatePairs(items), items, options);
+  const { chosen, aboveFloor, abovePriority } = selectCandidatePairs(
+    items,
+    options.minSim,
+    options.maxPairs,
+    options.prioritySim,
+  );
+  const res = await judgeExplicitPairs(chosen, items, options);
+  // 截断前有多少对够像 —— 见 `PairJudgeResult.candidatesAboveFloor` /
+  // `candidatesAbovePriority`（前者超标属预期，后者超标才是真的漏）。
+  return { ...res, candidatesAboveFloor: aboveFloor, candidatesAbovePriority: abovePriority };
 }
 
 /**
@@ -1112,8 +1478,20 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   const { useLlm = isLlmJudgeEnabled(), judge } = options;
   const mode: JudgeMode = judge?.mode ?? 'pair';
 
-  const { kept: keptAfterIdentity, drops: identityDrops } = dedupeStoriesDeterministic(items);
-  const drops: DedupDrop<T>[] = [...identityDrops];
+  const { kept: keptAfterDeterministic, drops: deterministicDrops } =
+    dedupeStoriesDeterministic(items);
+  /**
+   * 闸 3.5：**推送端专属**的近同名（`sim ≥ TITLE_NEAR_MIN_SIM`）。
+   *
+   * 放在 L2 **之前**有两个作用：省 token（这些对本来就该合并，不必问模型），
+   * 以及**绕开模型的漏判** —— 实测模型会把 0.76 那对判成「否」（见
+   * {@link TITLE_NEAR_MIN_SIM} 的说明），这一层不依赖它。
+   *
+   * ⚠️ 只在推送端：入库端丢行不可逆（见 `dedupeNearTitles`）。
+   */
+  const { kept: keptAfterIdentity, drops: nearTitleDrops } =
+    dedupeNearTitles(keptAfterDeterministic);
+  const drops: DedupDrop<T>[] = [...deterministicDrops, ...nearTitleDrops];
   const llm: DedupResult<T>['llm'] = { ran: false, ok: false, mode, groups: [] };
 
   if (!useLlm || keptAfterIdentity.length < 2) {
@@ -1134,6 +1512,8 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
     judgedProvider = res.provider;
     llm.pairs = res.pairs;
     llm.candidateCount = res.candidateCount;
+    llm.candidatesAboveFloor = res.candidatesAboveFloor;
+    llm.candidatesAbovePriority = res.candidatesAbovePriority;
     llm.vetoed = res.vetoed;
     llm.declined = res.declined;
     if (res.vetoed.length > 0) {

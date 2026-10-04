@@ -7,6 +7,7 @@
  */
 
 import { isChineseText, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
+import { isCountryRelevant as isCountryRelevantImpl } from './country-relevance';
 
 // ---------------------------------------------------------------------------
 // 一、正文清洗
@@ -454,193 +455,30 @@ export function hasMissingSource(title: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * 本国关键词：国名 + 首都 + 主要城市/地区 + 国家级公司。
+ * 国家相关性判据 —— **词表与判据本体已挪到 `@/lib/country-relevance`**（2026-10-05）。
+ * 这里只留一个**签名适配器**，让本模块与 `format-check` 的调用点一个字都不用改。
  *
- * ⚠️ 城市/地区名不是可选项 —— 只写国名会**误杀本国的地方新闻**。
- * 2026-09-21 离线实测踩到的真实案例：
- *   `[uz] 中国投资者在卡拉卡尔帕克斯坦发现4吨黄金储量`
- * 卡拉卡尔帕克斯坦（Karakalpakstan）是乌兹别克斯坦的一个自治共和国，
- * 标题里没出现「乌兹别克斯坦」，却出现了「中国」→ 被判成外国新闻直接丢掉。
- * 这是一条**真·乌兹别克投资新闻**，丢掉它比放进来一条外国新闻更糟。
- */
-const SELF_KEYWORDS: Record<string, string[]> = {
-  kz: [
-    'kazakhstan', 'kazakh', '哈萨克斯坦', '哈萨克', 'astana', '阿斯塔纳', 'almaty', '阿拉木图',
-    '努尔苏丹', '奇姆肯特', 'shymkent', '卡拉干达', 'karaganda', 'tengiz', '田吉兹',
-    'kashagan', '卡沙甘', 'kazatomprom', 'kazmunaigas',
-    '阿特劳', 'atyrau', '阿克套', 'aktau', '曼格斯套', 'mangystau',
-    '阿克托别', 'aktobe', '克孜勒奥尔达', 'kyzylorda', '塔拉兹', 'taraz',
-    '厄斯克门', 'oskemen', '巴甫洛达尔', 'pavlodar', '科斯塔奈', 'kostanay',
-    '突厥斯坦', 'turkistan', '杰兹卡兹甘', 'jezkazgan', '巴尔喀什', 'balkhash',
-  ],
-  uz: [
-    'uzbekistan', 'uzbek', '乌兹别克斯坦', '乌兹别克', 'tashkent', '塔什干',
-    'samarkand', '撒马尔罕', 'bukhara', '布哈拉', 'navoi', '纳沃伊',
-    'andijan', '安集延', 'fergana', '费尔干纳', 'namangan', '纳曼干',
-    '卡拉卡尔帕克斯坦', 'karakalpakstan', '努库斯', 'nukus',
-    '花拉子模', 'khorezm', '乌尔根奇', 'urgench', '铁尔梅兹', 'termez',
-    '吉扎克', 'jizzakh', '苏尔汉河', 'surkhandarya', '纳沃伊州',
-  ],
-  kg: [
-    'kyrgyzstan', 'kyrgyz', '吉尔吉斯斯坦', '吉尔吉斯', 'bishkek', '比什凯克',
-    'osh', '奥什', 'jalal-abad', '贾拉拉巴德', 'issyk-kul', '伊塞克湖', 'kumtor', '库姆托尔',
-    '塔拉斯', 'talas', '纳伦', 'naryn', '巴特肯', 'batken', '楚河', 'chuy', '卡拉科尔', 'karakol',
-  ],
-  az: [
-    'azerbaijan', 'azeri', 'azerbaijani', '阿塞拜疆', 'baku', '巴库',
-    'ganja', '甘贾', 'sumqayit', '苏姆盖特', 'nakhchivan', '纳希切万', 'socar',
-    '连科兰', 'lankaran', '舍基', 'sheki', '明盖恰乌尔', 'mingachevir',
-    '舒沙', 'shusha', '卡巴拉', 'qabala', '占贾',
-  ],
-  tj: [
-    'tajikistan', 'tajik', '塔吉克斯坦', '塔吉克', 'dushanbe', '杜尚别',
-    'khujand', '苦盏', 'khatlon', '哈特隆', 'roghun', '罗贡', 'tursunzoda',
-    '库利亚布', 'kulob', '博赫塔尔', 'bokhtar', '伊斯法拉', 'isfara',
-    '彭吉肯特', 'panjakent', '瓦赫达特', 'vahdat', '戈尔诺-巴达赫尚', 'gorno-badakhshan',
-  ],
-};
-
-/**
- * 区域/合作框架信号：命中即放行。
+ * ## 为什么必须挪（不是「整理代码」，是修事故）
  *
- * 存在的理由：有些新闻不点具体国名，但对中亚投资者是有价值的（区域走廊、
- * 欧亚经济联盟政策）。**必须在「外国」判断之前检查** ——
- * `中国—中亚天然气管道` 同时含「中国」和「中亚」，先判外国就会误杀。
+ * 这个判据原先在**两处各写一份**：这里一份（读翻译后的中文），
+ * `fetch-news/route.ts` 一份（读原始标题/描述）。两份的**词表不一样**，
+ * 于是 2026-10-04 用户又报了一次「阿塞拜疆频道出现和土耳其完全没关系的土耳其新闻」：
+ * 采集侧有 `土耳其`，这里**没有** —— 中文标题里明写「土耳其」也照样推出去。
  *
- * ⚠️ 刻意**不收**「欧盟」「欧洲」「南高加索」：
- * 用户 2026-09-21 反馈的正是阿塞拜疆频道里出现欧洲新闻，
- * 把「欧洲」当放行信号会把这类新闻全放进来。
- */
-const RELEVANT_REGION_KEYWORDS: string[] = [
-  '中亚', '中亚地区', '中亚五国', '中亚国家',
-  '欧亚经济联盟', 'eaeu', 'eurasian economic union',
-  '独联体', 'cis', '里海', 'caspian',
-  '丝绸之路', 'silk road', '一带一路', 'belt and road',
-  '中国—中亚', '中国-中亚', '中国中亚',
-];
-
-/**
- * 「讲的是别国」信号。命中即排除（除非本国或区域信号先命中）。
+ * 这是同一个判据「两处各写一份」造成的**第五次**事故
+ * （前四次见下面 `pushExclusionReason` 的注释）。所以这次不是补齐词表，是**合一**：
+ * 词表、判定顺序、兜底全在 `@/lib/country-relevance` 一处定义，
+ * 并用 `scripts/test-country-relevance.ts` 钉住「每个外国概念都必须有汉字形态」——
+ * 汉字形态是推送侧唯一读得到的东西，那条断言让同一种事故不可能再上线。
  *
- * 2026-09-20 实测：旧实现只列了 5 个目标国，导致 9/20 那批有 11 篇纯外国新闻
- * 全部走到「均未提及具体国家 → 放行」的兜底：
- *   蒙古 4 篇（吉尔吉斯频道）、格鲁吉亚 3 篇 / 土耳其 2 篇 / 俄罗斯 2 篇（阿塞拜疆频道）。
- * 用户原话：「与本国无任何关联」。
+ * ⚠️ **别再往这里加词表。** 要加词就改 `country-relevance.ts`，那边有清单和断言接着你。
  *
- * 全部小写；文本比对前统一小写。**故意不收 `us`/`eu`/`uk` 这类两字母缩写** ——
- * 它们会命中 `Europe`、`reunion`、`Ukraine` 等词的内部，误杀率远高于收益。
- */
-const FOREIGN_KEYWORDS: string[] = [
-  // 亚洲
-  '蒙古', 'mongolia', 'mongol', '乌兰巴托', 'ulaanbaatar',
-  '日本', 'japan', '东京', 'tokyo',
-  '韩国', 'south korea', 'korea', 'seoul', '首尔',
-  '朝鲜', 'north korea', 'pyongyang',
-  '越南', 'vietnam', '河内',
-  '泰国', 'thailand', 'bangkok',
-  '马来西亚', 'malaysia', '印度尼西亚', 'indonesia', '新加坡', 'singapore',
-  '菲律宾', 'philippines', '缅甸', 'myanmar', '尼泊尔', 'nepal',
-  '孟加拉', 'bangladesh', '斯里兰卡', 'sri lanka',
-  '印度', 'india', 'indian', '新德里', 'new delhi',
-  '巴基斯坦', 'pakistan', 'islamabad', '伊斯兰堡',
-  '阿富汗', 'afghanistan', 'kabul', '喀布尔',
-  '中国', 'china', 'chinese', '北京', 'beijing', '上海', 'shanghai',
-  '中国香港', '中国台湾', '中国澳门',
-  // 中东
-  '伊朗', 'iran', 'iranian', '德黑兰', 'tehran',
-  '伊拉克', 'iraq', 'baghdad', '巴格达',
-  '叙利亚', 'syria', '黎巴嫩', 'lebanon', '约旦', 'jordan',
-  '以色列', 'israel', '特拉维夫', '巴勒斯坦', 'palestine', '加沙', 'gaza',
-  '沙特', 'saudi', '利雅得', 'riyadh',
-  '阿联酋', 'uae', 'emirates', '迪拜', 'dubai', '阿布扎比', 'abu dhabi',
-  '卡塔尔', 'qatar', 'doha', '多哈', '科威特', 'kuwait', '阿曼', 'oman', '巴林', 'bahrain',
-  '也门', 'yemen', '埃及', 'egypt', 'cairo', '开罗',
-  // 欧洲
-  '欧洲', 'europe', 'european', '欧盟', 'european union', 'eurozone', '欧元区', '布鲁塞尔',
-  '德国', 'germany', 'german', '柏林', 'berlin', '慕尼黑', '法兰克福',
-  '法国', 'france', 'french', '巴黎', 'paris',
-  '英国', 'britain', 'british', 'england', 'london', '伦敦',
-  '意大利', 'italy', 'italian', '罗马', 'rome',
-  '西班牙', 'spain', 'spanish', '马德里', 'madrid', '葡萄牙', 'portugal', 'lisbon',
-  '荷兰', 'netherlands', 'dutch', 'amsterdam', '阿姆斯特丹',
-  '比利时', 'belgium', '卢森堡', 'luxembourg',
-  '瑞士', 'switzerland', 'geneva', '日内瓦', 'zurich',
-  '奥地利', 'austria', '维也纳', 'vienna',
-  '瑞典', 'sweden', 'stockholm', '挪威', 'norway', 'oslo',
-  '芬兰', 'finland', 'helsinki', '丹麦', 'denmark', 'copenhagen',
-  '冰岛', 'iceland', '爱尔兰', 'ireland', 'dublin',
-  '波兰', 'poland', 'warsaw', '华沙',
-  '捷克', 'czech', 'prague', '布拉格', '斯洛伐克', 'slovakia',
-  '匈牙利', 'hungary', 'budapest', '布达佩斯',
-  '罗马尼亚', 'romania', 'bucharest', '布加勒斯特',
-  '保加利亚', 'bulgaria', 'sofia', '希腊', 'greece', 'athens', '雅典',
-  '塞尔维亚', 'serbia', 'belgrade', '贝尔格莱德',
-  '克罗地亚', 'croatia', '斯洛文尼亚', 'slovenia',
-  '波黑', 'bosnia', '黑山', 'montenegro', '北马其顿', 'macedonia', 'albania', '阿尔巴尼亚',
-  '摩尔多瓦', 'moldova',
-  '爱沙尼亚', 'estonia', '拉脱维亚', 'latvia', '立陶宛', 'lithuania',
-  '格鲁吉亚', 'georgia', 'georgian', '第比利斯', 'tbilisi', '巴统', 'batumi',
-  '亚美尼亚', 'armenia', 'armenian', '埃里温', 'yerevan',
-  '俄罗斯', 'russia', 'russian', '莫斯科', 'moscow', '西伯利亚', 'siberia',
-  '白俄罗斯', 'belarus', 'minsk', '明斯克',
-  '乌克兰', 'ukraine', 'ukrainian', '基辅', 'kyiv', 'kiev', '敖德萨', 'odesa',
-  // 美洲
-  '美国', 'united states', 'america', 'american', '华盛顿', 'washington',
-  '纽约', 'new york', '白宫', '特朗普', 'trump', '拜登', 'biden',
-  '加拿大', 'canada', 'ottawa', '墨西哥', 'mexico',
-  '巴西', 'brazil', '阿根廷', 'argentina', '智利', 'chile', '秘鲁', 'peru',
-  '哥伦比亚', 'colombia', '委内瑞拉', 'venezuela', '古巴', 'cuba',
-  // 非洲 / 大洋洲
-  '南非', 'south africa', '尼日利亚', 'nigeria', '肯尼亚', 'kenya',
-  '埃塞俄比亚', 'ethiopia', '摩洛哥', 'morocco', '阿尔及利亚', 'algeria',
-  '突尼斯', 'tunisia', '利比亚', 'libya', '苏丹', 'sudan', '索马里', 'somalia',
-  '坦桑尼亚', 'tanzania', '加纳', 'ghana',
-  '澳大利亚', 'australia', '悉尼', 'sydney', '新西兰', 'new zealand',
-];
-
-/**
- * 把**另外四个目标国**的关键词也算作「别国」。
- *
- * 这是 2026-09-21 截图复核时抓出来的漏网：吉尔吉斯频道头条是
- * `哈萨克斯坦8月通胀率达12.5%，主要受燃料价格飙升推动`，乌兹别克频道里有
- * `哈萨克斯坦推进公共卫生系统现代化`。实测 200 篇里有 16 篇是这种「入库国别 ≠
- * 标题所指国别」（kg→kz 9 篇、uz→kz 4 篇等）。
- *
- * 为什么会漏：`FOREIGN_KEYWORDS` 只列了**非目标国**。一篇讲哈萨克斯坦的新闻
- * 落在吉尔吉斯频道里时，既不在吉尔吉斯的本国词表里，也不在任何「外国」词表里，
- * 于是命中第 4 条兜底「什么国家都没提到 → 放行」。
- *
- * 只在**本国词表都没命中之后**才查这里，所以不会误杀
- * `哈萨克斯坦与土耳其签署协议` 这种「本国 + 别国」的正常新闻。
- */
-function otherCountryKeywords(countryCode: string): string[] {
-  return Object.entries(SELF_KEYWORDS)
-    .filter(([code]) => code !== countryCode)
-    .flatMap(([, keywords]) => keywords);
-}
-
-/**
- * 判断一篇新闻是否真的与目标国家相关。
- *
- * 判定顺序（顺序本身就是规则，不要重排）：
- *   1. 命中**本国** → 相关（哪怕同时提到别国：`哈萨克斯坦与土耳其签署协议` 必须留）；
- *   2. 命中**区域/合作框架** → 相关（`中国—中亚天然气管道`）；
- *   3. 命中**任何别国**（含另外四个目标国）→ 不相关；
- *   4. 什么国家都没提到 → 放行（按入库国别归属；这类多是该国行业/企业新闻）。
+ * ⚠️ 两侧的兜底**故意不同**（采集侧：来自该国自己的媒体才算相关；推送侧：放行），
+ * 因为推送时 `country_code` 已经是采集侧判过的结论，再拿源国重判只会推翻它。
+ * 这个差别用「有没有传 `sourceCountry`」表达 —— 适配器**不传**，所以走推送侧口径。
  */
 export function isCountryRelevant(title: string, summary: string, countryCode: string): boolean {
-  const text = `${title} ${summary}`.toLowerCase();
-
-  const self = SELF_KEYWORDS[countryCode] || [];
-  if (self.some((kw) => text.includes(kw.toLowerCase()))) return true;
-
-  if (RELEVANT_REGION_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()))) return true;
-
-  if (otherCountryKeywords(countryCode).some((kw) => text.includes(kw.toLowerCase()))) return false;
-
-  if (FOREIGN_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()))) return false;
-
-  return true;
+  return isCountryRelevantImpl({ title, summary, countryCode });
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,12 @@ import {
   MIN_SOURCE_BODY_CHARS,
 } from '@/lib/article-body';
 import { translateNews, resetTranslationStats, getTranslationStats, fallbackCategory } from '@/lib/translate';
+import {
+  PROPER_NOUN_VERSION,
+  termGateProbe,
+  TERM_GATE_PROBE_EXPECT,
+} from '@/lib/proper-nouns';
+import { isCountryRelevant, selfKeywordsFor } from '@/lib/country-relevance';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
 // ⚠️ 不要在这里 new Parser / 直接调 parser.parseURL —— 用 `@/lib/feed-fetch` 的 `fetchFeed`。
@@ -152,6 +158,20 @@ interface FetchSummary {
   translation: {
     providerCounts: Record<string, number>;
     errors: Array<{ provider: string; model: string; error: string }>;
+    /**
+     * 术语闸（2026-10-05 加）。**这不是性能指标，是丢稿预警** ——
+     * 它是一道硬闸，命中 ⇒ 重试 ⇒ 三次不过丢稿（见 `translate.ts` 的 `TranslationStats.termGate`）。
+     */
+    termGate: {
+      tableVersion: string;
+      currency: number;
+      wrongNoun: number;
+      dropped: number;
+      samples: Array<{ kind: 'currency' | 'wrong-noun'; detail: string }>;
+      dropSamples: string[];
+      probe: string;
+      expected: string;
+    };
   };
 }
 
@@ -190,57 +210,18 @@ interface FetchRunState {
 //  见 translate.ts。旧实现拿英文关键词去匹配俄文/哈萨克文原文，永远匹配不上，
 //  所有文章都落到默认的 economy —— 即「推送里分类全是经济」的根因。）
 
-const COUNTRY_KEYWORDS: Record<string, string[]> = {
-  kz: ['kazakhstan', 'kazakh', 'astana', 'almaty', 'kazakhstani', 'казахстан', 'астана', 'алматы', 'қазақстан', '哈萨克斯坦', '阿斯塔纳', '阿拉木图'],
-  uz: ['uzbekistan', 'uzbek', 'tashkent', 'samarkand', 'uzbekistani', 'узбекистан', 'ташкент', '乌兹别克斯坦', '塔什干', '撒马尔罕'],
-  kg: ['kyrgyzstan', 'kyrgyz', 'bishkek', 'kyrgyzstani', 'киргиз', 'бишкек', 'кыргызстан', '吉尔吉斯斯坦', '比什凯克'],
-  tm: ['turkmenistan', 'turkmen', 'ashgabat', 'туркменистан', '土库曼斯坦', '阿什哈巴德'],
-  tj: ['tajikistan', 'tajik', 'dushanbe', 'таджикистан', 'душанбе', '塔吉克斯坦', '杜尚别'],
-  az: ['azerbaijan', 'azeri', 'baku', 'азербайджан', 'баку', '阿塞拜疆', '巴库'],
-  intl: ['central asia', '中亚', 'silk road', 'belt and road', ' BRI', 'shanghai cooperation', 'каспий', 'caspian', 'south caucasus'],
-};
-
-// 「世界其它主要国家」的识别词（含中/英/俄常见形态，俄语用词干匹配屈折变化）。
-// 用途：一条新闻如果**只**提到其它国家、完全没提目标国 → 与目标国无关，直接丢弃，
-// 连翻译都不做（省钱）。这正是「哈萨克媒体转载尼日利亚矿难」混进推送的根因：
-// 旧版的「其它国家」清单里只有中亚五国，尼日利亚根本不在里面，于是走了
-// 「来源是该国媒体 → 默认相关」的兜底放行。
+// 本国词 / 区域词 / 外国词 —— **都已挪到 `@/lib/country-relevance`**（2026-10-05）。
 //
-// 注意：提到第三国不等于无关（如「哈萨克斯坦与中国签署协议」标题里两国都有）——
-// 判定顺序永远是「先看目标国是否出现」，出现了就放行。
-const FOREIGN_COUNTRY_KEYWORDS: string[] = [
-  // 英语
-  'russia', 'russian', 'moscow', 'kremlin', 'putin',
-  'china', 'chinese', 'beijing',
-  'usa', 'united states', 'america', 'american', 'washington',
-  'ukraine', 'ukrainian', 'kyiv',
-  'nigeria', 'india', 'iran', 'iraq', 'israel', 'gaza', 'palestin',
-  'turkey', 'turkish', 'ankara', 'pakistan', 'afghanistan',
-  'germany', 'france', 'britain', 'british', 'london',
-  'japan', 'tokyo', 'korea', 'seoul', 'vietnam', 'thailand',
-  'saudi', 'emirates', 'qatar', 'egypt', 'brazil', 'mexico', 'argentina',
-  'european union', 'eu ', ' nato',
-  // 俄语（词干）。
-  // ⚠️ 选词干时避开会撞车的：'газа' 同时是「天然气的二格」（能源新闻会误伤）、
-  // 'анкер' 是「建筑锚栓」（基建新闻会误伤）、'инди' 会撞上「индикатор」。
-  // 这些宁可漏放（后面还有 LLM 的 investorRelevant 把关），也不能误杀本国新闻。
-  'росси', 'москв', 'кремл', 'путин',
-  'кита', 'пекин',
-  'сша', 'америк', 'вашингтон',
-  'украин', 'киев',
-  'нигери', 'индия', 'индии', 'индию', 'иран', 'ирак', 'израил', 'палестин',
-  'турци', 'пакистан', 'афганистан',
-  'германи', 'франци', 'британ', 'лондон',
-  'япони', 'токио', 'коре', 'сеул', 'вьетнам', 'таиланд',
-  'саудов', 'эмират', 'катар', 'египет', 'бразил', 'мексик', 'аргентин',
-  'евросоюз', 'европейск',
-  // 哈萨克语/吉尔吉斯语常用国名
-  'қытай', 'ресей',
-  // 中文
-  '俄罗斯', '莫斯科', '中国', '北京', '美国', '华盛顿', '乌克兰',
-  '尼日利亚', '印度', '伊朗', '伊拉克', '以色列', '土耳其', '巴基斯坦',
-  '阿富汗', '德国', '法国', '英国', '日本', '韩国', '越南', '沙特', '阿联酋', '埃及',
-];
+// 这里原先有两份私有清单：`COUNTRY_KEYWORDS`（119 条）与 `FOREIGN_COUNTRY_KEYWORDS`。
+// 它们与推送侧 `article-format.ts` 的清单**内容不同**、靠人肉同步 ——
+// 于是 2026-10-04 用户又报了一次「阿塞拜疆频道出现和土耳其完全没关系的土耳其新闻」：
+// 采集侧有 `土耳其`、推送侧没有，中文标题里明写「土耳其」也照样推出去。
+//
+// 这是同一个判据「两处各写一份」造成的第五次事故，所以这次是**合一**而不是补齐。
+// 词表、判定顺序、兜底全在 `@/lib/country-relevance` 一处定义。
+//
+// ⚠️ **别在这里重新建清单。** 要加词就改那个文件，它带着
+// `FOREIGN_CONCEPT_CHECKLIST` 与 `scripts/test-country-relevance.ts` 的断言。
 
 // 明显与投资者无关的「垃圾标题」关键词（命中即跳过，翻译都不做，纯省钱）。
 // 注意只匹配标题，且只要标题里同时出现强投资词（如 pipeline / gdp）就不拦。
@@ -277,31 +258,6 @@ function toSafeIso(value: string | undefined): string {
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
-// 判断新闻是否属于目标国家：
-// 1. 标题/正文提到目标国（任何语言形态）→ 相关（含「本国+第三国」的复合新闻）；
-// 2. 没提目标国，但明确提到**其它任何一个主要国家**（不限于中亚）→ 无关，丢弃；
-// 3. 谁都没提（纯粹的国内新闻标题，如「政府批准了……」）→ 来源是该国媒体则放行，
-//    intl 综合源则不放行（它没有「本国」可兜底）。
-function isCountryRelevant(title: string, description: string, countryCode: string, sourceCountry: string): boolean {
-  const text = `${title} ${description}`.toLowerCase();
-
-  // 1. 目标国出现 → 相关
-  const keywords = COUNTRY_KEYWORDS[countryCode] || [];
-  if (keywords.some((kw) => text.includes(kw.toLowerCase()))) return true;
-
-  // 2. 目标国没出现，但出现了其它主要国家 → 无关
-  if (FOREIGN_COUNTRY_KEYWORDS.some((kw) => text.includes(kw))) return false;
-  // 中亚邻国之间的归属判断（互斥国）
-  for (const [otherCountry, ows] of Object.entries(COUNTRY_KEYWORDS)) {
-    if (otherCountry === countryCode || otherCountry === 'intl') continue;
-    if (ows.some((kw) => text.includes(kw.toLowerCase()))) return false;
-  }
-
-  // 3. 谁都没提：来源即该国媒体则默认相关；intl 综合源不放行
-  //    （它没有「本国」可兜底 —— 区域综合源里不提任何本地区国家的全球新闻，对本项目无意义）
-  if (sourceCountry === countryCode && countryCode !== 'intl') return true;
-  return false;
-}
 
 /**
  * 可推送的国家清单 —— **「哪些国家会被推送」的唯一口径**，派生自 `countryList`，不要手写。
@@ -348,8 +304,12 @@ function resolveArticleCountry(
   let best: string | null = null;
   let bestHits = 0;
   for (const code of PUSHABLE_COUNTRY_CODES) {
-    const keywords = COUNTRY_KEYWORDS[code];
-    if (!keywords) continue;
+    // ⚠️ 2026-10-05 起从 `@/lib/country-relevance` 取词（`countryCode='ingest'` 侧），
+    // 不再读本文件里那份私有清单 —— 那份清单缺一堆拉丁城市名
+    // （`balkhash`/`atyrau`/`karaganda`…），而 intl 源恰恰是**英文**的，
+    // 缺的正是最该用的那批词。
+    const keywords = selfKeywordsFor(code, 'ingest');
+    if (keywords.length === 0) continue;
     // 命中词数最多的国家胜出；并列时按 PUSHABLE_COUNTRY_CODES 的顺序取先者
     // （顺序来自 countryList，是稳定顺序，所以同一篇稿子的判定可复现）。
     const hits = keywords.filter((kw) => text.includes(kw.toLowerCase())).length;
@@ -735,7 +695,7 @@ async function processFetchNews(
         // 检查是否与目标国家相关（含「其它主要国家」的排除逻辑）
         // ⚠️ 用**改判后的**国家来判，而不是 source.country —— 否则「一篇讲乌兹别克斯坦的
         //    intl 稿子」会拿 intl 的规则去评（intl 没有本国、规则 3 直接拒），等于白拿。
-        if (!isCountryRelevant(title, description, resolvedCountry, source.country)) {
+        if (!isCountryRelevant({ title, summary: description, countryCode: resolvedCountry, sourceCountry: source.country })) {
           result.droppedCountry++;
           continue; // 跳过与该国无关的新闻
         }
@@ -936,7 +896,7 @@ async function processFetchNews(
             // 也放进兜底来源：那条路会让 intl 稿子以 `'intl'` 入库，
             // 而 `'intl'` 永远推不出去 —— 正是这次要修掉的问题（见 resolveArticleCountry）。
             if (resolveArticleCountry(t, d, source.country) !== country) continue;
-            if (!isCountryRelevant(t, d, country, source.country)) continue;
+            if (!isCountryRelevant({ title: t, summary: d, countryCode: country, sourceCountry: source.country })) continue;
 
             // ★ 兜底路径**必须和第一轮走同一套补正文**（2026-10-02 补）。
             //
@@ -1356,8 +1316,17 @@ async function processFetchNews(
     .map(([name, count]) => `${name}=${count}`).join(' | ') || '无成功翻译';
   console.log(`翻译通道用量：${translationProviders}`);
   if (translation.errors.length > 0) {
+    // ⚠️ 必须把 `kind` / `count` 打出来（2026-10-05 加）。这一行是本轮修那个
+    // 「两个通道报错变成悬案」的直接产物：只打 `provider(model): error` 时，
+    //   · 看不出**这一轮失败了几次**（偶发 vs 常发是一个数，不是一句话）；
+    //   · 也看不出**该不该重试**（`content-filter` 重试无用，`rate-limit` 才有用）。
+    // 判读：`×N` 大 + `kind=rate-limit` ⇒ 首选通道被限流，属预期（免费档），
+    // 只要 `providerCounts` 里 `zhipu-flash` 有量就说明降级链在干活；
+    // `kind=content-filter` ⇒ **不重试**，是内容被审核，去查那几篇稿子的原文。
     console.warn(
-      `翻译通道报错：${translation.errors.map((e) => `${e.provider}(${e.model}): ${e.error}`).join('；')}`
+      `翻译通道报错：${translation.errors
+        .map((e) => `${e.provider}(${e.model})×${e.count ?? 1} [${e.kind ?? '未分类'}] ${e.error}`)
+        .join('；')}`
     );
   }
 
@@ -1480,6 +1449,34 @@ async function processFetchNews(
     translation: {
       providerCounts: translation.providerCounts,
       errors: translation.errors,
+      /**
+       * 术语闸（2026-10-05 加）—— 货币与所属国不符 / 已知错译写法。
+       *
+       * ⚠️ **这是一道硬闸**：命中 ⇒ 重试 ⇒ 三次不过**丢稿**。所以这一块不是
+       * 「性能指标」，是「丢稿预警」：`currency` / `wrongNoun` 只要不是 0，
+       * 就要去读 `samples` 那 20 条，确认拦的是真缺陷而不是误杀。
+       * 零值**不代表闸没生效** —— 看 `probe`。
+       */
+      termGate: {
+        /** 术语表版本号。改表必须改它；它一变就说明口径变了，两轮数据不可直接比。 */
+        tableVersion: PROPER_NOUN_VERSION,
+        currency: translation.termGate.currency,
+        wrongNoun: translation.termGate.wrongNoun,
+        /**
+         * ⚠️ **唯一需要盯着不为 0 的数**：因为术语闸而最终不入库的篇数。
+         * `currency`/`wrongNoun` 变大是好事（闸在干活、稿子被重试救回来）；
+         * `dropped` 变大的意思是**稿子在丢** —— 去读 `dropSamples`。
+         */
+        dropped: translation.termGate.dropped,
+        samples: translation.termGate.samples,
+        dropSamples: translation.termGate.dropSamples,
+        /**
+         * 活体探针：**真判据**跑固定样例，左侧三条必须命中、右侧三条必须放行。
+         * 与 `expected` 一致 ⇒ 这一版的判据确实在线上跑；不一致 ⇒ 部署没到位或判据被改坏。
+         */
+        probe: termGateProbe(),
+        expected: TERM_GATE_PROBE_EXPECT,
+      },
     },
   };
 }

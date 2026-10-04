@@ -9,6 +9,14 @@ import {
   MIN_HAN_CONTENT,
 } from './utils';
 import type { Category } from './data/types';
+import {
+  checkCurrencyCountryFit,
+  checkWrongProperNouns,
+  countryCodeByName,
+  currencyPromptTable,
+  type CurrencyMismatch,
+  type WrongNounHit,
+} from './proper-nouns';
 
 /**
  * 多模型新闻翻译 + 理解：按顺序尝试多个 OpenAI 兼容的大模型接口，任一成功即返回。
@@ -213,25 +221,103 @@ export const CATEGORY_IDS: Category[] = [
 interface TranslationStats {
   /** 每个 provider 成功翻译的篇数，如 { zhipu: 40, deepseek: 126 } */
   providerCounts: Record<string, number>;
-  /** 每个通道遇到的第一个错误（provider + 具体报错），排查「免费档为什么没生效」就靠它 */
-  errors: Array<{ provider: string; model: string; error: string }>;
+  /**
+   * 每个通道的错误，**按 (provider, kind) 聚合计数**（2026-10-05 改）。
+   *
+   * 旧版是「每个通道只留**第一条**原文」。代价很具体：用户 2026-10-04 报的
+   * 「glm-4.7-flash 超时、glm-4-flash-250414 HTTP 400 contentFilter」，
+   * 这两种都是**间歇性**故障 —— 一条样本既证明不了它常发，也证明不了它偶发，
+   * 而「常发 / 偶发」决定的处置完全不同（常发 ⇒ 该换通道或改提示词；
+   * 偶发 ⇒ 降级链本来就能兜住，不必动）。
+   *
+   * 现在：`count` = 次数，`kind` = 分类（见 {@link ProviderErrorKind}），
+   * `error` 仍然保留**第一条**原文（对照厂商文案用）。
+   * ⚠️ `provider` / `model` / `error` 三个键**不许改名**：体检接口与脚本已在读它们，
+   * 改名会让「线上到底报了什么」当场查不出来（同类事故本项目已栽过两次）。
+   */
+  errors: Array<{
+    provider: string;
+    model: string;
+    error: string;
+    /** 分类（见 {@link ProviderErrorKind}）。老调用点不传 ⇒ undefined，聚合时归到 `-` 档 */
+    kind?: ProviderErrorKind;
+    /** 分类的中文名，直接给人看 */
+    label?: string;
+    /** 同一 (provider, kind) 出现**几次**。≥2 才说明它是常发而不是抖动 */
+    count?: number;
+  }>;
+  /**
+   * 术语闸的命中计数（2026-10-05 加）。
+   *
+   * **为什么必须报出来**：术语闸是硬闸，命中 ⇒ 重试 ⇒ 三次不过就**丢稿**。
+   * 而「丢稿」在本项目里是不该发生的事（「宁可留重复，不要丢稿」），
+   * 所以只要它开始拦，就得在**第一轮**看得见拦了多少、拦的是什么，
+   * 而不是等下个月有人问「这个月吉尔吉斯的稿子怎么少了」。
+   */
+  termGate: {
+    /** 货币与所属国不符：命中**篇次**（同一篇重试两次会记两次） */
+    currency: number;
+    /** 已知错译写法：命中篇次 */
+    wrongNoun: number;
+    /**
+     * **因为术语闸而最终不入库的篇数**（所有通道 + 所有重试都没过）。
+     *
+     * ⚠️ 这是三个计数里唯一需要**盯着不为 0** 的：`currency`/`wrongNoun` 变多说明闸在
+     * 干活（那些稿子会被重试救回来），而 `dropped` 变多说明**稿子在丢**。
+     * 本项目对丢稿的态度是「宁可留重复（看得见），不要丢稿（看不见）」——
+     * 它不为 0 时要么是提示词没生效，要么是闸的判据过严，两者都要立刻查。
+     */
+    dropped: number;
+    /** 逐条样本（截断到 20 条），上线首日复核用 */
+    samples: Array<{ kind: 'currency' | 'wrong-noun'; detail: string }>;
+    /** 丢稿样本（截断到 10 条）—— `dropped` 不为 0 时看这里 */
+    dropSamples: string[];
+  };
 }
 
-let translationStats: TranslationStats = { providerCounts: {}, errors: [] };
+const emptyStats = (): TranslationStats => ({
+  providerCounts: {},
+  errors: [],
+  termGate: { currency: 0, wrongNoun: 0, dropped: 0, samples: [], dropSamples: [] },
+});
+
+let translationStats: TranslationStats = emptyStats();
 
 export function resetTranslationStats() {
-  translationStats = { providerCounts: {}, errors: [] };
+  translationStats = emptyStats();
 }
 
 export function getTranslationStats(): Readonly<TranslationStats> {
   return translationStats;
 }
 
-function recordProviderError(provider: string, model: string, error: string) {
-  // 每个通道只记第一个错误，够定位就行，不刷屏
-  if (!translationStats.errors.some((e) => e.provider === provider)) {
-    translationStats.errors.push({ provider, model, error });
+/**
+ * 记一次通道错误。**按 `(provider, kind)` 聚合**：同一个通道的同一类错误只留一条，
+ * 但把出现次数累加到 `count` 上（见 `TranslationStats.errors` 的说明）。
+ *
+ * 为什么 key 里带 `kind`：同一个通道「有时超时、有时被内容审核拦」是两种病，
+ * 合成一条会让人以为只有一种，修哪一个都不对。
+ */
+function recordProviderError(
+  provider: string,
+  model: string,
+  error: string,
+  kind?: ProviderErrorKind,
+) {
+  const hit = translationStats.errors.find(
+    (e) => e.provider === provider && (e.kind ?? '-') === (kind ?? '-'),
+  );
+  if (hit) {
+    hit.count = (hit.count ?? 1) + 1;
+    return;
   }
+  translationStats.errors.push({
+    provider,
+    model,
+    error,
+    ...(kind ? { kind, label: ERROR_KIND_LABEL[kind] } : {}),
+    count: 1,
+  });
 }
 
 const CATEGORY_ENUM_TEXT = CATEGORY_IDS.map((id) => {
@@ -394,8 +480,20 @@ export const TRANSLATE_PROMPT = `你是一位面向国际投资者的中亚与�
      这类英文词。正确写法示例：〈国名〉总统 〈该领导人的中文名〉；〈国名〉国防部长 〈该部长的拉丁名〉；
      阿斯塔纳市；AIIB 提供的 60 亿美元贷款；吉尔吉斯斯坦议会。
      （注意第二个示例：**职务用中文、不知名的人名用拉丁**，两种写法在同一个短语里并存是正常的。）
-   - **货币、度量衡、语言、民族、宗教 → 中文**：坚戈、马纳特、苏姆、美元、吨、公里、公顷、
-     俄语、哈萨克语、乌兹别克族、伊斯兰教。
+   - **货币、度量衡、语言、民族、宗教 → 中文**：吨、公里、公顷、俄语、哈萨克语、
+     乌兹别克族、伊斯兰教。
+   - ★ **货币必须与稿子所属国家对应**（下表**由代码生成**，闸门按同一张表判，
+     所以别凭记忆改这一行）：{CURRENCIES}；另加**美元**（国际结算通用，任何国家都可用）。
+     ⚠️ 这是用户**反复纠正过**的一类错，线上实测 2812 篇里命中 41 篇。典型错法：
+       ✗ 阿塞拜疆的工资 / 投资额 / 罚款 / 注册资本写成「坚戈」 ← 那是哈萨克斯坦的货币
+       ✗ 吉尔吉斯斯坦的汇率 / 预算 / 罚款写成「坚戈」或「苏姆」
+         ← 前者是哈萨克斯坦的，后者是乌兹别克斯坦的
+       ✗ 更离谱的：写出「吉尔吉斯斯坦坚戈」这种**不存在的货币名**
+     **原文里是什么货币就写什么货币**：原文写索姆就写「索姆」，不要因为另一个货币名
+     你更眼熟就把它换上去。同一篇里不许一会儿「索姆」一会儿「苏姆」。
+   - ⚠️ **称号不要与国家名混起来**：阿曼、文莱等国的国家元首称号是「**苏丹**」（Sultan），
+     它本身就是**一个完整的元首称号** —— 不要写成「苏丹国王」「国王苏丹」
+     （那是把称号当成了国名；阿曼在世元首的正确写法：「阿曼苏丹」）。
    - ⚠️ **同一个实体，全篇只能有一种写法**：不许一处写「哈萨克斯坦」、另一处写 Kazakhstan；
      不许一处写「塔什干」，另一处写 Tashkent；也不许同一个人一处写中文名、另一处写拉丁名。
    - ⚠️ **严禁把一个词写成「汉字 + 西里尔/拉丁」拼接**（例如 米尔зиёё夫、肯еш、霍贾and、哈萨克mys、
@@ -546,6 +644,11 @@ export function buildPrompt(
     .replace('{LANG}', langLabel(sourceLanguage))
     .replace('{TITLE}', title)
     .replace('{CATEGORIES}', CATEGORY_ENUM_TEXT)
+    // ⚠️ **货币表是生成式注入的，不是手写在模板里的** —— 手写的表迟早会与
+    // `proper-nouns.ts` 的 `COUNTRY_CURRENCY` 分叉，而分叉的后果是
+    // 「提示词说 A、闸门按 B 判」，每一篇都过不了闸（重试三次 → 丢稿）。
+    // 详见 `currencyPromptTable` 的注释。
+    .replace('{CURRENCIES}', currencyPromptTable())
     .replace('{CONTENT}', content);
 }
 
@@ -595,7 +698,13 @@ export function fallbackCategory(title: string, content: string): Category {
  * 质检拒绝的原因。**不是给日志看的花瓶** —— 它会被拼成重试时的修正指令，见 `buildRepairHint`。
  */
 export interface GateReject {
-  kind: 'mixed-script' | 'half-translated' | 'impossible-multiple' | 'latin-cyrillic';
+  kind:
+    | 'mixed-script'
+    | 'half-translated'
+    | 'impossible-multiple'
+    | 'latin-cyrillic'
+    | 'currency-mismatch'
+    | 'wrong-noun';
   /** 被拦下的词（截断到前几个） */
   tokens: string[];
   /**
@@ -607,6 +716,15 @@ export interface GateReject {
    * 三次用完就丢稿（见 `buildRepairHint` 的说明）。
    */
   impossibleMultiples?: string[];
+  /**
+   * 命中的「货币与所属国不符」（2026-10-05 加）。
+   *
+   * **同样与 `tokens` 分开存**，理由与 `impossibleMultiples` 逐字相同：
+   * 一篇稿子可以既有半译人名、又有写错的货币，修正指令必须一次说全。
+   */
+  currency?: CurrencyMismatch;
+  /** 命中的已知错译写法（2026-10-05 加）。同上，分开存。 */
+  wrongNouns?: WrongNounHit[];
 }
 
 /**
@@ -686,6 +804,45 @@ export function buildRepairHint(reject: GateReject): string {
     );
   }
 
+  // 块 3：货币与所属国不符（2026-10-05 加）。
+  //
+  // ⚠️ 这一块的写法与上面两块**刻意不同**：它不是「描写问题」，而是给出
+  // **机械的替换指令**（把哪个词换成哪个词）。理由：货币错是**系统性**的
+  // （模型只见过一个货币名就到处用，见 `proper-nouns.ts` 开头的说明），
+  // 「请重写一遍」这种泛泛的话对它无效 —— 必须把「就是你写的那个词，换成这个词」
+  // 说到字面上。实测线上 kg 频道 7 天里有 21 篇把索姆写成「苏姆」，
+  // 这不是手滑，是它真的不知道吉尔吉斯斯坦用什么货币。
+  if (reject.currency) {
+    const c = reject.currency;
+    const wrongWords = c.foreign.map((f) => f.word);
+    blocks.push(
+      [
+        '⚠️ 另有一类问题：**货币写成了别国的**。',
+        `本条稿子的所属国家是**${c.own}**（货币就是「${c.own}」，代码 ${c.ownCode}），`,
+        `但你的译文里**一次都没有出现「${c.own}」**，出现的全是 ${wrongWords.join('、')}。`,
+        `请把译文里**每一处** ${wrongWords.join('、')} 都替换成「${c.own}」——`,
+        '包括标题、摘要、正文里的所有金额。',
+        '⚠️ 不要因为原文的货币名字你不熟悉就换成别的：原文写什么货币就是什么货币。',
+        `⚠️ 顺带检查：不要写出「${c.own}」与别国货币名字**拼起来**的词（例如「吉尔吉斯斯坦坚戈」这类并不存在的货币）。`,
+      ].join('\n'),
+    );
+  }
+
+  // 块 4：已知错译写法（2026-10-05 加）。
+  //
+  // 与块 3 同理：给的是 wrong → right 的字面映射，而不是「请检查专名」。
+  // 每条的 `why` 也带上 —— 说明「为什么」能让模型在别处也不犯同一个错。
+  if (reject.wrongNouns && reject.wrongNouns.length > 0) {
+    blocks.push(
+      [
+        '⚠️ 另有一类问题：**已知的错误译名**。',
+        '被拦下的写法（左边错、右边对）：',
+        ...reject.wrongNouns.slice(0, 5).map((h) => `  「${h.wrong}」→「${h.right}」（${h.why}）`),
+        '请把这些写法全部改成右边那种，并检查译文里还有没有同类的错译。',
+      ].join('\n'),
+    );
+  }
+
   if (blocks.length === 0) return '';
   return ['', ...blocks, '以上要求本身不要写进 content —— content 里只写读者要读的新闻内容。'].join(
     '\n',
@@ -697,7 +854,8 @@ function normalizeResult(
   parsed: Record<string, unknown>,
   originalTitle: string,
   originalContent: string,
-  provider: string
+  provider: string,
+  countryName: string,
 ): { result: TranslateResult; reject?: GateReject } {
   // ---- 交付前的确定性清理（**先清理、再过闸** —— 顺序是量出来的，别改）----
   //
@@ -777,12 +935,47 @@ function normalizeResult(
   // **两者待遇不同的唯一依据是实测误报率**，不是「哪个看起来更准」。
   const impossible = fields.flatMap((f) => descendingMultiplePhrases(f));
 
+  // 第四类闸（2026-10-05 加）：**术语**——货币与所属国不符、已知错译写法。
+  //
+  // ## 为什么这一类单独成立
+  //
+  // 前三类闸管的是「书写系统」与「数量语义」，它们都**不认国家**。
+  // 而用户反复报的这一批错（阿塞拜疆写坚戈、吉尔吉斯写苏姆、Almaty→阿利穆特）
+  // 的共同点是：**要判对就必须知道「这篇稿子属于哪个国家」**。
+  // 判据本体在 `proper-nouns.ts`，与提示词共用同一张货币表。
+  //
+  // ## 为什么敢当硬闸（实测依据，不是「看起来更准」）
+  //
+  // `pnpm analyze:currency` 在线上 **2812 篇**上跑：命中 41 篇，**逐条人工判读
+  // 41/41 全是真缺陷、误报 0**；另测 3 篇错译写法也是 3/3 真缺陷。
+  // 参照 `mixedScriptTokens` 当年进闸的门槛（1757 篇、156 种词、误报 0），
+  // 这一条同样够格。
+  //
+  // ⚠️ 值得记下来的是**第一版判据有 2 处误报**（也是实测抓到的，不是想出来的）：
+  //   · 阿塞拜疆城市「苏姆盖**蒂**」被当成乌兹别克货币「苏姆」（假朋友只写了
+  //     「苏姆盖特」，换了个尾字就绕过了）；
+  //   · 塔吉克斯坦的异写「苏姆**尼**」被当成乌兹别克货币。
+  //   ⇒ 教训：**这类「货币名是别的词的子串」的判据，必须逐条把命中上下文打出来读**，
+  //     光看计数会以为全对。
+  //
+  // ⚠️ 还有一处是**判据设计**上的修正（不是 bug）：闸门要求文本里先有
+  // 「它确实是这个国家」的证据（`ownCountryMentioned`）。没这一条时 68 篇命中里
+  // 有 27 篇其实是「稿子被归错了国」（如 uz 栏目里的哈萨克斯坦太阳能补贴稿），
+  // 那类稿子的货币**本来就是对的**，拿它去重试会把「国别放错」升级成「正文也编了」。
+  // 详细理由写在 `proper-nouns.ts` 的 `ownCountryMentioned` 注释里。
+  const countryCode = countryCodeByName(countryName);
+  const combined = `${titleZh} ${summaryZh} ${contentZh}`;
+  const currencyIssue = countryCode ? checkCurrencyCountryFit(countryCode, combined) : null;
+  const wrongNouns = countryCode ? checkWrongProperNouns(countryCode, combined) : [];
+
   const ok =
     zhOk &&
     mixed.length === 0 &&
     halfTranslated.length === 0 &&
     latinCyr.length === 0 &&
-    impossible.length === 0;
+    impossible.length === 0 &&
+    !currencyIssue &&
+    wrongNouns.length === 0;
   if (zhOk && mixed.length > 0) {
     console.log(`[translate] 译文含「汉字+西里尔」混排词 ${mixed.slice(0, 6).join('/')}，判不合格并重试`);
   }
@@ -799,6 +992,30 @@ function normalizeResult(
   if (zhOk && impossible.length > 0) {
     console.log(
       `[translate] 译文含「下降 N 倍」这种中文里不成立的说法 ${[...new Set(impossible)].slice(0, 4).join('/')}，判不合格并重试`,
+    );
+  }
+  if (currencyIssue) {
+    translationStats.termGate.currency++;
+    if (translationStats.termGate.samples.length < 20) {
+      translationStats.termGate.samples.push({
+        kind: 'currency',
+        detail: `[${countryName}] ${currencyIssue.reason}`,
+      });
+    }
+    console.log(`[translate] 质检拦下（术语·货币）：${currencyIssue.reason} ⇒ 重试带修正指令`);
+  }
+  if (wrongNouns.length > 0) {
+    translationStats.termGate.wrongNoun++;
+    if (translationStats.termGate.samples.length < 20) {
+      translationStats.termGate.samples.push({
+        kind: 'wrong-noun',
+        detail: `[${countryName}] ${wrongNouns.map((h) => `${h.wrong}→${h.right}`).join('、')}`,
+      });
+    }
+    console.log(
+      `[translate] 质检拦下（术语·错译写法）：${wrongNouns
+        .map((h) => `${h.wrong}→${h.right}`)
+        .join('/')} ⇒ 重试带修正指令`,
     );
   }
 
@@ -823,13 +1040,20 @@ function normalizeResult(
         : latinCyr.length > 0
           ? 'latin-cyrillic'
           : undefined;
+  // ⚠️ **术语类与写法类是并列的，不是二选一**（同 `impossibleMultiples` 的理由）：
+  // 一篇稿子完全可以「人名被译了一半 + 货币写成别国的」，一次重试必须把两类都说清。
+  // `kind` 只是给日志一个主标签，真正的载荷在各字段里。
+  const termKind: GateReject['kind'] | undefined =
+    currencyIssue ? 'currency-mismatch' : wrongNouns.length > 0 ? 'wrong-noun' : undefined;
   const reject: GateReject | undefined = !zhOk
     ? undefined
-    : nameKind || impossible.length > 0
+    : nameKind || impossible.length > 0 || termKind
       ? {
-          kind: nameKind ?? 'impossible-multiple',
+          kind: nameKind ?? termKind ?? 'impossible-multiple',
           tokens: [...new Set([...halfTranslated, ...mixed, ...latinCyr])],
           ...(impossible.length > 0 ? { impossibleMultiples: [...new Set(impossible)] } : {}),
+          ...(currencyIssue ? { currency: currencyIssue } : {}),
+          ...(wrongNouns.length > 0 ? { wrongNouns } : {}),
         }
       : undefined;
 
@@ -921,6 +1145,126 @@ interface ChatCallOptions {
 }
 
 /**
+ * 通道失败的**类别**。
+ *
+ * ## 为什么要有它（2026-10-05）
+ *
+ * 在那之前，`translationStats.errors` 里只有一行**自由文本**，而且
+ * `recordProviderError` **每个通道只留第一条** —— 于是「这一轮失败了几次、为什么失败」
+ * 在报告里根本不存在。用户报的两个通道报错（`glm-4.7-flash` 超时、
+ * `glm-4-flash-250414` HTTP 400 contentFilter）就是这么变成悬案的：
+ * **只知道「报过一次」，不知道报了多少次、更不知道该怎么处置。**
+ *
+ * 分类直接决定**要不要重试**，这是它最主要的作用：
+ *   · 限流（429 / code 1305）：重试有意义（服务端会恢复）；
+ *   · **内容审核拒绝：重试毫无意义** —— 同一段文字再打一次还是被拒，
+ *     3 次重试纯属白等 2.4 秒并把「内容问题」伪装成「通道故障」；
+ *   · 超时：说明这个通道此刻**不可用**，不是「再试一次就好」（旧注释已写明）。
+ */
+export type ProviderErrorKind =
+  /** 没配环境变量 → 通道整条跳过（不是故障，是配置缺失） */
+  | 'no-key'
+  /** 单次调用超时：平台侧排队/拥堵 */
+  | 'timeout'
+  /** 限流：429 / 智谱 code 1305「该模型当前访问量过大」 */
+  | 'rate-limit'
+  /** **内容审核拒绝**：与通道健康无关，换通道才有用 */
+  | 'content-filter'
+  /** 认证失败：Key 无效/被截断 */
+  | 'auth'
+  /** 型号不存在（厂商下线了代号） */
+  | 'model-missing'
+  /** 其它 400：参数非法（例如往不支持 thinking 的型号塞了它） */
+  | 'bad-request'
+  /** 5xx：服务端抖动 */
+  | 'server'
+  /** 200 但内容为空（含「只有 reasoning_content」） */
+  | 'empty'
+  /** 网络/DNS/连接异常 */
+  | 'network';
+
+/** 类别 → 中文标签。日志和接口都用它，避免同义不同词。 */
+const ERROR_KIND_LABEL: Record<ProviderErrorKind, string> = {
+  'no-key': '未配置 Key',
+  timeout: '超时',
+  'rate-limit': '限流',
+  'content-filter': '内容审核拒绝',
+  auth: '认证失败',
+  'model-missing': '型号不存在',
+  'bad-request': '请求非法',
+  server: '服务端错误',
+  empty: '返回内容为空',
+  network: '网络异常',
+};
+
+/**
+ * 判定一个失败属于哪一类，以及**要不要重试**。
+ *
+ * 抽成纯函数是为了能被离线回归直接钉住 —— 这套判据是「删除类/花钱类」规则的邻居：
+ * 判错不会抛异常，只会让钱和时间悄悄花掉（重试无意义的错误），
+ * 或者让**内容问题**长期伪装成**通道故障**（用户报的那条 contentFilter 就是后者）。
+ *
+ * 匹配顺序有意为之：**先看异常（没有 HTTP 状态）→ 再看状态码 → 最后才猜内容**。
+ * 反过来「先猜内容」会把 429 里恰好提到敏感词的那种响应误判成内容审核。
+ */
+export function classifyProviderError(args: {
+  /** HTTP 状态码。调用抛异常时没有 */
+  status?: number;
+  /** 响应体片段（已截断） */
+  body?: string;
+  /** 抛出的异常消息。有它就是「没拿到 HTTP 响应」 */
+  thrown?: string;
+}): { kind: ProviderErrorKind; label: string; retryable: boolean } {
+  const { status, body = '', thrown } = args;
+
+  if (thrown !== undefined) {
+    const isTimeout = /timeout|abort/i.test(thrown);
+    const kind: ProviderErrorKind = isTimeout ? 'timeout' : 'network';
+    return { kind, label: ERROR_KIND_LABEL[kind], retryable: false };
+  }
+
+  if (status === 429) {
+    return { kind: 'rate-limit', label: ERROR_KIND_LABEL['rate-limit'], retryable: true };
+  }
+  if (status === 401 || status === 403) {
+    return { kind: 'auth', label: ERROR_KIND_LABEL.auth, retryable: false };
+  }
+  if (status === 404) {
+    return { kind: 'model-missing', label: ERROR_KIND_LABEL['model-missing'], retryable: false };
+  }
+  if (status !== undefined && status >= 500) {
+    return { kind: 'server', label: ERROR_KIND_LABEL.server, retryable: true };
+  }
+
+  // 到这里只剩 4xx（含 400）。**先判内容审核**，再落到「请求非法」。
+  if (looksLikeContentFilter(body)) {
+    return {
+      kind: 'content-filter',
+      label: ERROR_KIND_LABEL['content-filter'],
+      retryable: false,
+    };
+  }
+  return { kind: 'bad-request', label: ERROR_KIND_LABEL['bad-request'], retryable: false };
+}
+
+/**
+ * 响应体/`finish_reason` 里有没有**内容审核**的痕迹。
+ *
+ * 三种实测形态都要认（写死一个词就会漏）：
+ *   1. `finish_reason: "content_filter"`（HTTP 200、content 为空）—— 最阴的一种，
+ *      它长得像「返回内容为空」；
+ *   2. 智谱的审核错误码 `1301` / `1302`（内容安全）；
+ *   3. 中文文案里的「敏感」「内容安全」。
+ */
+export function looksLikeContentFilter(text: string): boolean {
+  return (
+    /content_?filter/i.test(text) ||
+    /"code"\s*:\s*"?(1301|1302)"?/.test(text) ||
+    /敏感|内容安全/.test(text)
+  );
+}
+
+/**
  * 调用一个 OpenAI 兼容的 chat/completions 接口。
  * 失败时返回 `{ text: null, retryable }`，由调用方决定重试还是换通道。
  */
@@ -941,10 +1285,21 @@ async function callChatProvider(
 
   const model = resolveModel(provider);
 
-  /** 统一的失败出口：记日志 + 记统计 + 通知调用方，三处都别漏 */
-  const fail = (err: string, retryable: boolean): ChatCallResult => {
-    console.error(`[${provider.name}/${model}] ${err}`);
-    if (recordError) recordProviderError(provider.name, model, err);
+  /**
+   * 统一的失败出口：分类 + 记日志 + 记统计 + 通知调用方，四处都别漏。
+   *
+   * `kind`/`label` 由 {@link classifyProviderError} 给出（或由调用点直接指定）。
+   * 分类不只是「好看」：它决定 `retryable`，而 `retryable` 决定是重试 3 次
+   * 还是**立刻换通道** —— 见下面 `content_filter` 那条的说明。
+   */
+  const fail = (
+    err: string,
+    retryable: boolean,
+    kind?: ProviderErrorKind,
+    label?: string,
+  ): ChatCallResult => {
+    console.error(`[${provider.name}/${model}] ${label ? `${label}：` : ''}${err}`);
+    if (recordError) recordProviderError(provider.name, model, err, kind);
     onError?.(err);
     return { text: null, retryable };
   };
@@ -971,24 +1326,62 @@ async function callChatProvider(
 
     if (!response.ok) {
       const body = await response.text();
-      // 429（限流）和 5xx（服务端抖动）值得重试；
-      // 其余 4xx（401 Key 无效 / 404 型号不存在 / 400 参数非法）是配置问题，重试无意义。
-      return fail(
-        `HTTP ${response.status}: ${body.substring(0, 200)}`,
-        response.status === 429 || response.status >= 500,
-      );
+      /**
+       * 非 2xx 的分类**全部交给 `classifyProviderError`**，不再在这里手写
+       * 「429/5xx 才重试」那条判断。
+       *
+       * 2026-10-05 换掉的理由是用户报的那两条错：`glm-4-flash-250414` 的
+       * 「HTTP 400 contentFilter」，和 `glm-4.7-flash` 的「超时」。
+       * 旧写法下这两者**都只能报出一句 `HTTP 400: <前200字>` / 调用异常**，
+       * 既分不出「限流（等一会儿就好）」与「内容审核（等多久都一样）」，
+       * 也分不出「超时（这个通道现在不可用）」与「网络抖动」。
+       * 现在返回体里带 `code`/`sensitive` 之类字样会被认成 `content-filter`（不可重试），
+       * 429 认成 `rate-limit`（可重试），500+ 认成 `server`（可重试）。
+       */
+      const cls = classifyProviderError({ status: response.status, body });
+      return fail(`HTTP ${response.status}: ${body.substring(0, 200)}`, cls.retryable, cls.kind, cls.label);
     }
 
     const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
+      choices?: Array<{
+        /** `stop` / `length` / `content_filter` … —— 200 也会带着它说明为什么停 */
+        finish_reason?: string;
+        message?: { content?: string; reasoning_content?: string };
+      }>;
     };
-    const message = data.choices?.[0]?.message;
+    const choice = data.choices?.[0];
+    const message = choice?.message;
     const llmContent = message?.content || '';
     const reasoningChars = (message?.reasoning_content || '').length;
     if (!llmContent) {
-      // 兼容「思考型模型把内容全放进 reasoning_content、content 为空」的情况，
-      // 报错时把这点写清楚，省得对着空响应猜。
-      return fail(reasoningChars > 0 ? '返回内容为空（只有 reasoning_content）' : '返回内容为空', true);
+      /**
+       * 空内容有**两种完全不同的成因**，不能混着报（2026-10-05 补）。
+       *
+       * `finish_reason: content_filter` 是最阴的一种：**HTTP 200、content 为空**，
+       * 所以上面那条 `!response.ok` 抓不到，而它和「模型抽风返回空」长得一模一样。
+       * 旧版把它归到「返回内容为空，可重试」⇒ `translateNews` 会**原样重试 3 次**，
+       * 每次都被同一个审核器拒掉（同一段文本、同一个厂商），最后只留下
+       * 一句含糊的「返回内容为空」—— 真实原因（被内容审核拦了）就这么丢了。
+       * 这正是用户 2026-10-04 报的那类错：**看起来像抖动，实际重试无用**。
+       *
+       * 所以：认成 `content-filter` ⇒ **不可重试**，`translateNews` 会立刻换通道
+       * （换厂商的审核器有可能放行，重试同一个没有意义）。
+       * 另一支「思考型模型把内容全写进 reasoning_content」仍然可重试。
+       */
+      if (choice?.finish_reason === 'content_filter' || looksLikeContentFilter(JSON.stringify(data))) {
+        return fail(
+          `返回内容为空：finish_reason=${choice?.finish_reason ?? '未知'}（内容审核拒绝，重试无用）`,
+          false,
+          'content-filter',
+          ERROR_KIND_LABEL['content-filter'],
+        );
+      }
+      return fail(
+        reasoningChars > 0 ? '返回内容为空（只有 reasoning_content）' : '返回内容为空',
+        true,
+        'empty',
+        ERROR_KIND_LABEL.empty,
+      );
     }
     return { text: llmContent, retryable: false, reasoningChars };
   } catch (err) {
@@ -996,7 +1389,13 @@ async function callChatProvider(
     // 超时 / 网络异常一律不重试：说明这个通道**当前不可用**，不是「再试一次就好」。
     // 旧版在这里硬重试 3 次（最坏 3 分钟/篇），166 篇就是几个小时，而且最后照样
     // 降级到付费通道。直接换下一个通道，让降级链干它该干的事。
-    return fail(`调用异常: ${message}`, false);
+    //
+    // 2026-10-05：超时与网络异常**分开报**（`classifyProviderError` 里按
+    // `AbortError`/`TimeoutError` 判）。用户报的「glm-4.7-flash 超时」与
+    // 「网络抖动」处置不同：前者说明这个通道在这个时段不可用（该换通道或调超时），
+    // 后者是偶发（降级链兜住即可）。两者混成一句「调用异常」时，只能靠猜。
+    const cls = classifyProviderError({ thrown: message });
+    return fail(`调用异常: ${message}`, cls.retryable, cls.kind, cls.label);
   }
 }
 
@@ -1125,6 +1524,19 @@ export async function translateNews(
    * 「上一家错在哪」，而不是从零再错三遍 —— 那样只会把丢稿概率乘起来。
    */
   let repairHint = '';
+  /**
+   * 最后一次质检拒绝的**类别**（2026-10-05 加）。
+   *
+   * 存在的唯一目的：所有通道都失败、这篇稿子要**丢掉**时，回答「它是因为什么丢的」。
+   * 术语闸是硬闸，命中 ⇒ 三次不过 ⇒ 丢稿 —— 本项目最忌讳的「看不见的丢失」。
+   * 靠这个变量把「因为货币写错而丢」这一类**变成可数的数字**（`termGate.dropped`），
+   * 而不是等人下个月问「吉尔吉斯的稿子怎么少了」。
+   *
+   * ⚠️ 记的是**最后一个通道的最后一次**拒绝，不是「跨通道汇总」。理由：
+   * 判断依据只能是「最后那次为什么没通过」，跨通道合并会把「A 家写错货币、
+   * B 家写错人名」这种情况误记成「两种都有」。刻度写在字段名里（`lastReject`）。
+   */
+  let lastReject: GateReject | undefined;
 
   for (const provider of PROVIDERS) {
     if (!process.env[provider.keyEnv]) {
@@ -1144,7 +1556,7 @@ export async function translateNews(
       if (call.text) {
         const parsed = parseLlmJson(call.text);
         if (parsed) {
-          const { result, reject } = normalizeResult(parsed, title, content, provider.name);
+          const { result, reject } = normalizeResult(parsed, title, content, provider.name, countryName);
           if (result.translated && result.contentZh !== content) {
             translationStats.providerCounts[provider.name] =
               (translationStats.providerCounts[provider.name] || 0) + 1;
@@ -1152,6 +1564,7 @@ export async function translateNews(
           }
           if (reject) {
             // 质检拦下 ⇒ 下一次重试带上「错在哪、该改成什么」
+            lastReject = reject;
             repairHint = buildRepairHint(reject);
             // 两类问题都可能出现，日志要**分别**打 —— 只打 tokens 的话，
             // 「纯倍数问题」（tokens 为空）会打出一行看不懂的空日志。
@@ -1159,6 +1572,10 @@ export async function translateNews(
             if (reject.tokens.length > 0) bits.push(`专名 ${reject.tokens.slice(0, 6).join('/')}`);
             if (reject.impossibleMultiples?.length) {
               bits.push(`不成立的倍数 ${reject.impossibleMultiples.slice(0, 4).join('/')}`);
+            }
+            if (reject.currency) bits.push(`货币 ${reject.currency.foreign.map((f) => f.word).join('/')}`);
+            if (reject.wrongNouns?.length) {
+              bits.push(`错译写法 ${reject.wrongNouns.map((h) => h.wrong).join('/')}`);
             }
             console.log(`[translate] 质检拦下（${reject.kind}）：${bits.join(' + ')} ⇒ 重试带修正指令`);
           } else {
@@ -1191,6 +1608,24 @@ export async function translateNews(
     }
   }
   console.error('[translate] 所有翻译通道均失败，本篇将不入库（保持中文优先策略）');
+
+  // 把「因为术语闸而丢」单独记账（见 `lastReject` 的说明）。
+  // ⚠️ 只统计**术语类**：写法类（半译专名等）丢稿是老现象，混在一起会让这个数字
+  // 失去意义 —— 它的用途是回答「新加的那道硬闸到底吃掉了多少稿子」。
+  if (lastReject?.currency || lastReject?.wrongNouns?.length) {
+    translationStats.termGate.dropped++;
+    if (translationStats.termGate.dropSamples.length < 10) {
+      translationStats.termGate.dropSamples.push(
+        `[${countryName}] ${title.slice(0, 40)}｜${
+          lastReject.currency ? lastReject.currency.reason : ''
+        }${lastReject.wrongNouns?.length ? lastReject.wrongNouns.map((h) => h.wrong).join('/') : ''}`,
+      );
+    }
+    console.error(
+      `[translate] ⚠️ 这一篇是因为**术语闸**丢的（不是网络/额度失败）：` +
+        `${lastReject.currency?.reason || ''}${lastReject.wrongNouns?.map((h) => h.wrong).join('/') || ''}`,
+    );
+  }
 
   return {
     titleZh: title,
