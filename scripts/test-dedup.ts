@@ -30,8 +30,11 @@ import {
   dedupeNearTitles,
   isNearSameTitleText,
   filterOversizedGroups,
+  hasConflictingNumbers,
   hasOppositePolarity,
   identityKeys,
+  numericTokensOf,
+  NUMERIC_VETO_VERSION,
   isLlmJudgeEnabled,
   isSameTitle,
   isSameTitleText,
@@ -869,7 +872,7 @@ section('candidatePairs · ★ 优先档：降阈不得让原本会问的对变�
 // ★ 2026-10-05：推送端专属的近同名闸（same_title_near）
 // ------------------------------------------------------------
 
-section('近同名闸 · ★ 推送端专属：0.75 + 长度下限 15 字');
+section('近同名闸 · ★ 推送端专属：0.70 + 长度下限 15 字 + 数字护栏');
 
 {
   /**
@@ -936,18 +939,25 @@ section('近同名闸 · ★ 推送端专属：0.75 + 长度下限 15 字');
     !isSameTitleText(SHORT_A, SHORT_B),
   );
 
-  // ---- 反例 ②：0.70–0.75 档**故意**留给模型 ----
+  // ---- 正例 ②：0.70–0.75 档（2026-10-05 **改判为同一件事**）----
+  //
+  // 这里原先写的是「0.70–0.75 档**故意**留给模型」，理由是「该档已出现实体词级替换，
+  // 属于语义判断」。2026-10-05 把 30 天 × 5 国的**全档 44 对逐条看完**之后，
+  // 那个理由**一个实例都没有** —— 该档 17 对全是同一件事（译文重复字、专名变体、
+  // 同义动词、可选年份/主体…），于是阈值降到 0.70。
+  // ⇒ 这条断言从「必须不合并」**翻转**为「必须合并」，翻转依据记在 `TITLE_NEAR_MIN_SIM`。
   const MID_A = '阿塞拜疆与塞尔维亚讨论战略伙伴关系';
   const MID_B = '阿塞拜疆与塞尔维亚战略伙伴关系关系';
   const midSim = similarity(MID_A, MID_B);
   ok(
-    '反例②前置条件：这对确实落在 0.70–0.75 档',
-    midSim >= 0.7 && midSim < TITLE_NEAR_MIN_SIM,
+    '正例②前置条件：这对落在 0.70–0.75 档（**旧阈值的漏网区**）',
+    midSim >= 0.7 && midSim < 0.75,
     midSim.toFixed(4),
   );
   ok(
-    '★ 反例②：本闸**不**处理 0.70–0.75（该档已出现实体词级替换，交给模型）—— 这是阈值取 0.75 而非 0.70 的可观测后果',
-    !isNearSameTitleText(MID_A, MID_B),
+    '★ 正例②（判定已翻转）：0.70–0.75 档现在**合并** —— 30 天实测该档 17/17 都是同一件事',
+    isNearSameTitleText(MID_A, MID_B),
+    `sim=${midSim.toFixed(4)}，阈值 ${TITLE_NEAR_MIN_SIM}`,
   );
 
   // ---- 反例 ③：松阈值下三条守卫更省不得 ----
@@ -957,13 +967,131 @@ section('近同名闸 · ★ 推送端专属：0.75 + 长度下限 15 字');
   );
   ok('反例③：占位标题不互相合并', !isNearSameTitleText('无标题', '无标题'));
 
+  // ============================================================
+  // ★ 数字护栏（2026-10-05 新增，`hasConflictingNumbers`）
+  // ============================================================
+  //
+  // 为什么降阈值必须**成对**加上它：纯相似度在「长共同模板 + 极短差异槽」上
+  // **双向**失效，而且构造得出实例：
+  //
+  //   「哈萨克斯坦总统任命 X 为国防部长」↔「…为紧急情况部长」  sim=0.7714  ← 不同事件却在闸内
+  //
+  // 数字冲突是其中**唯一能用确定性判据切开**的一类，而它恰好对应**静默丢数据**
+  // （同一份统计公报的不同指标被当成一件事）。所以：降阈值 + 加这条守卫，成对做。
+
+  // 数字抽取本身：只认阿拉伯数字（中文数字是量级词，不是「不同新闻」的证据）
+  ok(
+    'numericTokensOf：抽出阿拉伯数字与百分号，保序',
+    JSON.stringify(numericTokensOf('阿塞拜疆2025年新住宅区占比98%')) === '["2025","98%"]',
+    JSON.stringify(numericTokensOf('阿塞拜疆2025年新住宅区占比98%')),
+  );
+  ok(
+    'numericTokensOf：中文数字**不**抽（「数十亿」不该产生 token）',
+    JSON.stringify(numericTokensOf('哈萨克斯坦发现数十亿坚戈的逃税')) === '[]',
+    JSON.stringify(numericTokensOf('哈萨克斯坦发现数十亿坚戈的逃税')),
+  );
+
+  const NUM_CONFLICT: Array<[string, string, string]> = [
+    ['统计公报·不同指标（az 实测 8 对那一类）', '阿塞拜疆2025年新住宅区占比98%', '阿塞拜疆2025年建筑工作占比82.2%'],
+    [
+      '统计公报·不同指标（投资额 vs 占比）',
+      '哈萨克斯坦2025年制造业投资额为6.628亿马纳特',
+      '哈萨克斯坦2025年非油气资本投资占比75%',
+    ],
+    ['同模板·不同金额', '阿塞拜疆对某项目投资5.2亿马纳特', '阿塞拜疆对某项目投资3.1亿马纳特'],
+    ['同模板·不同税率', '哈萨克斯坦增值税税率提高至16%', '哈萨克斯坦增值税税率提高至12%'],
+  ];
+  for (const [why, a, b] of NUM_CONFLICT) {
+    ok(
+      `数字护栏·否决：${why}`,
+      hasConflictingNumbers(a, b),
+      `a=[${numericTokensOf(a)}] b=[${numericTokensOf(b)}]`,
+    );
+    ok(`数字护栏·否决后近同名闸也不合并：${why}`, !isNearSameTitleText(a, b), `sim=${similarity(a, b).toFixed(4)}`);
+  }
+
+  const NUM_OK: Array<[string, string, string]> = [
+    [
+      '可选年份（[] vs [2026] ⇒ 子序列）',
+      '哈萨克斯坦自行车运动员在亚洲运动会中夺得金牌',
+      '哈萨克斯坦自行车运动员在2026年亚洲运动会中夺得金牌',
+    ],
+    [
+      '数字完全相同（17.5%→12%）',
+      '乌兹别克斯坦卡拉卡尔帕克斯坦将家庭创业贷款利率从17.5%降至12%',
+      '乌兹别克斯坦卡拉卡尔帕克斯坦家庭创业贷款利率从17.5%下调至12%',
+    ],
+    [
+      '中文数字 vs 阿拉伯（上个世纪 / 20世纪，同一句话）',
+      '哈萨克斯坦总统 Tokayev：我军已停滞于上个世纪',
+      '哈萨克斯坦总统 Tokayev：我军已停滞在20世纪',
+    ],
+    [
+      '数字相同（48 处）',
+      '吉尔吉斯斯坦楚伊州警方在反极端主义行动中搜查48处地点',
+      '吉尔吉斯斯坦楚伊州警方在反恐行动中搜查48处地址',
+    ],
+    [
+      '一边多写了日期（子序列）',
+      '阿曼苏丹 Haitham bin Tariq Al Said 将对哈萨克斯坦进行国事访问',
+      '阿曼苏丹 Haitham bin Tariq Al Said 将于10月5日至6日对哈萨克斯坦进行国事访问',
+    ],
+  ];
+  for (const [why, a, b] of NUM_OK) {
+    ok(
+      `数字护栏·放行：${why}`,
+      !hasConflictingNumbers(a, b),
+      `a=[${numericTokensOf(a)}] b=[${numericTokensOf(b)}]`,
+    );
+  }
+
+  // ---- ★ 护栏与「哪一层」的边界（两条，都试过、都有代价）----
+  //
+  // 边界一：**不得**进 0.95 那道（`isSameTitleText`）。它在**入库端**也跑，
+  //         丢的行不可追；「同一件事、两家四舍五入不同」在那条线上必须照常合并。
+  {
+    const A = '哈萨克斯坦共和国国家统计局公布2025年前三季度制造业固定资产投资总额为6.628亿马纳特同比增长百分之三点一';
+    const B = '哈萨克斯坦共和国国家统计局公布2025年前三季度制造业固定资产投资总额为6.638亿马纳特同比增长百分之三点一';
+    const sim = similarity(A, B);
+    ok(
+      '边界①前置：这对**数字冲突**（6.628 vs 6.638），且已过近同名闸的第一关（够像）',
+      hasConflictingNumbers(A, B) && sim >= TITLE_NEAR_MIN_SIM,
+      `sim=${sim.toFixed(4)}，A=[${numericTokensOf(A)}] B=[${numericTokensOf(B)}]`,
+    );
+    ok(
+      '★ 边界①a：数字护栏**不**影响 0.95 那道闸 —— 它的行为就是「纯相似度」',
+      isSameTitleText(A, B) === sim >= TITLE_IDENTICAL_MIN_SIM,
+      `isSameTitleText=${isSameTitleText(A, B)}，sim=${sim.toFixed(4)}`,
+    );
+    ok(
+      '★ 边界①b（源码级）：`titleDupAt` 本体里没有数字护栏 —— 它同时给入库端闸 2 用',
+      !readFileSync(resolve(process.cwd(), 'src/lib/same-event.ts'), 'utf8')
+        .slice(
+          readFileSync(resolve(process.cwd(), 'src/lib/same-event.ts'), 'utf8').indexOf('function titleDupAt'),
+          readFileSync(resolve(process.cwd(), 'src/lib/same-event.ts'), 'utf8').indexOf('function titleDupAt') + 400,
+        )
+        .includes('hasConflictingNumbers'),
+    );
+    ok(
+      '★ 边界①c 对照：同一对在近同名闸（推送端、可逆）里被数字护栏拦住',
+      !isNearSameTitleText(A, B),
+      '两边行为不同是**有意的**（可逆性不对称）',
+    );
+  }
+
+  // 边界二：**不得**用于否决模型判出的簇。
+  // 行为层的守卫是下面「四之三」的端到端用例 ①（「75亿美元项目」↔「76亿美元投资项目」
+  // 必须照模型说的合并）—— 那是**唯一**能证明「护栏没接到合并循环里」的断言。
+  // 这里只钉版本号，防止有人改了判据却忘了递增（改了不递增 ⇒ 线上看不出换没换）。
+  ok('NUMERIC_VETO_VERSION === 1（改动判据必须一起 +1）', NUMERIC_VETO_VERSION === 1, String(NUMERIC_VETO_VERSION));
+
   // ---- 常量关系 ----
   ok(
-    'TITLE_NEAR_MIN_SIM === 0.75，且**松于** 0.95 那道（它们是两道闸，不是同一个数改了一次）',
-    TITLE_NEAR_MIN_SIM === 0.75 && TITLE_NEAR_MIN_SIM < TITLE_IDENTICAL_MIN_SIM,
+    'TITLE_NEAR_MIN_SIM === 0.7（2026-10-05 由 0.75 降下，依据 = 30 天全档逐条过目），且松于 0.95 那道',
+    TITLE_NEAR_MIN_SIM === 0.7 && TITLE_NEAR_MIN_SIM < TITLE_IDENTICAL_MIN_SIM,
     `${TITLE_NEAR_MIN_SIM} / ${TITLE_IDENTICAL_MIN_SIM}`,
   );
-  ok('TITLE_NEAR_MIN_CHARS === 15（= 实测 45 对里最短的那条）', TITLE_NEAR_MIN_CHARS === 15, String(TITLE_NEAR_MIN_CHARS));
+  ok('TITLE_NEAR_MIN_CHARS === 15（= 实测 44 对里最短的那条）', TITLE_NEAR_MIN_CHARS === 15, String(TITLE_NEAR_MIN_CHARS));
 
   // ---- ★ 边界：只在推送端 ----
   // 入库端丢的行**事后不可追**（`fetch-news` 的闸 2 注释写死了这条规矩），
@@ -982,6 +1110,29 @@ section('近同名闸 · ★ 推送端专属：0.75 + 长度下限 15 字');
     JSON.stringify(near.drops.map((d) => d.reason)),
   );
   ok('保序：保留的是**第一条**（与其它确定性闸一致，不按长度挑）', near.kept[0]?.title === POS[0][1]);
+  ok('没被数字护栏拦下时 `numericSpared` 为空', near.numericSpared.length === 0, JSON.stringify(near.numericSpared));
+
+  // ---- ★ 护栏的**可观测性**：拦下 → 进 `numericSpared`，进不了 `drops` ----
+  //
+  // 这条断言存在的理由：护栏拦下的是「一次删除的取消」，它**不会出现在任何 `drops` 里**。
+  // 没有这个字段，「护栏到底有没有在干活」就只能靠读代码猜 —— 而「不报错、没输出」
+  // 正是本项目反复栽的那一类。
+  {
+    const sparedPool = [
+      { title: '哈萨克斯坦2025年制造业投资额为6.628亿马纳特' },
+      { title: '哈萨克斯坦2025年制造业投资额为6.63亿马纳特' },
+    ];
+    const r = dedupeNearTitles(sparedPool);
+    ok('★ 护栏拦下时：两条都留住', r.kept.length === 2, `实际 ${r.kept.length} 条`);
+    ok('★ 护栏拦下时：`drops` 为空（它不删东西，只是取消删除）', r.drops.length === 0, JSON.stringify(r.drops));
+    ok(
+      '★ 护栏拦下时：进了 `numericSpared` 并带上两边标题（唯一的可见证据）',
+      r.numericSpared.length === 1 &&
+        r.numericSpared[0].kept === sparedPool[0].title &&
+        r.numericSpared[0].blocked === sparedPool[1].title,
+      JSON.stringify(r.numericSpared),
+    );
+  }
 }
 
 // ------------------------------------------------------------
@@ -1311,12 +1462,12 @@ async function llmPipelineChecks(): Promise<void> {
   {
     /**
      * ⚠️ 2026-10-05 换过构造 —— 旧构造（5 条只差一个动词的「会见中国外长…」）**已经到不了这一段**：
-     * 它们两两 ≥0.75，会被新的**近同名闸**在 L2 之前就确定性合并掉，
+     * 它们两两 ≥0.75（现已 ≥0.70），会被**近同名闸**在 L2 之前就确定性合并掉，
      * 于是「模型全答是」这个场景根本走不到超大簇护栏。
      *
      * 换成的 5 条是**同话题、不同措辞**（两两 sim 0.15–0.26），近同名闸放行、
      * 但彼此都过得了召回下限 —— 这才是这条护栏**真正的适用区间**：
-     * 模型手里的 0.2–0.75 那一档，靠相似度传递连成大簇。
+     * 模型手里的 0.2–0.70 那一档，靠相似度传递连成大簇。
      * 换句话说：near-identical 归确定性闸，语义相近但措辞不同归模型 + 簇护栏。
      */
     const items = [
@@ -1347,10 +1498,24 @@ async function llmPipelineChecks(): Promise<void> {
 
   // --- ③ 模型返回不是合法 JSON：不合并，并留下 error（不能静默）---
   {
+    /**
+     * ⚠️ 2026-10-05 换过构造 —— 旧构造（「新羊毛加工厂投产仪式」↔「…开工仪式」，
+     * `sim=0.7143`）**已经到不了这一段**：阈值降到 0.70 之后它会先被近同名闸确定性合并，
+     * 于是「模型返回不合法」这个场景根本走不到（`drops.length` 会变成 1、`llm.error` 为 undefined）。
+     *
+     * 换成的这一对 `sim=0.4000`：过了召回下限（会问模型），但**过不了**近同名闸。
+     * ——凡是「要走到模型」的用例，都必须落在 0.35–0.70 这个区间；阈值一动就要重挑。
+     */
     const items = [
       { title: '塔吉克斯坦总统主持新羊毛加工厂投产仪式' },
-      { title: '塔吉克斯坦总统主持新羊毛加工厂开工仪式' },
+      { title: '塔吉克斯坦总统出席羊毛加工厂开工典礼' },
     ];
+    ok(
+      '前提：这一对过得了召回、过不了近同名闸（否则测不到模型的返回）',
+      similarity(items[0].title, items[1].title) >= PAIR_PRIORITY_SIM &&
+        !isNearSameTitleText(items[0].title, items[1].title),
+      `sim=${similarity(items[0].title, items[1].title).toFixed(4)}，阈值 ${TITLE_NEAR_MIN_SIM}`,
+    );
     const { ask } = fakeAsk(() => '这两条看起来是同一件事。');
     const res = await dedupeStories(items, { useLlm: true, judge: { ask } });
     ok('返回不合法 → 不合并', res.drops.length === 0, String(res.drops.length));
@@ -1589,7 +1754,8 @@ async function promptVersionChecks(): Promise<void> {
     ok('包含冻结的 v1 对照组', versions.includes(1), versions.join(','));
     ok('包含当前版本', versions.includes(JUDGE_PROMPT_VERSION), String(JUDGE_PROMPT_VERSION));
     ok('当前版本是最大版本号', JUDGE_PROMPT_VERSION === Math.max(...versions), `${JUDGE_PROMPT_VERSION} vs ${versions.join(',')}`);
-    ok('当前版本 ≥ 3（v2 的校准已被 v3 取代）', JUDGE_PROMPT_VERSION >= 3, String(JUDGE_PROMPT_VERSION));
+    ok('当前版本 ≥ 4（v2/v3 的校准已被 v4 取代）', JUDGE_PROMPT_VERSION >= 4, String(JUDGE_PROMPT_VERSION));
+    ok('v3 仍在注册表里（前一版要能随时对照，否则 A/B 只剩 v1 一个基线）', versions.includes(3), versions.join(','));
 
     const items = [{ title: '甲' }, { title: '乙' }];
     const pairs = [{ a: 0, b: 1 }];
@@ -1609,9 +1775,10 @@ async function promptVersionChecks(): Promise<void> {
     ok('TITLE_MAX 仍是 80（模块搬家的护栏）', TITLE_MAX === 80, String(TITLE_MAX));
   }
 
-  section('判组提示词：当前版本（v3）的校准要点');
+  section('判组提示词：当前版本（v4）的校准要点');
   {
     const p = promptBuilderFor(JUDGE_PROMPT_VERSION)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
+    // ---- v1/v3 的要点必须**全部保留**（加新版本是叠加，不是重写）----
     ok('保留末句兜底「拿不准就判否」（误合并不可逆，这条不能删）', p.includes('拿不准就判「否」'));
     ok('有「相反事实」的第一步检查（v2 只加例子不管用）', p.includes('相反事实'));
     ok('点明「否认」是核心事实而非修饰语', p.includes('它就是那条新闻的核心事实'));
@@ -1620,6 +1787,29 @@ async function promptVersionChecks(): Promise<void> {
     ok('明说「同义指代不算不同主体」（v2 回退的根因）', p.includes('同义指代'));
     ok('正例形态三在（近义指代 + 数字表述）', p.includes('常见形态三') && p.includes('近 50 个 / 约 50 个'));
     ok('Unibank 那条正例仍在（用户报的重复）', p.includes('Unibank 推出绿色贷款'));
+
+    // ---- v4 新增：数字分界线（两侧都要在，只写一侧等于没写）----
+    ok('★ v4：有「同一个指标 / 不同指标」这一步检查', p.includes('数字是同一个人说的吗'));
+    ok(
+      '★ v4：正例侧 ——「同一个指标的数字略有出入 ⇒ 判是」在（常见形态四）',
+      p.includes('常见形态四') && p.includes('同一个指标的数字略有出入'),
+    );
+    ok(
+      '★ v4：反例侧 ——「同一份统计公报的不同指标 ⇒ 判否」在，且带真实标题',
+      p.includes('同一份统计公报') && p.includes('新住宅区占比 98%') && p.includes('非油气资本投资占比 75%'),
+    );
+    ok(
+      '★ v4：明说反例**优先于**正例（否则模型会按形态四把不同指标也合掉）',
+      p.includes('这一条**优先于**常见形态四'),
+    );
+    ok(
+      '★ v4：同一指标不同舍入的那个真实标题在（75/76 亿美元，端到端用例 ① 的 fixture）',
+      p.includes('75 亿美元') && p.includes('76 亿美元'),
+    );
+
+    const v3 = promptBuilderFor(3)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
+    ok('v3 与 v4**确实不同**（否则 judgePromptVersion 递增是假的）', v3 !== p);
+    ok('v3 里**没有** v4 新增的数字检查（前一版要真是前一版）', !v3.includes('数字是同一个人说的吗'));
 
     const v1 = promptBuilderFor(1)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
     ok('v1 对照组没有正例细化（它就该是校准前那版）', !v1.includes('常见形态'));
@@ -1658,6 +1848,15 @@ async function promptVersionChecks(): Promise<void> {
     ok('语料含用户报的 Unibank 重复（该合并）', pairs.some((x) => (x.a ?? '').includes('Unibank') && x.expect === 'same'));
     ok('语料含「否认某报道 vs 该报道本身」（该保留）', pairs.some((x) => (x.a ?? '').includes('否认准备对柴油出口') && x.expect === 'diff'));
     ok('语料含 v2 的回退点（中国 50 个联合项目）', pairs.some((x) => (x.a ?? '').includes('主要企业') && x.expect === 'same'));
+    // ---- v4（2026-10-05）新增的两侧 ----
+    ok(
+      '★ 语料含 v4 的反例侧：同一份统计公报的不同指标（该保留）',
+      pairs.some((x) => (x.a ?? '').includes('新住宅区占比 98%') && x.expect === 'diff'),
+    );
+    ok(
+      '★ 语料含 v4 的正例侧：同一指标不同舍入（该合并，且是「不能用算术护栏否决模型」的证据）',
+      pairs.some((x) => (x.a ?? '').includes('75亿美元') && x.expect === 'same'),
+    );
   }
 }
 

@@ -10,6 +10,7 @@ import {
   PAIR_MAX_CANDIDATES,
   PAIR_PRIORITY_SIM,
   TITLE_NEAR_MIN_SIM,
+  NUMERIC_VETO_VERSION,
 } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import {
@@ -386,7 +387,9 @@ interface PushMerge {
   country_code: string;
   /**
    * `same_url` / `same_original` / `same_text` / `same_title` = 确定性（入库端同样跑）；
-   * **`same_title_near` = 推送端特有的近同名闸（阈值 0.75，见 `TITLE_NEAR_MIN_SIM`）**；
+   * **`same_title_near` = 推送端特有的近同名闸（阈值见 `TITLE_NEAR_MIN_SIM`，
+   * 不要在这里写死数字 —— 它 2026-10-05 从 0.75 降到了 0.70，
+   * 而写死的那份没人会跟着改）**；
    * `llm_same_event` = 模型判的。
    */
   reason: string;
@@ -835,8 +838,23 @@ export async function GET(request: NextRequest) {
        * 它存在 ⇒ 这一版带上了第五道确定性闸（`same_title_near`），
        * 产出的合并记录里会出现这个 reason。取值范围只可能来自
        * `TITLE_NEAR_MIN_SIM`（现算，不手写）。
+       *
+       * **取值自 2026-10-05 起是 `0.7`**（原先 0.75）。所以这个字段同时是
+       * 「阈值降没降下去」的哨兵：`0.75` = 旧版，`0.7` = 新版。
        */
       titleNearMinSim: TITLE_NEAR_MIN_SIM,
+      /**
+       * 确定性**数字护栏**的版本号（2026-10-05 新增，`hasConflictingNumbers`）。
+       *
+       * 为什么用一个自增整数而不是布尔：以后判据升级（比如改成「按槽位比较」）时
+       * 需要区分「有护栏」和「是哪一代护栏」，布尔两者都表达不了。
+       *
+       * `1` = 首版：两条标题数字互相矛盾 ⇒ **近同名闸不合并**。
+       * （只作用在确定性那一层，**不**否决模型判出的簇 —— 那会把
+       * 「同一件事、两家四舍五入不同」的稿子重新变成重复，见 `hasConflictingNumbers`。）
+       * 它存在就说明这一版带上了护栏；改动 `hasConflictingNumbers` 时**必须一起加一**。
+       */
+      numericVetoVersion: NUMERIC_VETO_VERSION,
       /**
        * 「借图」（`planCoverBorrows`）的配对下限。2026-09-29 新增。
        *

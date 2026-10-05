@@ -22,6 +22,49 @@ export interface ArticleRow {
   updated_at: string | null;
 }
 
+/**
+ * 「读一篇文章要取哪些列」的**唯一真值**。所有返回 `ArticleRow[]` 的读取函数都用它。
+ *
+ * ## 为什么必须收成一处（2026-10-05 的事故）
+ *
+ * 在此之前是两个读取方各写一份 inline 字符串：
+ *
+ * | 读取方 | 选择列 | 后果 |
+ * | --- | --- | --- |
+ * | `getArticlesByDateRange` | 含 `original_title / original_content / original_language` | 总审能拿到原文（2026-10-01 补的）|
+ * | `getArticles`（`GET /api/articles` 用） | **不含**这三个 | 见下 |
+ *
+ * `rowToApi`（`app/api/articles/route.ts`）里**已经**有 `originalContent: row.original_content`，
+ * 注释还专门写了「不返回它诊断脚本就会把这个计数恒定显示成 0」。但选择列没跟着改，
+ * 于是 `row.original_content` 恒为 `undefined` —— 而 `JSON.stringify` 会把 `undefined`
+ * 的键**整个丢掉**，接口返回里连字段名都看不见。诊断脚本读到的就是「全部条目都没有正文」。
+ *
+ * 实际表现（`pnpm diagnose:push --period morning`）：五国 **全部**打印
+ * 「无原文正文 15/15」⇒「合格候选 0 篇」⇒「这一国本轮不会出草稿」——
+ * 一份**完全虚假**的漏斗报告，而它看起来像是采集侧塌了。
+ *
+ * ⇒ 这不是「漏写一个字段」，是**两个读取方各有一份真值**。收成一处之后，
+ * 以后新增字段只有一处要改，且 `rowToApi` 读不到的字段会由
+ * `scripts/test-api-field-contract.ts` 离线钉死。
+ *
+ * ⚠️ 改这个常量前先看那条回归：它断言 `rowToApi` 用到的每个 `row.*` 都在这里。
+ *
+ * ## ⚠️ 必须是**单个字符串字面量 + `as const`**，不许拆成 `'a' + 'b'`
+ *
+ * Supabase 的 `.select()` 靠**字面量类型**推断返回行的形状：
+ * `.select('id, title')` ⇒ `data` 的每一项是 `{ id, title }`。一旦传进去的是
+ * `string`（变量、或 `+` 拼接的结果 —— `+` 的结果类型是 `string`，加 `as const` 也救不回来），
+ * 推断就退化成 `GenericStringError[]`，于是两处 `data as ArticleRow[]` 全部报
+ * `TS2352：Conversion may be a mistake`，只能改成 `as unknown as` —— **那就等于放弃了
+ * 「选出来的列和 `ArticleRow` 对得上」这件事的类型检查**，而这恰好是本文件要防的那一类错。
+ *
+ * ⇒ 拿类型安全换「单一真值」不划算。代价是这一行很长（约 150 字符），
+ * 但换来的是：**漏选字段会被编译器发现**，而且 `scripts/test-api-field-contract.ts`
+ * 还能再离线兜一层。
+ */
+const ARTICLE_COLUMNS =
+  'id, title, summary, content, country_code, category, source_name, source_url, original_title, original_content, original_language, published_at, tags, is_featured' as const;
+
 export async function getArticles(filters?: {
   country_code?: string;
   category?: string;
@@ -31,7 +74,7 @@ export async function getArticles(filters?: {
   const client = getSupabaseClient();
   let query = client
     .from('articles')
-    .select('id, title, summary, content, country_code, category, source_name, source_url, published_at, tags, is_featured')
+    .select(ARTICLE_COLUMNS)
     .order('published_at', { ascending: false });
 
   if (filters?.country_code) {
@@ -453,7 +496,11 @@ export async function getArticlesByDateRange(
     // 在材料层面一直没成立过：总审只能审「中文之间自不自洽」。
     // 单独占一行注释是因为「这个字段明明在库里，只是没人读」这种缺口最难发现：
     // 它不报错、不报警，只表现为「判据上线了但没有效果」。
-    .select('id, title, summary, content, country_code, category, source_name, source_url, original_title, original_content, original_language, published_at, tags')
+    //
+    // ⇒ 列清单已上提到 {@link ARTICLE_COLUMNS}。**同一个坑 2026-10-05 又发生了一次**
+    // （`getArticles` 那一侧漏了这三个字段，把诊断漏斗整份报成假的），
+    // 所以这里也不再自己写字符串。
+    .select(ARTICLE_COLUMNS)
     .gte('published_at', startDate)
     .lte('published_at', endDate)
     .order('published_at', { ascending: false });

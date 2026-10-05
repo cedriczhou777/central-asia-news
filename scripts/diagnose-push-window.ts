@@ -6,7 +6,21 @@
  *   pnpm diagnose:push --period morning --date 2026-09-27
  *   pnpm diagnose:push --start 2026-09-26T11:00:00Z --end 2026-09-26T23:00:00Z
  *   pnpm diagnose:push --period morning --max-id 6068    # 只看「那一刻库里已有的」行
+ *   pnpm diagnose:push --period morning --limit 2000     # 回放更早的窗口（默认 500 只够约 2 天）
+ *   pnpm diagnose:push --period morning --allow-truncated # 明知窗口被截断，仍要看截断结果
  *   SITE_BASE=http://localhost:3000 pnpm diagnose:push --period evening
+ *
+ * ## ⚠️ 窗口被截断时本脚本**退出码非 0**（2026-10-05 改）
+ *
+ * **服务端还会把 `limit` 截到 1000**（实测 `limit=2500` 只返回 1000 行）——
+ * 所以本脚本**最多**能可靠回放约 4 天的窗口，再早的窗口无论 `--limit` 给多大都覆盖不到左端，
+ * 那时只能改用 `--start/--end` 显式圈一个能被覆盖的区间。
+ *
+ * 默认 `--limit 500` 在实测流量下只覆盖约 36~48 小时。回放更早的窗口时，
+ * 返回集的**左端**会落在窗口起点之后 ⇒ 「窗口内 N 篇」只是后半段的数。
+ * 这曾经让一次排查得出「吉尔吉斯整轮只有 1 篇稿」的结论，而真相是仪器把窗口砍了一半。
+ * 现在这种情况下会打印修法并**直接退出**（见 `assertWindowCovered`）——
+ * 与 `assertBodyFieldPresent` 同一个立场：**宁可报错，也不给一份看着正常的漏数**。
  *
  * ## `--max-id` 是复现「推送跑在抓取前面」的关键旋钮
  *
@@ -43,10 +57,11 @@
  *
  * ## 已知的口径差（读结论前先看这里）
  *
- * 1. **`original_title` 拿不到**。`GET /api/articles` 的 `rowToApi` 不返回它，
- *    而它是 `identityKeys` 里 `orig:` 这一条的来源。结果：本脚本的确定性去重
- *    **只能按链接判**，会比生产**少**剔一部分（生产还有原文标题指纹那一刀）。
- *    ⇒ 本脚本报的「进精选」是**上限**，真实值可能更低。
+ * 1. ~~**`original_title` 拿不到**~~ → **2026-10-05 已修**：`rowToApi` 现在返回
+ *    `originalTitle`，`GET /api/articles` 也真的 select 了这一列，
+ *    所以 `identityKeys` 的 `orig:` 那一刀在本脚本里同样生效，与生产同一套判据。
+ *    （这条原先写的是「拿不到」，而真因不是「接口没写这个字段」，是**SQL 选择列漏了** ——
+ *    见 `db-articles.ARTICLE_COLUMNS` 的说明。）
  * 2. **L2（模型判组）不跑**。本脚本调的是同步的 `dedupeStoriesDeterministic`，
  *    不碰模型（也因此不会在这里偷偷花掉配额）。⚠️ **但「两边可比」这句自 2026-09-28 起不再成立**：
  *    生产推送端当时把 L2 默认翻成了**开**，所以本脚本报的「进精选」现在是
@@ -76,8 +91,17 @@ const BASE =
 /** 与 `POST /api/wechat/push` 的 `maxPerCountry` 一致 —— 改一处要改两处，这里是刻意的重复。 */
 const MAX_PER_COUNTRY = 15;
 
-/** 拉取上限。给足余量：12h 窗口实测 100~200 篇，500 是安全水位（见下方的截断自检）。 */
-const FETCH_LIMIT = 500;
+/**
+ * 默认拉取上限。可用 `--limit N` 覆盖。
+ *
+ * ⚠️ **500 只够回放最近约两天的窗口**（实测 12h 窗口 36~176 篇，24h 约 250~350 篇，
+ * 而夜间时段常低到每小时 1~6 篇 ⇒ 500 篇大约覆盖 36~48 小时）。
+ * 想回放更早的窗口必须显式给更大的 `--limit`，否则**左侧会被截断**、
+ * 「窗口内 N 篇」变成漏数 —— 这正是 2026-10-05 排查「吉尔吉斯是不是停推了」
+ * 时踩到的：被截断的窗口报出 `kg 窗口内 1 篇`，而那只统计到窗口的后半段。
+ * 下面是**硬失败**（不是告警），见 `assertWindowCovered()`。
+ */
+const DEFAULT_FETCH_LIMIT = 500;
 
 interface ApiArticle {
   id: number;
@@ -89,9 +113,19 @@ interface ApiArticle {
   source: string | null;
   sourceUrl: string | null;
   /**
+   * 原文标题。`identityKeys` 里 `orig:` 那一刀的输入（见 `same-event.ts`）。
+   * 缺了它，本脚本的确定性去重会比生产**少**剔一部分 ⇒ 报出的「进精选」是上限。
+   */
+  originalTitle: string | null;
+  /**
    * 原文正文。**必须有**：推送侧第 0 条闸（`hasSourceBody`）判的就是它
    * （见 `article-format.ts` 里 `PushExclusion` 的说明和第 0 条闸的注释）。
-   * 漏了它，下面的 `no_source_body` 计数会恒为 0 —— 一个**不报错的错**。
+   *
+   * ⚠️ 注意这里判「有没有」的依据是 `hasSourceBody`（内容层面），
+   * 但**上面这条注释曾经和现实相反**：2026-10-05 之前 `GET /api/articles`
+   * 根本没 select 这一列，字段在 JSON 里**整个不存在**，于是这个计数被**恒报成满格**
+   * （不是 0）—— 五国全部「无原文正文」，一份完全虚假的漏斗。
+   * 字段级的存在性由下面的 `assertBodyFieldPresent()` 单独把关。
    */
   originalContent: string | null;
   publishedAt: string | null;
@@ -122,7 +156,7 @@ function argValue(name: string): string | undefined {
 }
 
 /** 认得的开关。写错一个字母就该报错，而不是悄悄跑默认值。 */
-const KNOWN_FLAGS = new Set(['start', 'end', 'period', 'date', 'max-id']);
+const KNOWN_FLAGS = new Set(['start', 'end', 'period', 'date', 'max-id', 'limit', 'allow-truncated']);
 
 function assertNoUnknownFlags(): void {
   const bad = process.argv
@@ -198,6 +232,90 @@ const REASON_LABEL: Record<PushExclusion, string> = {
   country: '与本国无关（讲了别国）',
 };
 
+/**
+ * 字段存在性自检 —— 挡住一整类**看起来正常的假报告**。
+ *
+ * ## 为什么必须单独有这一步
+ *
+ * 下面所有统计都建立在 `a.originalContent` 上（第 0 条闸 `hasSourceBody`）。
+ * 而「这一列没被 select」和「这一列的值是 NULL」在 JS 里长得很不一样、
+ * 在**报告里却长得一样**：
+ *
+ * | 情况 | `a.originalContent` | 报告里的表现 |
+ * | --- | --- | --- |
+ * | 库里是 NULL（真的是采集侧问题） | `null` | 这一条算 `no_source_body` ✅ 真实 |
+ * | 查询没 select 这一列（代码问题） | `undefined`（JSON 里键都不存在） | **全部**条目算 `no_source_body` ❌ 假 |
+ *
+ * 2026-10-05 就是这么栽的：五国 100% 「无原文正文」，看起来像采集侧全线塌了，
+ * 实际是 `getArticles` 的 `select(...)` 漏了这一列。
+ *
+ * ⇒ 契约是：**这一列必须至少在一条记录上是「存在的键」**（哪怕是 `null`）。
+ * 一条都没有，说明是接口/查询的问题，此时**任何**漏斗数字都不可信 ⇒ 直接退出。
+ * 这与本脚本 `argValue` 的立场一致：**宁可报错，也不要给一份看着正常的结果**。
+ */
+function assertBodyFieldPresent(rows: ApiArticle[]): void {
+  const withKey = rows.filter((a) => Object.prototype.hasOwnProperty.call(a, 'originalContent'));
+  if (withKey.length === 0) {
+    console.error(
+      '✖ 接口返回的 ' +
+        rows.length +
+        ' 条记录里，**没有一条**带 `originalContent` 这个键。\n' +
+        '  这不是「都没有正文」，而是「这一列压根没被查出来」——\n' +
+        '  两种情况的报告长得一样，但结论相反：前者是采集侧问题，后者是代码问题。\n' +
+        '  查 `src/lib/db-articles.ts` 的 `ARTICLE_COLUMNS` 有没有漏、\n' +
+        '  以及 `src/app/api/articles/route.ts` 的 `requiredColumn()` 有没有被绕过。\n' +
+        '  在这条修好之前，下面的漏斗数字**一律不可信**，所以直接退出。',
+    );
+    process.exit(1);
+  }
+  const nonNull = withKey.filter((a) => a.originalContent != null).length;
+  console.log(
+    `字段自检：${withKey.length}/${rows.length} 条带 originalContent 键，` +
+      `其中非空 ${nonNull} 条（${((nonNull / withKey.length) * 100).toFixed(1)}%）`,
+  );
+}
+
+/**
+ * **窗口覆盖自检 —— 截断必须硬失败，不许只告警。**
+ *
+ * ## 为什么从「打印 ⚠️」改成「exit 1」
+ *
+ * 这段逻辑原先只打一行告警就继续跑，而它上面那句注释写的是
+ * 「宁可报错也不要给一个看起来正常的漏数」—— **注释写的和代码做的是两件事**。
+ * 2026-10-05 就是这么再次栽的：用默认 `limit=500` 回放 2026-10-03 早报窗口时，
+ * 返回集最早只到北京时间 10-03 01:00，而窗口起点是 10-02 19:00 ——
+ * 于是「窗口内 N 篇」只统计到后半段，报出 `kg 窗口内 1 篇`，
+ * 看起来像「吉尔吉斯整轮没稿」，实际是**仪器把窗口砍了一半**。
+ *
+ * ⇒ 判据：返回集最早的一篇**新于**窗口起点 ⇒ 左端没覆盖 ⇒ 退出。
+ * 需要故意看截断结果时加 `--allow-truncated`（那时告警仍会打印，只是不退出）。
+ *
+ * 这是本项目第三次同类：**「不报错的错」比报错的错危险得多**。
+ * 见 `assertBodyFieldPresent`（字段没查出来时同样硬失败）与 `argValue`（参数写错就抛）。
+ */
+function assertWindowCovered(args: {
+  oldest: string;
+  startIso: string;
+  limit: number;
+  allowTruncated: boolean;
+}): void {
+  const { oldest, startIso, limit, allowTruncated } = args;
+  if (!oldest || oldest <= startIso) return;
+  const msg =
+    `返回集最早的一篇是 ${oldest}，**新于**窗口起点 ${startIso}` +
+    ` ⇒ 窗口左端没被覆盖，下面的「窗口内 N 篇」是**漏数**（不是「那一轮真的没稿」）。\n` +
+    `  当前 limit=${limit}。修法二选一：\n` +
+    `    · 调大取数上限：--limit ${Math.min(limit * 4, 5000)}\n` +
+    `    · 或只回放能覆盖到的区间：--start/--end 显式给窗口\n` +
+    `  确认要看截断结果（仅用于对照）时加 --allow-truncated。`;
+  if (allowTruncated) {
+    console.log(`  ⚠️ ${msg}`);
+    return;
+  }
+  console.error(`✖ ${msg}`);
+  process.exit(1);
+}
+
 interface Funnel {
   total: number;
   reason: Record<PushExclusion, number>;
@@ -224,6 +342,14 @@ async function main(): Promise<void> {
   console.log(`  数据来源 ${BASE}`);
   console.log('='.repeat(72));
 
+  const limitArg = argValue('limit');
+  const FETCH_LIMIT = limitArg === undefined ? DEFAULT_FETCH_LIMIT : Number(limitArg);
+  if (!Number.isFinite(FETCH_LIMIT) || FETCH_LIMIT <= 0) {
+    console.error(`--limit 不是正整数：${limitArg}`);
+    process.exit(1);
+  }
+  const allowTruncated = process.argv.includes('--allow-truncated');
+
   const res = await fetch(`${BASE}/api/articles?limit=${FETCH_LIMIT}`);
   if (!res.ok) {
     console.error(`拉取文章失败：HTTP ${res.status}`);
@@ -235,6 +361,9 @@ async function main(): Promise<void> {
     console.error('接口没返回任何文章 —— 先确认库里有数据，再谈漏斗。');
     process.exit(1);
   }
+
+  // 先验字段，再算漏斗。顺序不能反：字段缺失时下面每一格都是假的。
+  assertBodyFieldPresent(all);
 
   // `--max-id`：模拟「推送那一刻」的库。理由见文件头 —— id 顺序就是入库顺序，
   // 一轮抓取是一整段连续 id，所以「当时库里有什么」可以按 id 切出来。
@@ -253,7 +382,7 @@ async function main(): Promise<void> {
   }
 
   // 截断自检：如果返回集里最早的一篇**新于**窗口起点，说明窗口左端没被覆盖，
-  // 下面统计出的「窗口内 N 篇」是漏的。宁可报错也不要给一个看起来正常的漏数。
+  // 下面统计出的「窗口内 N 篇」是漏的。
   const oldest = all.reduce(
     (m, a) => (a.publishedAt && a.publishedAt < m ? a.publishedAt : m),
     all[0].publishedAt || '',
@@ -262,13 +391,8 @@ async function main(): Promise<void> {
     (m, a) => (a.publishedAt && a.publishedAt > m ? a.publishedAt : m),
     all[0].publishedAt || '',
   );
-  console.log(`拉取 ${all.length} 篇，published_at 覆盖 ${oldest} … ${newest}`);
-  if (oldest && oldest > startIso) {
-    console.log(
-      `  ⚠️ 返回集最早的一篇（${oldest}）新于窗口起点（${startIso}）` +
-        ` —— 窗口左端没覆盖到，下面的计数偏少。把 limit 调大或缩短窗口。`,
-    );
-  }
+  console.log(`拉取 ${all.length} 篇（limit=${FETCH_LIMIT}），published_at 覆盖 ${oldest} … ${newest}`);
+  assertWindowCovered({ oldest, startIso, limit: FETCH_LIMIT, allowTruncated });
 
   const inWindow = inDb.filter((a) => {
     const t = a.publishedAt;

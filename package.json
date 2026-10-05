@@ -41,11 +41,12 @@
     "analyze:pair-recall": "tsx scripts/analyze-pair-recall.ts",
     "probe:feeds": "tsx scripts/probe-feed-candidates.ts",
     "diagnose:push": "tsx scripts/diagnose-push-window.ts",
-    "verify:offline": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance",
+    "verify:offline": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance && pnpm test:api-field-contract",
     "verify:online": "pnpm test:translate",
     "test:editor-review": "tsx scripts/test-editor-review.ts",
     "test:proper-nouns": "tsx scripts/test-proper-nouns.ts",
-    "test:country-relevance": "tsx scripts/test-country-relevance.ts"
+    "test:country-relevance": "tsx scripts/test-country-relevance.ts",
+    "test:api-field-contract": "tsx scripts/test-api-field-contract.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

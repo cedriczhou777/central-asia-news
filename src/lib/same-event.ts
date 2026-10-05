@@ -98,6 +98,17 @@ export interface DedupResult<T> {
   kept: T[];
   drops: DedupDrop<T>[];
   /**
+   * **数字护栏「留下没合」的对**（2026-10-05 新增，见 `hasConflictingNumbers`）。
+   *
+   * 它和 `drops` 是**反方向**的记录：`drops` 说「删了谁」，这里说「本来要删、被拦住了」。
+   * 为什么必须留痕：护栏的价值**等于它拦下的东西**，而它拦下的是「一次删除的取消」——
+   * 没有任何输出字段能反映出来。不留痕的话，「护栏到底有没有生效」只能靠读代码猜。
+   *
+   * 存**标题**而不是下标：这是给人看的告警，而 `llm.indexTitles` 上还有一次
+   * 「下标基准在哪」的坑（见该字段），不值得为一条日志再引入一次映射风险。
+   */
+  numericSpared?: Array<{ kept: string; blocked: string }>;
+  /**
    * L2 的执行情况。`ran=false` 表示本次没跑模型（没配 Key 或条数不足）。
    *
    * `groups` 是**采信结果**（下标分组，每组 ≥2 条，组内保留第 0 条）。
@@ -320,6 +331,115 @@ export function isSameTitle(a: StoryLike, b: StoryLike): boolean {
 }
 
 /**
+ * 抽出一条标题里的**阿拉伯数字 token**（保序，含百分号与小数点）。
+ *
+ * ⚠️ **只认阿拉伯数字，不认中文数字**（`三`、`十亿`、`上个世纪`）—— 这是刻意的：
+ * 「上个世纪」vs「20世纪」是**同一个人说的话**（实测 `sim=0.7037`），
+ * 把中文数字也抽出来会让这一对因为 `[]` vs `['20']` 判成冲突、把真重复挡在外面。
+ * 中文数字在这套语料里几乎只出现在**量级词**里（数十亿、百万吨），
+ * 而量级词不构成「两条不同新闻」的证据。
+ */
+export function numericTokensOf(title: string): string[] {
+  // 把百分号并进 token（98% 与 82.2% 必须是两个不同的 token，而不是 ['98'] 与 ['82.2']）
+  return [...title.matchAll(/\d+(?:[.\u066B]\d+)*\s*%?/g)]
+    .map((m) => m[0].replace(/\s+/g, ''))
+    .filter((s) => s.length > 0);
+}
+
+/** `needle` 是否是 `hay` 的**保序子序列**（允许中间插数字）。空数组视为子序列。 */
+function isSubsequence(needle: string[], hay: string[]): boolean {
+  let i = 0;
+  for (const h of hay) {
+    if (i < needle.length && needle[i] === h) i++;
+  }
+  return i === needle.length;
+}
+
+/**
+ * **数字冲突护栏** —— 两条标题近乎相同、但里面的数字**互相矛盾** ⇒ 不是同一件事。
+ *
+ * ## 它治的是哪一类错（两个方向都有）
+ *
+ * | 症状 | 例子 | 不设护栏的后果 |
+ * | --- | --- | --- |
+ * | **过度合并**：同一份统计公报的不同数字被当成同一件事 | az「2025 年新住宅区占比 **98%**」↔「建筑工作占比 **82.2%**」（实测 `sim` 只有 0.20–0.26，但**模型全判了「是」**） | **静默丢数据** —— 8 条不同的事实合并成 1 条 |
+ * | **边界抖动**：同一件事的两个写法数字不同，时合时不合 | 用户第 12 条报的「发现数十亿坚戈」那类（实测 `0.7222 / 0.75`，卡在**旧阈值 0.75** 的边上）| 同一件事一会儿合一会儿不合，用户隔天看到重复 |
+ *
+ * ⚠️ 上表第二行的**抖动本身已由阈值 0.75 → 0.70 消掉**（`0.7222` 与 `0.75` 现在都在闸内），
+ * 无需护栏介入。但「长共同模板 + 一个极短差异槽 + 无数字」那一类仍旧是阈值治不了的
+ * —— 见 {@link TITLE_NEAR_MIN_SIM} 里列的**构造得出、30 天零实例**的那条已知风险。
+ * 这一行留在这里是因为护栏与阈值降档是**同一次**一起做的（降阈值必须配护栏）。
+ *
+ * ## 判据（保守：只在**明显矛盾**时否决）
+ *
+ * 两条标题各自抽出数字序列；**只有当两边都有数字、且任一序列都不是另一方的保序子序列时**
+ * 才算「冲突」。这几条实测都因此**照常合并**（护栏不能误伤它们）：
+ *
+ * ```
+ * 「在亚洲运动会中夺得金牌」      vs「在2026年亚洲运动会中夺得金牌」   [] vs ['2026']      → 合并
+ * 「17.5%降至12%」               vs「17.5%下调至12%」                相等               → 合并
+ * 「我军已停滞于上个世纪」         vs「我军已停滞在20世纪」             [] vs ['20']       → 合并
+ * 「反极端主义行动中搜查48处」      vs「反恐行动中搜查48处地址」          ['48'] vs ['48']   → 合并
+ * ```
+ *
+ * 这几条则被否决（正是要拦的）：
+ *
+ * ```
+ * 「制造业投资额为6.628亿马纳特」   vs「非油气资本投资占比75%」          ['6.628'] vs ['75%'] → 冲突
+ * 「新住宅区占比98%」             vs「建筑工作占比82.2%」              ['98%'] vs ['82.2%'] → 冲突
+ * 「投资5.2亿」                  vs「投资3.1亿」                     ['5.2'] vs ['3.1']   → 冲突
+ * ```
+ *
+ * ## ⚠️ 它**只能**用在确定性那一层（两条边界，都试过、都有代价）
+ *
+ * **调用点只有一个**：{@link isNearSameTitleText}（近同名闸，推送端专属）。
+ *
+ * ### 边界一：不要加进 {@link titleDupAt}
+ *
+ * 那条同时给**入库前**闸 2 用，而闸 2 丢的行不可追（库里没有就是没有）。
+ * 一旦两篇同一件事因为「一家写 6.628 亿、一家四舍五入写 6.63 亿」被判冲突，
+ * 库里就**永久**少一行。推送端丢的只是「今天不展示」，明天还在候选里。
+ * ——同一个「可逆性不对称」的取舍，见 {@link TITLE_NEAR_MIN_SIM}。
+ *
+ * ### 边界二：也不要拿去否决**模型判出的簇**（2026-10-05 试过，被回归挡下）
+ *
+ * 当时的动机是顺手治 az 那种「同一份统计公报的不同数字被模型判成同一件事」。
+ * 但这一层与上面**不适用同一条理由**：模型的输入里已经包含了语义判断，
+ * 用一个「数字不同就否决」的算术规则去推翻它，是**用算术否定语义**。
+ * 立刻被 `scripts/test-dedup.ts` 的端到端用例 ① 挡住：
+ * 「启动总额 **75** 亿美元项目」↔「…**76** 亿美元投资项目」——同一件事、
+ * 两家媒体四舍五入差 1 亿，否决它就会重新出现用户报的那类重复。
+ *
+ * ⇒ az 那一类要靠**判组提示词**（把「同一份公报的不同指标」写成反例），
+ * 不是靠事后算术。
+ */
+export function hasConflictingNumbers(ta: string, tb: string): boolean {
+  const a = numericTokensOf(ta);
+  const b = numericTokensOf(tb);
+  if (a.length === 0 || b.length === 0) return false;
+  if (isSubsequence(a, b) || isSubsequence(b, a)) return false;
+  return true;
+}
+
+/** 两条**标题**的数字是否冲突（对象形态）。 */
+export function hasConflictingNumbersInTitles(a: StoryLike, b: StoryLike): boolean {
+  return hasConflictingNumbers(a.title || '', b.title || '');
+}
+
+/**
+ * 数字护栏的**版本号** —— 随 `hasConflictingNumbers` 的判据一起加一。
+ *
+ * 存在的理由是另一个同类缺口：判据改了、线上行为没变，而**没有任何字段能证明
+ * 新判据到底上没上**。留一个自增整数，`GET /api/wechat/push` 的 `codeVersion.numericVetoVersion`
+ * 就能把「有护栏」和「是哪一代护栏」分开。
+ *
+ * | 版本 | 判据 |
+ * | --- | --- |
+ * | 1 | 两条标题都有阿拉伯数字、且任一序列不是另一方的保序子序列 ⇒ 冲突 |
+ */
+export const NUMERIC_VETO_VERSION = 1;
+
+/**
  * **近同名**的下限（2026-10-05 新增）—— 比 {@link TITLE_IDENTICAL_MIN_SIM}(0.95) 松。
  *
  * ## 为什么需要第二条线（用户报的重复，一半落在这一档）
@@ -339,47 +459,84 @@ export function isSameTitle(a: StoryLike, b: StoryLike): boolean {
  *   · 模型看到的阿曼苏丹那一对是 `sim = 0.29` 的**另一对**
  *     （「将对哈萨克斯坦进行国事访问」↔「卡西姆·本·塔里克·阿勒·赛义德对…国事访问」），
  *     模型判**是**；
- *   · 而 `0.76` 那对**根本没被问到** —— 它 `≥ 0.75` 且两条标题都 ≥ 15 字，
- *     被**本函数所属的近同名闸**在 L2 之前确定性合并掉了。
+ *   · 而 `0.76` 那对**根本没被问到** —— 它过了**本函数所属的近同名闸**
+ *     （当时的阈值是 0.75；2026-10-05 已降为 {@link TITLE_NEAR_MIN_SIM}）且两条标题都 ≥ 15 字，
+ *     所以是在 L2 之前被确定性合并掉的。
  * 也就是说：**这道闸的收益不依赖「模型判错」这个理由**，它自己就是那条兜底。
  * （教训与 AGENTS O-3-1 同类：**仪器也会撒谎**，而且它报出来的错法看着像模型的错。）
  *
- * ## 为什么取 0.75（量出来的，不是拍的）
+ * ## 为什么取 **0.70**（2026-10-05 从 0.75 降下来；量出来的，不是拍的）
  *
- * 30 天窗口内 `sim ≥ 0.70` 的对共 **45 对**，**逐条人工看过，45/45 都是同一件事**
- * （换词、加/减修饰语、专名音译差异、「参观/视察」「出席/参与」这类动词替换、
- * 括号里的「（更新）」、同一词的重复字）。
+ * 原先是 0.75，理由是「0.75 是实测里最低的、每条差异都只落在虚词/拼写/括号/同义动词
+ * 那一档的阈值」。**那条推理的地基在 2026-10-05 被重测推翻了**：当时只看了「取哪个数
+ * 最保守」，没有把 0.70–0.75 整档**逐条列出来看过**。补做之后：
  *
- * 取 0.75 而不是 0.70，是因为 0.75 是**实测里最低的、每一条差异都只落在
- * 「虚词 / 拼写 / 括号 / 动词同义」**这一档的阈值 —— 而 0.70–0.75 那 26 对里已经出现
- * 实体词级别的替换（`矿业冶金/矿产冶金`、`统一作用/联合作用`），那属于**语义**判断，
- * 该由模型判，而模型现在**一定会被问到**（优先档下限 0.35，见 {@link PAIR_PRIORITY_SIM}）。
- * 阈值卡在两个职责的分界上，而不是「越低越好」。
+ * ```
+ * pnpm analyze:pair-recall 30     # 2026-09-05 ~ 10-05，5 国，8547 篇 / 228 个推送轮
+ *   ≥0.90        1 对
+ *   0.70–0.90   44 对   ← 逐条过目：**44/44 全部是同一件事**
+ * ```
  *
- * 取 0.75 还有个具体好处：用户投诉的那条「阿曼的苏丹」正好落在里面 ——
- * 线上实测它 `sim = 0.7600`，**已由本闸确定性合并**（实测 kz 一国的
- * 「入参 40 条 → 模型实看 38 条」就是它加另一条被提前拿走）。
+ * 0.70–0.75 那 17 对（原阈值**全部漏掉**）逐条对照过，一条例外都没有：
  *
- * ⚠️ 若日后仍有 0.70–0.75 档的重复被报上来，**降这个数之前先重跑
- * `pnpm analyze:pair-recall 30`**，把 0.70–0.75 那一档重新逐条看过 ——
- * 不要因为「又报了一次」就把阈值往下推，那正是本项目栽过的坑（拍阈值）。
+ * | sim | 对 | 差异的性质 |
+ * | --- | --- | --- |
+ * | 0.7500 | 「17.5%降至12%」↔「17.5%下调至12%」 | 同义动词 |
+ * | 0.7391 | 「祝贺哈萨克斯坦人劳动节」↔「祝贺国民劳动节」 | 换词 |
+ * | 0.7333 | 「矿业冶金」↔「矿产冶金」 | 专名变体 |
+ * | 0.7308 | 「在亚洲运动会中」↔「在2026年亚洲运动会中」 | 可选年份 |
+ * | 0.7222 | 「战略伙伴关系」↔「战略伙伴关系关系」 | 译文重复字 |
+ * | 0.7222 | 「ADEX 展览：访问/参观/视察」 | 同义动词 |
+ * | 0.7179 | 「任命 X 为国防部长」↔「Tokayev 任命 X 为新国防部长」 | 可选主体/虚词 |
+ * | 0.7143 | 「统一作用」↔「联合作用」 | 同义词 |
+ * | 0.7083 | 「防务公司」↔「国防工业公司」 | 同义专名 |
+ * | 0.7059 | 「副主席」↔「亚欧地区副主席」 | 加限定语 |
+ * | 0.7037 | 「停滞于上个世纪」↔「停滞在20世纪」 | 数字写法 |
+ * | 0.7000 | 「向遇难军人家属致慰问电」±「Tokayev」 | 可选主体 |
+ *
+ * ⇒ 原注释担心的「实体词级别替换属于语义判断、该交给模型」在这个档里**没有实例**，
+ * 而模型**已经会看到这些对**（优先档下限 0.35 已覆盖）—— 也就是说原阈值唯一的净效果
+ * 是：**在模型漏判时不给兜底**。
+ *
+ * ## ⚠️ 降它的同时必须加的那条守卫（{@link hasConflictingNumbers}）
+ *
+ * 纯相似度在「长共同模板 + 极短差异槽」上**必然**失效，且失效方向是**双向**的：
+ *
+ * ```
+ * 「哈萨克斯坦总统任命 X 为国防部长」  ↔「…为紧急情况部长」        0.7714  ← 不同事件，却在闸内
+ * 「阿塞拜疆2025年新住宅区占比98%」   ↔「…建筑工作占比82.2%」       0.29    ← 不同事实，模型全判「是」
+ * ```
+ *
+ * 也就是说：**降阈值会把上面第一类也一起放进来**。所以这次不是单独调一个数，
+ * 而是「降阈值 + 补一条不依赖阈值的守卫」成对做的：
+ * 数字互相矛盾的两条标题一律不合并（判据与实测见 {@link hasConflictingNumbers}）。
+ * 那条守卫对第二类同样生效（模型判出的簇在合并前也要过它）。
+ *
+ * ## 本次实测中**仍然存在、已知未解**的风险（别当成修好了）
+ *
+ * 上面第一类（长模板 + 极短差异槽 + **不含数字**）没有被任何守卫覆盖。
+ * 它在 30 天语料里**一例都没出现**（所以我按实测把它算作可接受风险），
+ * 但它是**构造得出**的：同一个人的两个职务、同一场访问的两份不同协议都会长成这样。
+ * 哪天真的出现，**先看 `analyze:pair-recall` 有没有实例**，再决定是升降阈值、
+ * 还是给「差异槽」单独做判据 —— 不要靠想象调参。
  *
  * ⚠️ **这道闸只在推送端跑，入库端不跑**（见 `dedupeNearTitles`）。理由是**可逆性不对称**：
  * 入库端丢的行事后不可追（`fetch-news` 的闸 2 注释已经写死了这条规矩），
  * 而推送端丢的只是「今天不展示这一条」，行还在库里、明天还在候选里。
  * 两道线的阈值不同**是有意的**，不是「判据分叉」。
  */
-export const TITLE_NEAR_MIN_SIM = 0.75;
+export const TITLE_NEAR_MIN_SIM = 0.7;
 
 /**
  * 近同名闸的**最短标题长度**（两标题都要够长才算）。
  *
  * 为什么需要这条：`similarity` 是字符双字组的 Jaccard，**短标题里差一个字就能顶到 0.8**。
  * 算给你看（实测，不是估）——「托卡耶夫会见德国总统」↔「托卡耶夫会见德国总理」：
- * 10 个字里只有末字的双字组 `总统`/`总理` 不同 ⇒ **0.8000 ≥ 0.75**，
- * 而这是**两条不同的会见**（德国总统 vs 德国总理）。光靠阈值挡不住它。
+ * 10 个字里只有末字的双字组 `总统`/`总理` 不同 ⇒ **0.8000 ≥ 0.70**，
+ * 而这是**两条不同的会见**（德国总统 vs 德国总理）。光靠阈值挡不住它 ——
+ * 阈值降到 0.70 之后这条长度下限**比以前更要紧**（见 {@link TITLE_NEAR_MIN_SIM} 的取舍）。
  *
- * 取 **15**：实测 30 天里 ≥0.70 的那 45 对，**最短的一条是 15 字**
+ * 取 **15**：实测 30 天里 ≥0.70 的那 44 对，**最短的一条是 15 字**
  * （「阿塞拜疆大奖赛第三场练习赛结束」↔「…（更新）」= 0.8750）——
  * 也就是说下限不是拍的，是「不比实测里最短的真重复更短」。
  * 顺带把上面那个 10 字的反例挡住（并把「施泰因迈尔/舒尔茨」那类
@@ -395,6 +552,23 @@ export const TITLE_NEAR_MIN_CHARS = 15;
  * （见 {@link TITLE_NEAR_MIN_CHARS}），因为在短标题上相似度会虚高。
  */
 export function isNearSameTitleText(ta: string, tb: string): boolean {
+  if (!nearTitleShapeOk(ta, tb)) return false;
+  // 第四条守卫：数字互相矛盾 ⇒ 不是同一件事（见 {@link hasConflictingNumbers}）。
+  // 松阈值下**更**不能省 —— 相似度越高，越可能是「同一个模板 + 一个不同的数字」。
+  return !hasConflictingNumbers(ta, tb);
+}
+
+/**
+ * 近同名闸的**前三条守卫**（阈值 / 占位标题 / 反向极性 / 长度下限），**不含数字护栏**。
+ *
+ * 单独抽出来是为了让 `dedupeNearTitles` 能回答「**如果没有数字护栏，这一对会不会被合并**」
+ * —— 那是把「护栏真的拦下了东西」这件事变成可观测输出的唯一办法
+ * （见 {@link DedupResult.numericSpared}）。
+ *
+ * ⚠️ 两条判据必须**共用**这一份：一旦这里和 `isNearSameTitleText` 各写一遍，
+ * 「报出来的 spared 数量」与「实际的合并行为」就会分叉，而分叉不会报错。
+ */
+function nearTitleShapeOk(ta: string, tb: string): boolean {
   if (!titleDupAt(ta, tb, TITLE_NEAR_MIN_SIM)) return false;
   return Math.min(ta.length, tb.length) >= TITLE_NEAR_MIN_CHARS;
 }
@@ -409,7 +583,12 @@ export function isNearSameTitle(a: StoryLike, b: StoryLike): boolean {
  *
  * 与 `dedupeStoriesDeterministic` 的关系：那是**四条身份判据**（链接 / 原文指纹 /
  * 正文逐字 / 标题逐字 0.95），入库端与推送端共用；这一条是**推送端专属**的第五条，
- * 阈值 0.75 + 长度下限 12 字，见 {@link TITLE_NEAR_MIN_SIM} 里为什么这么定、为什么只在这一端跑。
+ * 阈值 {@link TITLE_NEAR_MIN_SIM}（0.70）+ 长度下限 {@link TITLE_NEAR_MIN_CHARS}（15 字）
+ * 见那两个常量里为什么这么定、为什么只在这一端跑。
+ *
+ * （这里原先写的是「长度下限 12 字」—— 那是 {@link TITLE_NEAR_MIN_CHARS} 定稿前的草稿值，
+ * 常量改成 15 之后这行注释没跟着改。**注释里的数字也是会撒谎的**，
+ * 所以现在改成引用常量名而不是复述数字。）
  *
  * 保序保留**第一条**（与其它确定性闸一致）。不搞「留更长的标题」这类聪明：
  * 那会让「留哪条」依赖长度而非顺序，出问题时无法从输入顺序复现。
@@ -417,15 +596,31 @@ export function isNearSameTitle(a: StoryLike, b: StoryLike): boolean {
 export function dedupeNearTitles<T extends StoryLike>(items: T[]): {
   kept: T[];
   drops: DedupDrop<T>[];
+  /** 见 {@link DedupResult.numericSpared} —— 够像但被数字护栏拦下的对。 */
+  numericSpared: Array<{ kept: string; blocked: string }>;
 } {
   const kept: T[] = [];
   const drops: DedupDrop<T>[] = [];
+  const numericSpared: Array<{ kept: string; blocked: string }> = [];
   for (const item of items) {
     const hit = kept.find((p) => isNearSameTitle(p, item));
-    if (hit) drops.push({ kept: hit, dropped: item, reason: 'same_title_near' });
-    else kept.push(item);
+    if (hit) {
+      drops.push({ kept: hit, dropped: item, reason: 'same_title_near' });
+      continue;
+    }
+    /**
+     * 没被合并的条目里，**有一部分是「够像、但被数字护栏拦下」** ——
+     * 这个区别必须报出来：否则「护栏有没有在干活」永远看不出来
+     * （它拦下的是一次删除的取消，不会出现在 `drops` 里）。
+     *
+     * `nearTitleShapeOk` 判的是**刨掉数字护栏之外**的那三条守卫（阈值 / 占位标题 / 极性 / 长度），
+     * 也就是「如果没有数字护栏，它会不会被合并」。
+     */
+    const spared = kept.find((p) => nearTitleShapeOk(p.title || '', item.title || ''));
+    if (spared) numericSpared.push({ kept: spared.title || '', blocked: item.title || '' });
+    kept.push(item);
   }
-  return { kept, drops };
+  return { kept, drops, numericSpared };
 }
 
 /**
@@ -1522,13 +1717,25 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
    *
    * ⚠️ 只在推送端：入库端丢行不可逆（见 `dedupeNearTitles`）。
    */
-  const { kept: keptAfterIdentity, drops: nearTitleDrops } =
+  const { kept: keptAfterIdentity, drops: nearTitleDrops, numericSpared } =
     dedupeNearTitles(keptAfterDeterministic);
   const drops: DedupDrop<T>[] = [...deterministicDrops, ...nearTitleDrops];
   const llm: DedupResult<T>['llm'] = { ran: false, ok: false, mode, groups: [] };
 
+  if (numericSpared.length > 0) {
+    // 这条日志是「数字护栏在干活」**唯一**的证据 —— 它拦下的是一次删除的取消，
+    // 不会出现在 `drops` 里（见 `DedupResult.numericSpared`）。
+    console.info(
+      `[same-event] 数字护栏留下 ${numericSpared.length} 对未合并（标题数字互相矛盾）。示例：` +
+        numericSpared
+          .slice(0, 3)
+          .map((v) => `「${v.kept.slice(0, 26)}」↔「${v.blocked.slice(0, 26)}」`)
+          .join(' / '),
+    );
+  }
+
   if (!useLlm || keptAfterIdentity.length < 2) {
-    return { kept: keptAfterIdentity, drops, llm };
+    return { kept: keptAfterIdentity, drops, llm, numericSpared };
   }
 
   llm.ran = true;
@@ -1604,13 +1811,27 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   }
   if (judgedGroups.length === 0) {
     // 一组都没有（含调用失败、返回不合法、簇超限被丢）：确定性去重的结果照常返回
-    return { kept: keptAfterIdentity, drops, llm };
+    return { kept: keptAfterIdentity, drops, llm, numericSpared };
   }
 
   llm.ok = true;
   llm.groups = judgedGroups;
 
-  // 组内保序保留第一条（传入前已按重要性排好），其余记为 llm_same_event
+  // 组内保序保留第一条（传入前已按重要性排好），其余记为 llm_same_event。
+  //
+  // ⚠️ **这里刻意不加「数字护栏」** —— 2026-10-05 试过，被回归挡住了。
+  //
+  // 当时想顺手用它治 az 那种「同一份统计公报的不同数字被模型判成同一件事」
+  // （`sim` 0.20–0.26，实测 8 对）。但同一套判据在**这一层**会误伤真实场景：
+  // `scripts/test-dedup.ts` 的端到端用例 ① 就是
+  // 「乌兹别克斯坦总统启动总额 **75** 亿美元项目」↔「…**76** 亿美元投资项目」
+  // —— 同一件事，两家媒体四舍五入差 1 亿。加上护栏这条就不合了，用户会看到重复。
+  //
+  // 分界线在于**模型已经做过语义判断**：这一层的输入是模型说「是」，
+  // 用一个「数字不同就否决」的粗糙规则去推翻它，等于用算术否定语义。
+  // 数字护栏该待的地方是**没有语义判断可依赖**的那一层（确定性近同名闸）。
+  // az 那类要靠**提示词**解决（判组提示词里要把「同一份公报的不同指标」列为反例），
+  // 不是靠事后算术否决。
   const droppedIndexes = new Set<number>();
   for (const g of judgedGroups) {
     const first = g[0];
@@ -1625,5 +1846,5 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   }
 
   const kept = keptAfterIdentity.filter((_, i) => !droppedIndexes.has(i));
-  return { kept, drops, llm };
+  return { kept, drops, llm, numericSpared };
 }
