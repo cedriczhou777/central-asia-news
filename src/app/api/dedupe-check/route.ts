@@ -33,7 +33,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getArticleIdentities, deleteArticlesByIds } from '@/lib/db-articles';
-import { canonicalUrl, originalTitleKey, similarity } from '@/lib/utils';
+import { canonicalUrl, originalTitleKey } from '@/lib/utils';
 import { dedupeStoriesDeterministic, JUDGE_PROMPT_VERSION, availablePromptVersions } from '@/lib/same-event';
 import { pushExclusionReason } from '@/lib/article-format';
 import { countryList } from '@/lib/data/countries';
@@ -384,6 +384,15 @@ export async function GET(request: NextRequest) {
       excludedByReason?: Record<string, number>;
       /** 真正喂给模型的行数（= min(合格行数, limit)），也就是 `pairs`/`declined` 里标题的出处 */
       sampleSize?: number;
+      /**
+       * ★ **真正喂给模型的行数**（= `DedupResult.llm.indexTitles.length`）。
+       *
+       * 与 `sampleSize` 的差 = 「还没问模型、确定性去重已经删掉的条数」。
+       * 2026-10-05 加：在这之前 `sampleSize` 的注释**写的就是这个意思**，
+       * 但它装的是 `slice.length`（去重**之前**），于是下标越界一致，
+       * 报出来的标题却全是错的。
+       */
+      judgedSampleSize?: number;
       /** 本轮问给模型的候选对数（pair 形态才有） */
       candidatePairs?: number;
       /**
@@ -479,10 +488,27 @@ export async function GET(request: NextRequest) {
         useLlm: true,
         judge: { extraBody, collectRaw: debug, mode: taskMode, promptVersion },
       });
-      // 候选对里被模型判为「是」的那些，配上相似度 —— 相似度是召回的排序依据，
-      // 把它和模型的判定并排看，才能分清「模型判错」与「候选没召回」。
-      const simOf = (a: number, b: number) =>
-        Math.round(similarity((slice[a] as Row).title || '', (slice[b] as Row).title || '') * 100) / 100;
+      /**
+       * ★ 按下标取标题：**必须用 `llm.indexTitles`，不能用 `slice`**（2026-10-05 修）。
+       *
+       * `slice` 是**喂给确定性去重之前**的行；而 `dedupeStories` 会先跑 L0/L1/L1.5
+       * 与闸 3.5 近同名、删掉若干条，才把剩下的交给模型。两套下标从第一步就错位，
+       * 于是这里原先报出来的每一对标题都是**不相干的两条**、`sim` 普遍算成 0，
+       * 还会让人得出「模型把消防火灾和医疗赔偿判成同一件事」这种**假结论**
+       * —— 真相是**仪器错了**。同类前科：AGENTS O-3-1「探针自己的期望值不可达」。
+       *
+       * 判读防线：`indexTitles` 缺失（`ran=false`）时**宁可报空**，
+       * 不要退回到 `slice` —— 退回等于把这个缺陷重新埋回去，而且更难发现。
+       */
+      const titles = llm.indexTitles;
+      if (!titles && (llm.pairs?.length || llm.groups.length)) {
+        // 有下标类明细却没有基准 —— 这是代码缺陷，不是数据问题，必须响。
+        console.warn(
+          `[dedupe-check] ${cc}: 模型判出了明细但没有 indexTitles，` +
+            `下标类明细（groupTitles/pairs/declined）将留空以免报出错误标题。`,
+        );
+      }
+      const titleAt = (i: number) => (titles ? titles[i] : undefined);
       probe.push({
         country: cc,
         ran: llm.ran,
@@ -498,7 +524,15 @@ export async function GET(request: NextRequest) {
         rowsInWindow: list.length,
         excludedByRules,
         excludedByReason,
+        /**
+         * ⚠️ 这**不是**「喂给模型的行数」（2026-10-05 更正，旧注释写反了）。
+         * 喂给模型的是 `dedupeStories` 内部确定性去重**之后**的 `keptAfterIdentity`，
+         * 它只会 ≤ 这个数。两者的差就是「还没问模型，确定性闸已经删掉的条数」，
+         * 所以**不能**拿它当 `pairs`/`declined` 里标题的出处 —— 那正是本轮的缺陷。
+         */
         sampleSize: slice.length,
+        /** 真正喂给模型的行数（`llm.indexTitles` 的长度就是它） */
+        judgedSampleSize: titles?.length,
         candidatePairs: llm.candidateCount,
         candidatesAboveFloor: llm.candidatesAboveFloor,
         candidatesAbovePriority: llm.candidatesAbovePriority,
@@ -508,25 +542,24 @@ export async function GET(request: NextRequest) {
         provider: llm.provider,
         groups: llm.groups.length,
         error: llm.error,
-        groupTitles: llm.groups.map((g) => ({
-          kept: (slice[g[0]] as Row).title,
-          dropped: g.slice(1).map((i) => (slice[i] as Row).title),
-        })),
-        pairs: llm.pairs?.map((p) => ({
-          sim: simOf(p.a, p.b),
-          a: (slice[p.a] as Row).title,
-          b: (slice[p.b] as Row).title,
-        })),
-        vetoed: llm.vetoed?.map((p) => ({
-          sim: simOf(p.a, p.b),
-          a: (slice[p.a] as Row).title,
-          b: (slice[p.b] as Row).title,
-        })),
-        declined: llm.declined?.map((p) => ({
-          sim: simOf(p.a, p.b),
-          a: (slice[p.a] as Row).title,
-          b: (slice[p.b] as Row).title,
-        })),
+        groupTitles: titles
+          ? llm.groups.map((g) => ({
+              kept: titleAt(g[0]) ?? '',
+              dropped: g.slice(1).map((i) => titleAt(i) ?? ''),
+            }))
+          : undefined,
+        // `sim` 直接用库里的值，**不再在这里重算一次** ——
+        // `DedupResult.llm.pairs` 的注释已经写明「两处各算一次，迟早会算出不一致的数字」，
+        // 而这里原先正是那个第二处。
+        pairs: titles
+          ? llm.pairs?.map((p) => ({ sim: p.sim, a: titleAt(p.a) ?? '', b: titleAt(p.b) ?? '' }))
+          : undefined,
+        vetoed: titles
+          ? llm.vetoed?.map((p) => ({ sim: p.sim, a: titleAt(p.a) ?? '', b: titleAt(p.b) ?? '' }))
+          : undefined,
+        declined: titles
+          ? llm.declined?.map((p) => ({ sim: p.sim, a: titleAt(p.a) ?? '', b: titleAt(p.b) ?? '' }))
+          : undefined,
         ...(debug && llm.raw ? { raw: llm.raw.map((t) => t.slice(0, 1500)) } : {}),
       });
     }

@@ -1401,6 +1401,62 @@ async function llmPipelineChecks(): Promise<void> {
     ok('判否 → 进入 declined 供人复核', res.llm.declined?.length === 1, JSON.stringify(res.llm.declined));
     ok('判否时 groups 为空', res.llm.groups.length === 0, JSON.stringify(res.llm.groups));
   }
+
+  // --- ⑦ ★ 下标基准：模型看到的是「确定性去重**之后**」的数组（2026-10-05）---
+  //
+  // 这一节钉的是一个**不报错**的缺陷，也是 `GET /api/dedupe-check` 那次的根因：
+  // `dedupeStories` 先跑确定性去重（L0/L1/L1.5 + 闸 3.5）删掉若干条，
+  // **才**把剩下的 `keptAfterIdentity` 交给模型。所以 `llm.pairs` / `llm.groups`
+  // 里的下标指的是「删完之后的数组」，而体检接口原先拿**调用方自己的入参**去解释它们。
+  //
+  // 后果（2026-10-05 线上实测）：报出来的每一对标题都**整体前移、指向不相干的两条**；
+  // `sim` 因此普遍算成 0，看着像「候选对里混进了毫不相似的对」；还会得出
+  // 「模型把消防火灾和医疗赔偿判成同一件事」这种**假结论** —— 真相是仪器错了。
+  // 同类前科：AGENTS O-3-1「探针自己的期望值不可达」。
+  //
+  // ⚠️ 断言的重点是「**两套下标确实不同**」，不是「映射结果好看」：
+  // 谁要是把它改回用入参映射，下面的承重断言就会挂。
+  // 前面 ①–⑥ 全都**没有确定性丢弃**，两套下标恰好重合 —— 所以它们都测不到这个缺陷。
+  {
+    // 第 2 条与第 1 条 **同 source_url** ⇒ 必被 L0 确定性闸删掉，
+    // 后面的条目整体前移一位 —— 这样两套基准才真正错开。
+    const items = [
+      { title: '哈萨克斯坦政府批准2027年国家预算草案', source_url: 'https://a.kz/budget' },
+      { title: '哈萨克斯坦政府批准2027年国家预算草案（重复稿）', source_url: 'https://a.kz/budget' },
+      { title: '塔吉克斯坦总统会见世界银行代表团', source_url: 'https://b.tj/wb' },
+      { title: '乌兹别克斯坦与韩国签署纺织业合作协议', source_url: 'https://c.uz/textile' },
+    ];
+    const { ask } = fakeAsk(() => '{"same": []}');
+    const res = await dedupeStories(items, { useLlm: true, judge: { ask } });
+
+    ok(
+      '⑦ 先确认确定性闸确实删了 1 条（否则这一节测不到错位）',
+      res.drops.length === 1 && res.drops[0].reason === 'same_url',
+      JSON.stringify(res.drops.map((d) => `${d.reason}:${d.dropped.title}`)),
+    );
+    ok('⑦ 模型确实跑了（ran=true）', res.llm.ran, JSON.stringify(res.llm).slice(0, 120));
+
+    const idx = res.llm.indexTitles;
+    ok('⑦ 报出了下标基准 indexTitles', Array.isArray(idx), JSON.stringify(idx));
+    ok(
+      '⑦ 下标基准 = 确定性去重**之后**的条数（4 → 3）',
+      idx?.length === 3,
+      `indexTitles.length=${idx?.length} / 入参 ${items.length} 条`,
+    );
+    ok(
+      '⑦ 下标基准是入参标题的**子序列**（顺序不变、只少了被删的那条）',
+      JSON.stringify(idx) === JSON.stringify([items[0].title, items[2].title, items[3].title]),
+      JSON.stringify(idx),
+    );
+    // ★ 承重断言：同一个下标在两套基准下指向**不同**的标题。
+    //   这一条一旦变 false，说明映射又退回用入参了 —— 缺陷复发。
+    ok(
+      '★ ⑦ 下标 1 在两套基准下**不是同一条**（用入参映射就会报错标题）',
+      idx?.[1] !== items[1].title,
+      `indexTitles[1]=${idx?.[1]} / items[1]=${items[1].title}`,
+    );
+    ok('⑦ 且 indexTitles[1] 正是入参里的第 3 条', idx?.[1] === items[2].title, String(idx?.[1]));
+  }
 }
 
 // ============================================================

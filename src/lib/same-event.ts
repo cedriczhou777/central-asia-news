@@ -112,6 +112,26 @@ export interface DedupResult<T> {
     mode: JudgeMode;
     groups: number[][];
     /**
+     * ★ **模型本次看到的「下标基准」** —— `groups` / `pairs` / `vetoed` / `declined`
+     * 里所有下标的含义都是「这个数组的第 i 条」，**不是**调用方传进来的 `items`。
+     *
+     * ## 为什么必须有这个字段（2026-10-05，踩到的真缺陷）
+     *
+     * `dedupeStories` 在问模型**之前**先跑确定性去重（L0/L1/L1.5 + 闸 3.5 近同名），
+     * 删掉若干条才把 `keptAfterIdentity` 交给模型。于是**两套下标从第一步就错位了**：
+     * `keptAfterIdentity[i]` 对应的是 `items[i + 删掉的条数]`。
+     *
+     * 体检接口原先拿调用方自己的数组去解释这些下标，结果：
+     *   · 报出来的每一对标题**都是不相干的两条**（下标被整体前移）；
+     *   · `sim` 因此普遍算成 0 —— 看着像「候选对里混进了毫不相似的对」；
+     *   · 还会得出「模型把消防火灾和医疗赔偿判成同一件事」这种**假结论**。
+     *   而真相是**仪器错了，模型没错**（同类前科见 AGENTS O-3-1）。
+     *
+     * ⇒ **凡是要按下标取标题/算相似度的地方，一律用这个数组，不许用调用方的入参。**
+     * 拿不到它时（`ran=false`）就不要报下标类明细，宁可报空。
+     */
+    indexTitles?: string[];
+    /**
      * pair 形态：模型判为「同一件事」的下标对（原样保留，未做合并）。
      *
      * `sim` 与 `vetoed`/`declined` 同口径（三条列表形状一致），这样体检报告与
@@ -1499,6 +1519,16 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   }
 
   llm.ran = true;
+  /**
+   * ★ 记下**模型实际看到的下标基准**（= `keptAfterIdentity` 的标题）。
+   *
+   * 必须在**这一行**取：再往下 pair / group 两个分支都只认这个数组的下标，
+   * 而调用方手里的 `items` 已经被确定性闸删过行、两套下标**不再对齐**。
+   * 漏掉这一行的后果是体检报告把每一对都映射到错的标题上
+   * （见 {@link DedupResult.llm.indexTitles} 的说明）—— 它**不报错**，
+   * 只是安静地给出一个像模像样的**假结论**。
+   */
+  llm.indexTitles = keptAfterIdentity.map((x) => x.title || '');
 
   // ---- 取回模型判定：pair 形态取「对」，group 形态取「组」 ----
   let judgedGroups: number[][] = [];

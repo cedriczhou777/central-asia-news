@@ -1229,6 +1229,10 @@ async function processFetchNews(
         llmJudge.ran = true;
         llmJudge.ok = llm.ok;
         llmJudge.error = llmJudge.error || llm.error;
+        // ⚠️ 这里把各国的下标组**拼进同一个数组**，而 `llm.groups` 的下标是
+        // **按国各自编号**的（见 `DedupResult.llm.indexTitles`）—— 拼完就没有意义了。
+        // 当前恒不触发（上面 `useLlm: false`），所以只是潜在陷阱：**哪天要在入库端开 L2，
+        // 必须先把它改成 per-country 结构**（`[{country, groups}]`），否则读到的组是错的。
         llmJudge.groups.push(...llm.groups);
       }
       for (const d of drops) {
