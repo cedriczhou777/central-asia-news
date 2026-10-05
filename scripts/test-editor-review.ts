@@ -1188,6 +1188,87 @@ section('八、版本指纹（GET 的 codeVersion）');
       /excerptMax: ORIGINAL_EXCERPT_MAX/.test(src),
     '缺 overExcerptMax 就只能看 max：「截断会不会真的发生」看的是尾部越线条数，不是最长那条多长',
   );
+
+  // ---- v5 / 2026-10-05：新哨兵，以及一处「声明与实际推出去的东西」静默分叉 ----
+  //
+  // 这一轮新增两条哨兵（`titleNearMinSim` 降档、`numericVetoVersion` 从无到有），
+  // 但更值得钉住的是下面那处分叉 —— 它是本项目反复踩的同一类缺陷在**接口层**的形态。
+  ok(
+    '近同名闸阈值进了指纹（从常量现算；`0.75` = 旧版、`0.7` = 2026-10-05 起）',
+    /titleNearMinSim:\s*TITLE_NEAR_MIN_SIM/.test(src),
+    '写成了字面量 —— 那样一降阈值它就撒谎，而「降没降下去」正是这个字段唯一的用途',
+  );
+  ok(
+    '数字护栏版本号进了指纹（`1`；旧码给不出这个字段，所以它的**存在**本身就是证据）',
+    /numericVetoVersion:\s*NUMERIC_VETO_VERSION/.test(src),
+    '没进指纹 ⇒ 「护栏没上线」与「上线了但没拦住」永远分不开',
+  );
+  ok(
+    '判组提示词版本也进了**推送端**指纹（不再只能去 /api/dedupe-check 问另一条链路）',
+    /judgePromptVersion:\s*JUDGE_PROMPT_VERSION/.test(src),
+    '只在 dedupe-check 报的话，「推送端这一轮用的是哪版判据」要换接口、换口径去问',
+  );
+
+  /**
+   * 反向自检：`PushJudge` 的**声明**必须覆盖 `judgeRuns.push` 实际推上去的**每一个键**。
+   *
+   * 为什么需要它（2026-10-05 发现）：推送那处用的是**展开写法**
+   * （`...(x !== undefined ? { k: x } : {})`），而 TypeScript
+   * **不对展开进来的属性做多余属性检查** ⇒ `candidatesAboveFloor` /
+   * `candidatesAbovePriority` 早就推出去了、接口里却一个字都没声明，`tsc` 全绿。
+   * 于是「声明」和「现实」静默分叉：读接口的人不知道有这两个字段，
+   * 谁改推送处的键名也没人拦 —— 与本项目那三处「字段声明了但没人读」是同一族。
+   */
+  // ⚠️ 用**位置**捕获组，不用命名捕获组：本仓库的 tsconfig `target` 低于 ES2018，
+  //    写 `(?<body>…)` 会直接 `TS1503` —— tsc 当场把这一节判成失败。
+  const judgeIfaceBody = (text: string): string =>
+    (/interface PushJudge \{([\s\S]*?)\n\}/.exec(text)?.[1] ?? '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+  const undeclaredJudgeKeys = (text: string): string[] => {
+    const declared = new Set(
+      [...judgeIfaceBody(text).matchAll(/^\s*([A-Za-z_]\w*)\??:/gm)].map((m) => m[1]),
+    );
+    // `country_code` 由 `Array<PushJudge & { country_code: string }>` 那一侧声明
+    const allowed = new Set([...declared, 'country_code']);
+    return judgePushKeys(text).filter((k) => !allowed.has(k));
+  };
+  /** `judgeRuns.push({...})` 实际推上去的键名（已剥注释）。 */
+  const judgePushKeys = (text: string): string[] => {
+    const pushBlock =
+      /\bjudgeRuns\.push\(\{([\s\S]*?)\n\s*\}\);/.exec(text)?.[1] ?? '';
+    const stripped = pushBlock
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    // 只认「行首缩进后」或 `{` 之后的 `键:`，避开 `llmJudge.x` 这类属性访问
+    const keys = [...stripped.matchAll(/(?:^|[\n{,]\s*)([A-Za-z_]\w*)\s*:/gm)].map((m) => m[1]);
+    return [...new Set(keys)];
+  };
+
+  ok('读到了 PushJudge 接口体（接口改名/挪走后本节的自检会失效）', judgeIfaceBody(src).length > 0);
+  ok(
+    '❗ 检查器**真的解析到了** judgeRuns.push 的键（否则下面两条是恒真的死闸）',
+    ['ran', 'ok', 'candidateCount', 'mergedPairs'].every((k) => judgePushKeys(src).includes(k)),
+    `解析到的键：${judgePushKeys(src).join(', ') || '(空 —— 正则没匹配上，检查器在空转)'}`,
+  );
+  ok(
+    'PushJudge 声明了 candidatesAboveFloor / candidatesAbovePriority（它们确实会被推出去）',
+    /candidatesAboveFloor\??:/.test(judgeIfaceBody(src)) &&
+      /candidatesAbovePriority\??:/.test(judgeIfaceBody(src)),
+    '展开写法绕过了 tsc 的检查 ⇒ 不声明就等于告诉读接口的人「没有这两个字段」',
+  );
+  ok(
+    '★ 反向自检：judgeRuns.push 推上去的每个键都已在 PushJudge 里声明',
+    undeclaredJudgeKeys(src).length === 0,
+    `未声明的键：${undeclaredJudgeKeys(src).join(', ') || '(无)'}`,
+  );
+  ok(
+    '★ 反向自检的探针本身有效（注入一个没声明的键必须被点出来）',
+    undeclaredJudgeKeys(src.replace('ran: llmJudge.ran,', 'ghostKey: llmJudge.ran,')).includes(
+      'ghostKey',
+    ),
+    '检查器恒返回空 —— 那样它只是装饰，挡不住下一次分叉',
+  );
 }
 
 // ============================================================

@@ -1752,10 +1752,29 @@ async function promptVersionChecks(): Promise<void> {
     const versions = availablePromptVersions();
     ok('注册表里至少 2 个版本（否则 pv 参数是假的）', versions.length >= 2, versions.join(','));
     ok('包含冻结的 v1 对照组', versions.includes(1), versions.join(','));
-    ok('包含当前版本', versions.includes(JUDGE_PROMPT_VERSION), String(JUDGE_PROMPT_VERSION));
-    ok('当前版本是最大版本号', JUDGE_PROMPT_VERSION === Math.max(...versions), `${JUDGE_PROMPT_VERSION} vs ${versions.join(',')}`);
-    ok('当前版本 ≥ 4（v2/v3 的校准已被 v4 取代）', JUDGE_PROMPT_VERSION >= 4, String(JUDGE_PROMPT_VERSION));
+    ok('包含默认版本', versions.includes(JUDGE_PROMPT_VERSION), String(JUDGE_PROMPT_VERSION));
     ok('v3 仍在注册表里（前一版要能随时对照，否则 A/B 只剩 v1 一个基线）', versions.includes(3), versions.join(','));
+    ok('v4 仍**注册**着（A/B 未采用 ≠ 删掉：保留才能继续用 pv=4 做实验）', versions.includes(4), versions.join(','));
+
+    /**
+     * ⚠️ 这两条**故意**推翻了原来的「默认 = 最大版本号」不变量。
+     *
+     * 2026-10-05：v4 做了 A/B（两条通道各 3 轮），结论是**不采用** ——
+     * 生产通道平手、`zhipu-flash` 降级档从 14/15 崩到 9/15。
+     * 于是注册表里出现了「有更大的版本号，但默认不是它」这种状态。
+     * 「默认版本」从此是一个**经 A/B 定过版**的决定，不是 `Math.max` 的结论 ——
+     * 所以只能钉成字面量：**改默认版本时这条断言会挂，逼你去写清楚为什么**。
+     */
+    ok(
+      '★ 默认版本 = 3（v4 未获采用：生产通道平手、降级通道崩 —— 见 buildV4 注释与 AGENTS Q-7-4）',
+      JUDGE_PROMPT_VERSION === 3,
+      `现值 ${JUDGE_PROMPT_VERSION}：改默认版本前先跑 judge:ab（**两条通道都要**），再改这条`,
+    );
+    ok(
+      '默认版本**不是**最大版本号（这条不再成立是对的：注册 ≠ 采用）',
+      JUDGE_PROMPT_VERSION !== Math.max(...versions),
+      `默认 ${JUDGE_PROMPT_VERSION}；可用 ${versions.join(',')}`,
+    );
 
     const items = [{ title: '甲' }, { title: '乙' }];
     const pairs = [{ a: 0, b: 1 }];
@@ -1775,45 +1794,63 @@ async function promptVersionChecks(): Promise<void> {
     ok('TITLE_MAX 仍是 80（模块搬家的护栏）', TITLE_MAX === 80, String(TITLE_MAX));
   }
 
-  section('判组提示词：当前版本（v4）的校准要点');
+  section('判组提示词的校准要点（默认版 + 已注册但未采用的 v4）');
   {
-    const p = promptBuilderFor(JUDGE_PROMPT_VERSION)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
-    // ---- v1/v3 的要点必须**全部保留**（加新版本是叠加，不是重写）----
-    ok('保留末句兜底「拿不准就判否」（误合并不可逆，这条不能删）', p.includes('拿不准就判「否」'));
-    ok('有「相反事实」的第一步检查（v2 只加例子不管用）', p.includes('相反事实'));
-    ok('点明「否认」是核心事实而非修饰语', p.includes('它就是那条新闻的核心事实'));
-    ok('否认反例的那对真实标题在', p.includes('否认准备对柴油出口实施 90 天禁令'));
-    ok('「不同主体」给了可操作判据', p.includes('不同的具体对象') && p.includes('不同公司名'));
-    ok('明说「同义指代不算不同主体」（v2 回退的根因）', p.includes('同义指代'));
-    ok('正例形态三在（近义指代 + 数字表述）', p.includes('常见形态三') && p.includes('近 50 个 / 约 50 个'));
-    ok('Unibank 那条正例仍在（用户报的重复）', p.includes('Unibank 推出绿色贷款'));
+    const mk = (v?: number) =>
+      promptBuilderFor(v ?? JUDGE_PROMPT_VERSION)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
+    const pDefault = mk();
+    const p3 = mk(3);
+    const p4 = mk(4);
+    const p1 = mk(1);
+
+    ok('默认版就是 v3 的提示词（默认值与注册表不许分叉）', pDefault === p3);
+
+    /**
+     * ---- v1/v3 的要点：**默认版与 v4 都必须保留** ----
+     *
+     * 原先只对「当前版本」断言一次。2026-10-05 默认回退到 3 之后出现了两个版本同时在库里的
+     * 状态，于是把这份清单**对两版各验一遍** —— 「加新版本是叠加、不是重写」这句话
+     * 从此是**被验的**，而不是靠人记得。反面情况正是这次 v4 的翻车形态：
+     * 它保住了旧要点、却在「专名限定语丢失」那一类上把 v3 判对的弄反了。
+     */
+    const common: Array<[string, (s: string) => boolean]> = [
+      ['保留末句兜底「拿不准就判否」（误合并不可逆，这条不能删）', (s) => s.includes('拿不准就判「否」')],
+      ['有「相反事实」的第一步检查（v2 只加例子不管用）', (s) => s.includes('相反事实')],
+      ['点明「否认」是核心事实而非修饰语', (s) => s.includes('它就是那条新闻的核心事实')],
+      ['否认反例的那对真实标题在', (s) => s.includes('否认准备对柴油出口实施 90 天禁令')],
+      ['「不同主体」给了可操作判据', (s) => s.includes('不同的具体对象') && s.includes('不同公司名')],
+      ['明说「同义指代不算不同主体」（v2 回退的根因）', (s) => s.includes('同义指代')],
+      ['正例形态三在（近义指代 + 数字表述）', (s) => s.includes('常见形态三') && s.includes('近 50 个 / 约 50 个')],
+      ['Unibank 那条正例仍在（用户报的重复）', (s) => s.includes('Unibank 推出绿色贷款')],
+    ];
+    for (const [label, s] of [['默认版 v3', pDefault], ['v4', p4]] as const) {
+      for (const [name, test] of common) ok(`[${label}] ${name}`, test(s));
+    }
 
     // ---- v4 新增：数字分界线（两侧都要在，只写一侧等于没写）----
-    ok('★ v4：有「同一个指标 / 不同指标」这一步检查', p.includes('数字是同一个人说的吗'));
+    // ⚠️ 这些断言只说明「v4 的正文写进去了」，**不代表**它该被采用 ——
+    //    采用与否由 A/B 决定（默认仍是 v3，见上面注册表那一节）。
+    ok('v4：有「同一个指标 / 不同指标」这一步检查', p4.includes('数字是同一个人说的吗'));
     ok(
-      '★ v4：正例侧 ——「同一个指标的数字略有出入 ⇒ 判是」在（常见形态四）',
-      p.includes('常见形态四') && p.includes('同一个指标的数字略有出入'),
+      'v4：正例侧 ——「同一个指标的数字略有出入 ⇒ 判是」在（常见形态四）',
+      p4.includes('常见形态四') && p4.includes('同一个指标的数字略有出入'),
     );
     ok(
-      '★ v4：反例侧 ——「同一份统计公报的不同指标 ⇒ 判否」在，且带真实标题',
-      p.includes('同一份统计公报') && p.includes('新住宅区占比 98%') && p.includes('非油气资本投资占比 75%'),
+      'v4：反例侧 ——「同一份统计公报的不同指标 ⇒ 判否」在，且带真实标题',
+      p4.includes('同一份统计公报') && p4.includes('新住宅区占比 98%') && p4.includes('非油气资本投资占比 75%'),
     );
     ok(
-      '★ v4：明说反例**优先于**正例（否则模型会按形态四把不同指标也合掉）',
-      p.includes('这一条**优先于**常见形态四'),
+      'v4：明说反例**优先于**正例（否则模型会按形态四把不同指标也合掉）',
+      p4.includes('这一条**优先于**常见形态四'),
     );
     ok(
-      '★ v4：同一指标不同舍入的那个真实标题在（75/76 亿美元，端到端用例 ① 的 fixture）',
-      p.includes('75 亿美元') && p.includes('76 亿美元'),
+      'v4：同一指标不同舍入的那个真实标题在（75/76 亿美元，端到端用例 ① 的 fixture）',
+      p4.includes('75 亿美元') && p4.includes('76 亿美元'),
     );
+    ok('v3 里**没有** v4 新增的数字检查（前一版要真是前一版）', !p3.includes('数字是同一个人说的吗'));
 
-    const v3 = promptBuilderFor(3)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
-    ok('v3 与 v4**确实不同**（否则 judgePromptVersion 递增是假的）', v3 !== p);
-    ok('v3 里**没有** v4 新增的数字检查（前一版要真是前一版）', !v3.includes('数字是同一个人说的吗'));
-
-    const v1 = promptBuilderFor(1)([{ a: 0, b: 1 }], [{ title: 'X' }, { title: 'Y' }]);
-    ok('v1 对照组没有正例细化（它就该是校准前那版）', !v1.includes('常见形态'));
-    ok('v1 保留自己的兜底句', v1.includes('拿不准就判「否」'));
+    ok('v1 对照组没有正例细化（它就该是校准前那版）', !p1.includes('常见形态'));
+    ok('v1 保留自己的兜底句', p1.includes('拿不准就判「否」'));
   }
 
   section('判组提示词：固定语料（gold set）');

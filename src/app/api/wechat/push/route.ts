@@ -6,6 +6,7 @@ import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/l
 import {
   dedupeStories,
   isLlmJudgeEnabled,
+  JUDGE_PROMPT_VERSION,
   PAIR_CANDIDATE_MIN_SIM,
   PAIR_MAX_CANDIDATES,
   PAIR_PRIORITY_SIM,
@@ -403,6 +404,14 @@ interface PushMerge {
  * **必须报出来**：L2 失败时 `drops` 里只剩确定性去重的结果，看起来和「本来就没重复」一模一样。
  * `ran=false`（没跑，例如候选不足 2 条）与 `ok=false`（跑了但没答成）要能区分 ——
  * 否则「今天怎么这么多重复」会又一次变成只能靠猜的问题。
+ *
+ * ⚠️ **这个接口曾经是残的**（2026-10-05 发现）：`candidatesAboveFloor` /
+ * `candidatesAbovePriority` 早就往这里推了，但接口里**没声明**它们。
+ * 之所以 tsc 没报错 —— 推送那行用的是**展开写法**
+ * （`...(x !== undefined ? { k: x } : {})`），而 TypeScript **不对展开进来的属性
+ * 做多余属性检查**。于是「声明」和「实际发出去的」静默分叉：
+ * 读接口的人看不见这两个字段存在，删了/改名了也没人拦。
+ * ⇒ 凡是往这推的字段，**必须在这里声明**；改推送处时一并改这里。
  */
 interface PushJudge {
   ran: boolean;
@@ -410,6 +419,29 @@ interface PushJudge {
   error?: string;
   /** 模型被问了几对 */
   candidateCount?: number;
+  /**
+   * L2 去重的**入参条数**（= 这一国合格候选的条数）与**模型实际看到的条数**。
+   *
+   * 两者的差 = 各道**确定性**闸（`same_url` / `same_original` / `same_text` /
+   * `same_title` / `same_title_near`）总共拿走了多少条。逐条明细本来就在 `merges` 里，
+   * 但**差额**是「这批稿子被闸吃掉了多大一块」唯一的即时读数 ——
+   * 2026-10-05 把近同名闸从 0.75 降到 0.70（并留下一条「长共同模板 + 极短差异槽」
+   * 的已知风险）之后，这两个数是那道闸的看门狗：
+   * 差额突然变大就要去 `merges` 里点名，看是不是阈值吃过了头。
+   *
+   * `judgedItemCount` 取的是 `llm.indexTitles.length`，**不是**调用方自己算的减法 ——
+   * 那正是 2026-10-05 体检接口那处「下标基准错位」的同一个坑：
+   * 用调用方的入参去解释下游的下标/计数，就会给出一个像模像样的假结论。
+   * 早退路径（候选 < 2 条或判组关着）拿不到它，所以是可选字段。
+   */
+  dedupeInputCount?: number;
+  judgedItemCount?: number;
+  /**
+   * 截断前，下限 / 优先档之上各有多少对。判读完全不同，见推送处的长注释。
+   * 详细口径在 `same-event.ts` 的 `PairJudgeResult`。
+   */
+  candidatesAboveFloor?: number;
+  candidatesAbovePriority?: number;
   /** 模型答了「是同一件事」的对数 */
   mergedPairs?: number;
 }
@@ -880,6 +912,18 @@ export async function GET(request: NextRequest) {
         maxPairs: PAIR_MAX_CANDIDATES,
       },
       /**
+       * L2「同一件事」判组用的提示词版本（`judge-prompts.JUDGE_PROMPT_VERSION`）。
+       *
+       * 为什么放在这里（2026-10-05）：它原先**只**在 `/api/dedupe-check` 报，
+       * 而 `dedupe-check` 是**另一条链路**（默认 `days=1`、自己取一批数据）。
+       * 于是「推送端这一轮用的是哪一版判据」必须换个接口、换个口径去问 ——
+       * 恰恰是「一条 curl 说不清线上跑的是什么」这个老毛病。
+       * 推送端本来就跑 L2（`dedupeStories`，`useLlm` 开），版本当然该在这里也报一份。
+       *
+       * ⚠️ 改 `judge-prompts.ts` 里的版本号时它会**自动跟着变**（现算，不手写）。
+       */
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      /**
        * 「库里原文正文多长才算有原文」的下限（2026-10-02 新增）。
        *
        * 与采集侧 `article-body.MIN_SOURCE_BODY_CHARS` **是同一个常量**：
@@ -1130,6 +1174,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         country_code: country.code,
         ran: llmJudge.ran,
         ok: llmJudge.ok,
+        // 入参 / 模型实看：差额就是确定性闸拿走的量（详见 `PushJudge` 的注释）。
+        dedupeInputCount: eligible.length,
+        ...(llmJudge.indexTitles ? { judgedItemCount: llmJudge.indexTitles.length } : {}),
         ...(llmJudge.error ? { error: llmJudge.error } : {}),
         ...(llmJudge.candidateCount !== undefined ? { candidateCount: llmJudge.candidateCount } : {}),
         /**
