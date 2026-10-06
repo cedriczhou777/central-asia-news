@@ -173,6 +173,12 @@ assets/
 # 靠人工挑文件名迟早会漏。统一忽略。
 _tmp_*
 
+# tsx/esbuild 在进程被强杀时留下的临时产物，形如 scripts/<名>.ts<6~8 位随机字母数字>
+# （实例：scripts/analyze-judge-order.tseuQceJ）。同样是「名字每次都变」的东西。
+# ⚠️ 故意要求 `.ts` 后再跟 **至少 6 位**：这样 `foo.tsx`、`foo.ts1` 之类不会被误伤
+# —— 用 `scripts/*.ts*` 会把仓库里所有 .tsx 一起吃掉。
+scripts/*.ts?????*
+
 # 会话工作数据（记忆 / 轮次报告）。自 2026-09-25 起存在于仓库根，
 # 但从未提交过 —— 它不是源码，而且 `git add -A` 会把它连带吞进提交。
 .workbuddy/

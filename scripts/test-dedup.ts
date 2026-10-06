@@ -1894,6 +1894,68 @@ async function promptVersionChecks(): Promise<void> {
       '★ 语料含 v4 的正例侧：同一指标不同舍入（该合并，且是「不能用算术护栏否决模型」的证据）',
       pairs.some((x) => (x.a ?? '').includes('75亿美元') && x.expect === 'same'),
     );
+    // ---- 2026-10-06：把「过量合并」这一类补成逐字的线上语料 ----
+    //
+    // 上面那两条（[12] 新住宅区占比 / [19] 建筑面积占比）原来只有一条，而且 `sim` 只有 0.38；
+    // 线上 3 天窗口里同一形态一共 8 对被判成「是」。这 8 对是**逐字**从
+    // `GET /api/dedupe-check?days=3&llm=1&debug=1` 的 `llmJudge[].pairs` 取回的，
+    // 它们让 v3 的真实成绩从「14/15」掉到「17/23」—— 也就是**旧的松语料在给 v3 放水**。
+    // 断言只钉两条最典型的形态，不逐对钉（逐对钉会在合理改标注时变成噪声）。
+    ok(
+      '★ 语料含「同一机构多项不同议程」（该保留）—— 线上真实误合并，sim 仅 0.303',
+      pairs.some((x) => (x.a ?? '').includes('反毒中心协定') && x.expect === 'diff'),
+    );
+    ok(
+      '★ 语料含「同模板不同客体：议会批准 X vs 批准 Y」（该保留）',
+      pairs.some((x) => (x.a ?? '').includes('引渡罪犯条约') && x.expect === 'diff'),
+    );
+    ok(
+      '★ 语料含用户报的最差一例：「总理出席教师节庆典」↔「因制裁叫停 16 家公司」（sim 仅 0.207）',
+      pairs.some((x) => (x.a ?? '').includes('教师节庆典活动') && x.expect === 'diff'),
+    );
+    // ---- 语料的使用说明必须跟着语料走 ----
+    //
+    // 这一节钉的是「文件里那些**结论性**的字段还在不在」。2026-10-06 实测踩到的三件事
+    // （批次组成改变判定 / 顺序影响大于版本差异 / 本文件顺序不是生产顺序）都是**会让人
+    // 拿错基线**的坑，所以它们必须在文件里、且必须能被断言守住 —— 光写在提交信息里没用。
+    {
+      type GoldFileShape = {
+        _provenance?: Record<string, unknown>;
+        [k: string]: unknown;
+      };
+      let gold = {} as GoldFileShape;
+      try {
+        gold = JSON.parse(readFileSync(goldPath, 'utf8')) as GoldFileShape;
+      } catch {
+        /* 上面已经报过「固定语料可读」了，这里不再重复报同一条 */
+      }
+      const rulesKey = Object.keys(gold).find((k) => k.includes('硬规矩'));
+      const rules = rulesKey ? (gold[rulesKey] as string[]) : [];
+      ok(
+        '语料里写着「批次组成会改变判定 / 顺序影响 > 版本差异 / 本文件顺序≠生产顺序」三条硬规矩',
+        rules.length >= 3,
+        rulesKey ?? '没有这个键',
+      );
+      const prov = gold._provenance ?? {};
+      const os06 = prov.orderSensitivity_2026_10_06 as Record<string, unknown> | undefined;
+      ok(
+        '语料记着 2026-10-06 的顺序重测（两条通道都有）',
+        !!os06 && 'zhipu(生产所用)' in os06 && 'zhipu-flash(降级档)' in os06,
+      );
+      // 旧的 3/12 是**低估**。不标出来的话，下一个人会拿它当噪声地板，
+      // 于是又一次「用一个过小的噪声去判版本差异显著」。
+      const oldOs = prov.orderSensitivity as Record<string, unknown> | undefined;
+      ok(
+        '旧的 orderSensitivity 已标注「被 2026-10-06 重测改写」，不会被当成当前噪声地板',
+        !!oldOs && Object.keys(oldOs).some((k) => k.includes('已被2026_10_06重测改写')),
+      );
+      // 语料采集时的逐对观测列**只在那一版语料内可比** —— 这条必须写在 `_provenance` 里，
+      // 因为 `observedV1V2` 那几个键看起来就像可以直接对照的基线。
+      ok(
+        '语料记着「observedV* 列不可跨语料版本对照」',
+        Object.keys(prov).some((k) => k.includes('observedV1V2不可直接对照')),
+      );
+    }
   }
 }
 

@@ -6,6 +6,8 @@
  *   pnpm judge:ab --versions 1,3             # 只跑指定版本
  *   pnpm judge:ab --provider zhipu-flash     # 钉住通道（**跑 A/B 应该总是带上**）
  *   pnpm judge:ab --provider zhipu-flash --repeat 3   # 每版 3 轮，分出噪声
+ *   pnpm judge:ab --provider zhipu --repeat 3 --delay 2000 --retry 5   # 主通道被限流时
+ *   pnpm judge:ab --provider zhipu --repeat 3 --shuffles 3            # 多顺序对照（定版必须）
  *   BASE=http://localhost:3000 pnpm judge:ab
  *   pnpm judge:ab --strict                   # 默认版本有任何一对判错就退出码 1（当闸门用）
  *
@@ -38,6 +40,35 @@
  * 这种量级下头条数字由**一个翻转**决定，而它可能来自提示词、也可能来自模型噪声。
  * `--repeat N` 先量出**版本自身的摇摆对数**（噪声地板），再把版本差异分成
  * 「稳定差异」与「摇摆」，只有前者能拿来定版。只跑 1 轮就下结论 = 比谁运气好。
+ *
+ * ## ⚠️⚠️ 限流会把「稳定性」这一节变成假绿灯（2026-10-06 实测）
+ *
+ * 主通道 `zhipu` 是共享账号，429 是常态。跑 `--versions 3,4 --repeat 3` 时
+ * **六条请求只过了一条**，于是：pv=4 整臂全失败、pv=3 只有 1 轮有证据。
+ * 而当时的「自身稳定性」只看「判成的那些轮里一不一致」——
+ * 一个**只判成 1 轮**的对自己也是「一致」，脚本就打出了
+ * `pv=3 自身稳定性（3 轮）：其余判定全部一致`。**限流被读成了结论。**
+ *
+ * 两处修法（都在本脚本里）：
+ * ① 请求级 429 退避（`--retry`，默认 4 次指数退避；`--delay` 控制请求间隔）；
+ * ② 稳定性按**证据轮数**算：轮数 < `repeat` 的对单列一档，不算稳定；
+ *    若全批没有任何一对凑满 `repeat` 轮，整节直接判「不成立」。
+ *    `--strict` 下这些对同样算失败 —— 单轮的正确不叫验证过。
+ *
+ * ## ⚠️⚠️ 顺序不是「噪声」，是**混淆项**（2026-10-06 实测，这一条改变了比较方法）
+ *
+ * 23 对语料、每版 3 轮（自身 0 摇摆）：
+ *
+ *   | 顺序 | pv=3  | pv=4  | Δ(pv4−pv3) |
+ *   | 正序 | 17/23 | 22/23 | **+5**     |
+ *   | 倒序 | 20/23 | 20/23 | **0**      |
+ *
+ * pv=3 的 6 个误合并**倒序后全部消失**，其顺序敏感对翻转方向 **100% 是「是→否」**。
+ * ⇒ 单序比较等于比两个任意采样点：Δ 在 +5 与 0 之间跳，谁也定不了版。
+ * ⇒ 生产链路的顺序由候选生成器排定，**既不是正序也不是倒序** —— 单序成绩不对应线上成绩。
+ *
+ * 所以定版前一律加 `--shuffles N`，脚本按**同序配对 Δ 是否在所有顺序下同号**下结论：
+ * 全同号 ⇒ 只有**方向**可信（幅度不可引用）；异号 ⇒ 分辨不出，别改默认版本。
  *
  * ## ⚠️⚠️ 最要命的一条：**判定对「列表顺序」敏感**
  *
@@ -141,6 +172,110 @@ const pinnedProvider = argValue('provider') || process.env.PROVIDER || undefined
  */
 const repeat = Math.max(1, Number(argValue('repeat') ?? '1') || 1);
 
+/**
+ * 两次判定请求之间至少间隔多久（毫秒）。`--delay 3000`。默认 0。
+ *
+ * 只在**主通道被限流**时需要：连续发请求会一直撞 429，一条都过不去。
+ */
+const delayMs = Math.max(0, Number(argValue('delay') ?? '0') || 0);
+
+/**
+ * 遇到 429 时最多重试几次。默认 4（`--retry 0` 可关掉）。
+ *
+ * ## 为什么必须给 429 留退避（2026-10-06 实测）
+ *
+ * `zhipu` 是共享账号，**429 是常态而不是异常**。而不重试的后果不是「少几对」，
+ * 是**整张对照表作废**：有一次 `--versions 3,4 --repeat 3` 六条请求只过了一条，
+ * 结果 pv=4 整臂全失败、pv=3 只有一个轮次有证据 —— 而「自身稳定性」那一节
+ * 因为只看「判成的那些轮次里一不一致」，把**单轮的判定**报成了
+ * 「3 轮：其余判定全部一致」。一个被限流限出来的假绿灯。
+ *
+ * ⚠️ 重试**不是**在掩盖失败：每次重试都打一行日志，重试耗尽后依旧按失败返回，
+ * 由调用方算进「未判成」。它只是把「一次瞬时限流」与「这一版真的不会判」分开。
+ */
+const retry429 = Math.max(0, Number(argValue('retry') ?? '4') || 0);
+const RETRY_BASE_MS = 8_000;
+
+/**
+ * 除正序/倒序外，再跑几个**确定性乱序**。默认 0。
+ *
+ * ## 为什么是「必须」而不是「锦上添花」（2026-10-06 实测）
+ *
+ * 23 对语料、`zhipu`、每版 3 轮，正序与倒序各跑一次：
+ *
+ * | 顺序 | pv=3 | pv=4 | Δ(pv4−pv3) |
+ * |---|---|---|---|
+ * | 正序 | 17/23 | 22/23 | **+5** |
+ * | 倒序 | 20/23 | 20/23 | **0** |
+ *
+ * pv=3 的 6 个误合并**在倒序下全部消失**，而它的 9 个顺序敏感对翻转方向
+ * **100% 是「是→否」**。⇒ **判定力不是一个数，是「顺序 → 正确数」的一条曲线**，
+ * 而正序只是这条曲线上的一个点。拿单个顺序比两版，等于比两个任意采样点。
+ *
+ * 更要紧的是：**生产链路的顺序是候选生成器排出来的，既不是正序也不是倒序**。
+ * 所以「正序成绩」根本不对应线上成绩 —— 只有**跨多个顺序的分布**才对应。
+ *
+ * 跑 N 个乱序后，脚本改为按「同序配对 Δ 是否在所有顺序下同号」判显著性：
+ * 方向全一致 ⇒ 方向可参考（幅度仍不可引用）；出现异号 ⇒ 这批语料分辨不出。
+ */
+const shuffles = Math.max(0, Number(argValue('shuffles') ?? '0') || 0);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 确定性洗牌（LCG）。**必须确定性**：同一命令重跑要给出同一组顺序，
+ * 否则「这次结论不一样」又会多一种解释（顺序换了）。
+ */
+function shuffledOrder(n: number, seed: number): number[] {
+  const a = Array.from({ length: n }, (_, i) => i);
+  let s = seed >>> 0;
+  const rnd = () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 2 ** 32;
+  };
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * 发一次判定请求，带 429 退避。
+ *
+ * ⚠️ 服务端把模型的 429 **包在 HTTP 200 里**返回（`ok:false` + `error` 里带 `HTTP 429`），
+ * 所以只看 `res.ok` 是看不见限流的 —— 必须同时看 `json.ok` 与 `json.error`。
+ * 这也意味着：任何「只看 HTTP 状态码」的下游都会把限流读成成功。
+ */
+async function postJudge(body: unknown, label: string): Promise<ProbeResponse> {
+  let last: ProbeResponse | undefined;
+  for (let attempt = 0; attempt <= retry429; attempt++) {
+    if (attempt > 0) {
+      const wait = RETRY_BASE_MS * 2 ** (attempt - 1);
+      console.log(`  ⏳ ${label} 第 ${attempt} 次重试（被限流），等 ${(wait / 1000).toFixed(0)}s`);
+      await sleep(wait);
+    } else if (delayMs) {
+      await sleep(delayMs);
+    }
+    const res = await fetch(`${BASE}/api/judge-pairs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const json = (await res.json()) as ProbeResponse;
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}：${json.error || JSON.stringify(json).slice(0, 300)}`);
+    }
+    last = json;
+    if (json.ok !== false) return json;
+    // 不是限流就**不要**重试：重试一个「通道名写错了」的请求只会白等 2 分钟。
+    if (!/429|访问量过大|rate ?limit/i.test(json.error ?? '')) return json;
+  }
+  console.log(`  ⚠️ ${label}：重试 ${retry429} 次后依旧被限流 —— 这一段计入「未判成」`);
+  return last!;
+}
+
 async function probe(pv: number | undefined): Promise<ProbeResponse> {
   const gold = JSON.parse(readFileSync(resolve(process.cwd(), fixturePath), 'utf8')) as GoldFile;
   const body = {
@@ -154,17 +289,7 @@ async function probe(pv: number | undefined): Promise<ProbeResponse> {
       ...(p.note ? { note: p.note } : {}),
     })),
   };
-  const res = await fetch(`${BASE}/api/judge-pairs`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  const json = (await res.json()) as ProbeResponse;
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}：${json.error || JSON.stringify(json).slice(0, 300)}`);
-  }
-  return json;
+  return postJudge(body, `pv=${pv ?? '默认'}（正序）`);
 }
 
 /** 判定标签的显示映射。`error` 单独一档：调用失败**不是**判否，别让它们长得一样。 */
@@ -174,10 +299,10 @@ function cell(v: string | undefined): string {
 }
 
 /**
- * 按**倒序**发同一批对，用于测「顺序敏感性」。
+ * 按**指定顺序**发同一批对，用于测「顺序敏感性」。
  *
  * `order[k]` = 第 k 个**发出去**的条目对应 fixture 里的第几个 pair。
- * 倒序时第 k 条对应 `n-1-k`，所以要映射回来才能逐对比。
+ * 收到结果后要按 `order` 映射回来才能逐对比。
  *
  * 为什么需要它（2026-09-24 实测，**这条改写了整个仪器的可信度**）：
  * 同一个版本、同一条通道、**同一批 12 对**，只把顺序倒过来，
@@ -185,27 +310,19 @@ function cell(v: string | undefined): string {
  * 而 v1 与 v3 的版本差异只有 1–2 对 ⇒ **差异比顺序噪声还小，
  * 这批语料根本分辨不出两版。** 不测这一项，就会把顺序噪声当成版本收益去定版。
  */
-async function probeReversed(
+async function probeInOrder(
   pv: number | undefined,
+  order: number[],
+  label: string,
 ): Promise<{ res: ProbeResponse; order: number[] }> {
   const gold = JSON.parse(readFileSync(resolve(process.cwd(), fixturePath), 'utf8')) as GoldFile;
-  const n = gold.pairs.length;
-  const rev = gold.pairs.map((_, i) => n - 1 - i); // 发出去的顺序（fixture 下标）
   const body = {
     ...(pv !== undefined ? { pv } : {}),
     ...(pinnedProvider ? { provider: pinnedProvider } : {}),
     // 只发 a/b —— `expect`/`note` 一律不发，它们只用于本地统计与展示。
-    pairs: rev.map((i) => ({ a: gold.pairs[i].a, b: gold.pairs[i].b })),
+    pairs: order.map((i) => ({ a: gold.pairs[i].a, b: gold.pairs[i].b })),
   };
-  const res = await fetch(`${BASE}/api/judge-pairs`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  const json = (await res.json()) as ProbeResponse;
-  if (!res.ok) throw new Error(`HTTP ${res.status}：${json.error || JSON.stringify(json).slice(0, 300)}`);
-  return { res: json, order: rev };
+  return { res: await postJudge(body, label), order };
 }
 
 async function main() {
@@ -297,6 +414,23 @@ async function main() {
   const judgedSet = (v: number, i: number): Set<string> =>
     new Set([...verdictSet(v, i)].filter((x) => JUDGED.has(x)));
   /**
+   * 某一对在几轮里**真的判成了**（`same`/`diff`）。取值 0…`repeat`。
+   *
+   * ⚠️ 这是「稳定性」那一节的**证据量**，而 `judgedSet` 只回答「判成的那些轮里出现过什么」。
+   * 一个**只判成 1 轮**的对自己也是 `size === 1` —— 与「3 轮都判成且完全一致」
+   * 在下面那张表里**长得一模一样**。
+   *
+   * 2026-10-06 实测：`--versions 3,4 --repeat 3` 六条请求被 429 挡掉五条，
+   * pv=3 只有 1 轮有证据，脚本照样打出「3 轮：其余判定全部一致」——
+   * 一个被限流限出来的假绿灯，而这一节恰恰是「噪声地板」，是判「版本差异是否显著」的依据。
+   * **少几轮证据的「稳定」不是稳定，是没有证据。**
+   */
+  const judgedRounds = (v: number, i: number): number =>
+    (reps.get(v) ?? []).filter((r) => {
+      const x = r.results?.find((y) => y.i === i)?.verdict;
+      return x === 'same' || x === 'diff';
+    }).length;
+  /**
    * 共识判定：在**判过的**那些轮里完全一致才给值。
    * 摇摆、全是失败、全被拦 —— 一律返回 undefined（没有资格参与对错统计）。
    */
@@ -309,8 +443,11 @@ async function main() {
   // 如果版本差异比噪声还小，那这个差异就不是差异 —— 2026-09-24 的 v1/v3 正是这种情况。
   if (repeat > 1) {
     let allDead = true;
+    /** 有没有**任意一版、任意一对**拿到了完整的 `repeat` 轮证据。没有 ⇒ 这一节整体不成立。 */
+    let anyFull = false;
     for (const v of versions) {
       const wobble: string[] = [];
+      const thin: string[] = [];
       let dead = 0;
       for (let i = 0; i < gold.pairs.length; i++) {
         const s = judgedSet(v, i);
@@ -319,19 +456,28 @@ async function main() {
           continue;
         }
         allDead = false;
+        const rounds = judgedRounds(v, i);
+        if (rounds >= repeat) anyFull = true;
+        else thin.push(`[${i}] ${rounds}/${repeat}`);
         if (s.size > 1) wobble.push(`[${i}] ${[...s].map((x) => cell(x).trim()).join('/')}`);
       }
       const deadPart = dead
         ? `⚠️ ${dead}/${gold.pairs.length} 对**没判成**（调用失败或被极性拦下，不计入稳定性）`
+        : '';
+      const thinPart = thin.length
+        ? `⚠️ ${thin.length} 对**证据轮数不足**（${thin.join('、')}）—— 只在部分轮次里判成的对，` +
+          '它的「一致」是没被检验的一致，**不算稳定**'
         : '';
       const rest = gold.pairs.length - dead;
       const stablePart = !rest
         ? ''
         : wobble.length
           ? `${wobble.length} 对摇摆 —— ${wobble.join('、')}`
-          : '其余判定全部一致';
+          : thin.length
+            ? '其余对在**已判成的轮次里**一致（但见上面的轮数不足，别当噪声地板用）'
+            : '其余判定全部一致';
       console.log(
-        `pv=${v} 自身稳定性（${repeat} 轮）：` + [deadPart, stablePart].filter(Boolean).join('；'),
+        `pv=${v} 自身稳定性（${repeat} 轮）：` + [deadPart, thinPart, stablePart].filter(Boolean).join('；'),
       );
     }
     if (allDead) {
@@ -339,6 +485,17 @@ async function main() {
       console.log('!'.repeat(70));
       console.log('⚠️ 两版**一对都没真的判成** —— 下面所有数字只反映「调用失败」，不反映判定力。');
       console.log('   本地最常见的成因：没配 API Key（本项目 .env.local 是私密配置，仓库里只有 example）。');
+      console.log('!'.repeat(70));
+    } else if (!anyFull) {
+      // ⚠️ 这一条是 2026-10-06 补的：以前只要**不是全挂**就算「有证据」，
+      // 于是「1/3 轮有证据」被当成「稳定」，把限流读成了结论。
+      console.log('');
+      console.log('!'.repeat(70));
+      console.log(
+        `⚠️ **没有任何一对拿到完整的 ${repeat} 轮证据** —— 这一节的「稳定性」**不成立**，` +
+          '它只反映了「哪几轮恰好没被限流」。',
+      );
+      console.log('   最常见成因：主通道被限流（429）。加大 --retry / --delay，或换到不挤的时间重跑。');
       console.log('!'.repeat(70));
     } else {
       console.log('  ↳ 说明：摇摆的对**不能**用来判「哪版更准」—— 下面的版本差异会单独标出它们。');
@@ -508,46 +665,184 @@ async function main() {
       );
     }
 
-    // ── 顺序敏感性：**这是真正的噪声地板** ────────────────────────────────
+    // ── 多顺序对照：**这才是版本比较的正确姿势** ──────────────────────────
     //
     // `--repeat` 量的是「同一顺序、多跑几次」的抖动（实测经常是 0）。
     // 但真正决定结论能不能用的是**换一个顺序它会不会翻** —— 2026-09-24 实测：
-    // 同一版本、同一通道、同一批 12 对，仅倒序 → **3 对翻转**，
-    // 而版本间差异只有 1–2 对 ⇒ 差异被噪声淹没，这批语料**分辨不出两版**。
-    // 所以这一节必须报，而且要在版本差异之后紧接着报（它是差异的解释边界）。
+    // 同一版本、同一通道、同一批 12 对，仅倒序 → **3 对翻转**。
+    //
+    // ⚠️ 2026-10-06 的实测把这一节彻底改写了。23 对语料、每版 3 轮（自身 0 摇摆）：
+    //
+    //   | 顺序 | pv=3  | pv=4  | Δ(pv4−pv3) |
+    //   | 正序 | 17/23 | 22/23 | **+5**     |
+    //   | 倒序 | 20/23 | 20/23 | **0**      |
+    //
+    // pv=3 的 6 个误合并**在倒序下全部消失**，其 9 个顺序敏感对翻转方向
+    // **100% 是「是→否」**。三条结论：
+    // ① 「判定力」不是一个数，是「顺序 → 正确数」的一条曲线，正序只是其中一个点；
+    // ② 拿单序比两版 = 比两个任意采样点，Δ 可以在 +5 与 0 之间跳；
+    // ③ 生产链路的顺序由候选生成器决定，**既不是正序也不是倒序**
+    //    ⇒ 单序成绩根本不对应线上成绩。
+    //
+    // 所以：**每版各自测，且在多序下比同序 Δ 的符号**。
+    // 各序 Δ 同号 ⇒ 方向可参考（幅度仍不可引用）；出现异号 ⇒ 这批语料分辨不出。
+    // 这是项目自己写下的解封条件：「先消掉顺序敏感」。
     if (!confounded) {
       console.log('');
-      console.log(`顺序敏感性（pv=${runs[0].v}，同一批对仅**倒序**发一次）：`);
-      try {
-        const { res: revRes, order } = await probeReversed(runs[0].v);
-        const revVerdict = new Map<number, string>();
-        for (const [k, r] of (revRes.results ?? []).entries()) revVerdict.set(order[k], r.verdict);
-        const orderFlips: string[] = [];
-        for (let i = 0; i < gold.pairs.length; i++) {
-          const a = [...judgedSet(runs[0].v, i)];
-          const b = revVerdict.get(i);
-          if (a.length !== 1 || (b !== 'same' && b !== 'diff')) continue; // 没判成的不比
-          if (a[0] !== b) orderFlips.push(`[${i}] ${cell(a[0]).trim()}→${cell(b).trim()}`);
+      const orderLabels = ['正序', '倒序', ...Array.from({ length: shuffles }, (_, k) => `乱序#${k + 1}`)];
+      console.log(`多顺序对照（同一批对按 ${orderLabels.length} 种顺序各发一次，每版各测一遍）：`);
+      /** 版本 → 顺序标签 → 「fixture 下标 → 判定」。正序用 `--repeat` 轮的判定集合表示。 */
+      const orderVerdicts = new Map<number, Map<string, Map<number, Set<string>>>>();
+      const noiseByV = new Map<number, number>();
+      for (const { v } of runs) {
+        const byOrder = new Map<string, Map<number, Set<string>>>();
+        const fwd = new Map<number, Set<string>>();
+        for (let i = 0; i < gold.pairs.length; i++) fwd.set(i, judgedSet(v, i));
+        byOrder.set('正序', fwd);
+        const flipDetail: string[] = [];
+        let flipCount = 0;
+        for (let k = 0; k < orderLabels.length - 1; k++) {
+          const label = orderLabels[k + 1];
+          // 倒序是 `n-1-i`；乱序用确定性种子，同一命令重跑给出同一组顺序。
+          const order =
+            k === 0
+              ? gold.pairs.map((_, i) => gold.pairs.length - 1 - i)
+              : shuffledOrder(gold.pairs.length, 0x9e3779b9 ^ ((k + 1) * 2654435761));
+          try {
+            const { res: ordRes, order: sent } = await probeInOrder(v, order, `pv=${v}（${label}）`);
+            const m = new Map<number, Set<string>>();
+            for (const [idx, r] of (ordRes.results ?? []).entries()) {
+              m.set(sent[idx], new Set(JUDGED.has(r.verdict) ? [r.verdict] : []));
+            }
+            byOrder.set(label, m);
+          } catch (err) {
+            console.log(`  ⚠️ pv=${v} 的「${label}」测不了：${err instanceof Error ? err.message : String(err)}`);
+          }
         }
-        console.log(`  ${orderFlips.length}/${gold.pairs.length} 对翻转` + (orderFlips.length ? ` —— ${orderFlips.join('、')}` : ''));
-        if (orderFlips.length === 0) {
-          console.log('  ⇒ 本批语料对顺序不敏感，上面的版本差异可以当结论用。');
-        } else if (orderFlips.length >= Math.max(1, stableFlips + shakyFlips)) {
-          console.log('');
+        // 顺序敏感对数：正序唯一判定 vs 该顺序唯一判定，不一致就记一笔（只报数，逐对明细在下面）。
+        for (const [label, m] of byOrder) {
+          if (label === '正序') continue;
+          for (let i = 0; i < gold.pairs.length; i++) {
+            const a = fwd.get(i)!;
+            const b = m.get(i);
+            if (!b || a.size !== 1 || b.size !== 1) continue;
+            if ([...a][0] !== [...b][0]) {
+              flipCount++;
+              const dir = [...a][0] === 'same' ? '是→否' : '否→是';
+              flipDetail.push(`[${i}]${label} ${dir}`);
+            }
+          }
+        }
+        noiseByV.set(v, flipCount);
+        orderVerdicts.set(v, byOrder);
+        console.log(
+          `  pv=${v}：跨顺序翻转 ${flipCount} 次（各顺序下「判成」的对数须一致才可比；` +
+            (flipDetail.length ? `${flipDetail.join('、')}` : '无翻转') +
+            '）',
+        );
+      }
+      console.log('');
+
+      // 逐顺序的「同序配对」成绩 —— 这一张表才是能下结论的地方。
+      //
+      // ⚠️ 两个必须做的校正（2026-10-06 实测暴露）：
+      // ① **分母必须对齐**：正序那一格曾出现 `pv3 13/18` 对 `pv4 22/23` ——
+      //    pv3 有 5 对没判成（被限流），直接比 13 与 22 是把「没答」当成了「答错」。
+      //    这里只统计**两版都判成了**的对，分母因此恒等。
+      // ② **「打平」不是「异号」**：Δ 出现 `+9、0、+3、+1` 时，旧判据按
+      //    `every(d>0)` 判成「异号 ⇒ 分辨不出」。可 0 是平局，不是反向 ——
+      //    「没有一个顺序显示 A 更差」与「A 有时更差」是两回事。
+      const perOrder: Array<{ label: string; cells: Map<number, { correct: number; n: number }> }> = [];
+      const labeledIdx = gold.pairs.map((g, i) => ({ g, i })).filter(({ g }) => g.expect === 'same' || g.expect === 'diff');
+      const vList = runs.map((r) => r.v);
+      for (const label of orderLabels) {
+        const cells = new Map<number, { correct: number; n: number }>();
+        /** 两版**都**给出唯一判定的对 —— 只有这些对能进分母，否则分母不等就没法比。 */
+        const common = labeledIdx.filter(({ i }) =>
+          vList.every((v) => {
+            const s = orderVerdicts.get(v)?.get(label)?.get(i);
+            return !!s && s.size === 1;
+          }),
+        );
+        for (const v of vList) {
+          const m = orderVerdicts.get(v)?.get(label);
+          if (!m) continue;
+          let correct = 0;
+          for (const { g, i } of common) if ([...m.get(i)!][0] === g.expect) correct++;
+          cells.set(v, { correct, n: common.length });
+        }
+        perOrder.push({ label, cells });
+      }
+      console.log('顺序        ' + vList.map((v) => `pv${v}`.padEnd(10)).join('') + '同序 Δ');
+      const deltas: number[] = [];
+      for (const { label, cells } of perOrder) {
+        if (vList.some((v) => !cells.has(v))) {
+          console.log(`  ${label.padEnd(8)} 未测全（有版本被限流）`);
+          continue;
+        }
+        const ns = vList.map((v) => cells.get(v)!.n);
+        const cs = vList.map((v) => cells.get(v)!.correct);
+        const delta = cs[cs.length - 1] - cs[0];
+        deltas.push(delta);
+        const sameDen = new Set(ns).size === 1;
+        console.log(
+          `  ${label.padEnd(8)} ` +
+            cs.map((c, k) => `${c}/${ns[k]}`.padEnd(10)).join('') +
+            (delta > 0 ? `+${delta}（pv${vList[vList.length - 1]} 好）` : delta < 0 ? `${delta}（pv${vList[0]} 好）` : '0（平）') +
+            (sameDen ? '' : '　⚠️ 分母不等（不该出现，脚本有 bug）'),
+        );
+      }
+
+      if (!deltas.length) {
+        console.log('  ⇒ 没有一条顺序测全，**拿不到可比成绩**，别据此定版。');
+      } else {
+        const A = vList[0];
+        const B = vList[vList.length - 1];
+        const fmt = deltas.map((d) => (d > 0 ? `+${d}` : `${d}`)).join('、');
+        const better = deltas.filter((d) => d > 0).length;
+        const worse = deltas.filter((d) => d < 0).length;
+        const tie = deltas.filter((d) => d === 0).length;
+        console.log('');
+        if (worse === 0 && better > 0) {
+          // 「没有一个顺序显示 B 更差」—— 这是**符号检验**意义上的结论，比「全同号正」弱、
+          // 比「分辨不出」强得多。而且它配得上一个实测到的大差异（顺序噪声 21 vs 3 次）。
+          console.log(
+            `  ⇒ ${deltas.length} 个顺序里，pv${B} **没有一个顺序更差**（更好 ${better} 个、打平 ${tie} 个）：` +
+              `Δ = ${fmt}。`,
+          );
+          console.log(`     ⇒ 方向可信：**pv${B} 不劣于 pv${A}**；幅度在 0…${Math.max(...deltas)} 对之间，别引用具体数字。`);
+        } else if (better === 0 && worse > 0) {
+          console.log(
+            `  ⇒ ${deltas.length} 个顺序里，pv${B} **没有一个顺序更好**（更差 ${worse} 个、打平 ${tie} 个）：Δ = ${fmt}。`,
+          );
+          console.log(`     ⇒ 方向可信：**pv${B} 不优于 pv${A}** —— 不要切到 pv${B}。`);
+        } else if (better > 0 && worse > 0) {
           console.log('  ' + '!'.repeat(66));
           console.log(
-            `  ⚠️ **顺序噪声（${orderFlips.length} 对）≥ 版本间差异（${stableFlips + shakyFlips} 对）**` +
+            `  ⚠️ 各顺序下的 Δ **异号**（${fmt}）：pv${B} 在 ${better} 个顺序下更好、在 ${worse} 个顺序下更差` +
               ' ⇒ 这批语料**分辨不出这两个版本**。',
           );
           console.log('     上面的 ★修好 / ★★回退 **不可作为定版依据** —— 换个顺序就可能反过来。');
           console.log('     要定版必须先扩语料（门 1：历史 42S/24D 那份从未落盘），或先消掉顺序敏感。');
           console.log('  ' + '!'.repeat(66));
         } else {
-          console.log(`  ⇒ 顺序噪声（${orderFlips.length} 对）小于版本差异（${stableFlips + shakyFlips} 对），差异方向可参考。`);
+          console.log(`  ⇒ 各顺序 Δ 全为 0（${fmt}）—— 这批语料上两版判定一致，不必改默认版本。`);
         }
-      } catch (err) {
-        console.log(`  ⚠️ 顺序敏感性测不了：${err instanceof Error ? err.message : String(err)}`);
-        console.log('  ⇒ 没有噪声地板，上面的版本差异**无法判断是否显著**，别据此定版。');
+        const worst = Math.max(...[...noiseByV.values()], 0);
+        if (worst >= Math.max(1, stableFlips + shakyFlips)) {
+          console.log(
+            `     ⚠️ 同时记一笔：单版跨顺序仍会翻 ${worst} 次，而版本间差异只有 ${stableFlips + shakyFlips} 对。` +
+              '⇒ 上面那张逐对表的 ★修好 / ★★回退 **仍不可当逐对证据**，只能用整体方向。',
+          );
+        }
+      }
+      const spread = [...noiseByV.values()];
+      if (spread.length > 1 && Math.min(...spread) !== Math.max(...spread)) {
+        console.log(
+          `  ↳ 各版跨顺序翻转次数相差 ${Math.min(...spread)}–${Math.max(...spread)} 次：**顺序敏感本身不是所有版本共有的** ——` +
+            '更稳的那一版在生产里更可信（线上的顺序是候选生成器排的，你无法选择）。' +
+            '⚠️ 这是**跨顺序**的次数（每版 × (顺序数−1)），与单序翻转对数不是同一量纲，别互相对照。',
+        );
       }
     }
   }
@@ -582,13 +877,31 @@ async function main() {
     // 会得到 wrong=0 ⇒ `--strict` 给一个**绿灯**。那就是最糟的一种闸门：
     // 它把「什么都没验到」报成「验过了，没问题」。
     const unjudged = labeledIdx.filter(({ i }) => consensus(defV, i) === undefined).length;
-    if (wrong > 0 || unjudged > 0) {
+    // ⚠️ **证据轮数不足的对也要算失败。** 这一条与上一条是同一类漏洞的另一半：
+    // `unjudged` 只抓「**一轮都没**判成」的对，而「3 轮里只判成 1 轮」的对自己
+    // `consensus` 照样给得出值（size===1），于是它既不算判错、也不算未判成 ——
+    // `--strict` 会给一个**看着很干净**的绿灯，而事实上它是一对**没被重复验证**的对。
+    // 只在 `--repeat > 1` 时有意义（跑 1 轮本来就谈不上「轮数不足」）。
+    const thin = repeat > 1
+      ? labeledIdx.filter(({ i }) => {
+          const r = judgedRounds(defV, i);
+          return r > 0 && r < repeat;
+        }).length
+      : 0;
+    if (wrong > 0 || unjudged > 0 || thin > 0) {
       console.log('');
       console.log(
-        `--strict：默认版本 pv=${defV} 共识判错 ${wrong} 对、未判成 ${unjudged} 对，退出码 1`,
+        `--strict：默认版本 pv=${defV} 共识判错 ${wrong} 对、未判成 ${unjudged} 对、` +
+          `证据轮数不足 ${thin} 对，退出码 1`,
       );
       if (unjudged) {
         console.log('        （「未判成」= 调用失败或被极性拦下 —— 没验到就是没验到，不算通过）');
+      }
+      if (thin) {
+        console.log(
+          `        （「轮数不足」= ${repeat} 轮里只有部分轮次判成 —— 单轮的正确不叫验证过，` +
+            '多半是主通道被限流；加大 --retry / --delay 重跑）',
+        );
       }
       process.exit(1);
     }
