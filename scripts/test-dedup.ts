@@ -53,6 +53,11 @@ import {
   type StoryLike,
 } from '../src/lib/same-event';
 import { promptBuilderFor } from '../src/lib/judge-prompts';
+import {
+  PAIR_RECALL_KNOB_SPECS,
+  parsePairRecallKnobs,
+  pairRecallKnobProbe,
+} from '../src/lib/dedupe-knobs';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
@@ -1959,6 +1964,154 @@ async function promptVersionChecks(): Promise<void> {
   }
 }
 
+// ----- 召回层旋钮（`cand` / `minside` / `prisim`）-----
+//
+// 为什么这一节必须存在：这三个旋钮是 2026-10-07 接上的**唯一**能在生产形态批次上
+// 验证修法的入口。而「接了但没接通」正是本项目反复栽的那一类 ——
+// `dedupeStories` 只把**嵌套的 `judge`** 透传给 `judgeSameEventPairs`
+// （`const res = await judgeSameEventPairs(keptAfterIdentity, judge)`），
+// 旋钮若写在顶层会被**静默忽略**：不报错、不告警、结果看起来完全正常，
+// 只是「实验组和对照组一模一样」。所以下面既测解析器，也**测它真的抵达召回层**。
+async function recallKnobChecks(): Promise<void> {
+  // --- ① 解析器：取值域与拒绝 ---
+  {
+    const none = parsePairRecallKnobs(new URLSearchParams());
+    ok(
+      '旋钮全缺省 ⇒ 一项都不覆盖（生产链路不传旋钮约定的可执行版本）',
+      none.ok && none.applied.length === 0 && Object.keys(none.values).length === 0,
+      JSON.stringify(none),
+    );
+
+    // 三个旋钮的名字、字段、整数性必须成对正确 —— 名字对上但字段接错是静默的
+    const byField = new Map(PAIR_RECALL_KNOB_SPECS.map((s) => [s.param, s.field]));
+    ok(
+      '旋钮名与字段的对应关系正确（cand→maxPairs / minside→minSim / prisim→prioritySim）',
+      byField.get('cand') === 'maxPairs' &&
+        byField.get('minside') === 'minSim' &&
+        byField.get('prisim') === 'prioritySim',
+      JSON.stringify([...byField]),
+    );
+    ok(
+      '只有 cand 要求整数（三个 sim 类旋钮是实数，误设成整数校验会让 0.35 被拒）',
+      PAIR_RECALL_KNOB_SPECS.filter((s) => s.integer).map((s) => s.param).join(',') === 'cand',
+    );
+
+    // 每个旋钮的两个边界都要**被接受且值相等**
+    for (const spec of PAIR_RECALL_KNOB_SPECS) {
+      for (const edge of [spec.lo, spec.hi]) {
+        const r = parsePairRecallKnobs(new URLSearchParams(`${spec.param}=${edge}`));
+        ok(
+          `旋钮 ${spec.param} 的边界 ${edge} 被接受且值相等`,
+          r.ok && r.values[spec.field] === edge,
+          JSON.stringify(r),
+        );
+      }
+      // 两侧越界都要被拒（只测一侧会漏掉单边符号错误）
+      for (const out of [spec.lo - 1, spec.hi + 1]) {
+        const r = parsePairRecallKnobs(new URLSearchParams(`${spec.param}=${out}`));
+        ok(
+          `旋钮 ${spec.param} 的越界值 ${out} 被拒且错误里点名了参数`,
+          !r.ok && r.error.includes(spec.param),
+          JSON.stringify(r),
+        );
+      }
+      const nan = parsePairRecallKnobs(new URLSearchParams(`${spec.param}=abc`));
+      ok(`旋钮 ${spec.param} 的非数字值被拒`, !nan.ok, JSON.stringify(nan));
+    }
+
+    // 整数旋钮收到小数必须拒 —— `Number('48.5')` 是合法数字，最容易漏这一条
+    const frac = parsePairRecallKnobs(new URLSearchParams('cand=48.5'));
+    ok('整数旋钮 cand=48.5 被拒（Number 会收下它，只判 isFinite 会漏）', !frac.ok, JSON.stringify(frac));
+
+    // 空串按「没传」处理，不能按 0 处理（`Number('')` 是 0，会把 minside 静默压到 0）
+    const blank = parsePairRecallKnobs(new URLSearchParams('minside='));
+    ok(
+      '空串按「没传」处理而不是 0（Number(\'\') === 0 是个静默陷阱）',
+      blank.ok && blank.applied.length === 0 && blank.values.minSim === undefined,
+      JSON.stringify(blank),
+    );
+
+    // 对照实验真要用的那一档必须能传进去
+    const real = parsePairRecallKnobs(new URLSearchParams('minside=0.35&cand=24'));
+    ok(
+      '对照实验的真实取值可传（minside=0.35&cand=24 ⇒ 两项都覆盖）',
+      real.ok && real.values.minSim === 0.35 && real.values.maxPairs === 24 && real.applied.length === 2,
+      JSON.stringify(real),
+    );
+  }
+
+  // --- ② 活体探针（推送端 `codeVersion.dedupeKnobProbe` 就是它）---
+  {
+    const probe = pairRecallKnobProbe();
+    ok(
+      '召回层旋钮活体探针全绿（出现 ✗ 说明边界判据被改坏）',
+      !probe.includes('✗'),
+      probe,
+    );
+    ok(
+      '探针逐段点名了三个旋钮（探针被清空/只剩一部分会在这里响）',
+      PAIR_RECALL_KNOB_SPECS.every((s) => probe.includes(`${s.param}[`)),
+      probe,
+    );
+    ok('探针末段证「全缺省不覆盖任何一项」', probe.includes('全缺省→applied=0'), probe);
+  }
+
+  // --- ③ ★ 接线：旋钮必须真的抵达召回层 ---
+  //
+  // 这一条是本节的重点。用一个**只回「没有同一件事」**的假模型出口，
+  // 就能在离线、不配 Key 的情况下看到「召回层选了哪几对」——
+  // 于是「旋钮有没有接通」变成一个可断言的事实，而不是靠读代码相信。
+  //
+  // 用 `minSim` 做判据而不是数对：`minSim=0.99` 时**一对都不该有**，
+  // 这个断言不依赖下面这几条标题的实际相似度（改标题也不会让它假绿）。
+  {
+    const items = [
+      { title: '阿塞拜疆总统出席巴库国际航运论坛开幕式' },
+      { title: '阿塞拜疆总统出席巴库国际航运论坛并发表讲话' },
+      { title: '阿塞拜疆总统出席巴库国际航运论坛，签署三项协议' },
+      { title: '哈萨克斯坦与中方举行经贸合作委员会会议' },
+    ];
+    const noDup = fakeAsk(() => '{"same":[]}');
+
+    const base = await dedupeStories(items, { useLlm: true, judge: { ask: noDup.ask } });
+    const capped = await dedupeStories(items, {
+      useLlm: true,
+      judge: { ask: noDup.ask, maxPairs: 1 },
+    });
+    const floored = await dedupeStories(items, {
+      useLlm: true,
+      judge: { ask: noDup.ask, minSim: 0.99 },
+    });
+
+    ok(
+      '旋钮接通（默认口径下确有候选对，否则下面两条断言无意义）',
+      (base.llm.candidateCount ?? 0) >= 2,
+      `candidateCount=${base.llm.candidateCount}`,
+    );
+    ok(
+      '★ judge.maxPairs 真的抵达召回层（上限 1 ⇒ 候选对恰为 1）',
+      capped.llm.candidateCount === 1,
+      `candidateCount=${capped.llm.candidateCount}`,
+    );
+    ok(
+      '★ judge.minSim 真的抵达召回层（下限 0.99 ⇒ 一对都没有）',
+      floored.llm.candidateCount === 0,
+      `candidateCount=${floored.llm.candidateCount}`,
+    );
+    ok(
+      '★ 顶层传旋钮**不会**生效（`dedupeStories` 只透传嵌套的 `judge`）—— 钉住这个坑，防止有人「顺手挪到顶层」',
+      (
+        await dedupeStories(items, {
+          useLlm: true,
+          judge: { ask: noDup.ask },
+          ...({ maxPairs: 1 } as Record<string, unknown>),
+        } as never)
+      ).llm.candidateCount === base.llm.candidateCount,
+      `顶层 maxPairs=1 时 candidateCount=${base.llm.candidateCount}（应与默认相同）`,
+    );
+  }
+}
+
 // ----- 汇总 -----
 
 function summarize() {
@@ -1979,6 +2132,7 @@ function summarize() {
 llmPipelineChecks()
   .then(modeChecks)
   .then(promptVersionChecks)
+  .then(recallKnobChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);

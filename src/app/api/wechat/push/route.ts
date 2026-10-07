@@ -14,6 +14,7 @@ import {
   NUMERIC_VETO_VERSION,
 } from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
+import { pairRecallKnobProbe } from '@/lib/dedupe-knobs';
 import {
   pushExclusionReason,
   isPushableText,
@@ -911,6 +912,25 @@ export async function GET(request: NextRequest) {
         prioritySim: PAIR_PRIORITY_SIM,
         maxPairs: PAIR_MAX_CANDIDATES,
       },
+      /**
+       * ★ 「体检接口能不能改召回层」的**活体探针**（2026-10-07 新增）。
+       *
+       * 背景：`/api/dedupe-check` 原先只接 `pv=` / `judge=` / `mode=`，**不接**
+       * 召回层那三个旋钮。而 2026-10-06 量出「批的大小与组成会改变判定」之后，
+       * 没有这个入口就等于**无法在生产形态的批次上验证任何修法**
+       * （唯一替代品 `/api/judge-pairs` 走另一种提示词形态、且上限 40 < 生产的 48，
+       * 数字不能对照）。于是三个旋钮在 2026-10-07 被接上，这个哨兵是它的证据。
+       *
+       * 为什么不是 `dedupeKnobs: 'cand,minside,prisim'` 这样的名字清单：
+       * 名字清单只证明「有人写了这几个字」，证明不了「边界判对了」——
+       * 而边界恰恰是这类代码最容易错的地方。这里**当场把每个旋钮的两个边界值
+       * 各过一遍并核对返回值**、再把两侧越界与 `abc` 各拒一遍。
+       *
+       * 读法：每段形如 `cand[lo/hi/越界/非数字]=✓✓✓✓`。
+       * **只要出现 `✗` 就说明旋钮被改坏了**（判据被删会编译不过，被改坏才会变成 `✗`）。
+       * 末段 `全缺省→applied=0` 是「生产链路不传旋钮」那条约定的可执行版本。
+       */
+      dedupeKnobProbe: pairRecallKnobProbe(),
       /**
        * L2「同一件事」判组用的提示词版本（`judge-prompts.JUDGE_PROMPT_VERSION`）。
        *

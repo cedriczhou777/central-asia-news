@@ -3,12 +3,29 @@
  *
  * ## 两个入口，一个是只读的
  *
- * - `GET  /api/dedupe-check?days=7[&llm=1][&mode=pair|group][&judge=think|nothink][&debug=1]`
+ * - `GET  /api/dedupe-check?days=7[&llm=1][&mode=pair|group][&judge=think|nothink][&debug=1]
+ *        [&pv=1|3|4][&cand=<n>][&minside=<0..1>][&prisim=<0..1>]`
  *   只读体检。把时间窗内的文章按国家分组跑一遍「同一件事」判据，
  *   报告**哪些会被判为重复、原因是什么**，不写任何数据。
  *   `llm=1` 时会真的调用一次模型判定（每国 1 次），用来验证 L2 通道通不通；
  *   此时会额外返回模型**逐对**的判定结果（`pairs`），那是判得准不准的直接证据。
  *   `mode=group` 是已停用形态的对照实验入口，生产链路固定走 `pair`。
+ *
+ *   ## 三个「召回层」旋钮（2026-10-07 新增：`cand` / `minside` / `prisim`）
+ *
+ *   分别覆盖召回下限 / 优先档下限 / 单轮上限（= `PAIR_CANDIDATE_MIN_SIM` /
+ *   `PAIR_PRIORITY_SIM` / `PAIR_MAX_CANDIDATES`）。**生产链路不传，永远走默认值。**
+ *
+ *   为什么非接不可：`JudgeOptions` 里这三个字段的注释早就写着「让召回层也能被单独钉住
+ *   做对照」，但入口一直没接 —— 而 2026-10-06 量出**批的大小与组成会改变判定**
+ *   （同一对在 15 对语料里稳定判否、在 23 对语料里稳定判是）之后，**没有这个入口就等于
+ *   无法在生产形态的批次上验证任何修法**。另一个入口 `POST /api/judge-pairs` 不行：
+ *   它走「显式配对」形态（2N 个条目）、且上限 `MAX_PAIRS=40` < 生产的 48，
+ *   两种形态的数字**不能对照**（详见 `scripts/analyze-judge-order.ts` 的头注释）。
+ *
+ *   ⚠️ 非法值**当场 400，绝不静默回退**（与 `pv=` 同一条规矩，理由见下面 `pv` 那段）。
+ *   本次**实际生效**的三个值报在 `llmJudgeParams.pairRecallUsed` 里
+ *   —— 与顶层 `pairRecall`（= 默认值）分开，免得把覆盖过的当默认值引用。
  *
  * - `POST /api/dedupe-check  { "apply": false, "days": 30 }`
  *   存量重复行清理。**默认 dry-run**，只有显式传 `apply: true` 才会真删。
@@ -34,7 +51,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getArticleIdentities, deleteArticlesByIds } from '@/lib/db-articles';
 import { canonicalUrl, originalTitleKey } from '@/lib/utils';
-import { dedupeStoriesDeterministic, JUDGE_PROMPT_VERSION, availablePromptVersions } from '@/lib/same-event';
+import {
+  dedupeStoriesDeterministic,
+  JUDGE_PROMPT_VERSION,
+  availablePromptVersions,
+  PAIR_CANDIDATE_MIN_SIM,
+  PAIR_PRIORITY_SIM,
+  PAIR_MAX_CANDIDATES,
+} from '@/lib/same-event';
+import { parsePairRecallKnobs, PAIR_RECALL_KNOB_SPECS } from '@/lib/dedupe-knobs';
 import { pushExclusionReason } from '@/lib/article-format';
 import { countryList } from '@/lib/data/countries';
 
@@ -354,6 +379,33 @@ export async function GET(request: NextRequest) {
         );
       }
     }
+    /**
+     * 召回层三旋钮（`cand` / `minside` / `prisim`）。解析与取值域见
+     * `@/lib/dedupe-knobs`，那里的 `pairRecallKnobProbe()` 同时是推送端的活体哨兵。
+     *
+     * ⚠️ 必须落在 **`judge` 对象里**：`dedupeStories` 是把**嵌套的 `judge`** 整体透传给
+     * `judgeSameEventPairs` 的（`const res = await judgeSameEventPairs(keptAfterIdentity, judge)`），
+     * 顶层多出来的字段会被**静默忽略** —— 正是本项目反复栽的「声明了但没接上」。
+     */
+    const knobs = parsePairRecallKnobs(searchParams);
+    if (!knobs.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: knobs.error,
+          pairRecallKnobs: PAIR_RECALL_KNOB_SPECS.map((s) => ({
+            param: s.param,
+            range: s.integer ? `${s.lo}–${s.hi} 整数` : `${s.lo}–${s.hi}`,
+          })),
+          pairRecall: {
+            minSim: PAIR_CANDIDATE_MIN_SIM,
+            prioritySim: PAIR_PRIORITY_SIM,
+            maxPairs: PAIR_MAX_CANDIDATES,
+          },
+        },
+        { status: 400 },
+      );
+    }
     const perCountryLimit = Math.min(Number(searchParams.get('limit')) || 60, 200);
 
     /** 因为「不会被推送」而没进体检的国家（当前只有 intl）—— 报出来，别让它静默消失 */
@@ -486,7 +538,7 @@ export async function GET(request: NextRequest) {
         // `useLlm` 一旦跟着默认值走，将来默认值再翻一次，这条查询就会变成
         // 「关着 L2 去验 L2」——那正是 2026-09-21「L2 不稳定」假结论的成因。
         useLlm: true,
-        judge: { extraBody, collectRaw: debug, mode: taskMode, promptVersion },
+        judge: { extraBody, collectRaw: debug, mode: taskMode, promptVersion, ...knobs.values },
       });
       /**
        * ★ 按下标取标题：**必须用 `llm.indexTitles`，不能用 `slice`**（2026-10-05 修）。
@@ -577,6 +629,22 @@ export async function GET(request: NextRequest) {
        * A/B 记录里**必须引用这个值**，引用顶层那个会把对照组的数据标成新版本。
        */
       judgePromptVersionUsed: promptVersion ?? JUDGE_PROMPT_VERSION,
+      /**
+       * ★ **本次实际生效**的召回层三值（2026-10-07 新增）。
+       *
+       * 与顶层 `pairRecall` 的关系：那个报的是**默认值**（生产真正在跑的口径），
+       * 这个报的是**这一次调用真的用了什么**。传了 `cand=24` 时这里会是 24。
+       * 两者必须分开，否则 A/B 记录会把覆盖过的一档标成默认值
+       * —— 和 `judgePromptVersionUsed` 与顶层 `judgePromptVersion` 是同一个理由。
+       *
+       * `overridden` 列出这次真的被旋钮覆盖的档；空数组 = 全部走默认（生产口径）。
+       */
+      pairRecallUsed: {
+        minSim: knobs.values.minSim ?? PAIR_CANDIDATE_MIN_SIM,
+        prioritySim: knobs.values.prioritySim ?? PAIR_PRIORITY_SIM,
+        maxPairs: knobs.values.maxPairs ?? PAIR_MAX_CANDIDATES,
+        overridden: knobs.applied,
+      },
       /**
        * 体检口径说明：输入已套与 `push` 相同的选稿判据（分类/空壳文/国家相关性），
        * 且只覆盖 `push` 会遍历的国家。**改这几条等于改体检结论的含义**，
