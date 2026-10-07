@@ -43,13 +43,14 @@
     "analyze:recall-floor": "tsx scripts/analyze-recall-floor.ts",
     "probe:feeds": "tsx scripts/probe-feed-candidates.ts",
     "diagnose:push": "tsx scripts/diagnose-push-window.ts",
-    "verify:offline": "pnpm ts-check && pnpm test:script-hygiene && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance && pnpm test:api-field-contract",
+    "verify:offline": "pnpm ts-check && pnpm test:script-hygiene && pnpm test:judge-probe && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance && pnpm test:api-field-contract",
     "verify:online": "pnpm test:translate",
     "test:editor-review": "tsx scripts/test-editor-review.ts",
     "test:proper-nouns": "tsx scripts/test-proper-nouns.ts",
     "test:country-relevance": "tsx scripts/test-country-relevance.ts",
     "test:api-field-contract": "tsx scripts/test-api-field-contract.ts",
     "test:script-hygiene": "tsx scripts/test-script-hygiene.ts",
+    "test:judge-probe": "tsx scripts/test-judge-probe.ts",
     "verify:knobs-live": "tsx scripts/verify-knobs-live.ts"
   },
   "dependencies": {

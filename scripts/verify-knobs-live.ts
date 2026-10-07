@@ -36,6 +36,8 @@
  * 一个国家都没调通时判为 **⚠️ 无法验证**（退出码 2），**不让空集合恒真地过**。
  * 逐国会打出 `provider(选N/判N/否N)` 与失败原因，便于判断是「接线坏了」还是「上游在限流」。
  */
+import { isJudgeAnswered } from './lib/judge-probe';
+
 const BASE = process.env.BASE || 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
 /**
  * 钉住的通道。默认取 **`zhipu-flash`**（`glm-4-flash-250414`）。
@@ -173,9 +175,15 @@ async function main() {
      * 钉的通道恰好被限流时，它照样红 —— 看起来像「钉通道失效」，其实什么都没坏。
      * `provider` 只在**成功**分支里带出（见 `judgeExplicitPairs`：非法 JSON / 调用失败
      * 两个早退分支都不带），所以「缺失」本身是**可用性**信号，不是接线信号。
+     *
+     * ⚠️ 第三版（就是现在这版）：**判据收进 `lib/judge-probe.ts`，别在这儿再写一遍**。同一个
+     * 「算不算答了」在 `analyze-recall-floor.ts` 里曾被写成 `ran && !error`，把大组护栏的
+     * 提示当成调用失败、导致 5 国只剩 1 国进对照。判据各写一份就是这个项目的复发型缺陷。
      */
-    const answered = ran.filter((c) => c.provider !== undefined);
-    const wrong = answered.filter((c) => c.provider !== ONLY);
+    const answered = (a.json?.llmJudge ?? []).filter(isJudgeAnswered);
+    /** 真的发起过模型调用的那些（零候选对的国家按设计不报 provider，要单独放行） */
+    const called = answered.filter((c) => c.provider !== undefined);
+    const wrong = called.filter((c) => c.provider !== ONLY);
     const detail = ran
       .map(
         (c) =>
@@ -198,7 +206,10 @@ async function main() {
         wrong.length === 0,
         `逐国：${detail}`,
       );
-      console.log(`   前提满足：${answered.length}/${ran.length} 国真的调通（「选出候选对」算不上调通）`);
+      console.log(
+        `   前提满足：${called.length} 国真的调通（「选出候选对」算不上调通）；` +
+          `另有 ${answered.length - called.length} 国零候选对、没有可问的对`,
+      );
     }
     ok(
       'A 候选对为 0 的国家**不报 provider**（规定行为，不是 bug —— 见 same-event.ts 的注释）',
