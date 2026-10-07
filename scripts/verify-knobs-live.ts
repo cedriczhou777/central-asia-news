@@ -19,19 +19,45 @@
  * 纯读代码看不出来 —— 只有真打一次接口才会暴露。已修（成功响应也报默认三值），
  * 并在 `test:dedup` 里加了「字段必须在**成功响应**里」的源码断言。
  *
- * ⚠️ 判据设计上的一条纪律（本轮也踩到）：**断言的前提必须可达**。
- * A 组第一版要求「每国 `provider` 都是 zhipu」，但**候选对为 0 的国家根本不会调模型**、
- * 因此按设计就不报 `provider`（见 `same-event.ts` 里 `DedupResult.llm.provider` 的注释）
- * ⇒ 那条断言**恒假**，看起来像功能坏了。现在改成：
- * 只对**真的问过模型**的国家断言通道，并**单独断言**「候选对为 0 的国家不报 provider」
- * 这个规定行为本身。
+ * ⚠️ 判据设计上的一条纪律（本轮**连踩两次**，都记在下面，因为同类错误还会再来）：
+ *
+ * 1. **断言的前提必须可达。** A 组第一版要求「每国 `provider` 都是 zhipu」，
+ *    但**候选对为 0 的国家根本不会调模型**、按设计就不报 `provider`
+ *    ⇒ 那条断言**恒假**，看起来像功能坏了。
+ * 2. ★ **「选出了候选对」不等于「调用成功」。** 第二版把 `candidatePairs > 0`
+ *    当成「答了模型」，于是前提断言恒真、而主断言变成**环境相关** ——
+ *    钉的通道恰好被限流时它照样红。正确区分：
+ *    - `candidatePairs > 0` = 召回层**选出了要问的对**（与调用成败无关）；
+ *    - `provider` 有值   = **调用成功且有人答了**（`askLlmJson` 成功时无条件带出通道名，
+ *      而 `judgeExplicitPairs` 的两个早退分支 —— 调用失败 / 非法 JSON —— **都不带**）。
+ *    ⇒ 所以 `provider` 缺失是**可用性**信号，不是接线信号。
+ *
+ * 现在的写法：只在**真的调通**的国家上断言「通道就是钉的那个」（防的是「别的通道漏进来」）；
+ * 一个国家都没调通时判为 **⚠️ 无法验证**（退出码 2），**不让空集合恒真地过**。
+ * 逐国会打出 `provider(选N/判N/否N)` 与失败原因，便于判断是「接线坏了」还是「上游在限流」。
  */
 const BASE = process.env.BASE || 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
+/**
+ * 钉住的通道。默认取 **`zhipu-flash`**（`glm-4-flash-250414`）。
+ *
+ * ⚠️ 默认**不**取 `zhipu`（`glm-4.7-flash`）：那个是第一优先的免费档，
+ * 但本项目实测它**常态 429**（1305 平台过载）。钉它会让这条验收大半时间
+ * 落在「没一个国家调通」上 ⇒ 判为「无法验证」。钉一个**答得动**的通道，
+ * 验的才是「only 有没有真的接上」，而不是「上游今天心情如何」。
+ * 想验别的通道：`ONLY=zhipu pnpm verify:knobs-live`。
+ */
+const ONLY = process.env.ONLY || 'zhipu-flash';
 
 type CountryProbe = {
   country: string;
   ran?: boolean;
   candidatePairs?: number;
+  /** 模型判为「同一件事」的对数（**只有调用成功且有合法 JSON 时才可能 > 0**） */
+  judgedPairs?: number;
+  /** 被模型判「否」的对数（同上） */
+  declinedPairs?: number;
+  /** 这一国失败/降级的原因（调用失败、非法 JSON、簇超限…） */
+  error?: string;
   provider?: string;
 };
 type Resp = {
@@ -49,6 +75,15 @@ type Resp = {
 };
 
 let fails = 0;
+/**
+ * 「本轮**无法验证**」的项（与「失败」分开）。
+ *
+ * 存在的理由：有些断言的前提依赖**上游可用性**（钉住的通道此刻有没有被限流），
+ * 前提不成立时那条断言要么**恒真**（空集合上「每国通道都是 x」恒真）、
+ * 要么**误报失败**（看起来像功能坏了）。两种都错，所以单列一档，
+ * 并用**不同的退出码**把它和真失败分开 —— 否则运维会把它当成前者。
+ */
+const inconclusive: string[] = [];
 const ok = (name: string, cond: boolean, detail = '') => {
   console.log(`${cond ? '✅' : '❌'} ${name}${detail ? `  —— ${detail}` : ''}`);
   if (!cond) fails++;
@@ -107,10 +142,14 @@ async function main() {
 
   // ---- A：钉通道 ----
   {
-    const a = await req('days=1&llm=1&limit=20&provider=zhipu&pv=3');
+    const a = await req(`days=1&llm=1&limit=20&provider=${ONLY}&pv=3`);
     const p = a.json?.llmJudgeParams;
     ok('A 请求成功且返回逐国判定', a.status === 200 && Array.isArray(a.json?.llmJudge), `status=${a.status}`);
-    ok('A providerRequested=zhipu（声明）', p?.providerRequested === 'zhipu', JSON.stringify(p?.providerRequested));
+    ok(
+      `A providerRequested=${ONLY}（声明）`,
+      p?.providerRequested === ONLY,
+      JSON.stringify(p?.providerRequested),
+    );
     ok(
       'A pairRecallUsed.overridden 为空（没被召回旋钮覆盖，= 生产口径）',
       Array.isArray(p?.pairRecallUsed?.overridden) && p.pairRecallUsed.overridden.length === 0,
@@ -123,33 +162,53 @@ async function main() {
     );
 
     const ran = (a.json?.llmJudge ?? []).filter((c) => c.ran);
-    // ⚠️ 只对**真的问过模型**的国家断言通道：候选对为 0 的国家按设计不调模型、
-    //    因而不报 `provider`。第一版没区分，于是断言恒假（看着像功能坏了）。
-    const answered = ran.filter((c) => (c.candidatePairs ?? 0) > 0);
-    const wrong = answered.filter((c) => c.provider !== 'zhipu');
-    ok(
-      'A 前提：本轮确实有国家真的问了模型（否则下一条恒真）',
-      answered.length > 0,
-      `答过模型的=${answered.map((c) => c.country).join(',') || '(一个都没有)'}；候选对为 0 的=${ran
-        .filter((c) => (c.candidatePairs ?? 0) === 0)
-        .map((c) => c.country)
-        .join(',') || '无'}`,
-    );
-    ok(
-      '★ A 每国**实际**通道都是 zhipu（钉住生效；有别的通道就说明 only 没传进去）',
-      answered.length > 0 && wrong.length === 0,
-      `答过模型的国家=${answered.map((c) => `${c.country}:${c.provider ?? '?'}`).join(' ')}`,
-    );
+    /**
+     * ★★ 判据的关键区分（2026-10-07 实测踩过，两次）：
+     *
+     * - `candidatePairs > 0` 只说明**召回层选出了要问的对**，
+     *   **不等于**「真的问成了」——模型调用可能 429、也可能返回的 JSON 解析不了；
+     * - 只有 `provider` 有值才说明**调用成功且有人答了**（`askLlmJson` 成功时无条件带出通道名）。
+     *
+     * 第一版把 `candidatePairs > 0` 当成「答了模型」，于是那条断言变成**环境相关**：
+     * 钉的通道恰好被限流时，它照样红 —— 看起来像「钉通道失效」，其实什么都没坏。
+     * `provider` 只在**成功**分支里带出（见 `judgeExplicitPairs`：非法 JSON / 调用失败
+     * 两个早退分支都不带），所以「缺失」本身是**可用性**信号，不是接线信号。
+     */
+    const answered = ran.filter((c) => c.provider !== undefined);
+    const wrong = answered.filter((c) => c.provider !== ONLY);
+    const detail = ran
+      .map(
+        (c) =>
+          `${c.country}:${c.provider ?? '—'}` +
+          `(选${c.candidatePairs ?? 0}/判${c.judgedPairs ?? 0}/否${c.declinedPairs ?? 0})` +
+          `${c.error ? ` ⚠${String(c.error).slice(0, 40)}` : ''}`,
+      )
+      .join('  ');
+
+    if (answered.length === 0) {
+      // ★ 一个都没调通时，**不能**让「每国通道都是 zhipu」这条溜过去 ——
+      //   空集合上它恒真，那又是一次「恒真的绿灯」。这里显式判为「无法验证」。
+      inconclusive.push('A 钉通道');
+      console.log(`⚠️ A 钉通道**本轮无法验证**：没有任何国家调通模型`);
+      console.log(`   逐国：${detail}`);
+      console.log(`   ⇒ 缺的不是接线，大概率是 provider= 钉的那个通道此刻被限流。换个时间重跑。`);
+    } else {
+      ok(
+        '★ A 每国**实际**通道都是 zhipu（有别的通道就说明 only 没传进去）',
+        wrong.length === 0,
+        `逐国：${detail}`,
+      );
+      console.log(`   前提满足：${answered.length}/${ran.length} 国真的调通（「选出候选对」算不上调通）`);
+    }
     ok(
       'A 候选对为 0 的国家**不报 provider**（规定行为，不是 bug —— 见 same-event.ts 的注释）',
       ran.filter((c) => (c.candidatePairs ?? 0) === 0).every((c) => c.provider === undefined),
-      JSON.stringify(ran.map((c) => `${c.country}:${c.provider ?? '—'}`)),
     );
   }
 
   // ---- B：限制批大小 ----
   {
-    const b = await req('days=1&llm=1&limit=20&provider=zhipu&pv=3&cand=3');
+    const b = await req(`days=1&llm=1&limit=20&provider=${ONLY}&pv=3&cand=3`);
     const p = b.json?.llmJudgeParams;
     ok('B 请求成功', b.status === 200 && Array.isArray(b.json?.llmJudge), `status=${b.status}`);
     ok('B pairRecallUsed.maxPairs=3（实际生效）', p?.pairRecallUsed?.maxPairs === 3, JSON.stringify(p?.pairRecallUsed));
@@ -172,8 +231,18 @@ async function main() {
     );
   }
 
-  console.log(`\n${fails === 0 ? '✅ 全部通过' : `❌ ${fails} 项失败`}`);
-  process.exit(fails === 0 ? 0 : 1);
+  console.log('');
+  if (fails === 0 && inconclusive.length === 0) {
+    console.log('✅ 全部通过');
+    process.exit(0);
+  }
+  if (fails === 0) {
+    console.log(`⚠️ 没有失败，但有 ${inconclusive.length} 项**本轮无法验证**：${inconclusive.join('、')}`);
+    console.log('   ⇒ 这不是「功能坏了」，是上游此刻不可用（多半是钉的通道被限流）。换时间重跑即可。');
+    process.exit(2);
+  }
+  console.log(`❌ ${fails} 项失败${inconclusive.length ? `（另有 ${inconclusive.length} 项无法验证：${inconclusive.join('、')}）` : ''}`);
+  process.exit(1);
 }
 
 main().catch((e) => {
