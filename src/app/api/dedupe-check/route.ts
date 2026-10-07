@@ -24,8 +24,14 @@
  *   两种形态的数字**不能对照**（详见 `scripts/analyze-judge-order.ts` 的头注释）。
  *
  *   ⚠️ 非法值**当场 400，绝不静默回退**（与 `pv=` 同一条规矩，理由见下面 `pv` 那段）。
- *   本次**实际生效**的三个值报在 `llmJudgeParams.pairRecallUsed` 里
- *   —— 与顶层 `pairRecall`（= 默认值）分开，免得把覆盖过的当默认值引用。
+ *   本次**实际生效**的三个值报在 `llmJudgeParams.pairRecallUsed` 里，
+ *   **默认值**报在同级的顶层 `pairRecall`（顶层 = 无论 `llm` 开关如何都会返回的那一层），
+ *   两者分开，免得把覆盖过的当默认值引用。
+ *   ⚠️ 顶层 `pairRecall` 是 **2026-10-07 补上的**：原先它只出现在「参数非法」的
+ *   400 响应体里，而本注释与 `llmJudgeParams` 的注释都写着「顶层 `pairRecall`」——
+ *   于是照注释写的验收断言会在**成功**响应上拿到 `undefined` 而**静默判错**
+ *   （实测踩到：断言「顶层 pairRecall 仍是默认 48」失败，查下去才发现字段压根不存在）。
+ *   教训同 `judgePromptVersion`：**口径字段必须放在「无论如何都会返回」的那一层**。
  *
  *   ## 通道旋钮 `provider=`（同一天补）
  *
@@ -334,6 +340,28 @@ export async function GET(request: NextRequest) {
      * 指纹必须零成本可读：拿它当**部署指纹**用，期望值见 `judge-prompts` 的版本历史。
      */
     judgePromptVersion: JUDGE_PROMPT_VERSION,
+    /**
+     * ★ 召回层的**默认三值** —— 也就是**生产真正在跑的口径**。
+     *
+     * 与 `llmJudgeParams.pairRecallUsed`（本次**实际生效**的）分开报：
+     * 传了 `cand=24` 时那个是 24，而这里**始终**是默认值。
+     * 和上面 `judgePromptVersion` 与 `judgePromptVersionUsed` 是同一对待
+     * —— 否则 A/B 记录会把「覆盖过的一档」当成默认值引用。
+     *
+     * ⚠️ **2026-10-07 补的字段。** 原先它只出现在 `cand=/minside=/prisim=`
+     * **参数非法**的那个 400 响应体里，而本文件两处注释都写着「顶层 `pairRecall`」
+     * ⇒ **成功响应里根本没有这个字段**，照注释写的验收断言会静默判错
+     * （实测：断言「顶层 pairRecall 仍是默认 48」拿到 `undefined` 而失败）。
+     * 现在成功响应也报，注释与事实对齐。
+     *
+     * 放在顶层（而不是 `llmJudgeParams` 内）的理由同 `judgePromptVersion`：
+     * **口径类字段必须零成本可读**，别挂在 `llm=1` 这种要花钱的分支上。
+     */
+    pairRecall: {
+      minSim: PAIR_CANDIDATE_MIN_SIM,
+      prioritySim: PAIR_PRIORITY_SIM,
+      maxPairs: PAIR_MAX_CANDIDATES,
+    },
     /**
      * 可以拿来 A/B 的版本清单（`&pv=` 参数）。
      *
@@ -677,6 +705,8 @@ export async function GET(request: NextRequest) {
        *
        * 与顶层 `pairRecall` 的关系：那个报的是**默认值**（生产真正在跑的口径），
        * 这个报的是**这一次调用真的用了什么**。传了 `cand=24` 时这里会是 24。
+       * （顶层那个是 2026-10-07 才补上的 —— 它原先只存在于「参数非法」的 400 响应体里，
+       *   注释与事实不符，照注释写的断言会在成功响应上静默拿到 `undefined`。）
        * 两者必须分开，否则 A/B 记录会把覆盖过的一档标成默认值
        * —— 和 `judgePromptVersionUsed` 与顶层 `judgePromptVersion` 是同一个理由。
        *

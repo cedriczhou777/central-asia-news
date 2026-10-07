@@ -49,7 +49,8 @@
     "test:proper-nouns": "tsx scripts/test-proper-nouns.ts",
     "test:country-relevance": "tsx scripts/test-country-relevance.ts",
     "test:api-field-contract": "tsx scripts/test-api-field-contract.ts",
-    "test:script-hygiene": "tsx scripts/test-script-hygiene.ts"
+    "test:script-hygiene": "tsx scripts/test-script-hygiene.ts",
+    "verify:knobs-live": "tsx scripts/verify-knobs-live.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

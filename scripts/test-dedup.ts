@@ -2154,6 +2154,86 @@ async function recallKnobChecks(): Promise<void> {
       `顶层 maxPairs=1 时 candidateCount=${base.llm.candidateCount}（应与默认相同）`,
     );
   }
+
+  // --- ④ ★ 口径字段的**位置**：默认值必须在「成功响应」里也报出来 ---
+  //
+  // 这一条是 2026-10-07 上线验收实测踩出来的：两处注释都写着「顶层 `pairRecall`」，
+  // 而那个字段**只存在于「参数非法」的 400 响应体里** ⇒ 成功响应上根本读不到，
+  // 照注释写的断言会**静默判错**（拿到 `undefined` 与 48 比较）。
+  //
+  // 断言方式刻意用「**成功响应的对象字面量里**有没有它」，
+  // 而不是「全文有没有它」—— 后者会被 400 分支里的那一份骗过去，而那正是当初出错的原因。
+  {
+    const routeSrc = readFileSync(resolve(process.cwd(), 'src/app/api/dedupe-check/route.ts'), 'utf8');
+    /**
+     * 切出**成功响应那个对象字面量**（`const result` 的 `{` 起，数花括号到配平为止）。
+     *
+     * ⚠️ 第一版用「`const result` 到 `return NextResponse.json(result)`」切片 ——
+     * **错的，会让本节恒真**：`const result` 在文件前部，而 400 分支在它**后面**、
+     * `return NextResponse.json(result)` 之前，于是那一刀把 400 分支里的
+     * `pairRecall` 也圈了进来。实测：对**修复前**的源码跑，第一版报「成功响应里有」
+     * （假绿），换成配平切片才报「没有」（真）。所以下面专门有一条断言
+     * 钉住「切出的块里不许含 400 分支的字段」。
+     */
+    const objectLiteralAt = (src: string, marker: string): string => {
+      const s = src.indexOf(marker);
+      if (s < 0) return '';
+      const open = src.indexOf('{', s);
+      let depth = 0;
+      for (let i = open; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') {
+          depth--;
+          if (depth === 0) return src.slice(s, i + 1);
+        }
+      }
+      return '';
+    };
+    const block = objectLiteralAt(routeSrc, 'const result: Record<string, unknown> = {');
+
+    ok(
+      '能切出成功响应的对象（切不出来 ⇒ 下面几条会静默变空，所以这条必须先过）',
+      block.length > 500,
+      `len=${block.length}`,
+    );
+    ok(
+      '★ 切出的块**不含** 400 分支的字段（`pairRecallKnobs`）—— 否则「必须在成功响应里」这条会被 400 那一份骗成恒真',
+      !block.includes('pairRecallKnobs') && !block.includes('if (!knobs.ok)'),
+    );
+    ok(
+      '切出的块确实覆盖了本对象的已知字段（防止配平切早了）',
+      block.includes('judgePromptVersion: JUDGE_PROMPT_VERSION') && block.includes('perCountry'),
+    );
+    ok(
+      '★ 顶层 `pairRecall`（默认三值）出现在**成功**响应里 —— 不许只存在于 400 分支',
+      /pairRecall:\s*\{[\s\S]{0,200}?maxPairs:\s*PAIR_MAX_CANDIDATES/.test(block),
+      '成功响应对象里找不到顶层 pairRecall（照注释写的验收断言会在成功响应上拿到 undefined）',
+    );
+    ok(
+      '顶层 `pairRecall` 报的是**常量**（默认口径），不是旋钮实际值',
+      /pairRecall:\s*\{[\s\S]{0,200}?minSim:\s*PAIR_CANDIDATE_MIN_SIM/.test(block) &&
+        !/pairRecall:\s*\{[\s\S]{0,200}?knobs\.values/.test(block),
+    );
+    ok(
+      '`pairRecallUsed` 报的是**旋钮实际值**（`?? 常量`）—— 两个口径必须分开，否则 A/B 会把覆盖档当默认值',
+      /pairRecallUsed:\s*\{[\s\S]{0,300}?maxPairs:\s*knobs\.values\.maxPairs\s*\?\?/.test(routeSrc),
+    );
+
+    // 反向自检：配平切片对合成源的行为 —— 一个是正常对象、一个是没有该 marker
+    {
+      const synthetic = 'const result: Record<string, unknown> = { ok: true, inner: { a: 1 } };\nreturn NextResponse.json(result);';
+      ok(
+        '反向自检：配平切片能切出完整的对象字面量（含嵌套的 `}`，且到配平处即止、不带后面的分号）',
+        objectLiteralAt(synthetic, 'const result: Record<string, unknown> = {') ===
+          'const result: Record<string, unknown> = { ok: true, inner: { a: 1 } }',
+        objectLiteralAt(synthetic, 'const result: Record<string, unknown> = {'),
+      );
+      ok(
+        '反向自检：没有该 marker 时返回空（⇒「必须在成功响应里」这条不是恒真）',
+        objectLiteralAt('export function GET() { return NextResponse.json({ ok: true }); }', 'const result: Record<string, unknown> = {') === '',
+      );
+    }
+  }
 }
 
 // ----- 汇总 -----
