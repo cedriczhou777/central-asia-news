@@ -56,6 +56,7 @@ import { promptBuilderFor } from '../src/lib/judge-prompts';
 import {
   PAIR_RECALL_KNOB_SPECS,
   parsePairRecallKnobs,
+  parseProviderOnly,
   pairRecallKnobProbe,
 } from '../src/lib/dedupe-knobs';
 import { readFileSync } from 'fs';
@@ -2040,6 +2041,44 @@ async function recallKnobChecks(): Promise<void> {
     );
   }
 
+  // --- ①b 通道旋钮 `provider=` ---
+  //
+  // 判据是「钉住了批大小却放开型号，等于只钉了一半」：降级链按 `PROVIDERS` 顺序取
+  // 第一个不报错的通道，而「谁不报错」取决于这一刻谁被 429 限流 ⇒ 不钉通道的 A/B
+  // 里，「结论不同」多出一种解释。**不认识的通道名必须当场拒**，不许静默回退
+  // （回退会让 `provider=zhipu-flsh` 这类手误跑出一个「看起来正常」的降级链结果）。
+  {
+    const usable = ['zhipu', 'zhipu-flash', 'deepseek'];
+
+    const pinned = parseProviderOnly(new URLSearchParams('provider=zhipu'), usable);
+    ok(
+      '通道旋钮：在册通道被接受且原样传下去',
+      pinned.ok && pinned.only === 'zhipu',
+      JSON.stringify(pinned),
+    );
+    const unknown = parseProviderOnly(new URLSearchParams('provider=zhipu-flsh'), usable);
+    ok(
+      '★ 通道旋钮：不在册通道被拒且错误里点名了参数（拼错的通道名必须响，不许静默回退）',
+      !unknown.ok && unknown.error.includes('provider=zhipu-flsh'),
+      JSON.stringify(unknown),
+    );
+    // 大小写不放过：`Zhipu` 不是 `zhipu`，静默归一化会掩盖拼写错误
+    const cased = parseProviderOnly(new URLSearchParams('provider=Zhipu'), usable);
+    ok('通道旋钮：大小写不做静默归一化（Zhipu ≠ zhipu）', !cased.ok, JSON.stringify(cased));
+    const blankProvider = parseProviderOnly(new URLSearchParams('provider='), usable);
+    ok(
+      '通道旋钮：空串按「没传」处理（走完整降级链），而不是当成一个空通道名',
+      blankProvider.ok && blankProvider.only === undefined,
+      JSON.stringify(blankProvider),
+    );
+    const absentProvider = parseProviderOnly(new URLSearchParams(), usable);
+    ok(
+      '通道旋钮：缺省 ⇒ 不钉通道（生产口径 = 保留降级）',
+      absentProvider.ok && absentProvider.only === undefined,
+      JSON.stringify(absentProvider),
+    );
+  }
+
   // --- ② 活体探针（推送端 `codeVersion.dedupeKnobProbe` 就是它）---
   {
     const probe = pairRecallKnobProbe();
@@ -2054,6 +2093,11 @@ async function recallKnobChecks(): Promise<void> {
       probe,
     );
     ok('探针末段证「全缺省不覆盖任何一项」', probe.includes('全缺省→applied=0'), probe);
+    ok(
+      '探针含通道旋钮那一整段（三段全绿）',
+      probe.includes('provider[在册/不在册/缺省]=✓✓✓'),
+      probe,
+    );
   }
 
   // --- ③ ★ 接线：旋钮必须真的抵达召回层 ---

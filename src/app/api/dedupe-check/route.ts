@@ -4,7 +4,7 @@
  * ## 两个入口，一个是只读的
  *
  * - `GET  /api/dedupe-check?days=7[&llm=1][&mode=pair|group][&judge=think|nothink][&debug=1]
- *        [&pv=1|3|4][&cand=<n>][&minside=<0..1>][&prisim=<0..1>]`
+ *        [&pv=1|3|4][&provider=<通道名>][&cand=<n>][&minside=<0..1>][&prisim=<0..1>]`
  *   只读体检。把时间窗内的文章按国家分组跑一遍「同一件事」判据，
  *   报告**哪些会被判为重复、原因是什么**，不写任何数据。
  *   `llm=1` 时会真的调用一次模型判定（每国 1 次），用来验证 L2 通道通不通；
@@ -26,6 +26,17 @@
  *   ⚠️ 非法值**当场 400，绝不静默回退**（与 `pv=` 同一条规矩，理由见下面 `pv` 那段）。
  *   本次**实际生效**的三个值报在 `llmJudgeParams.pairRecallUsed` 里
  *   —— 与顶层 `pairRecall`（= 默认值）分开，免得把覆盖过的当默认值引用。
+ *
+ *   ## 通道旋钮 `provider=`（同一天补）
+ *
+ *   钉住回答判定的模型通道。**这不是锦上添花**：降级链按 `PROVIDERS` 顺序取第一个
+ *   不报错的通道，而「谁不报错」取决于这一刻谁被 429 限流 —— 实测同一次 A/B 的两臂
+ *   就落到了不同通道。而通道间差 5.07 对、通道内标准差 0.09（差 50 倍）
+ *   ⇒ **钉住了批大小却放开型号，等于只钉了一半**。
+ *   本接口过去**没有**这个参数（只有 `POST /api/judge-pairs` 有），
+ *   于是召回层对照在这个入口上根本做不干净。
+ *   同样：不认识的通道名当场 400；请求钉的值报在 `llmJudgeParams.providerRequested`，
+ *   与每个国家各自报的**实际** `provider` 分开。
  *
  * - `POST /api/dedupe-check  { "apply": false, "days": 30 }`
  *   存量重复行清理。**默认 dry-run**，只有显式传 `apply: true` 才会真删。
@@ -59,7 +70,8 @@ import {
   PAIR_PRIORITY_SIM,
   PAIR_MAX_CANDIDATES,
 } from '@/lib/same-event';
-import { parsePairRecallKnobs, PAIR_RECALL_KNOB_SPECS } from '@/lib/dedupe-knobs';
+import { parsePairRecallKnobs, parseProviderOnly, PAIR_RECALL_KNOB_SPECS } from '@/lib/dedupe-knobs';
+import { availableProviderNames } from '@/lib/translate';
 import { pushExclusionReason } from '@/lib/article-format';
 import { countryList } from '@/lib/data/countries';
 
@@ -380,6 +392,28 @@ export async function GET(request: NextRequest) {
       }
     }
     /**
+     * ★ 钉住模型通道（`provider=zhipu`）。不传 = 走完整降级链。
+     *
+     * **这个参数是必需而不是锦上添花**：降级链按 `PROVIDERS` 顺序取第一个不报错的通道，
+     * 而「谁不报错」取决于这一刻谁被 429 限流 —— 实测同一次 A/B 的两臂就落到了
+     * 不同通道（`pv=1`→`zhipu`、`pv=3`→`zhipu-flash`）。那样「结论不同」就多出一种解释：
+     * **换了通道**（而通道间差 5.07 对、通道内标准差 0.09，差 50 倍）。
+     * ⇒ 本入口要做召回层对照（`cand` / `minside` / `prisim`）**就必须能钉通道**，
+     * 否则钉住了批大小却放开了型号，等于只钉了一半。
+     *
+     * 与 `pv=` 同一条规矩：**不认识的通道名当场 400，不静默回退到降级链**
+     * （回退会让 `provider=zhipu-flsh` 这类手误跑出一个「看起来正常的」结果）。
+     */
+    const usableProviders = availableProviderNames();
+    const providerKnob = parseProviderOnly(searchParams, usableProviders);
+    if (!providerKnob.ok) {
+      return NextResponse.json(
+        { ok: false, error: providerKnob.error, availableProviders: usableProviders },
+        { status: 400 },
+      );
+    }
+    const only = providerKnob.only;
+    /**
      * 召回层三旋钮（`cand` / `minside` / `prisim`）。解析与取值域见
      * `@/lib/dedupe-knobs`，那里的 `pairRecallKnobProbe()` 同时是推送端的活体哨兵。
      *
@@ -538,7 +572,7 @@ export async function GET(request: NextRequest) {
         // `useLlm` 一旦跟着默认值走，将来默认值再翻一次，这条查询就会变成
         // 「关着 L2 去验 L2」——那正是 2026-09-21「L2 不稳定」假结论的成因。
         useLlm: true,
-        judge: { extraBody, collectRaw: debug, mode: taskMode, promptVersion, ...knobs.values },
+        judge: { extraBody, collectRaw: debug, mode: taskMode, promptVersion, only, ...knobs.values },
       });
       /**
        * ★ 按下标取标题：**必须用 `llm.indexTitles`，不能用 `slice`**（2026-10-05 修）。
@@ -629,6 +663,15 @@ export async function GET(request: NextRequest) {
        * A/B 记录里**必须引用这个值**，引用顶层那个会把对照组的数据标成新版本。
        */
       judgePromptVersionUsed: promptVersion ?? JUDGE_PROMPT_VERSION,
+      /**
+       * ★ 本次**请求钉住**的通道（`provider=`）。没传 ⇒ 字段不出现。
+       *
+       * 与每个国家各自报的 `provider`（**实际**回答的通道）分开报：
+       * 只报实际的那个，读的人分不清「它是被钉住才走这条」还是「它只是恰好没被限流」，
+       * 而这两者对应的结论可信度完全不同。与 `judge-pairs` 的
+       * `providerRequested` / `provider` 是同一对待。
+       */
+      ...(only ? { providerRequested: only } : {}),
       /**
        * ★ **本次实际生效**的召回层三值（2026-10-07 新增）。
        *

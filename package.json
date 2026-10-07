@@ -40,6 +40,7 @@
     "analyze:country-filter": "tsx scripts/analyze-country-filter.ts",
     "analyze:pair-recall": "tsx scripts/analyze-pair-recall.ts",
     "analyze:judge-order": "tsx scripts/analyze-judge-order.ts",
+    "analyze:recall-floor": "tsx scripts/analyze-recall-floor.ts",
     "probe:feeds": "tsx scripts/probe-feed-candidates.ts",
     "diagnose:push": "tsx scripts/diagnose-push-window.ts",
     "verify:offline": "pnpm ts-check && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance && pnpm test:api-field-contract",

@@ -25,6 +25,13 @@
  * **非法值当场 400，绝不静默回退。** 静默回退会让 `cand=99999` 这类手误跑出一个
  * 「看起来正常」的默认值结果，而那正是这套参数要消灭的「分不清跑的是哪一档」
  * —— 见 `dedupe-check/route.ts` 里 `pv=` 那段注释的同一理由。
+ *
+ * ## 2026-10-07 补：通道旋钮 `provider=`
+ *
+ * 同一个入口还必须能**钉住模型通道**。理由与召回层三旋钮一样是「钉住要研究的变量」：
+ * 降级链按 `PROVIDERS` 顺序取第一个不报错的通道，而「谁不报错」取决于这一刻谁被 429
+ * 限流 —— 实测同一次 A/B 的两臂落到了不同通道。而通道间差 **5.07 对**、
+ * 通道内标准差 **0.09**（差 50 倍）⇒ 钉住了批大小却放开了型号，等于只钉了一半。
  */
 
 /**
@@ -129,6 +136,31 @@ export function parsePairRecallKnobs(params: URLSearchParams): ParsePairRecallKn
 }
 
 /**
+ * 通道旋钮 `provider=` 的解析结果。
+ *
+ * `usable` 由调用方传入（= `availableProviderNames()`）而不是在这里 import：
+ * 一来让本模块**不依赖 `translate.ts`**（离线测试不需要任何环境变量），
+ * 二来「可用通道清单」是运行时事实，写死在库里迟早和 `PROVIDERS` 分叉。
+ */
+export type ParseProviderOnlyResult =
+  | { ok: true; only?: string }
+  | { ok: false; error: string };
+
+export function parseProviderOnly(params: URLSearchParams, usable: string[]): ParseProviderOnlyResult {
+  const raw = params.get('provider');
+  if (raw === null || raw.trim() === '') return { ok: true }; // 未传 / 空串 = 走完整降级链
+
+  const name = raw.trim();
+  if (!usable.includes(name)) {
+    return {
+      ok: false,
+      error: `未知的模型通道 provider=${name}；可用：${usable.join(', ')}`,
+    };
+  }
+  return { ok: true, only: name };
+}
+
+/**
  * 召回层旋钮解析器的**活体探针** —— 给推送端 `codeVersion.dedupeKnobProbe` 用。
  *
  * 为什么要活体：本项目已经栽过一次「手写的 `true` 在代码被删掉之后依然是 `true`」
@@ -169,6 +201,18 @@ export function pairRecallKnobProbe(): string {
   // 全缺省必须「一项都不覆盖」—— 这是「生产不传旋钮」那条约定的可执行版本
   const none = parsePairRecallKnobs(new URLSearchParams());
   parts.push(`全缺省→applied=${none.ok ? none.applied.length : '✗'}`);
+
+  // 通道旋钮：用一个**固定的假清单**跑，不依赖真实 PROVIDERS
+  //（真实清单会随通道增减而变，把真实清单写进哨兵会让哨兵跟着漂）
+  const fake = ['chan-a', 'chan-b'];
+  const marks: string[] = [];
+  const good = parseProviderOnly(new URLSearchParams('provider=chan-a'), fake);
+  marks.push(good.ok && good.only === 'chan-a' ? '✓' : '✗(在册通道被拒或没传下去)');
+  const bad = parseProviderOnly(new URLSearchParams('provider=chan-z'), fake);
+  marks.push(bad.ok ? '✗(不在册通道被收下)' : '✓');
+  const absent = parseProviderOnly(new URLSearchParams(), fake);
+  marks.push(absent.ok && absent.only === undefined ? '✓' : '✗(缺省竟钉住了通道)');
+  parts.push(`provider[在册/不在册/缺省]=${marks.join('')}`);
 
   return parts.join(' · ');
 }
