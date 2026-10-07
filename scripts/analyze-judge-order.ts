@@ -384,3 +384,26 @@ main().catch((err) => {
   console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
   process.exit(2);
 });
+
+/**
+ * ★ 这一行**不是装饰**，删掉会让**云端构建失败**（2026-10-07 实测踩到）。
+ *
+ * `tsconfig.json` 的 `include` 是个通配全部 `.ts` 的 glob（`**` 接 `/*.ts`），而
+ * `scripts/build.sh` 里的
+ * `pnpm next build` 会跑它自己的 TypeScript 步骤 ⇒ **`scripts/` 下的每个 .ts
+ * 都被编进同一个 program**。
+ *
+ * 而 **`import` / `export` 一个都没有的文件是「脚本」而不是「模块」** ——
+ * 它的顶层声明落在**全局命名空间**里。于是两个各自写着 `const BASE` 的脚本
+ * （本文件 + `analyze-recall-floor.ts`）会让构建报：
+ *
+ *     ./scripts/analyze-judge-order.ts:46:7
+ *     Type error: Cannot redeclare block-scoped variable 'BASE'.
+ *
+ * 症状极具迷惑性：**旧容器继续服务**，外部看到的就是「推送成功、版本没换」，
+ * 与「推送没触发构建」**在观测上完全同形**。本次为此误判了一轮 C″。
+ * ⚠️ 而 `tsc -p tsconfig.json` **能**抓到它 —— 前提是你**在最后一个文件写完之后**跑；
+ * 本次漏掉的原因就是 tsc 在新增第二个脚本**之前**跑的。
+ * 结构性防线见 `scripts/test-script-hygiene.ts`（断言 scripts 下每个 .ts 都是模块）。
+ */
+export {};

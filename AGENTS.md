@@ -2747,6 +2747,7 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 | `pnpm verify:online` | 只用 `test:translate` —— 真实调一次模型，验证通道与解析 | **是** |
 | `pnpm verify:local` | 上面两条串起来（本机配了 Key 才跑得完） | 部分 |
 | `pnpm ts-check` | 全量 TypeScript 类型检查 | 否 |
+| `pnpm test:script-hygiene` | **脚本卫生结构断言（13 条）**：`scripts/` 与 `src/` 下**每个 .ts/.tsx 都必须是模块**（有顶层 `import`/`export`）。⚠️ 这条不是 `ts-check` 的重复品 —— 见下面那段「构建为什么失败」 | 否 |
 | `pnpm test:channels` | `TELEGRAM_CHANNELS` 解析用例（12 条） | 否 |
 | `pnpm test:format` | 选稿判据 / 排版用例（25 条） | 否 |
 | `pnpm test:investment-score` | 投资评分 + **入库闸门语言覆盖**双向语料（83 条） | 否 |
@@ -2794,6 +2795,42 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 > 或只对改动文件跑），**不要**把它直接塞进 `verify:offline`：
 > 一条 17 分钟都跑不完的门禁会重演「跑不完的门禁等于没有门禁」那个错误。
 > ⇒ 目前 ESLint 的**实际保护为零**，机器语法错误的唯一门禁是 `pnpm ts-check`。
+
+> ⚠️⚠️ **2026-10-07：云端构建**连续失败**了 3 次，而它的症状与「推送没触发构建」在观测上完全同形。**
+> 这条值得单独写下来，因为排查方向被它带偏了整整一轮。
+>
+> **根因**：`tsconfig.json` 的 `include` 是「通配全部 `.ts`」的 glob，而 `scripts/build.sh`
+> 跑的是 `pnpm next build` —— 它自己的 TypeScript 步骤会用**同一份 tsconfig**，
+> 于是 **`scripts/` 下每个 `.ts` 都被编进同一个 program**。
+> 而一个**既没有 `import` 也没有 `export`** 的 `.ts` 是「**脚本**」而不是「模块」：
+> 它顶层的 `const` 落在**全局命名空间**里。两个各自写着 `const BASE` 的脚本
+> （`analyze-judge-order.ts` + `analyze-recall-floor.ts`）于是让构建报：
+>
+> ```text
+> ./scripts/analyze-judge-order.ts:46:7
+> Type error: Cannot redeclare block-scoped variable 'BASE'.
+> ```
+>
+> **为什么极具迷惑性**：构建失败 ⇒ **旧容器继续服务**；推送没触发 ⇒ **也**是旧容器继续服务。
+> 两者的外部证据完全一致（`git push` 成功、`git ls-remote` 远端 sha 已变、
+> 线上哨兵字段不动）。**光靠轮询线上是分不开的** —— 必须**在本地跑一次真实的构建**。
+> 本次就是因为先假定成「没触发」，白等了一轮 15 分钟的轮询。
+>
+> **修法（两层，缺一层都不够）**：
+> 1. 两个脚本各补一行 `export {};`（**不是装饰**，删掉构建就红）；
+> 2. `scripts/test-script-hygiene.ts` —— 断言**每个 .ts/.tsx 都是模块**，
+>    于是这类跨文件重名**在构造上**就不可能发生。已进 `verify:offline`（紧跟 `ts-check`）。
+>
+> ⚠️ **`tsc -p tsconfig.json` 本身能抓到那个错误** —— 前提是你**在最后一个文件写完之后**跑。
+> 本次漏掉的唯一原因就是：`tsc` 是在新增第二个脚本**之前**跑的。
+> 所以「跑过 `tsc` 了」这句话必须附带**时序**才有意义。
+>
+> ⚠️ **副产物也是同一个坑的变体**：给这两个脚本写「为什么需要 `export {}`」的文档注释时，
+> 注释里引用了那个 glob 字面量 —— 而 `**` 后面紧跟一个斜杠，就与紧随的 `*` 组成
+> **块注释终止符**，注释在那一行断掉 ⇒ `tsx` 直接报 `Transform failed … Unexpected "*"`
+> ⇒ **又是一次构建失败**。同一个坑在 `test-script-hygiene.ts` 自身里也踩了一次，
+> 所以那条断言现在**专门盯这一类**（JSDoc 续行里不许出现该 glob 字面量，带反向自检）。
+> 教训与 O-5「模板字符串里不能有裸反引号」是同一条：**写文档注释时引用的字面量本身可能就是语法**。
 
 > ⚠️ **`verify:local` 原先在本机（无 Key）是跑不完的 —— 已拆成 offline / online 两段**（2026-09-24）。
 > 原因：`&&` 链中间夹着 `test:translate`（**需要私钥**，缺 Key 时 `exit 1`），

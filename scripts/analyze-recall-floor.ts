@@ -64,6 +64,18 @@ const BASE_RETRY_MS = 8_000;
 type Judged = { sim: number; a: string; b: string };
 type CountryProbe = {
   country: string;
+  /**
+   * ★ 这一条**必须**在类型里（2026-10-07 漏了它 ⇒ `tsc` 报 TS2339 ⇒ **云端构建失败**）。
+   *
+   * 它是服务端 `dedupe-check` 真的会返回的字段（`route.ts` 里 `ran: llm.ran`），
+   * 而 `answeredCountries()` 的分母口径正是靠它把「模型答了但答的是否」与
+   * 「这一国根本没跑成」分开（见 AGENTS R-4 第 3 条）。
+   * 教训：**本地复刻的服务端形状是「声明」，服务端才是「事实」** ——
+   * 复刻时少抄一个字段，编译器就在别人的构建机上替你发现。
+   */
+  ran?: boolean;
+  /** 与 `ran` 配套：`llm.ok` 的语义是「**判出了可合并的组**」，不是「调用成功」。 */
+  ok?: boolean;
   rowsInWindow?: number;
   sampleSize?: number;
   judgedSampleSize?: number;
@@ -294,3 +306,23 @@ main().catch((e) => {
   console.error('脚本抛错：', e);
   process.exit(1);
 });
+
+/**
+ * ★ 这一行**不是装饰**，删掉会让**云端构建失败**（2026-10-07 实测踩到）。
+ *
+ * `tsconfig.json` 的 `include` 是个通配全部 `.ts` 的 glob（`**` 接 `/*.ts`），而
+ * `scripts/build.sh` 里的
+ * `pnpm next build` 会跑它自己的 TypeScript 步骤 ⇒ **`scripts/` 下的每个 .ts
+ * 都被编进同一个 program**。
+ *
+ * 而 **`import` / `export` 一个都没有的文件是「脚本」而不是「模块」** ——
+ * 它的顶层声明落在**全局命名空间**里。于是两个各自写着 `const BASE` 的脚本
+ * （本文件 + `analyze-judge-order.ts`）会让构建报：
+ *
+ *     Type error: Cannot redeclare block-scoped variable 'BASE'.
+ *
+ * 症状极具迷惑性：**旧容器继续服务**，外部看到的就是「推送成功、版本没换」，
+ * 与「推送没触发构建」**在观测上完全同形**。
+ * 结构性防线见 `scripts/test-script-hygiene.ts`。
+ */
+export {};
