@@ -19,6 +19,7 @@ import {
   canonicalUrl,
   originalTitleKey,
   similarity,
+  textFingerprint,
 } from '../src/lib/utils';
 import {
   availablePromptVersions,
@@ -2236,6 +2237,75 @@ async function recallKnobChecks(): Promise<void> {
   }
 }
 
+// ----- 提示词指纹（`debug=1` 时回显，用来给「答案摇摆」归因）-----
+//
+// 它存在的理由只有一句话：**响应按结论分桶、不回显提示词**，所以「同一窗口内
+// 重复跑、答案却变了」分不出「提示词漂了」还是「通道在 temperature=0 下仍不确定」。
+// 详见 `PairJudgeResult.promptHash` 与 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二。
+//
+// ⚠️ 这一节最容易写成恒真的绿灯（随便算个哈希都能过），所以钉住的是**分辨力**：
+//   ① 指纹必须打在**真正发出去的那一份**提示词上（承重：算别的字符串就挂）；
+//   ② 不开 debug 时必须没有（生产增量必须为零）；
+//   ③ 同一批输入两次必须相同（否则它当不了判据）；
+//   ④ **提示词里没有文章表、也没有条目下标** ⇒ 只在末尾追加一条无关文章、
+//      不产生新对时，指纹必须**不变** —— 这条把「文章表加一行就整体改号」
+//      这个曾经被当成候选解释的说法**钉死为假**；
+//   ⑤ 但「问哪些对」变了（`maxPairs`）指纹必须**变** —— 否则它对顺序/组成没有分辨力。
+async function promptFingerprintChecks(): Promise<void> {
+  section('提示词指纹（debug=1 回显，用来给「答案摇摆」归因）');
+  const items = [
+    { title: '乌兹别克斯坦总统在卡拉卡尔帕克斯坦启动总额75亿美元项目' },
+    { title: '乌兹别克斯坦总统启动卡拉卡尔帕克斯坦76亿美元投资项目' },
+    { title: '哈萨克斯坦与七国加入OPEC+决定维持石油产量水平' },
+    { title: '哈萨克斯坦等七国加入OPEC+决定11月维持原石油产量水平' },
+  ];
+
+  // --- ① 开 debug 时有，且必须等于「实际发出去那份提示词」的指纹（承重）---
+  const a = fakeAsk(() => '{"same": []}');
+  const resA = await dedupeStories(items, { useLlm: true, judge: { ask: a.ask, collectRaw: true } });
+  ok('collectRaw 时带出 promptHash', typeof resA.llm.promptHash === 'string' && !!resA.llm.promptHash, String(resA.llm.promptHash));
+  ok(
+    '承重：指纹 == 实际发出去那份提示词的指纹（算别的字符串就会挂）',
+    resA.llm.promptHash === textFingerprint(a.seen[0]),
+    `got=${resA.llm.promptHash} want=${textFingerprint(a.seen[0] ?? '')} promptLen=${(a.seen[0] ?? '').length}`,
+  );
+
+  // --- ② 不开 debug 时没有（生产增量为零）---
+  const b2 = fakeAsk(() => '{"same": []}');
+  const resB = await dedupeStories(items, { useLlm: true, judge: { ask: b2.ask } });
+  ok('不开 collectRaw 时不带 promptHash（生产链路增量为零）', resB.llm.promptHash === undefined, String(resB.llm.promptHash));
+
+  // --- ③ 同一批输入两次 ⇒ 指纹相同（这是它能当判据的前提）---
+  const c2 = fakeAsk(() => '{"same": []}');
+  const resC = await dedupeStories(items, { useLlm: true, judge: { ask: c2.ask, collectRaw: true } });
+  ok('同一批输入两次 ⇒ 指纹相同（否则这个判据无意义）', resA.llm.promptHash === resC.llm.promptHash, `${resA.llm.promptHash} vs ${resC.llm.promptHash}`);
+
+  // --- ④ 末尾追加一条不产生新对的文章 ⇒ 指纹不变（钉死「文章表改了就整体改号」）---
+  const itemsPlus = [...items, { title: 'zzz qqq 7 8 9' }];
+  const d2 = fakeAsk(() => '{"same": []}');
+  const resD = await dedupeStories(itemsPlus, { useLlm: true, judge: { ask: d2.ask, collectRaw: true } });
+  ok(
+    '追加一条不产生新对的文章 ⇒ 指纹**不变**（提示词里只有配了对的标题，没有文章表、没有条目下标）',
+    resA.llm.promptHash === resD.llm.promptHash,
+    `${resA.llm.promptHash} vs ${resD.llm.promptHash}`,
+  );
+
+  // --- ⑤ 问的对变了 ⇒ 指纹必须变（分辨力）---
+  const e2 = fakeAsk(() => '{"same": []}');
+  const resE = await dedupeStories(items, { useLlm: true, judge: { ask: e2.ask, collectRaw: true, maxPairs: 1 } });
+  ok(
+    '`maxPairs` 变小 ⇒ 问的对变少 ⇒ 指纹**必须变**（对「组成/顺序」有分辨力）',
+    resA.llm.promptHash !== resE.llm.promptHash,
+    `${resA.llm.promptHash} vs ${resE.llm.promptHash}`,
+  );
+
+  // --- textFingerprint 本身：同串同值、异串异值、并带头长度 ---
+  ok('指纹：同一字符串两次相同', textFingerprint('abc') === textFingerprint('abc'));
+  ok('指纹：差一个字符就不同', textFingerprint('abc') !== textFingerprint('abd'));
+  ok('指纹：带着长度后缀（长度变了肉眼可见）', textFingerprint('abc').endsWith('-3'), textFingerprint('abc'));
+  ok('指纹：空串也有值（不返回空，避免被 `!hash` 误判成「没算」）', !!textFingerprint(''));
+}
+
 // ----- 汇总 -----
 
 function summarize() {
@@ -2257,6 +2327,7 @@ llmPipelineChecks()
   .then(modeChecks)
   .then(promptVersionChecks)
   .then(recallKnobChecks)
+  .then(promptFingerprintChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);

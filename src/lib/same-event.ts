@@ -43,7 +43,7 @@
  * L2 不可用时（没配 Key / 调用失败 / 返回不合法）**自动降级为只跑 L0+L1**，
  * 并在返回值里带上 `llm.error`，让调用方能看出来这次有没有真正跑过模型。
  */
-import { canonicalUrl, similarity, originalTitleKey } from './utils';
+import { canonicalUrl, similarity, originalTitleKey, textFingerprint } from './utils';
 import { askLlmJson } from './translate';
 // 判组提示词与它的版本号都在 `judge-prompts` 里 —— 那边同时冻着 v1 对照组。
 // `TITLE_MAX` 也从那里取，保证标题截断长度两边只有一个真值。
@@ -195,6 +195,13 @@ export interface DedupResult<T> {
     provider?: string;
     error?: string;
     raw?: string[];
+    /**
+     * 本次送进模型的提示词指纹，**只在 `collectRaw`（= `debug=1`）时出现**。
+     * 用来把「同一窗口内重复跑、答案却变了」归因：两次指纹相同 ⇒ 只能赖通道在
+     * `temperature=0` 下仍不确定；不同 ⇒ 提示词组成漂了。
+     * 见 {@link PairJudgeResult.promptHash} 与 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二。
+     */
+    promptHash?: string;
   };
 }
 
@@ -1447,6 +1454,24 @@ export interface PairJudgeResult {
   declined: Array<{ a: number; b: number; sim: number }>;
   /** 回答这次判定的通道名（见 `DedupResult.llm.provider` 的说明） */
   provider?: string;
+  /**
+   * 本次**送进模型的提示词的指纹**（{@link textFingerprint}）。**只在 `collectRaw`（即
+   * `debug=1`）时出现**，正常链路不带、也不花任何额外成本。
+   *
+   * ## 它存在的唯一理由：把「答案变了」归因
+   *
+   * 2026-10-08 实测：同一窗口、同通道、同参数、同 `pv`，重复跑 5 国，
+   * **uz / kg / az 的判定会变**（10-07 uz 判是 9/15/9 ⇒ 6 对翻转），
+   * 而三次的**题目集合完全相同**。当时归不了因，因为响应按结论分桶、
+   * 既不回显提示词也不保留提问顺序。两个候选解释一直分不开：
+   * ① 提示词组成/编号漂了（窗口锚点是每次请求现算的 `now-3d`，文章集合差几行就整体改号）；
+   * ② 通道在 `temperature=0` 下仍不确定。
+   *
+   * 有了它就能一刀切开：**两次调用的指纹相同 ⇒ ①不成立，只能赖②**；
+   * 指纹不同 ⇒ ①成立，且「同一窗口」这句话本身就该打折扣
+   * （参见 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二）。
+   */
+  promptHash?: string;
   error?: string;
   raw?: string[];
 }
@@ -1493,7 +1518,15 @@ export async function judgeExplicitPairs<T extends StoryLike>(
   }
   if (asked.length === 0) return { pairs: [], candidateCount: all.length, vetoed, declined: [] };
 
-  const res = await resolveAsk(options)(buildPairPrompt(asked, items, options.promptVersion));
+  /**
+   * 提示词**只构造一次**并留一个变量 —— 指纹必须打在**真正发出去的那一份**上。
+   *
+   * `options.collectRaw`（= `debug=1`）是唯一的开关：正常链路**不计算、不返回**，
+   * 于是这个字段对生产行为的增量是零。见 {@link PairJudgeResult.promptHash}。
+   */
+  const prompt = buildPairPrompt(asked, items, options.promptVersion);
+  const promptHash = options.collectRaw ? textFingerprint(prompt) : undefined;
+  const res = await resolveAsk(options)(prompt);
   const raw = options.collectRaw ? [res.ok ? res.text : `调用失败：${'error' in res ? res.error : '未知'}`] : undefined;
   if (!res.ok) {
     return {
@@ -1502,6 +1535,7 @@ export async function judgeExplicitPairs<T extends StoryLike>(
       vetoed,
       declined: [],
       error: 'error' in res ? res.error : '模型调用失败（无错误详情）',
+      ...(promptHash ? { promptHash } : {}),
       raw,
     };
   }
@@ -1514,6 +1548,7 @@ export async function judgeExplicitPairs<T extends StoryLike>(
       vetoed,
       declined: [],
       error: '模型返回不是合法 JSON（已按「一对都不合并」处理）',
+      ...(promptHash ? { promptHash } : {}),
       raw,
     };
   }
@@ -1529,6 +1564,7 @@ export async function judgeExplicitPairs<T extends StoryLike>(
     // 而漏合并和误合并是这套机制的两个相反方向的失效，必须都能看见。
     declined: asked.filter((_, i) => !accepted.has(i)).map((c) => ({ a: c.a, b: c.b, sim: c.sim })),
     ...(res.provider ? { provider: res.provider } : {}),
+    ...(promptHash ? { promptHash } : {}),
     raw,
   };
 }
@@ -1818,6 +1854,8 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
     judgedProvider = res.provider;
     llm.pairs = res.pairs;
     llm.candidateCount = res.candidateCount;
+    // 提示词指纹（只在 collectRaw 时有值）：判「这次问的是不是同一份提示词」的唯一凭据。
+    if (res.promptHash) llm.promptHash = res.promptHash;
     llm.candidatesAboveFloor = res.candidatesAboveFloor;
     llm.candidatesAbovePriority = res.candidatesAbovePriority;
     llm.vetoed = res.vetoed;

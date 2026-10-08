@@ -675,6 +675,19 @@ export async function GET(request: NextRequest) {
           ? llm.declined?.map((p) => ({ sim: p.sim, a: titleAt(p.a) ?? '', b: titleAt(p.b) ?? '' }))
           : undefined,
         ...(debug && llm.raw ? { raw: llm.raw.map((t) => t.slice(0, 1500)) } : {}),
+        /**
+         * ★ 本次送进模型的**提示词指纹**（只在 `debug=1` 时出现）。
+         *
+         * 用途只有一个：**把「同一窗口内重复跑、答案却变了」归因**。
+         * 两次调用的指纹相同 ⇒ 提示词逐字相同 ⇒ 只能赖通道在 `temperature=0`
+         * 下仍不确定；指纹不同 ⇒ 提示词本身漂了（窗口锚点是每次请求现算的
+         * `now-3d`，文章集合差几行就整体改号）。
+         *
+         * 没有它就永远分不开这两者 —— 因为本响应把 `pairs`/`declined` **按结论分桶**，
+         * 既不回显提示词、也不保留提问顺序。详见 `PairJudgeResult.promptHash`
+         * 与 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二。
+         */
+        ...(debug && llm.promptHash ? { promptHash: llm.promptHash } : {}),
       });
     }
     result.llmJudge = probe;
