@@ -1,0 +1,760 @@
+{
+  "_README": "同一窗口内、同参数、同通道、同提示词版本，把 5 国各重跑 2–4 次的逐国结果（判是/判否/成组）。用途有两个：① 支撑「重复调用不是独立样本」这条硬规矩；② 同时也是它的边界 ——「可复现」必须**逐国**说，不能整体说。2026-10-08 我把 tj 一国的零摇摆（46 对 / 26是22否）写成了「整体零摇摆」，把 5 国一起看等于三份错误（同一窗口内 uz 极差 6、kg 3、az 6）。",
+  "_provenance": {
+    "接口": "GET /api/dedupe-check?days=3&llm=1&limit=60&provider=zhipu-flash&pv=3",
+    "采集": "curl 存原始响应到临时目录，本文件由生成脚本逐字录入（未经二次编辑）",
+    "窗口数": "3 个（2026-10-07 23:5x / 2026-10-08 14:1x / 2026-10-08 18:3x 北京时间）",
+    "两个窗口的确切锚点": "见各 window.since（接口每次请求都按 now-3d 现算，所以「同一窗口」是指相隔几十秒到几分钟）",
+    "样本有效性判据": "只收 ok===true 的国家行。ok=false（实测 HTTP 429 / code 1302 账号级限流）时 judgedPairs=0、pairs=[]，若不看 ok 会被误读成「该国无事可合并」。**并发发起请求会稳定触发这个状态**（实测 3 个并发里有 2 个中招）；要重跑就串行，并在两次之间留 ~75 秒。",
+    "可比性判据": "同一窗口内的两次运行只有在「题目集合完全相同」（pairSetHash 相同）时才算复现实验。否则它们只是两份不同语料，判是之差没有解释力 —— 本文件把这种情形标 可比=false 并拒绝给极差。2026-10-08 晚的 kz 就是这种（问到 18/15/15 对）。",
+    "本产物能回答什么": "同一窗口内重复运行，逐国的判是计数是否一致；不一致时具体哪几对翻转。",
+    "本产物不能回答什么": "① 响应里的 pairs（判是）与 declined（判否）是**按判定结果分桶**的，**不保留提问顺序** ⇒ 用这份产物无法检验「顺序效应」，也无法证明「两次的提示词逐字相同」。② 因此「为什么会摇摆」在本文件里**没有答案**：候选项是「提示词组成/编号随窗口漂」与「通道在 temperature=0 下仍不确定」，两者都需要一个会回显提示词（或它的哈希）的探针才能分开。"
+  },
+  "windows": [
+    {
+      "tag": "2026-10-07",
+      "since": "2026-10-04T15:54:06.554Z",
+      "params": {
+        "minSim": 0.2,
+        "prioritySim": 0.35,
+        "maxPairs": 48,
+        "pv": 3,
+        "provider": "zhipu-flash",
+        "judgeMode": "nothink",
+        "perCountryLimit": 60
+      },
+      "countries": {
+        "kz": {
+          "runs": [
+            {
+              "tag": "A",
+              "ok": true,
+              "asked": 11,
+              "yes": 2,
+              "no": 9,
+              "groups": 1,
+              "pairSetHash": "21fad1325202"
+            },
+            {
+              "tag": "B",
+              "ok": true,
+              "asked": 11,
+              "yes": 2,
+              "no": 9,
+              "groups": 1,
+              "pairSetHash": "21fad1325202"
+            },
+            {
+              "tag": "C",
+              "ok": true,
+              "asked": 11,
+              "yes": 2,
+              "no": 9,
+              "groups": 1,
+              "pairSetHash": "21fad1325202"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        },
+        "uz": {
+          "runs": [
+            {
+              "tag": "A",
+              "ok": true,
+              "asked": 25,
+              "yes": 9,
+              "no": 16,
+              "groups": 1,
+              "pairSetHash": "e8d05278954a"
+            },
+            {
+              "tag": "B",
+              "ok": true,
+              "asked": 25,
+              "yes": 15,
+              "no": 10,
+              "groups": 3,
+              "pairSetHash": "e8d05278954a"
+            },
+            {
+              "tag": "C",
+              "ok": true,
+              "asked": 25,
+              "yes": 9,
+              "no": 16,
+              "groups": 1,
+              "pairSetHash": "e8d05278954a"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 6,
+          "翻转对数": 6,
+          "flippedPairs": [
+            {
+              "判定序列": "否是否",
+              "a": "乌兹别克斯坦与伊朗讨论双边合作发展",
+              "b": "乌兹别克斯坦与阿曼讨论地质采矿与勘探投资合作"
+            },
+            {
+              "判定序列": "否是否",
+              "a": "卡拉什达里亚州税务官员涉嫌贪污 1.226 亿苏姆",
+              "b": "卡拉希税务人员涉嫌侵占 122.6 万苏姆"
+            },
+            {
+              "判定序列": "否是否",
+              "a": "乌兹别克斯坦药店售药价格高达规定六倍",
+              "b": "乌兹别克斯坦药店部分药品价格虚高至6倍——竞争委员会"
+            },
+            {
+              "判定序列": "否是否",
+              "a": "乌兹别克斯坦药店部分药品价格虚高至6倍——竞争委员会",
+              "b": "查明售药价格虚高的药房，违规药品价格高至6倍以上"
+            },
+            {
+              "判定序列": "否是否",
+              "a": "卡拉希税务人员涉嫌侵占 122.6 万苏姆",
+              "b": "在卡拉希，一群税务检查员窃取了超过 1220 万苏姆"
+            },
+            {
+              "判定序列": "否是否",
+              "a": "乌兹别克斯坦总统沙夫卡特·米尔济约夫与塔吉克斯坦总统埃莫马利·拉赫蒙通电话",
+              "b": "乌兹别克斯坦总统米尔济约耶夫视察油气行业项目并规划增产"
+            }
+          ]
+        },
+        "az": {
+          "runs": [
+            {
+              "tag": "A",
+              "ok": true,
+              "asked": 30,
+              "yes": 27,
+              "no": 3,
+              "groups": 4,
+              "pairSetHash": "ec7736e04ae8"
+            },
+            {
+              "tag": "B",
+              "ok": true,
+              "asked": 30,
+              "yes": 27,
+              "no": 3,
+              "groups": 4,
+              "pairSetHash": "ec7736e04ae8"
+            },
+            {
+              "tag": "C",
+              "ok": true,
+              "asked": 30,
+              "yes": 27,
+              "no": 3,
+              "groups": 4,
+              "pairSetHash": "ec7736e04ae8"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        },
+        "kg": {
+          "runs": [
+            {
+              "tag": "A",
+              "ok": true,
+              "asked": 24,
+              "yes": 14,
+              "no": 10,
+              "groups": 2,
+              "pairSetHash": "c7a8e136abf5"
+            },
+            {
+              "tag": "B",
+              "ok": true,
+              "asked": 24,
+              "yes": 11,
+              "no": 13,
+              "groups": 2,
+              "pairSetHash": "c7a8e136abf5"
+            },
+            {
+              "tag": "C",
+              "ok": true,
+              "asked": 24,
+              "yes": 14,
+              "no": 10,
+              "groups": 2,
+              "pairSetHash": "c7a8e136abf5"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 3,
+          "翻转对数": 3,
+          "flippedPairs": [
+            {
+              "判定序列": "是否是",
+              "a": "玛纳斯市第 21 中学新建教学楼竣工并安装太阳能板",
+              "b": "玛纳斯市第21中学375座新教学楼竣工"
+            },
+            {
+              "判定序列": "是否是",
+              "a": "吉尔吉斯斯坦总理出席教师节庆典活动",
+              "b": "吉尔吉斯斯坦总统向奥什市拨款 20 亿索姆"
+            },
+            {
+              "判定序列": "是否是",
+              "a": "吉尔吉斯斯坦总理阿迪尔别克祝贺教师节",
+              "b": "吉尔吉斯斯坦总统向奥什市拨款 20 亿索姆"
+            }
+          ]
+        },
+        "tj": {
+          "runs": [
+            {
+              "tag": "A",
+              "ok": true,
+              "asked": 46,
+              "yes": 46,
+              "no": 0,
+              "groups": 6,
+              "pairSetHash": "1fd1602d09e1"
+            },
+            {
+              "tag": "B",
+              "ok": true,
+              "asked": 46,
+              "yes": 46,
+              "no": 0,
+              "groups": 6,
+              "pairSetHash": "1fd1602d09e1"
+            },
+            {
+              "tag": "C",
+              "ok": true,
+              "asked": 46,
+              "yes": 46,
+              "no": 0,
+              "groups": 6,
+              "pairSetHash": "1fd1602d09e1"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        }
+      }
+    },
+    {
+      "tag": "2026-10-08",
+      "since": "2026-10-05T06:15:24.015Z",
+      "params": {
+        "minSim": 0.2,
+        "prioritySim": 0.35,
+        "maxPairs": 48,
+        "pv": 3,
+        "provider": "zhipu-flash",
+        "judgeMode": "nothink",
+        "perCountryLimit": 60
+      },
+      "countries": {
+        "kz": {
+          "runs": [
+            {
+              "tag": "D",
+              "ok": true,
+              "asked": 8,
+              "yes": 4,
+              "no": 4,
+              "groups": 4,
+              "pairSetHash": "ea5a4f11394f"
+            },
+            {
+              "tag": "E",
+              "ok": true,
+              "asked": 8,
+              "yes": 4,
+              "no": 4,
+              "groups": 4,
+              "pairSetHash": "ea5a4f11394f"
+            },
+            {
+              "tag": "F",
+              "ok": true,
+              "asked": 8,
+              "yes": 4,
+              "no": 4,
+              "groups": 4,
+              "pairSetHash": "ea5a4f11394f"
+            },
+            {
+              "tag": "G(cand=48)",
+              "ok": true,
+              "asked": 8,
+              "yes": 4,
+              "no": 4,
+              "groups": 4,
+              "pairSetHash": "ea5a4f11394f"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        },
+        "uz": {
+          "runs": [
+            {
+              "tag": "D",
+              "ok": true,
+              "asked": 22,
+              "yes": 15,
+              "no": 7,
+              "groups": 6,
+              "pairSetHash": "441712493e7f"
+            },
+            {
+              "tag": "E",
+              "ok": true,
+              "asked": 22,
+              "yes": 14,
+              "no": 8,
+              "groups": 5,
+              "pairSetHash": "441712493e7f"
+            },
+            {
+              "tag": "F",
+              "ok": true,
+              "asked": 22,
+              "yes": 14,
+              "no": 8,
+              "groups": 5,
+              "pairSetHash": "441712493e7f"
+            },
+            {
+              "tag": "G(cand=48)",
+              "ok": true,
+              "asked": 22,
+              "yes": 14,
+              "no": 8,
+              "groups": 5,
+              "pairSetHash": "441712493e7f"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 1,
+          "翻转对数": 1,
+          "flippedPairs": [
+            {
+              "判定序列": "是否否否",
+              "a": "乌兹别克斯坦药店售药价格高达规定六倍",
+              "b": "乌兹别克斯坦药店部分药品价格虚高至6倍——竞争委员会"
+            }
+          ]
+        },
+        "az": {
+          "runs": [
+            {
+              "tag": "D",
+              "ok": true,
+              "asked": 34,
+              "yes": 11,
+              "no": 23,
+              "groups": 2,
+              "pairSetHash": "433e4f6f8635"
+            },
+            {
+              "tag": "E",
+              "ok": true,
+              "asked": 34,
+              "yes": 11,
+              "no": 23,
+              "groups": 2,
+              "pairSetHash": "433e4f6f8635"
+            },
+            {
+              "tag": "F",
+              "ok": true,
+              "asked": 34,
+              "yes": 11,
+              "no": 23,
+              "groups": 2,
+              "pairSetHash": "433e4f6f8635"
+            },
+            {
+              "tag": "G(cand=48)",
+              "ok": true,
+              "asked": 34,
+              "yes": 10,
+              "no": 24,
+              "groups": 2,
+              "pairSetHash": "433e4f6f8635"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 1,
+          "翻转对数": 3,
+          "flippedPairs": [
+            {
+              "判定序列": "是是是否",
+              "a": "阿塞拜疆总统伊尔哈姆·阿利耶夫出席Pirallahı工业园制药厂开业仪式",
+              "b": "阿塞拜疆总统阿利耶夫出席皮拉拉希工业区制药厂投产仪式"
+            },
+            {
+              "判定序列": "是是是否",
+              "a": "阿塞拜疆总统伊利哈姆·阿利耶夫出席 Pirallahı 工业园区药物生产工厂开工仪式 - 图",
+              "b": "阿塞拜疆总统伊尔哈姆·阿利耶夫出席巴库皮拉拉希工业区制药厂投产仪式"
+            },
+            {
+              "判定序列": "否否否是",
+              "a": "Kapital Bank 代表在 Sibos 2026 会议上进行了 30 多次商务会议",
+              "b": "卡佩塔尔银行在 Sibos 2026 举办超过 30 场商务会议"
+            }
+          ]
+        },
+        "kg": {
+          "runs": [
+            {
+              "tag": "D",
+              "ok": true,
+              "asked": 21,
+              "yes": 4,
+              "no": 17,
+              "groups": 2,
+              "pairSetHash": "d373938f7729"
+            },
+            {
+              "tag": "E",
+              "ok": true,
+              "asked": 21,
+              "yes": 4,
+              "no": 17,
+              "groups": 2,
+              "pairSetHash": "d373938f7729"
+            },
+            {
+              "tag": "F",
+              "ok": true,
+              "asked": 21,
+              "yes": 4,
+              "no": 17,
+              "groups": 2,
+              "pairSetHash": "d373938f7729"
+            },
+            {
+              "tag": "G(cand=48)",
+              "ok": true,
+              "asked": 21,
+              "yes": 4,
+              "no": 17,
+              "groups": 2,
+              "pairSetHash": "d373938f7729"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        },
+        "tj": {
+          "runs": [
+            {
+              "tag": "D",
+              "ok": true,
+              "asked": 48,
+              "yes": 26,
+              "no": 22,
+              "groups": 2,
+              "pairSetHash": "8a0dc2487299"
+            },
+            {
+              "tag": "E",
+              "ok": true,
+              "asked": 48,
+              "yes": 26,
+              "no": 22,
+              "groups": 2,
+              "pairSetHash": "8a0dc2487299"
+            },
+            {
+              "tag": "F",
+              "ok": true,
+              "asked": 48,
+              "yes": 26,
+              "no": 22,
+              "groups": 2,
+              "pairSetHash": "8a0dc2487299"
+            },
+            {
+              "tag": "G(cand=48)",
+              "ok": true,
+              "asked": 48,
+              "yes": 26,
+              "no": 22,
+              "groups": 2,
+              "pairSetHash": "8a0dc2487299"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        }
+      }
+    },
+    {
+      "tag": "2026-10-08 晚",
+      "since": "2026-10-05T10:32:11.668Z",
+      "params": {
+        "minSim": 0.2,
+        "prioritySim": 0.35,
+        "maxPairs": 48,
+        "pv": 3,
+        "provider": "zhipu-flash",
+        "judgeMode": "nothink",
+        "perCountryLimit": 60
+      },
+      "countries": {
+        "kz": {
+          "runs": [
+            {
+              "tag": "H",
+              "ok": true,
+              "asked": 18,
+              "yes": 7,
+              "no": 11,
+              "groups": 4,
+              "pairSetHash": "6c8a46b7326c"
+            },
+            {
+              "tag": "I",
+              "ok": true,
+              "asked": 15,
+              "yes": 6,
+              "no": 9,
+              "groups": 3,
+              "pairSetHash": "9c5566eaa291"
+            },
+            {
+              "tag": "J",
+              "ok": true,
+              "asked": 15,
+              "yes": 6,
+              "no": 9,
+              "groups": 3,
+              "pairSetHash": "9c5566eaa291"
+            }
+          ],
+          "题目集合在各次之间一致": false,
+          "可比": false,
+          "不可比的原因": "各次题目集合不同（2 种：问到 18/15/15 对）—— 这不是复现实验，只是三份不同语料",
+          "判是极差": null,
+          "翻转对数": null,
+          "flippedPairs": []
+        },
+        "uz": {
+          "runs": [
+            {
+              "tag": "H",
+              "ok": true,
+              "asked": 40,
+              "yes": 40,
+              "no": 0,
+              "groups": 2,
+              "pairSetHash": "4717af6fa6e8"
+            },
+            {
+              "tag": "I",
+              "ok": true,
+              "asked": 40,
+              "yes": 40,
+              "no": 0,
+              "groups": 2,
+              "pairSetHash": "4717af6fa6e8"
+            },
+            {
+              "tag": "J",
+              "ok": true,
+              "asked": 40,
+              "yes": 40,
+              "no": 0,
+              "groups": 2,
+              "pairSetHash": "4717af6fa6e8"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        },
+        "az": {
+          "runs": [
+            {
+              "tag": "H",
+              "ok": true,
+              "asked": 19,
+              "yes": 13,
+              "no": 6,
+              "groups": 2,
+              "pairSetHash": "b50a6a5f7ba6"
+            },
+            {
+              "tag": "I",
+              "ok": true,
+              "asked": 19,
+              "yes": 13,
+              "no": 6,
+              "groups": 2,
+              "pairSetHash": "b50a6a5f7ba6"
+            },
+            {
+              "tag": "J",
+              "ok": true,
+              "asked": 19,
+              "yes": 19,
+              "no": 0,
+              "groups": 3,
+              "pairSetHash": "b50a6a5f7ba6"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 6,
+          "翻转对数": 6,
+          "flippedPairs": [
+            {
+              "判定序列": "否否是",
+              "a": "阿塞拜疆与尼日利亚外长举行电话会谈",
+              "b": "阿塞拜疆与尼日利亚外长讨论多边平台合作"
+            },
+            {
+              "判定序列": "否否是",
+              "a": "巴库9月独栋住宅价格同比上涨13.5%",
+              "b": "巴库非住宅物业价格 9 月同比上涨 13%"
+            },
+            {
+              "判定序列": "否否是",
+              "a": "阿塞拜疆外长与美国务卿通电话",
+              "b": "阿塞拜疆外长杰伊洪·巴伊拉莫夫与美国国务卿马尔科·卢比奥通电话"
+            },
+            {
+              "判定序列": "否否是",
+              "a": "阿塞拜疆外长 Bayramov 与美国国务卿 Rubio 讨论阿亚关系正常化进程",
+              "b": "阿塞拜疆外长与美国务卿通电话"
+            },
+            {
+              "判定序列": "否否是",
+              "a": "阿塞拜疆议会举办“阿塞拜疆议会史上的女性”国际会议",
+              "b": "阿塞拜疆议会女性议员比例升至 21%"
+            },
+            {
+              "判定序列": "否否是",
+              "a": "阿塞拜疆与尼日利亚外长举行电话会谈",
+              "b": "阿塞拜疆外长与美国务卿通电话"
+            }
+          ]
+        },
+        "kg": {
+          "runs": [
+            {
+              "tag": "H",
+              "ok": true,
+              "asked": 8,
+              "yes": 3,
+              "no": 5,
+              "groups": 2,
+              "pairSetHash": "bae6bc7ddad7"
+            },
+            {
+              "tag": "I",
+              "ok": true,
+              "asked": 8,
+              "yes": 3,
+              "no": 5,
+              "groups": 2,
+              "pairSetHash": "bae6bc7ddad7"
+            },
+            {
+              "tag": "J",
+              "ok": true,
+              "asked": 8,
+              "yes": 3,
+              "no": 5,
+              "groups": 2,
+              "pairSetHash": "bae6bc7ddad7"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        },
+        "tj": {
+          "runs": [
+            {
+              "tag": "H",
+              "ok": true,
+              "asked": 27,
+              "yes": 20,
+              "no": 7,
+              "groups": 3,
+              "pairSetHash": "4862a247c9b7"
+            },
+            {
+              "tag": "I",
+              "ok": true,
+              "asked": 27,
+              "yes": 20,
+              "no": 7,
+              "groups": 3,
+              "pairSetHash": "4862a247c9b7"
+            },
+            {
+              "tag": "J",
+              "ok": true,
+              "asked": 27,
+              "yes": 20,
+              "no": 7,
+              "groups": 3,
+              "pairSetHash": "4862a247c9b7"
+            }
+          ],
+          "题目集合在各次之间一致": true,
+          "可比": true,
+          "不可比的原因": null,
+          "判是极差": 0,
+          "翻转对数": 0,
+          "flippedPairs": []
+        }
+      }
+    }
+  ]
+}

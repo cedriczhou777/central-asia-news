@@ -43,6 +43,8 @@
     "analyze:recall-floor": "tsx scripts/analyze-recall-floor.ts",
     "analyze:guard-clusters": "tsx scripts/analyze-guard-clusters.ts",
     "analyze:object-veto": "tsx scripts/analyze-object-veto.ts",
+    "analyze:judge-repro": "tsx scripts/analyze-judge-repro.ts",
+    "analyze:per-country-floor": "tsx scripts/analyze-per-country-floor.ts",
     "probe:feeds": "tsx scripts/probe-feed-candidates.ts",
     "diagnose:push": "tsx scripts/diagnose-push-window.ts",
     "verify:offline": "pnpm ts-check && pnpm test:script-hygiene && pnpm test:judge-probe && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance && pnpm test:api-field-contract",
