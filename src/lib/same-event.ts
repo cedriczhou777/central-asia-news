@@ -43,7 +43,7 @@
  * L2 不可用时（没配 Key / 调用失败 / 返回不合法）**自动降级为只跑 L0+L1**，
  * 并在返回值里带上 `llm.error`，让调用方能看出来这次有没有真正跑过模型。
  */
-import { canonicalUrl, similarity, originalTitleKey, textFingerprint } from './utils';
+import { canonicalUrl, similarity, originalTitleKey, textFingerprint, askedPairsFingerprint } from './utils';
 import { askLlmJson } from './translate';
 // 判组提示词与它的版本号都在 `judge-prompts` 里 —— 那边同时冻着 v1 对照组。
 // `TITLE_MAX` 也从那里取，保证标题截断长度两边只有一个真值。
@@ -198,10 +198,18 @@ export interface DedupResult<T> {
     /**
      * 本次送进模型的提示词指纹，**只在 `collectRaw`（= `debug=1`）时出现**。
      * 用来把「同一窗口内重复跑、答案却变了」归因：两次指纹相同 ⇒ 只能赖通道在
-     * `temperature=0` 下仍不确定；不同 ⇒ 提示词组成漂了。
+     * `temperature=0` 下仍不确定。
+     *
+     * ⚠️ 但「不同」**不足以**说是「提示词组成漂了」—— 要配合 {@link askedSetHash}
+     * 才分得清「题目换了」还是「题目没换、只是顺序变了」。
      * 见 {@link PairJudgeResult.promptHash} 与 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二。
      */
     promptHash?: string;
+    /**
+     * 本次问出去的**题目集合**指纹（顺序无关、下标无关），与 `promptHash` 同开关。
+     * 和 `promptHash` 一起看才能把「答案变了」三分。见 {@link PairJudgeResult.askedSetHash}。
+     */
+    askedSetHash?: string;
   };
 }
 
@@ -1467,11 +1475,36 @@ export interface PairJudgeResult {
    * ① 提示词组成/编号漂了（窗口锚点是每次请求现算的 `now-3d`，文章集合差几行就整体改号）；
    * ② 通道在 `temperature=0` 下仍不确定。
    *
-   * 有了它就能一刀切开：**两次调用的指纹相同 ⇒ ①不成立，只能赖②**；
-   * 指纹不同 ⇒ ①成立，且「同一窗口」这句话本身就该打折扣
-   * （参见 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二）。
+   * 有它 + {@link askedSetHash} 就能**三分**（单靠它只能二分，见下）：
+   * - 指纹**相同** ⇒ ①不成立，只能赖②（连提问顺序都一样）；
+   * - 指纹**不同、集合指纹相同** ⇒ **只是顺序变了**；
+   * - 指纹**不同、集合指纹也不同** ⇒ **组合变了**（有题进/出），
+   *   此时「同一窗口」这句话本身就该打折扣
+   *   （参见 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二）。
+   *
+   * ⚠️ 只有它一个时，「不同」是**含糊的** —— 分不清「只是顺序变了」还是
+   * 「题目换了」。这正是 2026-10-08 又补一个 {@link askedSetHash} 的原因。
    */
   promptHash?: string;
+  /**
+   * 本次**问出去的题目集合**的指纹，顺序无关、下标无关（{@link askedPairsFingerprint}）。
+   * **只在 `collectRaw`（即 `debug=1`）时出现**，和 `promptHash` 同开关、零生产增量。
+   *
+   * ## 它补的是 `promptHash` 缺的那一半
+   *
+   * `promptHash` 是**整个提示词**的字节指纹 —— 它当然包含顺序（`renderPairs` 就是按
+   * `asked` 的数组序渲的）。于是「指纹不同」这一种情况里混着两件完全不同的事：
+   * 题目**换了**，还是题目**没换只是排法变了**。两者对「同一窗口」这句话的含义
+   * 天差地别（前者是数据漂移、后者是排序不稳），必须能分开。
+   *
+   * ## 为什么按「标题」而不是按「下标」建集合
+   *
+   * 题目身份若拿下标（`a`/`b`）表示，**文章集合差一行就会让下标整体改号**，
+   * 于是同一批题会被算成「不同的集合」—— 那正是本项目推翻过的机制①
+   * （见 `promptHash` 注释）。所以这里用标题、并把对内的两篇排序归一，
+   * 再用整集合排序 ⇒ 拿到的就是**纯粹「问了哪些题」**。
+   */
+  askedSetHash?: string;
   error?: string;
   raw?: string[];
 }
@@ -1526,6 +1559,11 @@ export async function judgeExplicitPairs<T extends StoryLike>(
    */
   const prompt = buildPairPrompt(asked, items, options.promptVersion);
   const promptHash = options.collectRaw ? textFingerprint(prompt) : undefined;
+  // 集合指纹，与上面同开关。**必须跟着下面每一次 return 一起回传** ——
+  // 少了它，「指纹不同」就退化成含糊的二分（分不清题目换了还是只是顺序变了）。
+  const askedSetHash = options.collectRaw
+    ? askedPairsFingerprint(asked.map((c) => [items[c.a]?.title || '', items[c.b]?.title || '']))
+    : undefined;
   const res = await resolveAsk(options)(prompt);
   const raw = options.collectRaw ? [res.ok ? res.text : `调用失败：${'error' in res ? res.error : '未知'}`] : undefined;
   if (!res.ok) {
@@ -1536,6 +1574,7 @@ export async function judgeExplicitPairs<T extends StoryLike>(
       declined: [],
       error: 'error' in res ? res.error : '模型调用失败（无错误详情）',
       ...(promptHash ? { promptHash } : {}),
+      ...(askedSetHash ? { askedSetHash } : {}),
       raw,
     };
   }
@@ -1549,6 +1588,7 @@ export async function judgeExplicitPairs<T extends StoryLike>(
       declined: [],
       error: '模型返回不是合法 JSON（已按「一对都不合并」处理）',
       ...(promptHash ? { promptHash } : {}),
+      ...(askedSetHash ? { askedSetHash } : {}),
       raw,
     };
   }
@@ -1565,6 +1605,7 @@ export async function judgeExplicitPairs<T extends StoryLike>(
     declined: asked.filter((_, i) => !accepted.has(i)).map((c) => ({ a: c.a, b: c.b, sim: c.sim })),
     ...(res.provider ? { provider: res.provider } : {}),
     ...(promptHash ? { promptHash } : {}),
+    ...(askedSetHash ? { askedSetHash } : {}),
     raw,
   };
 }
@@ -1854,8 +1895,10 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
     judgedProvider = res.provider;
     llm.pairs = res.pairs;
     llm.candidateCount = res.candidateCount;
-    // 提示词指纹（只在 collectRaw 时有值）：判「这次问的是不是同一份提示词」的唯一凭据。
+    // 提示词 / 题目集合指纹（只在 collectRaw 时有值）：判「这次问的是不是同一份提示词、
+    // 同一批题」的唯一凭据。两个**必须成对回传**，只带一个会让归因退化成二分。
     if (res.promptHash) llm.promptHash = res.promptHash;
+    if (res.askedSetHash) llm.askedSetHash = res.askedSetHash;
     llm.candidatesAboveFloor = res.candidatesAboveFloor;
     llm.candidatesAbovePriority = res.candidatesAbovePriority;
     llm.vetoed = res.vetoed;

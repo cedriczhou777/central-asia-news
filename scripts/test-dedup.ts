@@ -16,6 +16,7 @@
  * 包括用户 2026-09-21 在草稿预览里截到的那对阿斯塔纳桥梁新闻。
  */
 import {
+  askedPairsFingerprint,
   canonicalUrl,
   originalTitleKey,
   similarity,
@@ -2251,6 +2252,10 @@ async function recallKnobChecks(): Promise<void> {
 //      不产生新对时，指纹必须**不变** —— 这条把「文章表加一行就整体改号」
 //      这个曾经被当成候选解释的说法**钉死为假**；
 //   ⑤ 但「问哪些对」变了（`maxPairs`）指纹必须**变** —— 否则它对顺序/组成没有分辨力。
+//   ⑥ **只颠倒提问顺序、题目集合不变** ⇒ `promptHash` 必变、`askedSetHash` 必不变。
+//      这是 `askedSetHash` 存在的**唯一理由**：单靠 `promptHash`，「不同」是含糊的
+//      （分不清「题目换了」还是「只是排法变了」）。
+//   ⑦ 集合真的变了 ⇒ `askedSetHash` 必变（否则它没有分辨力，就是个常数）。
 async function promptFingerprintChecks(): Promise<void> {
   section('提示词指纹（debug=1 回显，用来给「答案摇摆」归因）');
   const items = [
@@ -2304,6 +2309,52 @@ async function promptFingerprintChecks(): Promise<void> {
   ok('指纹：差一个字符就不同', textFingerprint('abc') !== textFingerprint('abd'));
   ok('指纹：带着长度后缀（长度变了肉眼可见）', textFingerprint('abc').endsWith('-3'), textFingerprint('abc'));
   ok('指纹：空串也有值（不返回空，避免被 `!hash` 误判成「没算」）', !!textFingerprint(''));
+
+  // --- 集合指纹的「有 / 无」跟着同一开关（生产增量必须为零）---
+  ok('collectRaw 时带出 askedSetHash', typeof resA.llm.askedSetHash === 'string' && !!resA.llm.askedSetHash, String(resA.llm.askedSetHash));
+  ok('不开 collectRaw 时不带 askedSetHash（生产链路增量为零）', resB.llm.askedSetHash === undefined, String(resB.llm.askedSetHash));
+
+  // --- ⑥ 承重：只颠倒提问顺序（题目集合不变）⇒ promptHash 变、askedSetHash 不变 ---
+  //     走 judgeExplicitPairs 直入（照单全收），这样顺序完全由我们控制；
+  //     走生产入口 dedupeStories 的话顺序由召回决定，测不出这一条。
+  const pairsFwd = [{ a: 0, b: 1 }, { a: 2, b: 3 }];
+  const pairsRev = [...pairsFwd].reverse();
+  const rFwd = await judgeExplicitPairs(pairsFwd, items, { ask: fakeAsk(() => '{"same": []}').ask, collectRaw: true });
+  const rRev = await judgeExplicitPairs(pairsRev, items, { ask: fakeAsk(() => '{"same": []}').ask, collectRaw: true });
+  ok(
+    '承重：**只颠倒提问顺序**（题目集合不变）⇒ promptHash **必须变**',
+    rFwd.promptHash !== rRev.promptHash,
+    `fwd=${rFwd.promptHash} rev=${rRev.promptHash}`,
+  );
+  ok(
+    '承重：同样只颠倒顺序 ⇒ askedSetHash **必须不变**（这就是它补的那一半）',
+    rFwd.askedSetHash === rRev.askedSetHash && !!rFwd.askedSetHash,
+    `fwd=${rFwd.askedSetHash} rev=${rRev.askedSetHash}`,
+  );
+  ok(
+    'askedSetHash == 题目集合（标题对）的指纹 —— 值与「问了哪两对」对得上，不是随便一个哈希',
+    rFwd.askedSetHash === askedPairsFingerprint([[items[0].title, items[1].title], [items[2].title, items[3].title]]),
+    `got=${rFwd.askedSetHash} want=${askedPairsFingerprint([[items[0].title, items[1].title], [items[2].title, items[3].title]])}`,
+  );
+
+  // --- ⑦ 集合真的变了 ⇒ askedSetHash 必须变（否则它没有分辨力）---
+  const rOne = await judgeExplicitPairs([{ a: 0, b: 1 }], items, { ask: fakeAsk(() => '{"same": []}').ask, collectRaw: true });
+  ok(
+    '题目集合变小 ⇒ askedSetHash **必须变**（对「组成」有分辨力）',
+    rFwd.askedSetHash !== rOne.askedSetHash,
+    `two=${rFwd.askedSetHash} one=${rOne.askedSetHash}`,
+  );
+
+  // --- 集合指纹本身：顺序无关、对内归一、集合不同则不同 ---
+  ok('集合指纹：整体顺序无关', askedPairsFingerprint([['a', 'b'], ['c', 'd']]) === askedPairsFingerprint([['c', 'd'], ['a', 'b']]));
+  ok('集合指纹：对内顺序无关（a/b 互换同值）', askedPairsFingerprint([['a', 'b']]) === askedPairsFingerprint([['b', 'a']]));
+  ok('集合指纹：集合不同则值不同', askedPairsFingerprint([['a', 'b']]) !== askedPairsFingerprint([['a', 'c']]));
+  ok('集合指纹：空集合也有值（不返回空，避免被 `!hash` 误判成「没算」）', !!askedPairsFingerprint([]));
+  ok(
+    '集合指纹：NUL 分隔是对的 —— 用空格拼会把 [[a b, c]] 与 [[a, b c]] 混成同值',
+    askedPairsFingerprint([['a b', 'c']]) !== askedPairsFingerprint([['a', 'b c']]),
+    `${askedPairsFingerprint([['a b', 'c']])} vs ${askedPairsFingerprint([['a', 'b c']])}`,
+  );
 }
 
 // ----- 汇总 -----

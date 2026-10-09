@@ -680,14 +680,23 @@ export async function GET(request: NextRequest) {
          *
          * 用途只有一个：**把「同一窗口内重复跑、答案却变了」归因**。
          * 两次调用的指纹相同 ⇒ 提示词逐字相同 ⇒ 只能赖通道在 `temperature=0`
-         * 下仍不确定；指纹不同 ⇒ 提示词本身漂了（窗口锚点是每次请求现算的
-         * `now-3d`，文章集合差几行就整体改号）。
+         * 下仍不确定。
          *
-         * 没有它就永远分不开这两者 —— 因为本响应把 `pairs`/`declined` **按结论分桶**，
-         * 既不回显提示词、也不保留提问顺序。详见 `PairJudgeResult.promptHash`
-         * 与 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二。
+         * ⚠️ 指纹**不同**不足以说是「提示词漂了」—— 它分不清「题目换了」还是
+         * 「题目没换、只是顺序变了」（提示词就是按问序渲的）。要配合下面的
+         * `askedSetHash` 才是三分。没有这两个就永远分不开，因为本响应把
+         * `pairs`/`declined` **按结论分桶**，既不回显提示词、也不保留提问顺序。
+         * 详见 `PairJudgeResult.promptHash` 与 `JUDGE_STABILITY_2026-10-08.md` 第二节·补二。
          */
         ...(debug && llm.promptHash ? { promptHash: llm.promptHash } : {}),
+        /**
+         * ★ 本次问出去的**题目集合**指纹（顺序无关、下标无关），与 `promptHash` 同开关。
+         *
+         * 两者一起看才能把「答案变了」**三分**：
+         * `promptHash` 相同 ⇒ 逐字一样；不同但本值相同 ⇒ **只是顺序变了**；
+         * 两个都不同 ⇒ **题目集合变了**（有题进 / 出）。见 `PairJudgeResult.askedSetHash`。
+         */
+        ...(debug && llm.askedSetHash ? { askedSetHash: llm.askedSetHash } : {}),
       });
     }
     result.llmJudge = probe;
