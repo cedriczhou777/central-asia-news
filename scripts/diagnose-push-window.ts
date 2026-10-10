@@ -2,13 +2,17 @@
  * 「今天为什么只推了 N 个国家」—— 把推送选稿漏斗在**同一批真实数据**上复现一遍（只读）。
  *
  * 用法：
- *   pnpm diagnose:push --period morning                 # 今天的早报窗口（默认）
- *   pnpm diagnose:push --period morning --date 2026-09-27
+ *   pnpm diagnose:push --period daily                  # 今天这一轮日报的窗口（默认）
+ *   pnpm diagnose:push --period daily --date 2026-09-27
  *   pnpm diagnose:push --start 2026-09-26T11:00:00Z --end 2026-09-26T23:00:00Z
- *   pnpm diagnose:push --period morning --max-id 6068    # 只看「那一刻库里已有的」行
- *   pnpm diagnose:push --period morning --limit 2000     # 回放更早的窗口（默认 500 只够约 2 天）
- *   pnpm diagnose:push --period morning --allow-truncated # 明知窗口被截断，仍要看截断结果
- *   SITE_BASE=http://localhost:3000 pnpm diagnose:push --period evening
+ *   pnpm diagnose:push --period daily --max-id 6068    # 只看「那一刻库里已有的」行
+ *   pnpm diagnose:push --period daily --limit 2000     # 回放更早的窗口（默认 500 只够约 2 天）
+ *   pnpm diagnose:push --period daily --allow-truncated # 明知窗口被截断，仍要看截断结果
+ *   SITE_BASE=http://localhost:3000 pnpm diagnose:push --period daily
+ *
+ * ⚠️ 2026-10-10 起 `--period` 只认 **`daily`**（早晚报合并成日报，窗口 24h）。
+ * `--date 2026-10-10` 指的是「**10-10 凌晨 04:00 那一轮**」，窗口 = `[10-09 04:00, 10-10 04:00]`。
+ * 想回放合并前那些 12h 的早/晚报窗口，用 `--start/--end` 显式给区间。
  *
  * ## ⚠️ 窗口被截断时本脚本**退出码非 0**（2026-10-05 改）
  *
@@ -81,7 +85,7 @@ import {
 } from '../src/lib/article-format';
 import { hasSourceBody } from '../src/lib/article-body';
 import { dedupeStoriesDeterministic } from '../src/lib/same-event';
-import { scheduledWindow } from '../src/lib/publish-schedule';
+import { PUBLISH_SCHEDULES, scheduledWindow } from '../src/lib/publish-schedule';
 import { compareByInvestmentRelevance, investmentRelevanceOf } from '../src/lib/investment-score';
 
 const BASE =
@@ -100,6 +104,11 @@ const MAX_PER_COUNTRY = 15;
  * 「窗口内 N 篇」变成漏数 —— 这正是 2026-10-05 排查「吉尔吉斯是不是停推了」
  * 时踩到的：被截断的窗口报出 `kg 窗口内 1 篇`，而那只统计到窗口的后半段。
  * 下面是**硬失败**（不是告警），见 `assertWindowCovered()`。
+ *
+ * 📌 2026-10-10 合并成日报（窗口 12h → 24h）后，**默认值正好够用**：
+ * 500 篇覆盖 36~48h > 一轮的 24h ⇒ `--period daily` 不带 `--limit` 时不会截断。
+ * 但陷阱仍然在，只是换了位置：`--start/--end` 圈**更早的**区间时照样会撞上，
+ * 所以 `assertWindowCovered()` 必须留着，不许因为「现在默认够用了」就删。
  */
 const DEFAULT_FETCH_LIMIT = 500;
 
@@ -187,13 +196,17 @@ function resolveWindow(): { start: Date; end: Date; label: string } {
     return { start, end, label: '手工指定' };
   }
 
-  const period = argValue('period') || 'morning';
+  const period = argValue('period') || 'daily';
   const dateArg = argValue('date');
   // `scheduledWindow` 是按**北京时间日期**推导的，所以要把「想复现的那一天」
   // 转成一个北京日期正确的 `Date` 再喂进去 —— 直接 new Date() 会拿到今天，
   // 想复现昨天那轮就永远复现不出来。
+  //
+  // 锚点取当天**正午**（12:00 +08:00）而不是某个 cron 钟点：函数只用得到它的
+  // **北京日期**，用不到小时。取正午就与「时刻表钟点是多少」彻底解耦 ——
+  // 写成 T05:00 的话，哪天钟点再改一次，这里就又是一处要跟着改的暗耦合。
   const anchor = dateArg
-    ? new Date(`${dateArg}T07:00:00+08:00`)
+    ? new Date(`${dateArg}T12:00:00+08:00`)
     : new Date();
   if (dateArg && Number.isNaN(anchor.getTime())) {
     console.error(`--date 不是合法日期：${dateArg}（要 YYYY-MM-DD）`);
@@ -202,9 +215,11 @@ function resolveWindow(): { start: Date; end: Date; label: string } {
 
   const w = scheduledWindow(period, anchor);
   if (!w) {
+    // 认得的 period **从时刻表现算**，不手写 —— 手写的那份在 2026-10-10 合并时
+    // 正是漏改的候选（原文写「只支持 morning / evening」，而表里已只剩 daily）。
     console.error(
-      `--period=${period} 推不出固定窗口（只支持 morning / evening）。` +
-        `人工补跑请改用 --start/--end 显式给窗口。`,
+      `--period=${period} 推不出固定窗口（只支持 ${PUBLISH_SCHEDULES.map((s) => s.period).join(' / ')}）。` +
+        `人工补跑 / 回放合并前的旧窗口请改用 --start/--end 显式给区间。`,
     );
     process.exit(1);
   }

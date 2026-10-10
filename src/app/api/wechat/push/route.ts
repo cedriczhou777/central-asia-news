@@ -280,7 +280,16 @@ async function addDraft(articles: DraftArticle[]): Promise<string> {
   return data.media_id;
 }
 
-// 时段标记：由调度器传入，只用来区分同一天的早报/晚报。
+// 时段标记：由调度器传入，只用来给草稿标题加后缀。
+//
+// 2026-10-10 起早晚报合并成**每天一份日报**，所以调度器传的是 `'daily'` → 「日报」。
+//
+// ⚠️ `'morning'` / `'evening'` **故意保留为历史别名**，不是漏删：
+// 滚动发布时新旧容器会并存一小段时间，而 cron 是**进程内**注册的 ——
+// 老容器有可能正好在那一刻触发一轮，`period` 就是老值。别名把它们映射成
+// 「早报 / 晚报」后缀：既不会与当天的「日报」同名（观感问题，用户 2026-09-19
+// 投诉过草稿箱里两份同名标题），也不会因为「不认识这个值」退回无后缀标题。
+// 删掉别名的代价是发布窗口期可能出现无后缀草稿，留着的代价是零。
 //
 // 'manual' 专给「人工补跑」用（对应文档里的
 //   POST /api/wechat/push {"hours": 24, "period": "manual"}）。
@@ -289,8 +298,9 @@ async function addDraft(articles: DraftArticle[]): Promise<string> {
 // 正是 2026-09-19 用户投诉过的那个观感。
 // 不带 period（历史写法）仍返回空串，保持向后兼容。
 function periodSuffix(period: unknown): string {
-  if (period === 'morning') return '早报';
-  if (period === 'evening') return '晚报';
+  if (period === 'daily') return '日报';
+  if (period === 'morning') return '早报'; // 历史别名，见上：滚动发布期的老容器会传它
+  if (period === 'evening') return '晚报'; // 历史别名，见上
   if (period === 'manual') return '补报';
   return '';
 }
@@ -792,16 +802,18 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     message: '微信公众号推送接口',
-    usage: 'POST /api/wechat/push with optional { hours: 24, period: "morning" | "evening" | "manual" }',
+    usage: 'POST /api/wechat/push with optional { hours: 24, period: "daily" | "manual" }（"morning"/"evening" 为历史别名，仍接受）',
     originalCoverage,
     /**
-     * 已注册的早晚报时刻表（来自 `lib/publish-schedule.ts`）。
+     * 已注册的推送时刻表（来自 `lib/publish-schedule.ts`）。
      *
      * 为什么要把一个「配置值」报出来：改时间这件事**在响应里原本完全看不见** ——
      * 部署之后想确认「新时刻真的注册上了」，过去只能等第二天那一轮跑起来、
-     * 再去控制台翻启动日志（`已注册公众号推送任务：0 7 * * * ...`），
-     * 而启动日志外面拿不到。现在 `cron: "0 7 * * *"` 直接出现在响应里，
+     * 再去控制台翻启动日志（`已注册公众号推送任务：0 4 * * * ...`），
+     * 而启动日志外面拿不到。现在 `cron: "0 4 * * *"` 直接出现在响应里，
      * **一条 curl 同时证明两件事：新版本接管了流量、且时刻表就是改后的值**。
+     * （2026-10-10 起表里只有一段；滚动发布期里这条也是「线上跑的是新版还是老版
+     *   时刻表」最省事的判据 —— 老版会报出两条 `0 7` / `0 19`。）
      * 这比 build ID 强 —— build ID 只能说明「有部署发生」，说不清是哪个提交。
      *
      * ⚠️ 注意它反映的是**代码里的时刻表**，不是「容器里 node-cron 真的注册成功」。
@@ -999,8 +1011,11 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     const today = beijingDate();
     // 每国每份报告的篇数上限。
     //
-    // 2026-09-22 由 30 收到 15：现在是**早晚报两段**（各 12h，见 `scheduler.ts`），
+    // 2026-09-22 由 30 收到 15：当时是**早晚报两段**（各 12h，见 `scheduler.ts`），
     // 每份报告每国 15 篇已经足够，30 篇只会把相关性靠后的稿子也塞进来、拉低整份报告的质量。
+    // 2026-10-10 合并成日报后**这个 15 没有跟着改** —— 它本来就是「质量上限」而不是
+    // 「按窗口长度配的配额」：窗口从 12h 变 24h，候选变多，但每国该推几篇由
+    // `pushExclusionReason` + 去重 + 相关性排序决定，不因为窗口长就该多推。
     // 这是个**上限**不是配额 —— 候选不足 15 篇时按实际可用量推，不硬凑
     // （硬凑就得放宽判据，而本项目历史上「判据过严/过松」都出过事）。
     //
@@ -1012,8 +1027,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
 
     // 计算时间范围
     //
-    // 定时时段（早报 / 晚报）用**固定钟点窗口**：起点/终点由 `publish-schedule.ts`
-    // 的时刻表推导（早报 `[昨日19:00, 今日07:00]`、晚报 `[今日07:00, 今日19:00]`），
+    // 定时时段（2026-10-10 起只有日报一段）用**固定钟点窗口**：起点/终点由
+    // `publish-schedule.ts` 的时刻表推导（日报 `[昨日04:00, 今日04:00]`），
     // **与执行时刻无关**。原因见 `scheduledWindow` 的注释 —— 起点锚在执行时刻的话，
     // 推送一迟到窗口就整体后移：既漏掉一段，又与上一轮重叠（2026-09-24 早晚报各栽一次）。
     //
@@ -1528,8 +1543,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       const thumbMediaId = await uploadThumb(draftCover?.url);
 
       // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
-      // 标题带「早报 / 晚报」：同一天两次推送的草稿标题必须不同，
-      // 否则草稿箱里会出现两份一模一样的标题，分不清哪份是哪份。
+      // 标题带时段后缀（日报 / 补报）：合并成日报后**同一天仍然可能有两份**草稿
+      // （自动那一轮 + 人工补跑），标题必须能区分，否则草稿箱里会出现两份一模一样的标题。
+      // 历史上 2026-09-19 用户投诉的就是这个观感。
       // 关键：建草稿失败只跳过这一国。旧实现在这里 throw，首个国家一失败就把
       // 整轮打成 500，后面四个国家一篇草稿都建不出来（2026-09-18 早报的实际情况）。
       let mediaId: string;

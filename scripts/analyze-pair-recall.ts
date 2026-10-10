@@ -44,6 +44,7 @@ import {
   PAIR_PRIORITY_SIM,
   type StoryLike,
 } from '../src/lib/same-event';
+import { PUBLISH_SCHEDULES, scheduledWindow } from '../src/lib/publish-schedule';
 import { similarity } from '../src/lib/utils';
 
 const BASE =
@@ -92,32 +93,38 @@ function beijingDates(days: number): string[] {
  *
  * 第一版按「国别 + 北京日期」分组，量出来每批 **200+ 条** —— 而真实推送每批只有 ~15 条。
  * 差异的来源：`GET /api/articles` 返回的是**当天入库的全部稿子**，
- * 而推送只吃 `PUBLISH_SCHEDULES` 给出的那 **12 小时窗口**。
+ * 而推送只吃 `PUBLISH_SCHEDULES` 给出的那个发布窗口。
  *
  * 这个单位错得**很致命**，而且方向是「把问题放大」：
  * 用户报的重复是**同一份公众号草稿里出现两条**，那就必须落在**同一个窗口**里。
- * 跨窗口的两条（一条 05:00、一条 10:00）分别进早报和晚报，用户根本不会并排看到它们
- * —— 把它们算成「该合并没合并」是冤枉代码。
+ * 跨窗口的两条（例如一条 02:00、一条 10:00）不会出现在同一份草稿里，
+ * 用户根本不会并排看到它们 —— 把它们算成「该合并没合并」是冤枉代码。
  *
- * 窗口定义（北京时区，来自 `PUBLISH_SCHEDULES`）：
- *   · 早报 07:00 触发，回看 12h ⇒ `[前一日 19:00, 当日 07:00)`
- *   · 晚报 19:00 触发，回看 12h ⇒ `[当日 07:00, 当日 19:00)`
+ * ## 窗口定义**来自生产同一份实现**（2026-10-10 重写）
  *
- * ⚠️ 所以 **19:00 之后发的稿子属于「次日早报」**，不是当天晚报。这一点最容易写错。
+ * 这里**不再手抄钟点**。旧版是写死的
+ *   `h < 7 → 早报 / h < 19 → 晚报 / 否则 → 次日早报`，
+ * 而 2026-10-10 早晚报合并成 **04:00 的日报**（窗口 24h）——
+ * 手抄的那份必然漏改，于是分组会全部错位、报告却看着很正常。
+ * 现在改成调 `scheduledWindow()`：它和生产推送用的是**同一个函数**，
+ * 钟点、段数、窗口长度怎么变，这里都自动跟上。
+ *
+ * 判法：取「以本条稿子所在北京日 04:00 收口」的那个窗口 ——
+ *   · 稿子落在该窗口内 ⇒ 它属于这一轮；
+ *   · 稿子比收口时刻还新（刚过 04:00）⇒ 它属于**次日**那一轮（同一时刻收口）。
+ * 返回的 key 用「收口日的北京日期 + 时刻表标签」，同一个 key = 同一份草稿。
  */
 function pushWindowOf(iso: string): string | null {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return null;
-  // 直接加到 UTC 时间戳上，再用 getUTC* 读 —— 等价于「北京墙上时间」，且不用管本机时区。
-  const bj = new Date(t + 8 * 3600 * 1000);
-  const y = bj.getUTCFullYear();
-  const m = String(bj.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(bj.getUTCDate()).padStart(2, '0');
-  const h = bj.getUTCHours();
-  const day = `${y}-${m}-${d}`;
-  if (h < 7) return `${day} 早报`;
-  if (h < 19) return `${day} 晚报`;
-  return `${new Date(bj.getTime() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'UTC' })} 早报`;
+  const period = PUBLISH_SCHEDULES[0]?.period;
+  if (!period) return null;
+  const w = scheduledWindow(period, new Date(t));
+  if (!w) return null;
+  // 窗口终点：本条稿子所在北京日的钟点；落在它之后 ⇒ 归次日那一轮（终点 +24h）。
+  const endMs = t < w.end.getTime() ? w.end.getTime() : w.end.getTime() + 24 * 3600 * 1000;
+  const day = new Date(endMs + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  return `${day} ${w.label}`;
 }
 
 async function load(country: CountryCode, date: string): Promise<Row[]> {
@@ -167,7 +174,7 @@ function toStories(rows: Row[]): StoryLike[] {
 }
 
 async function main() {
-  // 多取一天：最早那天的「早报」窗口横跨前一日 19:00。
+  // 多取一天：最早那天的窗口横跨前一日（日报 04:00 触发 ⇒ 窗口含前一日 04:00 之后）。
   const dates = beijingDates(DAYS + 1);
   const buckets = new Map<string, number>();
   const bucketOf = (s: number) => {
