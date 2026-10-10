@@ -736,6 +736,23 @@
   ⇒ 批内重复只占候选的 **0.4%**，**连翻译费都不值得省** ⇒ **闸 1 那一半永久不做**。
   （同一轮还顺带**复现了 `againstDb ≈ 85` 的基线**：79。⇒ 那 52 分钟/轮的浪费是稳定存在的，
   不是 2026-09-24 那天的偶发。若要再看一次，干跑是**零成本**的办法。）
+- ✅ **活体回显：不必烧掉一轮就能确认开关（2026-10-10 加）**。
+  `GET /api/fetch-news` 多了一段 `knobs`（与 `GET /api/wechat/push` 的 `codeVersion` 同一范式）：
+  ```
+  curl -s "$URL/api/fetch-news" | grep -A6 '"knobs"'
+  # knobs.dedupBeforeTranslate = { switch, windowDays, effective }
+  ```
+  · `switch` —— 环境变量的**解析值**（走 `isDedupBeforeTranslateEnabled()`，所以 `True` / ` on `
+    这类写法也算数；直接读 `process.env` 的版本会把它们读成「关」）。
+  · `windowDays` —— 算出的前置窗口；`null` ⇒ 这份配置下不存在安全更窄窗口，按设计关掉。
+  · `effective` = `switch && windowDays !== null` ⇒ **下一轮真跑会不会走这条路**（干跑不算，见下）。
+  · **为什么它不会像 `lastRun` 那样骗人**：环境变量是**容器级配置**，冷启动的新容器也是同一份
+    ⇒ 任何时刻读都准（`lastRun` 是模块级内存态，见 §G 的「读的时机」）。
+  · 同一份因果也盖章进了轮次结果：`summary.dedup.beforeTranslate = { switch, active, windowDays }`。
+    有它才不会把「开关开着但 `skippedBeforeTranslate` 是 0」读成「开关没生效」——
+    那也可能只是**本轮确实没有库内重复**。两个字段配套读。
+  · ⚠️ 这个接口**无副作用**（只做纯函数计算 + 读内存态），所以它同时是保活 ping 的正确靶子；
+    回归脚本里有一条断言专门钉住「GET 里不许出现翻译/入库/抓取调用」。
 
 #### 第一步（零模型、可回滚、✅ 2026-09-24 已上线）：把 `same_title` 的判据接到闸 2，封住「跨轮重复」
 
@@ -1062,6 +1079,14 @@ POST /api/wechat/push {"hours": 17, "period": "manual"}
 > ⇒ 要读就**在窗口内读**（一轮跑完后，如 07:00–10:50）。
 > ⇒ **推代码（滚动发布 = 换容器）同样会清空它** ⇒ 顺序必须是「**先读数 → 再推**」，不能反过来。
 > ⇒ 补报/补推前查 `running` 也一样，只能在窗口内查。
+>
+> ✅ **对照：有一类读数**不受**这个限制 —— `GET /api/fetch-news` 的 `knobs`（2026-10-10 加）**。
+> 它现算环境变量与窗口算术，而环境变量是**容器级配置**（冷启动的新容器身上也是同一份）
+> ⇒ **什么时刻读都准**。用法：`curl -s "$URL/api/fetch-news" | grep -A6 '"knobs"'`。
+> 判读：`dedupBeforeTranslate.effective` = 「下一轮真跑会不会走这条路」；
+> `false` 时看 `switch`（环境变量没设/写错）还是 `windowDays`（窗口收不出来）——
+> **两种失败修法不同**。有了它，就不必「先烧掉一轮 2.5 小时」才知道开关没生效。
+> ⇒ 这条区别（**容器级配置 vs 模块级内存态**）才是「可不可读」的真正分界，不是「在不在窗口内」。
 
 - `rows` / `titleRows` 都必须**越过 1000 且不相等**；**恰好卡在 1000 ⇒ 分页坏了**，立刻查。
 - 顺带看 `dedup.titleDrops` 与 `againstDbTitles`：

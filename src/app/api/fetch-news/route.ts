@@ -108,6 +108,23 @@ interface FetchSummary {
      */
     skippedBeforeTranslate: number;
     /**
+     * 本轮「翻译前去重」这条路**走没走**、以及为什么（2026-10-10 加）。
+     *
+     * 加它的理由：只有 `skippedBeforeTranslate` 一个数时，「开关开着而它是 0」
+     * 与「本轮确实没有库内重复」**完全同形** —— 而事后复盘时这恰恰最容易被读反。
+     * 三个字段合起来才是完整的因果：`switch` 是意图、`windowDays` 是约束、`active` 是事实。
+     *
+     * （`GET /api/fetch-news` 的 `knobs.dedupBeforeTranslate` 是它在**开跑之前**的对应物。）
+     */
+    beforeTranslate: {
+      /** 环境变量 `DEDUP_BEFORE_TRANSLATE` 的解析值（**默认关**）。 */
+      switch: boolean;
+      /** 本轮是否真的执行了前置跳过。干跑恒为 `false`（干跑不翻译 ⇒ 没有「白翻」可省）。 */
+      active: boolean;
+      /** 前置窗口（天）；`null` ⇒ 这份配置下不存在安全更窄窗口，按设计关掉。 */
+      windowDays: number | null;
+    };
+    /**
      * 与库内近 3 天**中译标题**近逐字相同（跨轮「同一件事」，2026-09-24 加）。
      * 判据与闸 3 `same_title` 同一条（`isSameTitleText`），但作用于入库前，
      * 所以它拦下的行**库里没有** —— 想知道拦了什么看 `titleDrops` 或日志。
@@ -935,8 +952,13 @@ async function processFetchNews(
   //     而它现在报出来的去重账（`saved` / `againstDb` 等）是既有的体检口径，
   //     不该因为一个省时间的开关而变。
   const preWindowDays = dedupPreWindowDays(DB_DEDUP_WINDOW_DAYS);
+  // 开关的**原始解析值**单独留一份。`dedupBeforeTranslate` 把「开关」「窗口安全」
+  // 「非干跑」三个条件与在了一起，光看它分不清「没开开关」和「开了但本轮是干跑」——
+  // 而这两种情形在排查时的下一步动作完全不同（改控制台 vs 换一条命令）。
+  // 这一份随 `summary.dedup.beforeTranslate.switch` 和 `GET /api/fetch-news` 的回显报出去。
+  const dedupBeforeTranslateSwitch = isDedupBeforeTranslateEnabled();
   const dedupBeforeTranslate =
-    isDedupBeforeTranslateEnabled() && preWindowDays !== null && !skipTranslation;
+    dedupBeforeTranslateSwitch && preWindowDays !== null && !skipTranslation;
   let preKnownUrls = new Set<string>();
   let preKnownOriginals = new Map<string, number>();
   let preKnownOk = false;
@@ -965,7 +987,7 @@ async function processFetchNews(
         }`,
       );
     }
-  } else if (isDedupBeforeTranslateEnabled() && preWindowDays === null) {
+  } else if (dedupBeforeTranslateSwitch && preWindowDays === null) {
     // 开关打开了但窗口算不出来（`DB_DEDUP_WINDOW_DAYS < 2`）⇒ 明确报出来，
     // 免得「明明设了环境变量却没生效」变成悬案。
     console.warn(
@@ -1546,6 +1568,22 @@ async function processFetchNews(
        */
       skippedBeforeTranslate,
       /**
+       * 「翻译前去重」这条路本轮**到底走没走**，以及为什么（2026-10-10 加）。
+       *
+       * 必须与 `skippedBeforeTranslate` 配套读：只有那个计数时，
+       * 「开关开着但它是 0」既是「开关没生效」也是「本轮确实没有库内重复」，
+       * 两种情形同形 —— 而这正是事后复盘最容易读反的地方。
+       * 三个字段合起来才是完整的因果：`switch` 是意图，`windowDays` 是约束，`active` 是事实。
+       */
+      beforeTranslate: {
+        /** 环境变量 `DEDUP_BEFORE_TRANSLATE` 的解析值（默认关）。 */
+        switch: dedupBeforeTranslateSwitch,
+        /** 本轮是否真的执行了前置跳过。干跑恒为 false（干跑不翻译 ⇒ 没有「白翻」可省）。 */
+        active: dedupBeforeTranslate,
+        /** 前置窗口（天）；null ⇒ 这份配置下不存在安全更窄窗口，按设计关掉。 */
+        windowDays: preWindowDays,
+      },
+      /**
        * 与库内近 3 天**中译标题**近逐字相同（跨轮「同一件事」，2026-09-24 加）。
        * 判据与闸 3 `same_title` 同一条（`isSameTitleText`），但作用于入库前，
        * 所以它拦下的行**库里没有** —— 想知道拦了什么看 `titleDrops` 或日志。
@@ -1688,6 +1726,11 @@ async function processFetchNews(
 }
 
 export async function GET() {
+  // 这几个值**现算**（不缓存、不从 `lastRun` 里取）：环境变量是容器级配置，
+  // 冷启动出来的容器身上也是同一份 ⇒ 任何时刻读都准。这一点是它和 `lastRun` 的根本区别。
+  const dedupBeforeTranslateSwitch = isDedupBeforeTranslateEnabled();
+  const dedupBeforeTranslateWindowDays = dedupPreWindowDays(DB_DEDUP_WINDOW_DAYS);
+
   return NextResponse.json({
     message: '新闻采集接口',
     usage: 'POST /api/fetch-news with optional { date: "YYYY-MM-DD", minPerCountry: 10, skipTranslation: true }',
@@ -1696,8 +1739,51 @@ export async function GET() {
     // 想确认 Telegram 通没通、某个 RSS 源是不是死了，用这个模式，几分钟出结果且零成本。
     dryRunHint: 'POST {"skipTranslation": true} 可做零成本的信息源体检（只采集不入库）',
     sources: RSS_SOURCES.map((s) => ({ name: s.name, country: s.country })),
+    /**
+     * 行为开关的**活体回显**（2026-10-10 加，对齐 `GET /api/wechat/push` 的 `codeVersion`）。
+     *
+     * ## 为什么需要它
+     *
+     * `DEDUP_BEFORE_TRANSLATE` 是**控制台设的环境变量**，而一轮真跑要 2.5 小时、
+     * 还要花翻译费。没有这个回显时，「环境变量到底设上没有」就只能靠**跑完一轮**
+     * 去看 `summary.dedup.skippedBeforeTranslate` —— 若那时开关其实没生效，
+     * 这一轮量到的其实是「关闭态」，排好的两天工作量白费。
+     * 一条 `curl` 就能把这件事**在花钱之前**问清楚。
+     *
+     * ## 为什么它**不会**像 `lastRun` 那样骗人
+     *
+     * `lastRun` 是**内存态**：窗口外实例缩容到 0，任何一次 GET 都会冷启动一个新容器
+     * ⇒ 读到计时全空、`summary` 空对象，与「那一轮根本没跑」**完全同形**（见 `AGENTS.md`）。
+     * 而环境变量是**容器级配置**，新冷启动的容器身上也是同一份
+     * ⇒ 下面这几个值**什么时刻读都准**。这正是它值得存在、而 `lastRun` 不行的理由。
+     *
+     * 用法：`curl -s "$URL/api/fetch-news" | grep -A6 '"knobs"'`
+     * 判读：`dedupBeforeTranslate.effective` 就是「下一轮真跑会不会走这条路」；
+     *       为 false 时再看 `switch`（环境变量没设/写错了）与 `windowDays`（窗口收不出来）
+     *       是哪一个 —— 两种失败修法不同。
+     * ⚠️ 这个接口**没有任何副作用**（下面只做纯函数计算与读内存态），
+     *    所以它同时是保活 ping 的正确靶子；**千万别把保活 ping 打到 POST**，那是一打就跑一轮。
+     */
+    knobs: {
+      /**
+       * 「翻译前先按库内身份去重」（`@/lib/dedup-before-translate`）。
+       * 打开后每轮省下的是「先翻译、再被闸 2 丢掉」的那批（线上实测 `againstDb = 85`
+       * ⇒ 约 52 分钟/轮）。
+       */
+      dedupBeforeTranslate: {
+        /** 环境变量 `DEDUP_BEFORE_TRANSLATE` 的解析值（**默认关**；只有 1/on/true 才开）。 */
+        switch: dedupBeforeTranslateSwitch,
+        /** 前置探测窗口（天）= `DB_DEDUP_WINDOW_DAYS − 1`；null ⇒ 收不出更窄窗口 ⇒ 关掉。 */
+        windowDays: dedupBeforeTranslateWindowDays,
+        /** 正常轮（非干跑）的预期效果 = `switch && windowDays !== null`。 */
+        effective: dedupBeforeTranslateSwitch && dedupBeforeTranslateWindowDays !== null,
+      },
+      /** 闸 2 的库内窗口（天），与 `summary.dedup.window.days` 同源。 */
+      dbDedupWindowDays: DB_DEDUP_WINDOW_DAYS,
+    },
     // 上一轮抓取的状态。调度器靠 running / finishedAt 判断「抓完了没」；
     // 人工排查时 summary 里有各源采集量与最终入库数，error 是失败原因。
+    // ⚠️ 内存态：窗口外读到的空态**不等于**「那一轮没跑」，见上面 `knobs` 的说明。
     lastRun: fetchRunState,
   }, {
     // 必须禁掉缓存：调度器轮询这个接口等状态变化，被缓存住就会一直看到旧状态，

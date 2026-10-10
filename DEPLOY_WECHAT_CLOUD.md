@@ -221,11 +221,28 @@ curl -X POST "$URL/api/fetch-news" -H 'Content-Type: application/json' \
 > （降规格是同一个问题的另一条路：它省钱但把轮次拉长 ⇒ 窗口要变宽 ⇒ 省的又被吃掉；
 > 而且算过余量只有 8.1%，见 `container.config.json` 的降规格段。
 > ⚠️ 去重前置打掉的 52 分钟**不足以**把 8.1% 那道算术关变成「安全」—— 别把两者混为一谈。）
+>
+> ✅ **在开跑之前先确认开关真的生效（2026-10-10 加，省掉一次 2.5 小时的空跑）**：
+> `GET /api/fetch-news` 多了一段 `knobs`，一条 curl 就能问清楚：
+> ```
+> curl -s "$URL/api/fetch-news" | grep -A6 '"knobs"'
+>   → knobs.dedupBeforeTranslate = { switch, windowDays, effective }
+> ```
+> · `effective` = 「下一轮真跑会不会走这条路」；为 `false` 时看是 `switch`（环境变量没设／写法
+>   不被识别）还是 `windowDays`（这份配置收不出安全更窄窗口）——**两者修法不同，别混**。
+> · 它**不受**「只能在 03:45–11:15 窗口内读」的限制（那条限制属于 `lastRun`）：
+>   `lastRun` 是模块级内存态，缩容到 0 就没了；而**环境变量是容器级配置**，冷启动的新容器
+>   身上也是同一份 ⇒ 任何时刻读都准。这正是它值得存在的理由。
+> · 这个接口无副作用 ⇒ 也是保活 ping 的正确靶子（⚠️ 别把 ping 打到 POST，那是一打就跑一轮）。
 
 ##### ⚠️ 等待逻辑踩过的坑：状态要取 `body.lastRun`，不是整个响应体（2026-09-20 已修）
 
-`GET /api/fetch-news` / `GET /api/wechat/push` 返回的是一个**信封**：
-`{ message, usage, dryRunHint, sources, lastRun }`。
+`GET /api/fetch-news` / `GET /api/wechat/push` 返回的是一个**信封**，状态一律在 `body.lastRun` 里：
+- `fetch-news` → `{ message, usage, dryRunHint, sources, knobs, lastRun }`
+- `wechat/push` → `{ ..., codeVersion, ..., lastRun }`
+
+⚠️ 两个信封里除了 `lastRun` 还有别的**看起来像状态**的字段（`fetch-news` 的 `knobs`、
+`wechat/push` 的 `codeVersion` 与各类计数）⇒ 更容易把顶层字段当成 `running` / `finishedAt` 用。
 调度器（`lib/scheduler.ts`）和流水线（`api/pipeline/route.ts`）原先都把整个响应体当状态用，
 于是 `state.running` / `state.finishedAt` **恒为 undefined**，完成判据永远为假 ——
 不报错，只是**每一轮都干等到超时上限**。

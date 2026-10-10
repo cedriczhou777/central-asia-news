@@ -203,6 +203,18 @@
 #       ⇒ **顺序：① 关闭态拿基线（`durationMs` + `timing`）→ ② 开 `DEDUP_BEFORE_TRANSLATE`
 #          再量一轮 → ③ 才轮到讨论降规格。**「并发」已从这条路线上划掉（见上）。
 #         用户若想「并行」，可以并行的只有**准备工作**，**生效必须一次只开一个**。
+#          ★ **不必「开完开关就跑一轮才知道开没开」**（2026-10-10 加）：
+#            `GET /api/fetch-news` 多了一段 `knobs`，一条 curl 就能在花钱之前问清楚：
+#              `curl -s "$URL/api/fetch-news" | grep -A6 '"knobs"'`
+#              → `knobs.dedupBeforeTranslate = { switch, windowDays, effective }`
+#            · `switch`     = 环境变量的**解析值**（走解析函数，所以 `True` / ` on ` 也算数）
+#            · `windowDays` = `DB_DEDUP_WINDOW_DAYS − 1`；null ⇒ 收不出安全更窄窗口，按设计关掉
+#            · `effective`  = `switch && windowDays !== null` ⇒ **下一轮真跑会不会走这条路**
+#            为 false 时看是 `switch` 还是 `windowDays` 挂了 —— 两者修法不同，别混。
+#            ⚠️ 它**不受**「只能窗口内读」的限制：`lastRun` 是模块级内存态（缩容到 0 就没了），
+#               而环境变量是**容器级配置**（冷启动的新容器身上也是同一份）⇒ 任何时刻都准。
+#               这正是它值得存在的理由。
+#            ⚠️ 这个接口无副作用 ⇒ 它同时是保活 ping 的正确靶子（别把 ping 打到 POST）。
 #     ⚠️ 两条路都只该在「先拿到真实数据」之后动手，而且**是两个数、答两个问题**：
 #       · `lastRun.durationMs`（整轮）⇒ 轮次还有多少压缩空间、窗口能收到多窄；
 #       · `lastRun.summary.timing.translationMs`（2026-10-10 新增）⇒ **时间花在等 API 还是本地算**：
@@ -300,6 +312,10 @@ container:
   policyType: cpu
   policyThreshold: 95
   envParams:
+    # ⚠️ 这一段**不驱动线上环境变量**（控制台才是源头，见文件头那两条：minNum/port 都实测对不上）。
+    #    这里留空是**刻意的**：密钥不该进仓库。行为开关也同理 —— 例如
+    #    `DEDUP_BEFORE_TRANSLATE` 要在**控制台**设，回滚 = 在控制台删掉它。
+    #    它设上没有，用 `GET /api/fetch-news` 的 `knobs` 回显确认（见文件上半部分那一段）。
     SUPABASE_URL: ""
     SUPABASE_ANON_KEY: ""
     WECHAT_APP_ID: ""

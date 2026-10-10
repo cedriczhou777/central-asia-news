@@ -185,6 +185,52 @@ if (advisoryCatch >= 0) {
   );
 }
 
+// ----- ④ 活体回显：不花一轮就能确认开关（2026-10-10 加） -----
+//
+// 起因：这个开关是**控制台设的环境变量**，而一轮真跑 2.5 小时 + 翻译费。
+// 没有回显时，「环境变量到底设上没有」只能等跑完一轮才知道 ——
+// 而若那时它其实没生效，那一轮量到的是「关闭态」，两天的排期就白排了。
+// 所以下面钉住的是「**不花钱就能问清楚**」这个能力本身。
+const GET_ANCHOR = 'export async function GET()';
+const getAt = pos(GET_ANCHOR);
+ok('④ GET 处理器仍在文件里（否则下面几条是空转的绿灯）', getAt >= 0);
+const getBody = getAt >= 0 ? src.slice(getAt) : '';
+
+ok('④ GET 里回显开关本身（`switch`）', getBody.includes('switch: dedupBeforeTranslateSwitch'));
+ok(
+  '④ GET 里回显解析出的前置窗口（`windowDays`）',
+  getBody.includes('windowDays: dedupBeforeTranslateWindowDays'),
+);
+ok(
+  '④ GET 里给出综合判据（`effective` = switch && windowDays !== null）',
+  getBody.includes('effective: dedupBeforeTranslateSwitch && dedupBeforeTranslateWindowDays !== null'),
+);
+ok(
+  '④ 回显经 `isDedupBeforeTranslateEnabled()` 现算（不是直接读 process.env，绕过解析容错）',
+  getBody.includes('isDedupBeforeTranslateEnabled()') &&
+    !getBody.includes('process.env.DEDUP_BEFORE_TRANSLATE'),
+  '回显要么没走纯函数，要么直接读了环境变量',
+);
+ok(
+  '④ 回显现算而不是从 lastRun 里取（后者是内存态，冷启动读到的空态会骗人）',
+  !/dedupBeforeTranslateSwitch\s*=\s*fetchRunState/.test(getBody),
+);
+// ★ 这条守的是「别把保活 ping 打到会跑一轮的接口上」那件事的另一半：
+//   GET 既然被文档推荐当保活靶子，就必须**永远**没有副作用。
+ok(
+  '④ ★ GET 无副作用：不翻译、不入库、不抓取（它被推荐当保活 ping 的靶子）',
+  !/translateNews\(/.test(getBody) && !/insertArticles\(/.test(getBody) && !/fetchFeed\(/.test(getBody),
+  'GET 处理器里出现了翻译/入库/抓取调用',
+);
+// 干跑时 `active` 必须为 false（干跑不翻译 ⇒ 没有「白翻」可省）——
+// 与上面 ③-1 的 `&& !skipTranslation` 是同一个约束的两种写法，两处都要在。
+ok(
+  '④ 轮次结果里也盖章了本轮的因果（`beforeTranslate` 三字段）',
+  pos('switch: dedupBeforeTranslateSwitch,') >= 0 &&
+    pos('active: dedupBeforeTranslate,') >= 0 &&
+    pos('windowDays: preWindowDays,') >= 0,
+);
+
 // ----- 汇总 -----
 
 console.log(`\n${'='.repeat(60)}`);
