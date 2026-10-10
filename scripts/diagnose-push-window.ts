@@ -87,13 +87,22 @@ import { hasSourceBody } from '../src/lib/article-body';
 import { dedupeStoriesDeterministic } from '../src/lib/same-event';
 import { PUBLISH_SCHEDULES, scheduledWindow } from '../src/lib/publish-schedule';
 import { compareByInvestmentRelevance, investmentRelevanceOf } from '../src/lib/investment-score';
+import { PUSH_MAX_PER_COUNTRY } from '../src/lib/push-limits';
 
 const BASE =
   process.env.SITE_BASE ||
   'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
 
-/** 与 `POST /api/wechat/push` 的 `maxPerCountry` 一致 —— 改一处要改两处，这里是刻意的重复。 */
-const MAX_PER_COUNTRY = 15;
+/**
+ * 每国上限 —— 与线上**同一个常量**（`@/lib/push-limits`）。
+ *
+ * ⚠️ 2026-10-10 之前这里是**手抄的** `const MAX_PER_COUNTRY = 15`，注释还写着
+ * 「与 `POST /api/wechat/push` 的 `maxPerCountry` 一致 —— 改一处要改两处，这里是刻意的重复」。
+ * 那种写法改一处、漏一处，本脚本就会按**旧上限**算出一个**看起来完全正常**的结论，
+ * 而且不报任何错 —— 正是本项目反复吃亏的「静默不一致」。
+ * 现在值只有一个来源，下面这行只是沿用脚本内部旧名以减小 diff。
+ */
+const MAX_PER_COUNTRY = PUSH_MAX_PER_COUNTRY;
 
 /**
  * 默认拉取上限。可用 `--limit N` 覆盖。

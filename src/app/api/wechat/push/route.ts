@@ -41,6 +41,7 @@ import {
   type ReviewItem,
 } from '@/lib/editor-review';
 import { pickDraftCover } from '@/lib/draft-cover';
+import { PUSH_MAX_PER_COUNTRY } from '@/lib/push-limits';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
@@ -317,6 +318,11 @@ function periodSuffix(period: unknown): string {
 // 两次要求方向一致，后者是前者的细化，不是替换。
 
 // `normalizeImages` / `generateWechatHtml` / `cleanSummary` 见 `@/lib/wechat-template`。
+
+// 每国每份报告的篇数上限在 `@/lib/push-limits`（那里有变更史 30→15→20、
+// 与总审删稿额度的耦合、以及「它有可能是个 no-op」的说明）。
+// 放 lib 而不是留在这里，是为了让 `scripts/diagnose-push-window.ts` import 同一份 ——
+// 原先它是手抄的，手抄一定会分叉。
 
 interface PushFailure {
   country_code: string;
@@ -984,6 +990,17 @@ export async function GET(request: NextRequest) {
        * 入参是线上真实命中（id=6658 正文）。
        */
       cyrillicNoteStripProbe: stripCyrillicParentheticals('吉尔吉斯斯坦国家税务局（ГНС）'),
+      /**
+       * 「每国每份报告的篇数上限」（2026-10-10 新增，取自 `PUSH_MAX_PER_COUNTRY`）。
+       *
+       * 加它的理由就是这个对象存在的理由（见上面「为什么需要它」）：
+       * 这个旋钮 2026-10-10 从 **15** 改成 **20**，而「改个常量」在旧办法下
+       * **完全没得看** —— 只能等一轮跑完去数草稿里的条数（还要先有草稿）。
+       * 报出来之后，部署完一条 curl 就能确认线上拿到的是 20 还是 15。
+       *
+       * 读法：`pushMaxPerCountry: 20` = 新版已接管；`15` = 部署还没接管流量。
+       */
+      pushMaxPerCountry: PUSH_MAX_PER_COUNTRY,
       // v3 + v4 + g2 的**六个**活体探针：实现在 `@/lib/editor-review` 的 `runEditorProbes()`，
       // 期望值在 `EDITOR_PROBE_EXPECT`，且**期望值可达**由离线回归第十二节断言。
       // g2 新增的 `editorFixLocateGateProbe` 是**双向**的（一条必须拒、一条必须采纳）——
@@ -1009,21 +1026,10 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
   try {
     const suffix = periodSuffix(period);
     const today = beijingDate();
-    // 每国每份报告的篇数上限。
-    //
-    // 2026-09-22 由 30 收到 15：当时是**早晚报两段**（各 12h，见 `scheduler.ts`），
-    // 每份报告每国 15 篇已经足够，30 篇只会把相关性靠后的稿子也塞进来、拉低整份报告的质量。
-    // 2026-10-10 合并成日报后**这个 15 没有跟着改** —— 它本来就是「质量上限」而不是
-    // 「按窗口长度配的配额」：窗口从 12h 变 24h，候选变多，但每国该推几篇由
-    // `pushExclusionReason` + 去重 + 相关性排序决定，不因为窗口长就该多推。
-    // 这是个**上限**不是配额 —— 候选不足 15 篇时按实际可用量推，不硬凑
-    // （硬凑就得放宽判据，而本项目历史上「判据过严/过松」都出过事）。
-    //
-    // ⚠️ 收这个数字会**改变「每国不足 15 篇」这个症状的出现面**：
-    // 以前要 30 篇才触发，现在 15 篇就可能不够。候选不足时先用
-    // `GET /api/fetch-news` 的 `funnelByCountry` 看漏斗里掉在哪一段，
-    // 不要去动 `pushExclusionReason` 或 `maxPerCountry`。
-    const maxPerCountry = 15;
+    // 每国上限 —— 取值、变更史（30 → 15 → 20）、以及「它有可能是个 no-op」
+    // 全部在模块级 `PUSH_MAX_PER_COUNTRY` 的注释里。
+    // 这里不重复写数字，也不重复写理由：同一个数字有两份说明，迟早会分叉。
+    const maxPerCountry = PUSH_MAX_PER_COUNTRY;
 
     // 计算时间范围
     //
@@ -1440,6 +1446,31 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
               );
             }
           }
+        }
+
+        // ★ 「删稿额度被顶掉」必须**显式报警**（2026-10-10 新增）。
+        //
+        // 为什么它不能只留在 `rejections` 里：`editor-review` 在模型想删的条数超过
+        // `dropCap`（= `min(MAX_DROPS=4, floor(n/3))`）时的失败方式是**整组作废** ——
+        // 不是截断取前 4 条，而是 `dropSet.clear()` ⇒ **一条都不删**，
+        // 重复原样留在成品里。用户看到的就只是「这期日报里又有重复」，
+        // 而**根因是额度不够，不是判据没认出来** —— 不报出来就会去错地方改。
+        //
+        // 这与上面的 `PAIR_MAX_CANDIDATES` 告警是**同一类**（都是「最该处理的那批里有没处理到的」），
+        // 所以按同一判例用 `console.warn`（不是 `console.log`）。
+        //
+        // 触发条件与 `PUSH_MAX_PER_COUNTRY` 直接耦合：每国上限 2026-10-10 由 15 涨到 20
+        // ⇒ 单国条目更多 ⇒ 想删的条数更容易超过 4 条。这条 warn 开始频繁出现时，
+        // 要动的是 `MAX_DROPS`（**先量后调，别拍**），不是放宽别的判据。
+        const overDropCap = audit.rejections.find(
+          (r) => r.startsWith('drops 整组作废') && r.includes('> 上限'),
+        );
+        if (overDropCap) {
+          console.warn(
+            `[${pc.country.name}] ⚠️ 总审删稿额度不足 ⇒ **整组作废、一条都没删**（重复会留在成品里）：${overDropCap}` +
+              `｜该国本轮 ${before} 条，额度 = min(MAX_DROPS, ${before}/3)。` +
+              `若反复出现，该调的是 MAX_DROPS（先量后调）。`,
+          );
         }
 
         console.log(
