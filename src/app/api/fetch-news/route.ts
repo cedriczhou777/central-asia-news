@@ -3,6 +3,10 @@ import { insertArticles, getRecentCanonicalUrls, getRecentOriginalTitleKeys, get
 import { fetchTelegramRSS } from '@/lib/scraper';
 import { isChineseText, beijingDate, canonicalUrl, originalTitleKey, similarity } from '@/lib/utils';
 import { dedupeStories, isSameTitleText } from '@/lib/same-event';
+import {
+  isDedupBeforeTranslateEnabled,
+  dedupPreWindowDays,
+} from '@/lib/dedup-before-translate';
 import { scoreInvestmentRelevance, isInvestmentTopic } from '@/lib/investment-score';
 import { countryList } from '@/lib/data/countries';
 import { RSS_SOURCES, type RSSSource } from '@/lib/data/rss-sources';
@@ -62,7 +66,13 @@ interface FetchSummary {
   date: string;
   /** 各信息源取到的原始条数合计 */
   totalFetched: number;
-  /** 通过投资相关性初筛的条数 */
+  /**
+   * 通过投资相关性初筛的条数（走到翻译循环、并已过兜底/正文补全的那些）。
+   *
+   * ⚠️ `DEDUP_BEFORE_TRANSLATE=1` 时**不含**被翻译前跳过的那批 ⇒
+   * 开关打开后这个数会**恰好比关闭时少 `dedup.skippedBeforeTranslate` 篇**。
+   * 这是「开关确实起了作用」的读数，不是缺陷（想还原可比口径就加上那个数）。
+   */
   candidates: number;
   /** URL 去重后剩余 */
   afterUrlDedup: number;
@@ -74,12 +84,29 @@ interface FetchSummary {
    * 去重分四段记账。**别再合成一个数字**：四段失败的排查方向完全不同
    * （批内重复 = 抓取重复拉取；跨轮链接/原文 = 库内判重失效；跨轮标题 = 同一件事隔轮到达；
    * 同事件 = 理解机制漏判），合成之后就再也回答不了「今天为什么少了几篇」。
+   *
+   * `skippedBeforeTranslate`（2026-10-10 加）**不是第五个阶段**，而是闸 2 的
+   * 「链接/原文」那一半被**提前执行**了（提前到翻译之前）—— 所以它归在本组记账，
+   * 但它与 `againstDb` 的互斥关系必须按那个字段自己的说明读。
    */
   dedup: {
     /** 批内链接/原文重复（同一轮里同一条被抓到两次） */
     intraBatch: number;
     /** 与库内近 3 天重复（跨轮重复，线上重复行的主要来源） */
     againstDb: number;
+    /**
+     * ⏱ **翻译前**就按库内身份丢掉、因而**没花翻译费**的条数（2026-10-10 加）。
+     *
+     * 只在 `DEDUP_BEFORE_TRANSLATE=1` 时非零。动机（实测 `againstDb = 85` ⇒ 约
+     * 52 分钟/轮白翻）与「为什么不改变输出集合」的证明都在 `@/lib/dedup-before-translate`。
+     *
+     * ⚠️ 它是 `againstDb` 的**上游**：被提前丢掉的条子压根没被翻译、没进
+     * `articlesToInsert` ⇒ **不会**再出现在 `againstDb` 或 `intraBatch` 里。
+     * 所以「本轮有多少条是库内重复」= `skippedBeforeTranslate + againstDb`
+     * （两者互斥，可以相加）；而单独盯任一个的**趋势**会在开关前后跳变 ——
+     * 那不是重复变多变少，只是记账位置变了。
+     */
+    skippedBeforeTranslate: number;
     /**
      * 与库内近 3 天**中译标题**近逐字相同（跨轮「同一件事」，2026-09-24 加）。
      * 判据与闸 3 `same_title` 同一条（`isSameTitleText`），但作用于入库前，
@@ -887,6 +914,66 @@ async function processFetchNews(
     image_urls: string[];
   }> = [];
 
+  // ⏱ **翻译前**的库内身份探测（2026-10-10 加；`DEDUP_BEFORE_TRANSLATE=1` 才生效）
+  //
+  // 【为什么】线上实测 `dedup.againstDb = 85`（2026-09-24 19:00 那轮，见 AGENTS.md）——
+  //   这 85 篇是**先翻译、再被闸 2 丢掉**的，按 37 秒/篇算 ≈ 52 分钟/轮，外加翻译费。
+  //   而「是不是库内重复」在翻译**之前**就完全可知：判据只用 `item.link`
+  //   与 `original_title` 两个翻译前字段。所以这部分判断没有理由排在翻译后面。
+  //   完整动机与「为什么不改变输出集合」的证明写在 `@/lib/dedup-before-translate` 头部。
+  //
+  // 【每个变量为什么是这个写法】
+  //   · `preWindowDays` 比闸 2 的窗口**窄一天**，这是硬要求不是保守：
+  //     这里跑在循环**之前**、闸 2 跑在**之后**，两边 `since` 的基准时刻不同，
+  //     等宽会让前置窗口反而更宽 ⇒ 有概率丢一篇闸 2 本来会放行的稿子。
+  //     算术与反例见 `dedupPreWindowDays` 的注释（返回 null = 这份配置下不安全 ⇒ 关掉）。
+  //   · 结果放在 `preKnown*` 三个变量里、**绝不与 `existing*` 共用**：
+  //     闸 2 那次查询跑在循环**之后**，能看见循环期间别的进程（比如人工补报）新插的行。
+  //     拿这里更早的快照去替它，就会放进重复行 —— 前置探测只许**省时间**，
+  //     不许替闸 2 做判断。
+  //   · 干跑模式（`skipTranslation`）跳过整段：干跑不翻译、也就不存在「白翻」，
+  //     而它现在报出来的去重账（`saved` / `againstDb` 等）是既有的体检口径，
+  //     不该因为一个省时间的开关而变。
+  const preWindowDays = dedupPreWindowDays(DB_DEDUP_WINDOW_DAYS);
+  const dedupBeforeTranslate =
+    isDedupBeforeTranslateEnabled() && preWindowDays !== null && !skipTranslation;
+  let preKnownUrls = new Set<string>();
+  let preKnownOriginals = new Map<string, number>();
+  let preKnownOk = false;
+  let skippedBeforeTranslate = 0;
+  if (dedupBeforeTranslate && preWindowDays !== null) {
+    try {
+      const since = new Date(Date.now() - preWindowDays * 24 * 60 * 60 * 1000).toISOString();
+      const [urlWindow, originalWindow] = await Promise.all([
+        getRecentCanonicalUrls(since),
+        getRecentOriginalTitleKeys(since),
+      ]);
+      preKnownUrls = urlWindow.urls;
+      preKnownOriginals = originalWindow.keys;
+      preKnownOk = true;
+      console.log(
+        `⏱ 翻译前去重已启用：库内近 ${preWindowDays} 天 ${urlWindow.rows} 行 → ` +
+          `${preKnownUrls.size} 个链接指纹、${preKnownOriginals.size} 个原文指纹（命中即跳过翻译）`,
+      );
+    } catch (err) {
+      // 只降级、不中止：本轮照旧翻译全部候选，正确性仍由下面那个原封不动的闸 2 兜住。
+      // ⚠️ 这里**不要**去设置 `dbCheckError` —— 那个变量语义是「闸 2 查不出来 ⇒ 本轮不入库」，
+      //    而这里失败只意味着「没省下时间」。
+      console.warn(
+        `翻译前去重探测失败，本轮照旧翻译全部候选（只影响省不省时间，不影响正确性）：${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+  } else if (isDedupBeforeTranslateEnabled() && preWindowDays === null) {
+    // 开关打开了但窗口算不出来（`DB_DEDUP_WINDOW_DAYS < 2`）⇒ 明确报出来，
+    // 免得「明明设了环境变量却没生效」变成悬案。
+    console.warn(
+      `DEDUP_BEFORE_TRANSLATE 已设置，但 DB_DEDUP_WINDOW_DAYS=${DB_DEDUP_WINDOW_DAYS} ` +
+        `收不出安全的更窄窗口，已跳过（见 dedupPreWindowDays 的说明）。`,
+    );
+  }
+
   // 第二步：每个国家精选至少 minPerCountry 篇新闻
   //
   // 遍历的目标是**固定的国家清单**，不是 candidatesByCountry 的现有键。
@@ -992,6 +1079,25 @@ async function processFetchNews(
     for (const { item, source } of selected) {
       try {
         const originalTitle = item.title || '';
+
+        // ⏱ 翻译前跳过「库里已经有」的稿子（见本函数上方 `preKnown*` 那段说明）。
+        // ⚠️ 位置只能在这里：必须在 og:image 抓取与 `translateNews` **之前** ——
+        //    那两者才是花钱花时间的部分，放到它们后面就等于什么都没省
+        //    （而闸 2 照样会在最后把这些稿子丢掉）。
+        // ⚠️ 判据必须与闸 2 **逐字同源**（`canonicalUrl(source_url)` /
+        //    `originalTitleKey(original_title)`），否则「提前丢掉的」与「闸 2 会丢的」
+        //    就不是同一个集合，`dedup-before-translate.ts` 头部那段等价性证明随即失效。
+        // ⚠️ 这条 `continue` 不写日志：它命中的可能是几十篇，
+        //    要的是汇总数（`skippedBeforeTranslate` 与结束时的漏斗行），不是逐条刷屏。
+        if (preKnownOk) {
+          const cu = canonicalUrl(item.link || '');
+          const ok = originalTitleKey(originalTitle);
+          if ((cu && preKnownUrls.has(cu)) || (ok && preKnownOriginals.has(ok))) {
+            skippedBeforeTranslate++;
+            continue;
+          }
+        }
+
         const originalContent = item.contentSnippet || item.content || '';
         const tags = extractTags(originalTitle, originalContent);
 
@@ -1329,6 +1435,9 @@ async function processFetchNews(
 
   console.log(
     `新闻抓取完成：日期=${targetDate}｜原始采集 ${totalFetched} 篇 → 投资相关候选 ${articlesToInsert.length} 篇 ` +
+      // ⏱ 只在开关打开时插这一段：关着的时候这行与旧版**逐字相同**，
+      // 于是开关前后的日志可以直接逐字对比（少一段就是它没生效）。
+      (dedupBeforeTranslate ? `→ 翻译前跳过 ${skippedBeforeTranslate} 篇（库内已有，未花翻译费） ` : '') +
       `→ 批内去重剔除 ${intraBatchDropped} 篇 ` +
       `→ 链接/原文去重剔除 ${urlDropped} 篇 ` +
       `→ 库内标题去重剔除 ${titleDropped} 篇 ` +
@@ -1359,13 +1468,21 @@ async function processFetchNews(
     .map(([name, count]) => `${name}=${count}`).join(' | ') || '无成功翻译';
   console.log(`翻译通道用量：${translationProviders}`);
 
-  // ⏱ 阶段耗时（2026-10-10 加）—— **这一行是「该不该加翻译并发」的判据**。
+  // ⏱ 阶段耗时（2026-10-10 加）—— 用途是分清「时间花在**等 API** 还是**本地算**」。
+  //
+  // ⚠️⚠️ 同日就改过一次判读：**别再把它读成「该不该加翻译并发」**。
+  //   加并发已被实测排除 —— `scripts/fixtures/judge-repro-2026-10-07_10-08.json` 记着
+  //   「并发发起请求会稳定触发 code 1302 **账号级**限流（实测 3 个并发里 2 个中招）」，
+  //   而判组与翻译**共用同一个智谱账号** ⇒ 提并发只会把请求推进付费的 DeepSeek 降级链，
+  //   **更贵、也不一定更快**。压缩轮次的正确顺序是
+  //   「先去重前置（`DEDUP_BEFORE_TRANSLATE`）→ 再看要不要动规格」。
   //
   // 判读规则（写在这里，免得下次又要重新推一遍）：
   //   · `翻译占总 X%` 大（比如 >60%）⇒ 时间花在**等翻译 API** ⇒
-  //       加并发收益大（并发省的正是等待），降规格的代价小。**先做并发。**
+  //       这部分没法并行省，只能**少发请求** ⇒ 去看 `dedup.skippedBeforeTranslate` 扣掉
+  //       多少篇（能扣多少就打掉多少 × 秒/篇）。此时降规格的代价小。
   //   · `X%` 小、而整轮却很久 ⇒ 时间花在**本地算**（去重相似度、判组、排版）⇒
-  //       加并发几乎没用，该查的是那几段；降规格也会**真的**把轮次拉长。
+  //       该查的是那几段；降规格会**真的**把轮次拉长。
   //   · `秒/篇` 与 `scheduler.ts` 的 `MEASURED_WORST_PER_ARTICLE_MS`（37 秒）对照：
   //       明显低于它 ⇒ 那个最坏值偏保守，`mergedRoundWorstMs()` 算出的 370 分钟是上界；
   //       接近或超过它 ⇒ 400 分钟硬上限的余量是真的薄，**先别动规格**。
@@ -1377,6 +1494,26 @@ async function processFetchNews(
       `翻译占 ${runElapsedMs > 0 ? Math.round((translationMs / runElapsedMs) * 100) : 0}%）` +
       `${skipTranslation ? '｜干跑模式，翻译跳过' : ''}`
   );
+  if (dedupBeforeTranslate) {
+    // ⏱ 翻译前去重的**收成**（只在开关打开时打）。这行是「省了多少」的唯一直接读数。
+    //
+    // 判读（这两句就是这条优化的验收标准）：
+    //   · `跳过 N 篇` × 本轮实测秒/篇 = 省下的时间；把它与 `durationMs` 的变化对照。
+    //   · **`跳过 + 闸 2 又拦下` 应当 ≈ 关闭开关时的 `againstDb` 基线（线上 85）**。
+    //     明显偏小 ⇒ 前置集合比闸 2 集合小得可疑：先查 `preWindowDays`，
+    //       再查 `getRecentCanonicalUrls` / `getRecentOriginalTitleKeys` 的分页有没有被静默截断。
+    //     明显偏大 ⇒ 两处口径不一致：去看两处 `canonicalUrl` / `originalTitleKey` 是不是同源。
+    //   ⚠️ **不要期待「闸 2 又拦下 = 0」**：前置窗口刻意比闸 2 **窄一天**（这是正确性要求，
+    //      见 `dedupPreWindowDays`），所以「库里那条对应行已经 2–3 天老」的那部分
+    //      本来就轮不到前置拦，归闸 2 拦 —— 这部分非零是**设计如此**。
+    console.log(
+      `⏱ 翻译前去重收成：跳过 ${skippedBeforeTranslate} 篇` +
+        (translatedArticles > 0
+          ? `（约 ${((skippedBeforeTranslate * secPerArticle) / 60).toFixed(1)} 分钟，按本轮实测 ${secPerArticle.toFixed(1)} 秒/篇）`
+          : '') +
+        `｜之后闸 2 又拦下 ${urlDropped} 篇（前者 + 后者应当 ≈ 关闭开关时的 againstDb 基线）`,
+    );
+  }
   if (translation.errors.length > 0) {
     // ⚠️ 必须把 `kind` / `count` 打出来（2026-10-05 加）。这一行是本轮修那个
     // 「两个通道报错变成悬案」的直接产物：只打 `provider(model): error` 时，
@@ -1403,6 +1540,11 @@ async function processFetchNews(
       intraBatch: intraBatchDropped,
       /** 与库内近 3 天重复（跨轮重复，线上重复行的主要来源） */
       againstDb: urlDropped,
+      /**
+       * ⏱ 翻译前跳过、因而没花翻译费的条数（见 `FetchSummary.dedup` 的字段说明）。
+       * 与 `againstDb` 互斥、可相加；开关关着时恒为 0。
+       */
+      skippedBeforeTranslate,
       /**
        * 与库内近 3 天**中译标题**近逐字相同（跨轮「同一件事」，2026-09-24 加）。
        * 判据与闸 3 `same_title` 同一条（`isSameTitleText`），但作用于入库前，
