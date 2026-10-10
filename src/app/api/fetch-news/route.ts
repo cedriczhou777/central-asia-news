@@ -173,6 +173,25 @@ interface FetchSummary {
       expected: string;
     };
   };
+  /**
+   * 阶段计时（2026-10-10 加）。**这是决策数据，不是性能装饰。**
+   *
+   * 只报一项：`translateNews` 的墙钟时间之和。选它是因为两个悬而未决的问题都取决于它 ——
+   *   ① **该不该给翻译加并发**（第 2 步）：并发只省「等在网络上」的那部分，
+   *      省不到「真在算」的那部分。不先量出这个比例，加并发就是拍脑袋。
+   *   ② **降规格会不会把轮次推过 400 分钟硬上限**：CPU 砍半只有在「轮次是 CPU 受限」
+   *      时才会让耗时翻倍。若时间其实花在等 API，那降规格的代价就小得多。
+   *
+   * ⚠️ 它顺带能解掉一个**看起来矛盾**的现象：容器长时间贴 ~100% CPU，
+   * 但单篇翻译若只花十几秒，CPU 就不该是瓶颈。到底是「等 API」还是「真在算」，
+   * 这个数一出来就分得清（判读见下面那行日志的注释）。
+   */
+  timing: {
+    /** 所有 `translateNews` 调用的墙钟时间之和（含重试与降级链的全部等待） */
+    translationMs: number;
+    /** 实际发起过翻译的文章篇数 —— 用来算「秒/篇」，与 `MEASURED_WORST_PER_ARTICLE_MS` 对照 */
+    translatedArticles: number;
+  };
 }
 
 /** 抓取任务的执行状态。见 GET /api/fetch-news 的说明。 */
@@ -637,6 +656,20 @@ async function processFetchNews(
 
   console.log(`开始采集新闻，目标日期：${targetDate}，每个国家至少 ${minPerCountry} 篇`);
 
+  // ⏱ 翻译阶段计时累加器（2026-10-10 加，见 `FetchSummary.timing` 的说明）。
+  //
+  // ⚠️ **刻意只做「累加」，不碰任何控制流。** 明早 04:00 那一轮是「合并成一轮日报」
+  // 的第一次真实试跑（而且实例保活也刚从常驻改成窗口钉住），**不能再往上加变量**。
+  // 纯 `+=` 不可能改变一轮的成败，但它能把两个悬着的问题变成可算的。
+  //
+  // 为什么非要加代码而不能直接读日志：翻译是**逐国交错在采集之间**的
+  // （每国：采集 → `候选 N 篇` → 翻译该国 → 下一国），所以任意两行日志之间的
+  // 间隔都是「某国翻译 + 下一国采集」的混合，读不出翻译单独占多少。
+  let translationMs = 0;
+  let translatedArticles = 0;
+  /** 本函数的墙钟起点，只用来算「翻译占多少百分比」。见下面那行日志。 */
+  const runStartedMs = Date.now();
+
   // 第一步：从所有 RSS 源采集候选新闻
   for (const source of RSS_SOURCES) {
     const result = emptySourceResult(source.name, source.country);
@@ -981,6 +1014,10 @@ async function processFetchNews(
         const coverImage = imageUrls[0] || '';
 
         if (!skipTranslation) {
+          // ⏱ 只包住这一次调用（见文件上方 `translationMs` 的说明）。
+          // ⚠️ `translateNews` 抛错时这两行不会执行 ⇒ 失败的篇数不计入分母，
+          //    所以「秒/篇」是**成功调用的**均值。这是刻意的：分母混进失败会让均值失真。
+          const translateStartedMs = Date.now();
           const translated = await translateNews(
             originalTitle,
             originalContent,
@@ -991,6 +1028,8 @@ async function processFetchNews(
             // 于是第 6 条的两条判据（国名只许写原文有的 / 本国元首写中文）会跟着错。
             countryList.find((c) => c.code === country)?.name || country,
           );
+          translationMs += Date.now() - translateStartedMs;
+          translatedArticles += 1;
 
           // 翻译失败（结果非中文）则跳过该篇，绝不以原文入库，避免推送英文
           if (!translated.translated && !isChineseText(originalTitle)) {
@@ -1319,6 +1358,25 @@ async function processFetchNews(
   const translationProviders = Object.entries(translation.providerCounts)
     .map(([name, count]) => `${name}=${count}`).join(' | ') || '无成功翻译';
   console.log(`翻译通道用量：${translationProviders}`);
+
+  // ⏱ 阶段耗时（2026-10-10 加）—— **这一行是「该不该加翻译并发」的判据**。
+  //
+  // 判读规则（写在这里，免得下次又要重新推一遍）：
+  //   · `翻译占总 X%` 大（比如 >60%）⇒ 时间花在**等翻译 API** ⇒
+  //       加并发收益大（并发省的正是等待），降规格的代价小。**先做并发。**
+  //   · `X%` 小、而整轮却很久 ⇒ 时间花在**本地算**（去重相似度、判组、排版）⇒
+  //       加并发几乎没用，该查的是那几段；降规格也会**真的**把轮次拉长。
+  //   · `秒/篇` 与 `scheduler.ts` 的 `MEASURED_WORST_PER_ARTICLE_MS`（37 秒）对照：
+  //       明显低于它 ⇒ 那个最坏值偏保守，`mergedRoundWorstMs()` 算出的 370 分钟是上界；
+  //       接近或超过它 ⇒ 400 分钟硬上限的余量是真的薄，**先别动规格**。
+  const runElapsedMs = Date.now() - runStartedMs;
+  const secPerArticle = translatedArticles > 0 ? translationMs / translatedArticles / 1000 : 0;
+  console.log(
+    `翻译耗时：${(translationMs / 60000).toFixed(1)} 分钟／${translatedArticles} 篇 = ` +
+      `${secPerArticle.toFixed(1)} 秒/篇（本函数总耗时 ${(runElapsedMs / 60000).toFixed(1)} 分钟，` +
+      `翻译占 ${runElapsedMs > 0 ? Math.round((translationMs / runElapsedMs) * 100) : 0}%）` +
+      `${skipTranslation ? '｜干跑模式，翻译跳过' : ''}`
+  );
   if (translation.errors.length > 0) {
     // ⚠️ 必须把 `kind` / `count` 打出来（2026-10-05 加）。这一行是本轮修那个
     // 「两个通道报错变成悬案」的直接产物：只打 `provider(model): error` 时，
@@ -1450,6 +1508,8 @@ async function processFetchNews(
         };
       }),
     sourceErrors: failedSources.map((r) => ({ source: r.source, errors: r.errors })),
+    /** ⏱ 阶段计时 —— 说明与判读规则见 `FetchSummary.timing` 和那行「翻译耗时」日志。 */
+    timing: { translationMs, translatedArticles },
     translation: {
       providerCounts: translation.providerCounts,
       errors: translation.errors,
