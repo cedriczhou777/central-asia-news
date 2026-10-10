@@ -715,6 +715,14 @@
 - **失败模式是「没省下时间」，不是「丢稿」**：探测失败 ⇒ `preKnownOk = false`
   ⇒ 一条都不前置跳过、照旧全译，正确性由闸 2 的 fail-closed 兜住。
   （所以那段 catch **刻意不设 `dbCheckError`** —— 那个变量的语义是「本轮不入库」。）
+- **「窄一天」的代价已核实 ≈ 0**（2026-10-10 核代码）：采集窗是**按日历天**的
+  （`采集时间窗 = targetDate-1 ~ targetDate`，`route.ts:661/710`）⇒ 04:00 那轮的候选
+  `pubDate` ≥ **前一日 00:00 北京**；而前置窗口 `T0 − 2 天` 起点是**前前一日 04:00 北京**，
+  **比采集窗更早** ⇒ 同一条稿子在库里的那行 `published_at` 就是同一个 `pubDate`
+  ⇒ **必然落在前置窗口内** ⇒ 对「链接命中/同篇标题命中」零损失。
+  只漏「另一家媒体同标题、且库里那行发布在前 2–3 天」这一类（占比很小）。
+  ⚠️ 配套读数：`GET /api/dedupe-check?days=3` 实测 `identicalGroups.groupCount = 0`
+  （窗口内 1062 篇、0 组重复）——**别读成「判重失效」**，闸 2 在入库前拦，库里本来就不该有重复行。
 - **回归**：`pnpm test:dedup-before-translate`（纯函数 + 源码结构断言）。该脚本的断言已用
   **变异测试**验过不是空转（把 `preKnownOk` 门去掉、让 catch 污染 `dbCheckError`，两条都必须报错）。
 - ⚠️ **一条被收回的说法**（别再照着它改）：曾写「把闸 1 的 `seenUrl`/`seenOrig` 两个 Set 提到循环外、
@@ -1040,6 +1048,16 @@ POST /api/wechat/push {"hours": 17, "period": "manual"}
   正确顺序：轮询到两个任务的 `running` 都是 `false` → 再推。
 
 **以后每轮要看的**：`GET /api/fetch-news` → `lastRun.summary.dedup.window`
+
+> ⚠️⚠️ **先看「读的时机」——读错了会得出完全相反的结论（2026-10-10 18:45 实测踩到）**：
+> `lastRun` 是**内存态**，而实例在窗口（03:45–11:15）结束后 30 分钟内缩容到 0
+> ⇒ 之后再 GET 会**冷启动一个新容器**，`lastRun` 是**空的**
+> （实测：`running:false` + `startedAt/finishedAt/durationMs` 全 `null` + `summary` 无键）。
+> **看起来就像「那一轮根本没跑」**，于是会去查错的地方（抓取？翻译？触发器？）。
+> ⇒ 要读就**在窗口内读**（一轮跑完后，如 07:00–10:50）。
+> ⇒ **推代码（滚动发布 = 换容器）同样会清空它** ⇒ 顺序必须是「**先读数 → 再推**」，不能反过来。
+> ⇒ 补报/补推前查 `running` 也一样，只能在窗口内查。
+
 - `rows` / `titleRows` 都必须**越过 1000 且不相等**；**恰好卡在 1000 ⇒ 分页坏了**，立刻查。
 - 顺带看 `dedup.titleDrops` 与 `againstDbTitles`：
   本轮 `againstDbTitles = 0`、`titleDrops` 1 条，属正常（跨轮近逐字重复本来就少）；
