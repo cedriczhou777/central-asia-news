@@ -70,7 +70,14 @@ export interface PublishSchedule {
    * 判定，类型收紧后「写了个不在表里的 period」在编译期就会红，不必等运行时。
    */
   period: 'daily';
-  /** 回看窗口小时数（窗口起点 = 执行时刻 − hours） */
+  /**
+   * 回看窗口小时数 —— ⚠️ **只是交叉校验值，不是窗口来源**。
+   *
+   * 窗口由 {@link scheduledWindow} 从本表的 `cron` 钟点推导；这里写 24 是为了让
+   * 「表里声明的长度」和「实际推导出的长度」能被 `scheduleHoursCrossCheck()` 比出来，
+   * 谁只改了一处就会红。**别再按「起点 = 执行时刻 − hours」理解它** ——
+   * 那个浮动算法正是缺陷 19（2026-09-24 两次空跑）的成因，只留给人工补跑用。
+   */
   hours: number;
 }
 
@@ -124,7 +131,7 @@ function beijingFields(d: Date) {
   };
 }
 
-/** 由「北京墙上时间」构造真实时刻（`mi` 默认 0：时刻表都落在整点） */
+/** 由「北京墙上时间」构造真实时刻（时刻表的钟点都落在整点，所以没有分钟参数） */
 function fromBeijing(y: number, mo: number, d: number, h: number): Date {
   return new Date(Date.UTC(y, mo, d, h) - BEIJING_OFFSET_MS);
 }
