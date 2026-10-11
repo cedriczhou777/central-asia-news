@@ -18,12 +18,20 @@ RUN pnpm install --frozen-lockfile \
  && rm -rf .next/cache \
  && rm -rf "$(pnpm store path)"
 
-# 构建期冒烟：确认裁剪后的依赖树里，服务真正需要的两个外部包还在。
-# 依据是构建产物本身 —— dist/server.js 的外部 require 只有 next 和 node-cron
-# （其余全是 node: 内置模块，见 `grep -oE 'require\("[^"]+"\)' dist/server.js`）。
-# 这类问题如果在运行时才炸，只会表现为「部署失败：探针 connection refused」，排查成本高得多；
-# 放在构建期失败则不会影响正在运行的旧版本。
-RUN node -e "require('next'); require('node-cron'); console.log('runtime deps ok')"
+# 构建期冒烟：确认裁剪后的依赖树里，服务真正需要的包还在。
+#
+# ⚠️ 2026-10-11 扩了清单。原来只查 next + node-cron（依据是 `dist/server.js` 的外部
+# require 只有这两个）。但那只覆盖了**入口文件**，而 Next 的路由是**按需加载**的 ——
+# 路由里的 require 在构建期根本不出现，漏掉一个就是「部署成功、探针过了，
+# 第一条请求才 500」。所以这里改成**按 dependencies 逐个 load**：
+# 清单与 package.json 的 dependencies 一致（10 个，逐个都有运行期引用点，
+# 判据与维护纪律见 AGENTS.md 的「运行时依赖只有 10 个」）。
+#
+# 依据仍然是构建产物本身（`grep -oE 'require\("[^"]+"\)' dist/server.js`
+# → http / next / node-cron / url，其余全是 node: 内置），加上**路由侧**的运行期引用。
+# 这类问题如果在运行时才炸，只会表现为「部署失败：探针 connection refused」
+# 或「第一条请求 500」，排查成本高得多；放在构建期失败则不会影响正在运行的旧版本。
+RUN node -e "for (const m of ['next','node-cron','@supabase/supabase-js','rss-parser','cheerio','clsx','tailwind-merge']) require(m); console.log('runtime deps ok')"
 
 # sharp 探针：推送前要把外链封面（中亚媒体站大量用 .webp）转成微信素材接口认的 JPEG。
 # sharp 已在 package.json 的 dependencies 里**显式声明** —— 这是必需的，别删：

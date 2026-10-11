@@ -53,340 +53,128 @@ pnpm start
 
 ```
 src/
-├── app/                      # Next.js App Router 目录
-│   ├── layout.tsx           # 根布局组件
-│   ├── page.tsx             # 首页
-│   ├── globals.css          # 全局样式（包含 shadcn 主题变量）
-│   └── [route]/             # 其他路由页面
-├── components/              # React 组件目录
-│   └── ui/                  # shadcn/ui 基础组件（优先使用）
-│       ├── button.tsx
-│       ├── card.tsx
-│       └── ...
-├── lib/                     # 工具函数库
-│   └── utils.ts            # cn() 等工具函数
-└── hooks/                   # 自定义 React Hooks（可选）
-
-核心业务文件：
-
-├── src/server.ts                    # 自定义服务器入口（内嵌 Next.js + 调度器）
-├── src/lib/scheduler.ts             # node-cron 定时任务（每天 04:00 北京时间）
-├── src/lib/publish-schedule.ts      # 定时时刻表（唯一权威来源）+ 固定钟点窗口推导
-├── src/lib/translate.ts             # 翻译链路：智谱 → DeepSeek 多通道降级
-├── src/lib/runtime.ts               # 端口口径与自身地址（唯一来源）
-├── src/lib/telegram-channels.ts     # TELEGRAM_CHANNELS 解析（纯函数，有测试）
-├── src/app/api/fetch-news/route.ts  # 采集 + 翻译 + 入库主流程
-└── src/app/api/wechat/push/route.ts # 按国别组装并推送公众号草稿
+├── app/                       # Next.js App Router
+│   ├── layout.tsx             # 根布局
+│   ├── page.tsx               # 静态落地页（一句话「服务已就绪」）
+│   ├── globals.css            # 全局样式（Tailwind 4）
+│   └── api/                   # 10 个 API 路由（见下）
+├── lib/                       # 全部业务逻辑
+│   ├── feed-fetch.ts          # 抓取（RSS / Telegram）
+│   ├── article-body.ts        # 正文补抓
+│   ├── scraper.ts             # cheerio 解析
+│   ├── translate.ts           # 翻译 + 提示词 + 译后校验
+│   ├── same-event.ts          # 同事件去重（L0/L1/L1.5/L2 四层）
+│   ├── dedup-before-translate.ts
+│   ├── editor-review.ts       # AI 总审（丢弃/修正）
+│   ├── country-relevance.ts   # 国家相关性闸
+│   ├── proper-nouns.ts        # 专名/元首译名与术语闸
+│   ├── investment-score.ts    # 投资相关性评分
+│   ├── wechat-template.ts     # 公众号正文 HTML（不走 React）
+│   ├── draft-cover.ts         # 封面（sharp 转 JPEG）
+│   ├── db-articles.ts         # 库 CRUD
+│   ├── scheduler.ts           # node-cron 调度
+│   ├── publish-schedule.ts    # 时刻表（唯一出口）
+│   ├── push-limits.ts         # 每国上限等常量
+│   └── utils.ts               # 语言闸、去重助手、日期口径
+├── storage/database/
+│   └── supabase-client.ts     # 唯一的数据层入口
+└── server.ts                  # 自定义服务端入口（tsup → dist/server.js）
 ```
+
+### API 路由
+
+| 路由 | 作用 |
+|---|---|
+| `POST /api/fetch-news` | 抓取 → 翻译 → 去重 → 入库（一轮日报的主体） |
+| `POST /api/wechat/push` | 总审 → 生成草稿推公众号 |
+| `POST /api/pipeline` | 一键跑完上面两步 |
+| `POST /api/daily-digest` | 按国汇总摘要 |
+| `GET /api/articles` | 文章列表（带 `originalTitle` / `originalContent`） |
+| `POST /api/dedupe-check` | 去重体检（有 `llm=1` 走模型判组） |
+| `POST /api/judge-pairs` | 指定配对对照探针 |
+| `POST /api/format-check` | 排版自检 |
+| `POST /api/translate-check` / `POST /api/telegram-check` | 通道自检 |
+
+> `GET` 形式的 `/api/fetch-news` 与 `/api/wechat/push` 会返回 `codeVersion`（部署指纹）
+> 与 `lastRun`（内存态），是判断「线上跑的哪一版」的**首选手段**，比猜日志快。
+> 见 DEPLOY_WECHAT_CLOUD.md 的「推了代码但线上没变化？」。
 
 ## 核心开发规范
 
-### 1. 组件开发
+### ⚠️ 这是一个**没有交互式 Web UI** 的项目
 
-**优先使用 shadcn/ui 基础组件**
+唯一的「产品」是微信公众号草稿：正文 HTML 由 `src/lib/wechat-template.ts` 直接生成，
+**不经过任何 React 组件**。`src/app/` 下只有一个 `layout.tsx` 和一个静态 `page.tsx`。
 
-本项目已预装完整的 shadcn/ui 组件库，位于 `src/components/ui/` 目录。开发时应优先使用这些组件作为基础：
+**2026-10-11 已删除**整套 shadcn/ui 组件库（`src/components/ui/` 53 个文件）
+与 26 个 `@radix-ui/react-*` 等依赖 —— 它们从真实入口**全部不可达**，
+过去只躺在 `dependencies` 里让镜像变大。**不要再按「Next.js 项目优先用 shadcn」的通用规范写代码。**
 
-```tsx
-// ✅ 推荐：使用 shadcn 基础组件
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+要重新引入 UI 组件：`npx shadcn@latest add <组件>`（会同时加回组件文件与依赖），
+加完必须重跑 `pnpm verify:offline` + `npx next build`。
 
-export default function MyComponent() {
-  return (
-    <Card>
-      <CardHeader>标题</CardHeader>
-      <CardContent>
-        <Input placeholder="输入内容" />
-        <Button>提交</Button>
-      </CardContent>
-    </Card>
-  );
-}
-```
-
-**可用的 shadcn 组件清单**
-
-- 表单：`button`, `input`, `textarea`, `select`, `checkbox`, `radio-group`, `switch`, `slider`
-- 布局：`card`, `separator`, `tabs`, `accordion`, `collapsible`, `scroll-area`
-- 反馈：`alert`, `alert-dialog`, `dialog`, `toast`, `sonner`, `progress`
-- 导航：`dropdown-menu`, `menubar`, `navigation-menu`, `context-menu`
-- 数据展示：`table`, `avatar`, `badge`, `hover-card`, `tooltip`, `popover`
-- 其他：`calendar`, `command`, `carousel`, `resizable`, `sidebar`
-
-详见 `src/components/ui/` 目录下的具体组件实现。
-
-### 2. 路由开发
-
-Next.js 使用文件系统路由，在 `src/app/` 目录下创建文件夹即可添加路由：
+### 改代码后的自检纪律
 
 ```bash
-# 创建新路由 /about
-src/app/about/page.tsx
-
-# 创建动态路由 /posts/[id]
-src/app/posts/[id]/page.tsx
-
-# 创建路由组（不影响 URL）
-src/app/(marketing)/about/page.tsx
-
-# 创建 API 路由
-src/app/api/users/route.ts
+pnpm verify:offline   # tsc + 19 个离线回归套件，不联网
+npx next build        # 最接近云端的行为（含 TS 类型检查）
 ```
 
-**页面组件示例**
+- **判据改动的验收标准是「在真实语料上逐条人工判读、误报 0」**，不是「跑通了」。
+- 有些判据的下游是「重试 → 三次不过就丢稿」⇒ **误报 = 静默丢稿**，代价不对称。
+  所以新判据的方向永远是**宁漏不误杀**。
+- 阈值**不许拍**：先量、再定，且把量表和语料规模写进注释。
+- 观测类输出**不许静默截断**：可以截，但必须写明「…另 N 条」/「（原始 N 字，已截断）」。
 
-```tsx
-// src/app/about/page.tsx
-import { Button } from '@/components/ui/button';
+### 依赖管理
 
-export const metadata = {
-  title: '关于我们',
-  description: '关于页面描述',
-};
+**仅允许 pnpm**（`preinstall` 有 `only-allow pnpm` 拦着）。`packageManager: pnpm@9.0.0` 必须与
+Dockerfile 里 `corepack prepare` 的版本一致。
 
-export default function AboutPage() {
-  return (
-    <div>
-      <h1>关于我们</h1>
-      <Button>了解更多</Button>
-    </div>
-  );
-}
-```
+`dependencies` 现只有 **10 个**，全部有明确运行期引用点；加依赖前请先读
+`AGENTS.md` 的「运行时依赖只有 10 个」一节 —— 那里写了怎么正确判断一个包是否真的被用
+（**不许只 grep 包名**，要看引用它的文件是否从入口可达）。
 
-**动态路由示例**
+改完 `package.json` **必须本机跑一次 `pnpm install` 重生成 `pnpm-lock.yaml`**：
+Dockerfile 与 `build.sh` 都用 `--frozen-lockfile`，不一致就是构建硬失败。
 
-```tsx
-// src/app/posts/[id]/page.tsx
-export default async function PostPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
+### 样式
 
-  return <div>文章 ID: {id}</div>;
-}
-```
+Tailwind CSS 4，入口 `src/app/globals.css`。
+`tailwindcss` / `@tailwindcss/postcss` / `tw-animate-css` 都是**构建期**依赖，
+因此位于 `devDependencies`，会被 `pnpm prune --prod` 裁掉 —— 这是对的，别挪回 `dependencies`。
 
-**API 路由示例**
+### 时间口径
 
-```tsx
-// src/app/api/users/route.ts
-import { NextResponse } from 'next/server';
-
-export async function GET() {
-  return NextResponse.json({ users: [] });
-}
-
-export async function POST(request: Request) {
-  const body = await request.json();
-  return NextResponse.json({ success: true });
-}
-```
-
-### 3. 依赖管理
-
-**必须使用 pnpm 管理依赖**
-
-```bash
-# ✅ 安装依赖
-pnpm install
-
-# ✅ 添加新依赖
-pnpm add package-name
-
-# ✅ 添加开发依赖
-pnpm add -D package-name
-
-# ❌ 禁止使用 npm 或 yarn
-# npm install  # 错误！
-# yarn add     # 错误！
-```
-
-项目已配置 `preinstall` 脚本，使用其他包管理器会报错。
-
-### 4. 样式开发
-
-**使用 Tailwind CSS v4**
-
-本项目使用 Tailwind CSS v4 进行样式开发，并已配置 shadcn 主题变量。
-
-```tsx
-// 使用 Tailwind 类名
-<div className="flex items-center gap-4 p-4 rounded-lg bg-background">
-  <Button className="bg-primary text-primary-foreground">
-    主要按钮
-  </Button>
-</div>
-
-// 使用 cn() 工具函数合并类名
-import { cn } from '@/lib/utils';
-
-<div className={cn(
-  "base-class",
-  condition && "conditional-class",
-  className
-)}>
-  内容
-</div>
-```
-
-**主题变量**
-
-主题变量定义在 `src/app/globals.css` 中，支持亮色/暗色模式：
-
-- `--background`, `--foreground`
-- `--primary`, `--primary-foreground`
-- `--secondary`, `--secondary-foreground`
-- `--muted`, `--muted-foreground`
-- `--accent`, `--accent-foreground`
-- `--destructive`, `--destructive-foreground`
-- `--border`, `--input`, `--ring`
-
-### 5. 表单开发
-
-推荐使用 `react-hook-form` + `zod` 进行表单开发：
-
-```tsx
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-
-const formSchema = z.object({
-  username: z.string().min(2, '用户名至少 2 个字符'),
-  email: z.string().email('请输入有效的邮箱'),
-});
-
-export default function MyForm() {
-  const form = useForm({
-    resolver: zodResolver(formSchema),
-    defaultValues: { username: '', email: '' },
-  });
-
-  const onSubmit = (data: z.infer<typeof formSchema>) => {
-    console.log(data);
-  };
-
-  return (
-    <form onSubmit={form.handleSubmit(onSubmit)}>
-      <Input {...form.register('username')} />
-      <Input {...form.register('email')} />
-      <Button type="submit">提交</Button>
-    </form>
-  );
-}
-```
-
-### 6. 数据获取
-
-**服务端组件（推荐）**
-
-```tsx
-// src/app/posts/page.tsx
-async function getPosts() {
-  const res = await fetch('https://api.example.com/posts', {
-    cache: 'no-store', // 或 'force-cache'
-  });
-  return res.json();
-}
-
-export default async function PostsPage() {
-  const posts = await getPosts();
-
-  return (
-    <div>
-      {posts.map(post => (
-        <div key={post.id}>{post.title}</div>
-      ))}
-    </div>
-  );
-}
-```
-
-**客户端组件**
-
-```tsx
-'use client';
-
-import { useEffect, useState } from 'react';
-
-export default function ClientComponent() {
-  const [data, setData] = useState(null);
-
-  useEffect(() => {
-    fetch('/api/data')
-      .then(res => res.json())
-      .then(setData);
-  }, []);
-
-  return <div>{JSON.stringify(data)}</div>;
-}
-```
-
-## 常见开发场景
-
-### 添加新页面
-
-1. 在 `src/app/` 下创建文件夹和 `page.tsx`
-2. 使用 shadcn 组件构建 UI
-3. 根据需要添加 `layout.tsx` 和 `loading.tsx`
-
-### 创建业务组件
-
-1. 在 `src/components/` 下创建组件文件（非 UI 组件）
-2. 优先组合使用 `src/components/ui/` 中的基础组件
-3. 使用 TypeScript 定义 Props 类型
-
-### 添加全局状态
-
-推荐使用 React Context 或 Zustand：
-
-```tsx
-// src/lib/store.ts
-import { create } from 'zustand';
-
-interface Store {
-  count: number;
-  increment: () => void;
-}
-
-export const useStore = create<Store>((set) => ({
-  count: 0,
-  increment: () => set((state) => ({ count: state.count + 1 })),
-}));
-```
-
-### 集成数据库
-
-推荐使用 Prisma 或 Drizzle ORM，在 `src/lib/db.ts` 中配置。
+**一律用 `src/lib/utils.ts` 的 `beijingDate()`**。不要写 `new Date().toISOString().split('T')[0]`
+—— 那是 UTC 日期，北京 00:00–08:00 会算成前一天（历史上因此产生过同名草稿）。
 
 ## 技术栈
 
-- **框架**: Next.js 16.1.1 (App Router)
-- **UI 组件**: shadcn/ui (基于 Radix UI)
-- **样式**: Tailwind CSS v4
-- **表单**: React Hook Form + Zod
-- **图标**: Lucide React
-- **字体**: Geist Sans & Geist Mono
-- **包管理器**: pnpm 9+
-- **TypeScript**: 5.x
+- **Framework**: Next.js 16（App Router，Turbopack 构建）
+- **Core**: React 19
+- **Language**: TypeScript 5
+- **Styling**: Tailwind CSS 4
+- **UI 组件**: 无（见上）
+- **数据库**: Supabase PostgreSQL（表 `articles`，DDL 见 DEPLOY_WECHAT_CLOUD.md）
+- **调度**: node-cron（进程内，每天 04:00 一轮）
+- **部署**: 微信云托管（`main` 分支即部署分支）
 
 ## 参考文档
 
-- [Next.js 官方文档](https://nextjs.org/docs)
-- [shadcn/ui 组件文档](https://ui.shadcn.com)
-- [Tailwind CSS 文档](https://tailwindcss.com/docs)
-- [React Hook Form](https://react-hook-form.com)
+| 文档 | 内容 |
+|---|---|
+| [AGENTS.md](./AGENTS.md) | 项目上下文、未结项清单、各判据的实测依据 |
+| [DEPLOY_WECHAT_CLOUD.md](./DEPLOY_WECHAT_CLOUD.md) | 部署、验收、DDL、常见故障排查 |
+| [LOCAL_VERIFY.md](./LOCAL_VERIFY.md) | 本地怎么验证、门禁怎么跑 |
+| [BASELINE_2026-10-11.md](./BASELINE_2026-10-11.md) | 关闭态基线与逐条订正记录 |
+| [REVIEW_2026-10-10.md](./REVIEW_2026-10-10.md) | 一次全仓复盘（历史记录，**不修改**） |
 
 ## 重要提示
 
-1. **必须使用 pnpm** 作为包管理器
-2. **优先使用 shadcn/ui 组件** 而不是从零开发基础组件
-3. **遵循 Next.js App Router 规范**，正确区分服务端/客户端组件
-4. **使用 TypeScript** 进行类型安全开发
-5. **使用 `@/` 路径别名** 导入模块（已配置）
+1. **`main` 是云托管绑定的部署分支** —— `git push` 本身就是一次完整重建 + 滚动发布。
+   **不要在任务窗口（北京 03:45–11:15）里推**；推前先确认线上没有长任务在跑。
+2. **历史实测记录一律不改**。新结论用「supersede」的方式新增订正段，
+   不删原文 —— 改历史等于伪造记录。
+3. 报告类的数字（阈值、计数、耗时）**必须能复算**，并且要写清语料规模与口径；
+   查不出来就写「没查出来」，不要给一个像模像样的假结论。

@@ -5,8 +5,9 @@
 - **Framework**: Next.js 16 (App Router)
 - **Core**: React 19
 - **Language**: TypeScript 5
-- **UI 组件**: shadcn/ui (基于 Radix UI)
-- **Styling**: Tailwind CSS 4
+- **UI 组件**: **无**。整套 shadcn/ui（Radix + 26 个组件文件）已于 2026-10-11 删除 ——
+  全仓不可达，详见本文档「UI 生态现状」一节。**别再往 `dependencies` 里加 UI 库。**
+- **Styling**: Tailwind CSS 4（现仅服务于 `src/app/page.tsx` 那一个静态落地页）
 
 ## 未结项（截至 2026-09-29）
 
@@ -2821,22 +2822,24 @@ uz 组#1  保留：乌兹别克斯坦与丹麦签署政治磋商备忘录
 
 ```
 ├── public/                 # 静态资源
-├── scripts/                # 构建与启动脚本
-│   ├── build.sh            # 构建脚本
+├── scripts/                # 构建/启动脚本 + 离线回归门禁 + 分析脚本
+│   ├── build.sh            # 构建脚本（pnpm install → next build → tsup）
 │   ├── dev.sh              # 开发环境启动脚本
-│   ├── prepare.sh          # 预处理脚本
-│   └── start.sh            # 生产环境启动脚本
+│   └── start.sh            # 生产环境启动脚本（node dist/server.js）
 ├── src/
-│   ├── app/                # 页面路由与布局
-│   ├── components/ui/      # Shadcn UI 组件库
-│   ├── hooks/              # 自定义 Hooks
-│   ├── lib/                # 工具库
-│   │   └── utils.ts        # 通用工具函数 (cn)
-│   └── server.ts           # 自定义服务端入口
-├── next.config.ts          # Next.js 配置
+│   ├── app/                # 页面路由与布局（只有 layout.tsx + 静态 page.tsx + api/**）
+│   ├── lib/                # 全部业务逻辑（翻译/去重/总审/采集/推送/排版）
+│   │   └── utils.ts        # 语言闸、去重助手、日期口径（**不只是 cn**）
+│   ├── storage/database/
+│   │   └── supabase-client.ts   # 唯一的数据层入口
+│   └── server.ts           # 自定义服务端入口（tsup 打包成 dist/server.js）
+├── next.config.mjs         # Next.js 配置（.mjs，运行期不依赖 typescript）
 ├── package.json            # 项目依赖管理
 └── tsconfig.json           # TypeScript 配置
 ```
+
+> 2026-10-11 更正：原版这里列着 `components/ui/`、`hooks/` 和 `next.config.ts`，
+> 三者都已不存在（前两者是死文件、第三个是记错的后缀）。详见「UI 生态现状」一节。
 
 - 项目文件（如 app 目录、pages 目录、components 等）默认初始化到 `src/` 目录下。
 
@@ -2848,6 +2851,37 @@ uz 组#1  保留：乌兹别克斯坦与丹麦签署政治磋商备忘录
 - 安装开发依赖：`pnpm add -D <package>`
 - 安装所有依赖：`pnpm install`
 - 移除依赖：`pnpm remove <package>`
+
+### ★ 运行时依赖只有 10 个 —— 加依赖前先读这里（2026-10-11）
+
+`dependencies` 现在**只剩 10 个**，每一个都有明确的运行期引用点：
+
+| 包 | 谁在用 |
+|---|---|
+| `next` | 框架本体 |
+| `react` / `react-dom` | `layout.tsx` / `page.tsx` + Next 的 peer（**自动 JSX runtime，代码里不会出现 `import react`**） |
+| `@supabase/supabase-js` | `storage/database/supabase-client.ts` |
+| `node-cron` | `lib/scheduler.ts`（`dist/server.js` 的外部 require 之一） |
+| `rss-parser` | `lib/feed-fetch.ts` / `lib/article-body.ts` |
+| `cheerio` | `lib/scraper.ts` |
+| `sharp` | 推送封面转 JPEG（`await import('sharp')`） |
+| `clsx` / `tailwind-merge` | `lib/utils.ts` 顶层的 `cn()` —— 该模块被 5 个 API 路由 import，**运行期必须可解析** |
+
+**纪律（这次是按它执行的，别推翻）**：
+
+1. **判断一个包能不能卸，不许用「grep 包名」** —— 那会把文档里的提及算成引用。要看
+   「**引用它的文件里，有没有一个从入口可达**」。入口是 `src/app/**` + `src/server.ts`
+   （生产侧）与 `scripts/**`（工具链侧），**不是「src 下所有文件」**——
+   后者会让死文件自己证明自己可达。
+2. **两类假信号必须人工排除**：
+   - `react` / `react-dom` —— 自动 JSX runtime ⇒ **代码里不会出现 import**；
+   - `typescript` / `tsup` / `eslint` / `stylelint` / `tsx` / `only-allow` —— **命令行调用**，
+     也永远不出现在 import 里。删了它们 `build.sh` 直接挂。
+3. `@types/*` 是给 `tsc` 用的（`tsconfig.json` 没有 `types` 白名单 ⇒ 自动收录全部 `@types`）。
+   只有当**对应的运行库也被删掉**时才能删对应的 `@types`。
+4. 改完 `package.json` **必须在本机跑一次 `pnpm install` 重生成 `pnpm-lock.yaml`** ——
+   Dockerfile 与 `build.sh` 都用 `--frozen-lockfile`，不一致就是**构建硬失败**。
+   验收命令：`pnpm install --frozen-lockfile --lockfile-only`（必须 exit 0）。
 
 ### ⚠️ 用到「传递依赖」时必须先提升为直接依赖
 
@@ -3016,8 +3050,33 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 
 ## UI 设计与组件规范 (UI & Styling Standards)
 
-- 模板默认预装核心组件库 `shadcn/ui`，位于`src/components/ui/`目录下
-- Next.js 项目**必须默认**采用 shadcn/ui 组件、风格和规范，**除非用户指定用其他的组件和规范。**
+### ⚠️ 本项目的真实形态：**没有交互式 Web UI**（2026-10-11 更正）
+
+原来这里写的是模板自带的两条（「默认预装 `shadcn/ui`，位于 `src/components/ui/`」、
+「Next.js 项目必须默认采用 shadcn/ui」）。**那两条对本项目已经不成立，不要再照着做。**
+
+事实是：`src/app/` 下只有一个 `layout.tsx` 和一个静态 `page.tsx`（一句话的服务就绪页）。
+唯一的「产品」是微信公众号草稿 —— 正文 HTML 由 `src/lib/wechat-template.ts` 生成，
+**不经过任何 React 组件**。
+
+**已删除的东西（别以为是丢了）**：
+
+| 删了什么 | 为什么 |
+|---|---|
+| `src/components/ui/*.tsx`（53 个） | 从真实入口（`src/app/**` + `src/server.ts`）**全部不可达** |
+| `src/hooks/use-mobile.ts` | 只被 `sidebar.tsx` 引用，而后者也是死文件 |
+| 26 个 `@radix-ui/react-*` + `class-variance-authority` / `cmdk` / `lucide-react` / `recharts` / `react-hook-form` / `react-day-picker` / `react-resizable-panels` / `embla-carousel-react` / `input-otp` / `next-themes` / `sonner` / `vaul` | 全部**只被上面那批死组件引用** |
+
+**要重新引入 UI 组件时的正确做法**：`npx shadcn@latest add <组件>` 会把组件文件和所需依赖
+一起加回 `dependencies`；不要手工一条条装 Radix。加完**必须**再跑一次
+`pnpm verify:offline` + `npx next build`，然后**把这一节改回来**。
+
+### Tailwind 在本项目里的角色
+
+`globals.css` 顶部是 `@import 'tailwindcss'` + `@import 'tw-animate-css'`，
+两者都是**构建期**依赖（PostCSS 处理），所以 `tailwindcss` / `@tailwindcss/postcss` /
+`tw-animate-css` 都在 `devDependencies` 里 —— 运行时的镜像里**不需要**它们。
+`pnpm prune --prod` 会把它们裁掉，这是**对的**，不要「顺手」把它们挪回 `dependencies`。
 
 ## 项目概述
 
@@ -3050,7 +3109,10 @@ corepack 会先下载指定版本，并**弹一个交互式确认**：
 ### 数据层
 - **数据库**: Supabase PostgreSQL，表 `articles`
 - `src/lib/db-articles.ts` - 数据库 CRUD 操作
-- `src/storage/database/shared/schema.ts` - Drizzle ORM schema
+- `src/storage/database/supabase-client.ts` - **唯一**的连库入口
+- **建表语句（DDL）不在这里，也不在代码里** —— 已随 `storage/database/shared/schema.ts`
+  的删除抄进 `DEPLOY_WECHAT_CLOUD.md` 的「5.1 建表语句」。原版这两行把那个 Drizzle 文件
+  写成「Drizzle ORM schema」，但全仓无人 import 它，运行期根本不走 Drizzle（已删）。
 - `src/lib/data/types.ts` - 类型定义
 - `src/lib/data/countries.ts` - 国家数据
 - `src/lib/data/categories.ts` - 分类数据

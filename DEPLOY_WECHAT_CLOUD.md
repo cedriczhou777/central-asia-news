@@ -461,8 +461,77 @@ tar -czf deploy.tar.gz \
 
 如果使用 Supabase：
 1. 在 Supabase 创建项目
-2. 执行 `src/storage/database/shared/schema.ts` 中的建表语句
+2. 按下面「建表语句」一节建表
 3. 将连接信息填入环境变量
+
+#### 5.1 建表语句（DDL）——**权威副本在这里，不在代码里**
+
+> 2026-10-11：原指向 `src/storage/database/shared/schema.ts`。该文件是**扣子/Drizzle 时代的遗留**
+> （全仓无人 import，运行期用的是 `supabase-client.ts`），已随仓库瘦身删除。
+> **DDL 在删除前抄录于此**，以后不要再去找那个文件。
+
+```sql
+-- 健康检查表（容器探针/自检用）
+CREATE TABLE IF NOT EXISTS health_check (
+  id         SERIAL NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 主表
+CREATE TABLE IF NOT EXISTS articles (
+  id                SERIAL PRIMARY KEY,
+  title             TEXT NOT NULL,
+  summary           TEXT NOT NULL,
+  content           TEXT NOT NULL,
+  country_code      VARCHAR(10) NOT NULL,
+  category          VARCHAR(30) NOT NULL,
+  source_name       VARCHAR(100) NOT NULL,
+  source_url        TEXT,
+  original_title    TEXT,
+  original_content  TEXT,
+  original_language VARCHAR(10),
+  published_at      TIMESTAMPTZ NOT NULL,
+  tags              JSONB,
+  is_featured       BOOLEAN NOT NULL DEFAULT false,
+  cover_image       TEXT,
+  image_urls        JSONB,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS articles_country_code_idx ON articles (country_code);
+CREATE INDEX IF NOT EXISTS articles_category_idx     ON articles (category);
+CREATE INDEX IF NOT EXISTS articles_published_at_idx ON articles (published_at);
+CREATE INDEX IF NOT EXISTS articles_is_featured_idx  ON articles (is_featured);
+```
+
+#### 5.2 ⚠️ 仓库里还有**另一份** `CREATE TABLE`，两份**不一致**
+
+`container.config.json` 的 `topics.container.executeSQLs[0]`（第 327 行）也有一条
+`CREATE TABLE IF NOT EXISTS articles (...)`。它与上面这份的差异：
+
+| 项 | `schema.ts`（本页 §5.1） | `container.config.json` |
+|---|---|---|
+| `cover_image` / `image_urls` | **有** | **无** ⚠️ |
+| 4 个索引 | **有** | 无 |
+| `country_code` | VARCHAR(10) | VARCHAR(2) |
+| `category` | VARCHAR(30) | VARCHAR(20) |
+| `source_name` | VARCHAR(100) | VARCHAR(50) |
+| `original_language` | VARCHAR(10) | VARCHAR(5) |
+| `updated_at` | 可空 | DEFAULT NOW() |
+
+**两者的定位不同，别把它们当成同一份**：`executeSQLs` 只在**建库/换库时**跑一次（`IF NOT EXISTS`），
+是「把空库拉到能启动」的最小集；§5.1 是代码曾经声明过的形状。
+
+**唯一权威是 Supabase 里**articles**表本身的现状** —— 因为 `cover_image` / `image_urls`
+这两列是运行期真的在读写的（推送封面、正文配图），线上表必然有；但**两张纸都不能证明线上表的实际列**。
+要核对请直接查库：
+
+```sql
+SELECT column_name, data_type, character_maximum_length
+FROM information_schema.columns
+WHERE table_name = 'articles' ORDER BY ordinal_position;
+```
 
 ### 6. 验证部署（在云托管上调试）
 
