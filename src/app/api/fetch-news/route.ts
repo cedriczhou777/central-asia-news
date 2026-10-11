@@ -210,8 +210,15 @@ interface FetchSummary {
       tableVersion: string;
       currency: number;
       wrongNoun: number;
+      /** 元首写法命中篇次（2026-10-11 加） */
+      headOfState: number;
+      /** 日期缺月份命中篇次（2026-10-11 加） */
+      dateAmbiguous: number;
       dropped: number;
-      samples: Array<{ kind: 'currency' | 'wrong-noun'; detail: string }>;
+      samples: Array<{
+        kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month';
+        detail: string;
+      }>;
       dropSamples: string[];
       probe: string;
       expected: string;
@@ -1697,15 +1704,17 @@ async function processFetchNews(
        * 术语闸（2026-10-05 加）—— 货币与所属国不符 / 已知错译写法。
        *
        * ⚠️ **这是一道硬闸**：命中 ⇒ 重试 ⇒ 三次不过**丢稿**。所以这一块不是
-       * 「性能指标」，是「丢稿预警」：`currency` / `wrongNoun` 只要不是 0，
-       * 就要去读 `samples` 那 20 条，确认拦的是真缺陷而不是误杀。
-       * 零值**不代表闸没生效** —— 看 `probe`。
+       * 「性能指标」，是「丢稿预警」：`currency` / `wrongNoun` / `headOfState` /
+       * `dateAmbiguous` 只要不是 0，就要去读 `samples` 那 20 条，确认拦的是真缺陷
+       * 而不是误杀。零值**不代表闸没生效** —— 看 `probe`。
        */
       termGate: {
         /** 术语表版本号。改表必须改它；它一变就说明口径变了，两轮数据不可直接比。 */
         tableVersion: PROPER_NOUN_VERSION,
         currency: translation.termGate.currency,
         wrongNoun: translation.termGate.wrongNoun,
+        headOfState: translation.termGate.headOfState,
+        dateAmbiguous: translation.termGate.dateAmbiguous,
         /**
          * ⚠️ **唯一需要盯着不为 0 的数**：因为术语闸而最终不入库的篇数。
          * `currency`/`wrongNoun` 变大是好事（闸在干活、稿子被重试救回来）；
@@ -1715,7 +1724,7 @@ async function processFetchNews(
         samples: translation.termGate.samples,
         dropSamples: translation.termGate.dropSamples,
         /**
-         * 活体探针：**真判据**跑固定样例，左侧三条必须命中、右侧三条必须放行。
+         * 活体探针：**真判据**跑固定样例，左侧六条必须命中、右侧六条必须放行。
          * 与 `expected` 一致 ⇒ 这一版的判据确实在线上跑；不一致 ⇒ 部署没到位或判据被改坏。
          */
         probe: termGateProbe(),

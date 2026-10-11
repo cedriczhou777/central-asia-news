@@ -210,6 +210,23 @@ export interface DedupResult<T> {
      * 和 `promptHash` 一起看才能把「答案变了」三分。见 {@link PairJudgeResult.askedSetHash}。
      */
     askedSetHash?: string;
+    /**
+     * ★ **被 `MAX_GROUP_SIZE` 整簇否掉的簇**（2026-10-11 新增，pair 形态才有）。
+     *
+     * 为什么必须结构化：在这之前这件事**只有一个错误串** ——
+     * `有 N 个簇因超过 4 条被整簇丢弃（模型的判定在传递）` —— 它既不说簇有多大、
+     * 也不说谁在里面（那条 warn 只打**第一个**簇的前 6 条标题，还是 `.slice(0, 6)` 静默截断）。
+     * 而这条护栏的代价**全在被省略掉的那些条目上**：
+     * 2026-10-11 kg 那一轮，一个 9 条的簇被判超限 ⇒ `judgedGroups.length === 0`
+     * ⇒ `dedupeStories` 提前返回、`llm.ok=false` ⇒ **该国整批模型判组一起作废** ⇒
+     * 9 条「楚河州 100 周年」同题稿里至少 6 条直接进了草稿（`draft.cover_from_title` 就是其中一条）。
+     * 只看到 `ok:false` 的人**无从知道丢的是这一簇、更无从知道是 9 条**。
+     *
+     * `size` 与 `titles.length` **必须恒等**（两条一起给是故意的）：这样「有人只 slice 了
+     * `titles` 却忘了同步 `size`」这类改动，在读数时立刻暴露成 `size≠titles.length`，
+     * 而不是变成一个悄悄缩小的簇——那正是本字段要治的病。
+     */
+    oversizedClusters?: Array<{ size: number; titles: string[] }>;
   };
 }
 
@@ -1224,6 +1241,44 @@ export function filterOversizedGroups(
 }
 
 /**
+ * 把**因为超过 `MAX_GROUP_SIZE` 被整簇丢掉**的簇渲染成一行日志文本：
+ * 每个簇报**真实条数** + **全部成员标题**。
+ *
+ * ## 为什么需要它（2026-10-11）
+ *
+ * 原先两处 warn 都是 `oversize.slice(0, 6).map(…).join(' | ') …`，有两个缺陷叠在一起：
+ *   1. 只取**第一个**超限簇（`find` / `oversize[0]`），其余的簇连条数都不报；
+ *   2. 每个簇只印 **6 条**，且是**静默**截断。
+ * 于是 kg 那一轮 9 条同题稿被整簇否掉时，日志上看到的是「6 条看着确实挺像」，
+ * 恰好掩盖了「9 条、7 条来自同一家 Kabar」这个真正该看见的形状。
+ *
+ * ⇒ 这里的唯一设计约束是：**不许静默截断**。超过 `perCluster` 条时把省下的条数
+ *   **显式写出来**（`…另 N 条`），并指向全量所在的结构化字段
+ *   （{@link SameEventLlm.oversizedClusters}）。日志行有长度上限是合理的，
+ *   但「截断了却不说」与「截断了并说明」是两回事 —— 前者会让读日志的人得出反结论。
+ *
+ * 导出是**故意的**（与 `filterOversizedGroups` 同理）：`scripts/test-dedup.ts`
+ * 直接拿它跑固定簇，断言「12 条成员一个不少地出现在日志里」——
+ * 否则「有人把 `perCluster` 调小或加回 `.slice(0, 6)`」这类改动不会报错。
+ */
+export function describeOversizedClusters(
+  clusters: number[][],
+  titleOf: (i: number) => string | undefined,
+  perCluster = 40,
+): string {
+  return clusters
+    .map((g) => {
+      const shown = g.slice(0, perCluster).map((i) => titleOf(i) || '(无标题)');
+      const rest = g.length - shown.length;
+      const head = `[${g.length} 条]`;
+      return rest > 0
+        ? `${head} ${shown.join(' | ')} …另 ${rest} 条（全量见 oversizedClusters）`
+        : `${head} ${shown.join(' | ')}`;
+    })
+    .join(' ／ ');
+}
+
+/**
  * 解析模型返回的分组。**只接受合法下标**：
  * 越界、重复、单元素分组一律丢掉，而不是抛错 ——
  * 宁可这次不合并，也不要让一次脏输出掀掉整轮推送。
@@ -1739,13 +1794,15 @@ export async function judgeSameEventGroups<
     if (rejected > 0) {
       // 整组丢弃（见 MAX_GROUP_SIZE 的说明）。这里必须打日志：
       // 静默丢弃的话，「模型退化成乱合并」这件事就看不出来了。
+      //
+      // ⚠️ `group` 形态**没有** `llm.oversizedClusters` 可挂（它不是生产链路，见
+      // `JudgeMode` 顶部注释：生产只用 `pair`），所以这里的 warn 就是唯一的读数 ——
+      // 更要按「报全部簇 + 全部成员」来打（2026-10-11 同步 pair 形态的改动）。
       rejectedBySize += rejected;
       const oversize = parsed.filter((g) => g.length > MAX_GROUP_SIZE);
       console.warn(
-        `[same-event] ${rejected} 个分组超过上限 ${MAX_GROUP_SIZE} 条，整组不采信。示例：${oversize[0]
-          .slice(0, 6)
-          .map((i) => rows[i]?.title)
-          .join(' | ')} …`,
+        `[same-event] ${rejected} 个分组超过上限 ${MAX_GROUP_SIZE} 条，整组不采信：` +
+          describeOversizedClusters(oversize, (i) => rows[i]?.title),
       );
     }
     for (const g of kept) {
@@ -1919,12 +1976,16 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
       const clustered = clusterPairs(res.pairs);
       const { kept, rejected } = filterOversizedGroups(clustered);
       if (rejected > 0) {
-        const oversize = clustered.find((g) => g.length > MAX_GROUP_SIZE) || [];
+        const oversize = clustered.filter((g) => g.length > MAX_GROUP_SIZE);
+        // 报**全部**超限簇、每簇报**全部成员**（含真实条数）。原先只印第一个簇的前 6 条，
+        // 恰好把 kg「9 条同题稿被整簇否掉」这个形状盖住了 —— 见 describeOversizedClusters。
+        llm.oversizedClusters = oversize.map((g) => ({
+          size: g.length,
+          titles: g.map((i) => keptAfterIdentity[i]?.title ?? ''),
+        }));
         console.warn(
-          `[same-event] pair 合并出 ${rejected} 个超过 ${MAX_GROUP_SIZE} 条的簇，整簇不采信。示例：${oversize
-            .slice(0, 6)
-            .map((i) => keptAfterIdentity[i]?.title)
-            .join(' | ')} …`,
+          `[same-event] pair 合并出 ${rejected} 个超过 ${MAX_GROUP_SIZE} 条的簇，整簇不采信：` +
+            describeOversizedClusters(oversize, (i) => keptAfterIdentity[i]?.title),
         );
         judgedError = `有 ${rejected} 个簇因超过 ${MAX_GROUP_SIZE} 条被整簇丢弃（模型的判定在传递）`;
       }

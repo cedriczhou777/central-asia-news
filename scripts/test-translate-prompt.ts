@@ -53,7 +53,7 @@
  * 混在一起查会查错方向。
  */
 import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint, buildPrompt } from '../src/lib/translate';
-import { COUNTRY_CURRENCY } from '../src/lib/proper-nouns';
+import { COUNTRY_CURRENCY, HEAD_OF_STATE } from '../src/lib/proper-nouns';
 import { RSS_SOURCES } from '../src/lib/data/rss-sources';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
@@ -226,6 +226,22 @@ for (const name of ['托卡耶夫', '米尔济约耶夫', '扎帕罗夫', '阿�
 for (const lat of ['Tokayev', 'Mirziyoyev', 'Japarov', 'Aliyev', 'Rahmon']) {
   ok(`❗ 提示词里没有拉丁写法的领导人名字「${lat}」`, !P.includes(lat));
 }
+
+// ★★ 2026-10-11 **局部订正**（supersede：上面那两条的历史记录原样保留，不动）。
+//
+// 上面两条断言的是「**模板里**不许硬写领导人名字」，这条口径**不变、也不该变**。
+// 但用户在 2026-10-11 明确要求：「总统的名字，固定用中文，并且请翻译好，用约定俗成的，
+// 比如，吉尔吉斯的是扎帕罗夫」。而实测的后果是同一轮 kg 稿子里三种写法并存：
+//   `Sadyr Zhaparov` 4 条 /「贾帕罗夫」4 条 /「朱帕罗夫」1 条 / 约定俗成的「扎帕罗夫」**0 条**
+// ⇒ 「只说写中文、不给名字」等于把**转写**这件确定性的事交给模型去猜，它猜出了三个答案。
+//
+// 所以新增了**逐篇注入**：`{HEADSOFSTATE}` 在渲染时换成**本条稿子所属国**的元首中文名，
+// 与闸门共用 `HEAD_OF_STATE` 同一张表（见 `headOfStatePromptLine`）。
+// 这与上面那条禁令**不矛盾**，因为注入行自带一句：
+// 「原文没有提到元首时，译文里就不许出现元首的姓名或职务 —— 这一条只告诉你
+// 该用哪个写法，不是让你把元首补进正文」。
+// 模板本身仍然**一个名字都不许硬写** —— 那正是上面两条断言在把关的事；
+// 渲染后的断言在下面 `{HEADSOFSTATE}` 那一节。
 ok(
   '❗ 保留「国家元首 / 政府首脑 / 外交部长 → 中文」的**职务判据**（只是不再给名字）',
   P.includes('国家元首') && P.includes('政府首脑') && P.includes('外交部长'),
@@ -435,7 +451,7 @@ for (const en of ['Astana', 'Almaty', 'Bishkek', 'Dushanbe', 'Baku', 'Khujand'])
 
 section('三、结构性不变量');
 
-for (const ph of ['{LANG}', '{TITLE}', '{CONTENT}', '{CATEGORIES}', '{COUNTRY}', '{CURRENCIES}']) {
+for (const ph of ['{LANG}', '{TITLE}', '{CONTENT}', '{CATEGORIES}', '{COUNTRY}', '{CURRENCIES}', '{HEADSOFSTATE}']) {
   ok(`占位符 ${ph} 仍在（缺了就原样发给模型）`, P.includes(ph));
 }
 
@@ -500,6 +516,78 @@ for (const ph of ['{LANG}', '{TITLE}', '{CONTENT}', '{CATEGORIES}', '{COUNTRY}',
   ok(
     '❗ 提示词把「苏丹」讲成了元首称号（不是国家）',
     rendered.includes('苏丹') && /元首称号/.test(rendered) && rendered.includes('苏丹国王'),
+  );
+}
+
+// ★★ `{HEADSOFSTATE}` 是 2026-10-11 新增的。用户原话：
+// 「总统的名字，固定用中文，并且请翻译好，用约定俗成的，比如，吉尔吉斯的是扎帕罗夫，
+// 但是你看看你怎么翻译的，要么用英文，要么用不同的汉字，贾帕罗夫，朱帕罗夫，SadyrZhaparov」。
+//
+// 事故形状：提示词第 6 条从 2026-09-28 起就写着「本条所属国家的元首写中文」，
+// **但没给名字**（当年是故意的，怕示例被搬去当主语）。结果一轮 kg 稿子里三种写法并存 ——
+// `Sadyr Zhaparov` 4 条 / 「贾帕罗夫」4 条 / 「朱帕罗夫」1 条 / 约定俗成的「扎帕罗夫」**0 条**。
+// ⇒ 「只说写中文、不给名字」等于把**转写**这件确定性的事交给模型去猜，它猜出三个答案。
+//
+// ⚠️ 与 `{CURRENCIES}` 是**同一种做法**（生成式注入、与闸门共用同一张表），
+// 所以断言也照抄一遍：表进了提示词、逐国正确、是生成式的、**并且带上了那句禁令**。
+{
+  const rendered = buildPrompt('Тест', 'Содержание', 'ky', '吉尔吉斯斯坦');
+  ok('❗ 渲染后不留 `{HEADSOFSTATE}`', !rendered.includes('{HEADSOFSTATE}'));
+  // ⚠️ 五国逐个渲染。**不要**写成「循环里 `|| true` 兜一下」——
+  // 那样的断言恒真，是个假绿灯（2026-10-11 在本项目已抓到过一次同类问题）。
+  const NAMES: Record<string, string> = {
+    kz: '哈萨克斯坦',
+    uz: '乌兹别克斯坦',
+    kg: '吉尔吉斯斯坦',
+    tj: '塔吉克斯坦',
+    az: '阿塞拜疆',
+  };
+  for (const [code, name] of Object.entries(NAMES)) {
+    const spec = HEAD_OF_STATE[code as keyof typeof HEAD_OF_STATE];
+    const r = buildPrompt('Тест', 'Содержание', 'ru', name);
+    ok(
+      `注入的是 ${name} 的元首「${spec.zhFull}」`,
+      r.includes(spec.zhFull),
+      '没注入 ⇒ 模型只能自己猜音译（2026-10-11 实测同一轮里猜出了三种写法）',
+    );
+    ok(
+      `  └ ${name} 的提示词里不含别国元首名（不串国）`,
+      Object.entries(HEAD_OF_STATE)
+        .filter(([c]) => c !== code)
+        .every(([, s]) => !r.includes(s.zhFull)),
+    );
+  }
+  // 上面那个「不串国」断言有个前提：模板里本身不许出现任何元首名。
+  ok(
+    '模板里一个元首名都没有（否则「不串国」那条会变成恒真）',
+    Object.values(HEAD_OF_STATE).every((s) => !TRANSLATE_PROMPT.includes(s.zhFull)),
+    '模板里硬写就与 `HEAD_OF_STATE` 分叉了',
+  );
+  ok(
+    '换一个国家注入的是另一个元首（不是硬编码）',
+    buildPrompt('Тест', 'Содержание', 'kk', '哈萨克斯坦').includes(HEAD_OF_STATE.kz.zhFull) &&
+      !buildPrompt('Тест', 'Содержание', 'kk', '哈萨克斯坦').includes(HEAD_OF_STATE.kg.zhFull),
+  );
+  ok(
+    '❗ 注入是**生成式**的（与闸门同源，不是手写在模板里）',
+    /\.replace\('\{HEADSOFSTATE\}', headOfStatePromptLine\(countryName\)\)/.test(
+      readFileSync(resolve(process.cwd(), 'src/lib/translate.ts'), 'utf8'),
+    ),
+    '手写的名字迟早与 `HEAD_OF_STATE` 分叉 ⇒ 模型按 A 写、闸门按 B 判，每篇都过不了闸',
+  );
+  // ⚠️ 这一条是**注入的代价**，不能随占位符一起丢：2026-10-01 实测过，
+  // 提示词里列出来的领导人名字会被搬去当正文主语（一篇只有交通部的公路稿
+  // 被写成「〈某国总统〉政府完成…」）。给的是**写法**，不是**素材**。
+  ok(
+    '❗ 注入必须配「元首名字只是写法标准、不是素材」的禁令（否则用新错换旧错）',
+    rendered.includes('原文没有提到元首时，译文里就不许出现元首的姓名或职务'),
+  );
+  ok('元首那一行还要求「全篇统一」', rendered.includes('全篇统一'));
+  // 提示词里**不许**把元首名字当示例散落在别处 —— 只许出现在这一个注入位。
+  ok(
+    '元首名字只在注入位出现（正文示例里不许再列中亚领导人名）',
+    (TRANSLATE_PROMPT.match(/萨德尔·扎帕罗夫/g) || []).length === 0,
+    '模板里硬写就与 `HEAD_OF_STATE` 分叉了；示例散落还会诱发「搬去当主语」',
   );
 }
 
@@ -789,7 +877,50 @@ section('八、术语类的修正指令');
   ok('错译写法类：给了 wrong→right 的字面映射', hintNoun.includes('阿利穆拉特') && hintNoun.includes('阿拉木图'));
   ok('错译写法类：带上了「为什么错」', hintNoun.includes('通行译名'));
 
-  // 三类问题同时出现 → **一次说全**（重试只有一次机会）
+  // ---- 2026-10-11 加的两块 ----
+  const hintHos = buildRepairHint({
+    kind: 'wrong-head-of-state',
+    tokens: [],
+    headOfState: [
+      {
+        kind: 'latin',
+        sample: '总统 Sadyr',
+        right: '萨德尔·扎帕罗夫',
+        country: '吉尔吉斯斯坦',
+        why: '该写中文',
+      },
+      {
+        kind: 'not-head-of-state',
+        sample: '塔吉克斯坦总统伊斯坎德尔·萨德洛夫',
+        right: '埃莫马利·拉赫蒙',
+        country: '塔吉克斯坦',
+        why: '此人不是元首',
+      },
+    ],
+  });
+  ok('元首类：拉丁那一类给了「该写什么」', hintHos.includes('萨德尔·扎帕罗夫'));
+  ok('元首类：非元首那一类被点名了', hintHos.includes('伊斯坎德尔·萨德洛夫'));
+  ok(
+    '❗ 元首类：两类**必须分开讲**（合成一段会把「加错头衔」修成「换成元首名字」= 另一处事实错误）',
+    hintHos.includes('不要靠替换名字修') && hintHos.includes('约定俗成的中文译名'),
+  );
+  ok('元首类：强调同一处要一起改、全篇只留一种写法', hintHos.includes('全篇只留一种写法'));
+
+  const hintDate = buildRepairHint({
+    kind: 'date-no-month',
+    tokens: [],
+    dateAmbiguous: { samples: ['23日', '25日'], why: '通篇没有月份' },
+  });
+  ok('日期类：点名了被拦下的写法', hintDate.includes('23日') && hintDate.includes('25日'));
+  ok('日期类：给的是「回到原文找月份」的机械指令', hintDate.includes('回到原文'));
+  ok('日期类：给了正确示例（23-25 октября → 10 月 23 日至 25 日）', hintDate.includes('10 月 23 日至 25 日'));
+  ok(
+    '❗ 日期类：说清了「原文确实没有月份时不要补」（否则这段指令自己会造出假日期）',
+    hintDate.includes('确实没有') && hintDate.includes('就不要自己补一个'),
+  );
+  ok('日期类：提醒「序数别当日期」', hintDate.includes('序数'));
+
+  // 六类问题同时出现 → **一次说全**（重试只有一次机会）
   const hintTri = buildRepairHint({
     kind: 'half-translated',
     tokens: ['阿克tau市'],
@@ -801,13 +932,25 @@ section('八、术语类的修正指令');
       reason: '探针用',
     },
     wrongNouns: [{ wrong: '苏丹国王', right: '阿曼苏丹', why: '苏丹本身就是元首称号' }],
+    headOfState: [
+      {
+        kind: 'latin',
+        sample: '总统 Ilham',
+        right: '伊利哈姆·阿利耶夫',
+        country: '阿塞拜疆',
+        why: '该写中文',
+      },
+    ],
+    dateAmbiguous: { samples: ['8日', '9日'], why: '通篇没有月份' },
   });
   ok(
-    '❗ 四类问题同时命中时，修正指令**四块都带**（不是二选一）',
+    '❗ 六类问题同时命中时，修正指令**六块都带**（不是二选一）',
     hintTri.includes('阿克tau市') &&
       hintTri.includes('下调1.5倍') &&
       hintTri.includes('马纳特') &&
-      hintTri.includes('苏丹国王'),
+      hintTri.includes('苏丹国王') &&
+      hintTri.includes('伊利哈姆·阿利耶夫') &&
+      hintTri.includes('8日'),
     '只说一类，另一类会撑到三次用完然后丢稿',
   );
 }

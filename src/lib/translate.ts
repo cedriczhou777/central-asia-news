@@ -12,10 +12,15 @@ import type { Category } from './data/types';
 import {
   checkCurrencyCountryFit,
   checkWrongProperNouns,
+  checkHeadOfStateNames,
+  checkDateMonthAmbiguity,
   countryCodeByName,
   currencyPromptTable,
+  headOfStatePromptLine,
   type CurrencyMismatch,
   type WrongNounHit,
+  type HeadOfStateHit,
+  type DateAmbiguity,
 } from './proper-nouns';
 
 /**
@@ -259,6 +264,10 @@ interface TranslationStats {
     currency: number;
     /** 已知错译写法：命中篇次 */
     wrongNoun: number;
+    /** 元首写法（拉丁写法 / 给非元首加了元首头衔）：命中篇次（2026-10-11 加） */
+    headOfState: number;
+    /** 日期缺月份：命中篇次（2026-10-11 加，**只在原文有月份时才可能命中**） */
+    dateAmbiguous: number;
     /**
      * **因为术语闸而最终不入库的篇数**（所有通道 + 所有重试都没过）。
      *
@@ -269,7 +278,10 @@ interface TranslationStats {
      */
     dropped: number;
     /** 逐条样本（截断到 20 条），上线首日复核用 */
-    samples: Array<{ kind: 'currency' | 'wrong-noun'; detail: string }>;
+    samples: Array<{
+      kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month';
+      detail: string;
+    }>;
     /** 丢稿样本（截断到 10 条）—— `dropped` 不为 0 时看这里 */
     dropSamples: string[];
   };
@@ -278,7 +290,15 @@ interface TranslationStats {
 const emptyStats = (): TranslationStats => ({
   providerCounts: {},
   errors: [],
-  termGate: { currency: 0, wrongNoun: 0, dropped: 0, samples: [], dropSamples: [] },
+  termGate: {
+    currency: 0,
+    wrongNoun: 0,
+    headOfState: 0,
+    dateAmbiguous: 0,
+    dropped: 0,
+    samples: [],
+    dropSamples: [],
+  },
 });
 
 let translationStats: TranslationStats = emptyStats();
@@ -417,14 +437,22 @@ export const TRANSLATE_PROMPT = `你是一位面向国际投资者的中亚与�
 
    - **人名分两类，先判断属于哪一类**：
      ★ **第一类：→ 用中文**（国内有通行译名，读者认得出）。两类都算：
-       ① **本条所属国家（{COUNTRY}）的国家元首、政府首脑、外交部长** —— 这三个职务一律写中文；
+       ① **本条所属国家（{COUNTRY}）的国家元首、政府首脑、外交部长** —— 这三个职务一律写中文，
+          而且**必须用约定俗成的中文译名**（不要自己按字母音译，也不要写拉丁转写）：
+          {HEADSOFSTATE}
        ② **全球知名人物**（大国领导人、世界级企业家与名人），例如 Путин → 普京、
           Musk → 马斯克、Gates → 盖茨。
        判断标准是「**中国读者普遍认识这个名字**」。拿不准时**按第二类处理**（写拉丁）。
-       ⚠️ **这里刻意不列中亚/高加索人名的对照**：2026-10-01 实测，提示词里当示例写出来的
-       外国领导人名字会被**搬去当正文主语** —— 一篇吉尔吉斯斯坦的公路稿标题被写成
-       「〈某国总统〉政府完成…」，而原文里根本没有这个人（原文只有交通部）。
-       中东/中亚的人名请你自己判断，不要从本提示词里找。
+       ⚠️ **① 里给出的元首名字只是「写法标准」，不是「素材」**：原文没有提到这位元首时，
+       译文里就**不许**出现他的名字或职务。2026-10-01 实测过这个坑 —— 提示词里列出来的
+       领导人名字会被**搬去当正文主语**，一篇只有交通部的吉尔吉斯斯坦公路稿被写成
+       「〈某国总统〉政府完成…」。**人名必须来自原文，不能来自本提示词。**
+       ⚠️ 元首的中文写法**全篇统一**：同一个人在同一篇稿子里只能是**同一种写法** ——
+       不许一处写中文名、另一处写拉丁转写，也不许换个同音的汉字写法。
+       （⚠️ 这条**刻意不举具体人名当例子**：提示词里写出来的名字会被搬去当正文主语，
+       理由同上一条。）
+       ⚠️ **除元首外**，这里刻意不列中亚/高加索人名的对照（同一个理由：列出来的名字会被搬去当主语）。
+       中东/中亚的**其他人名**请你自己判断，不要从本提示词里找。
      ★ **第二类：其余所有人名 → 拉丁字母**（该人名的通行英文转写），
        **不要**音译成汉字：部长、副部长、州长、市长、议员、企业家、专家、运动员、
        以及任何一个需要看原文才知道是谁的中亚/高加索人名。
@@ -581,6 +609,22 @@ export const TRANSLATE_PROMPT = `你是一位面向国际投资者的中亚与�
      - 判定方法：**先把原文里的每一组（数字 + 单位 + 序数）单独列出来，再逐个对到译文里**，
        不许凭印象一扫而过。
 
+   ★ **(g) 日期必须带月份，不许只写「几号」。**（2026-10-11 新增，用户报上来的）
+     原文写 「23-25 октября」/「8-9-октябрда」/「9 қазан」 就必须写成
+     「10 月 23 日至 25 日」/「10 月 8 日至 9 日」/「10 月 9 日」，
+     **不许**写成「23 日至 25 日」—— 读者无法判断是哪个月，也就无法判断这件事
+     是已经发生还是即将发生。
+     ⚠️ **反例（线上 2026-10-10 实际出过）**：
+       原文：「Иш-чаралар **23-25-октябрь** күндөрү Бишкек шаарындагы…」
+             （活动在 10 月 23–25 日于比什凯克…）
+       ✗ 「吉尔吉斯斯坦 **23 日至 25 日**在比什凯克举办"AgroTechExpo-2026"展会…」
+       ✓ 「吉尔吉斯斯坦 **10 月 23 日至 25 日**在比什凯克举办"AgroTechExpo-2026"展会…」
+     ⚠️ 与 (e) 是同一条纪律的两面：**原文里有月份就必须译出来；原文里没有的月份
+     一个字也不许补**。原文本身只写「几号」时，照原样译即可，不要自己编一个月份。
+     ⚠️ **别把序数当日期**：原文 «14-я Международная выставка»（**第 14 届**国际展览会）
+     里的「14-я」是**序数**，不是「14 日」；同理 «2026» 是年份、「№5」是编号。
+     线上实测出过一篇：「第 14 届展览会开幕」被写成「展览会于 **14 日**开幕」。
+
 **关于图片的说明 —— 这是写给你的规则，不是要写进 content 的内容：**
 
 - 只有当**原文里确实存在**以 http:// 或 https:// 开头的图片地址时，才把那张图插进
@@ -649,6 +693,10 @@ export function buildPrompt(
     // 「提示词说 A、闸门按 B 判」，每一篇都过不了闸（重试三次 → 丢稿）。
     // 详见 `currencyPromptTable` 的注释。
     .replace('{CURRENCIES}', currencyPromptTable())
+    // ⚠️ 元首那一行**同样是生成式注入**（与货币表逐字同理由）：手写在模板里的名字
+    // 迟早会与 `proper-nouns.ts` 的 `HEAD_OF_STATE` 分叉 ⇒「模型按 A 写、闸门按 B 判」
+    // ⇒ 每篇都过不了闸。见 `headOfStatePromptLine` 的注释。
+    .replace('{HEADSOFSTATE}', headOfStatePromptLine(countryName))
     .replace('{CONTENT}', content);
 }
 
@@ -704,7 +752,9 @@ export interface GateReject {
     | 'impossible-multiple'
     | 'latin-cyrillic'
     | 'currency-mismatch'
-    | 'wrong-noun';
+    | 'wrong-noun'
+    | 'wrong-head-of-state'
+    | 'date-no-month';
   /** 被拦下的词（截断到前几个） */
   tokens: string[];
   /**
@@ -725,6 +775,15 @@ export interface GateReject {
   currency?: CurrencyMismatch;
   /** 命中的已知错译写法（2026-10-05 加）。同上，分开存。 */
   wrongNouns?: WrongNounHit[];
+  /**
+   * 命中的**元首写法问题**（2026-10-11 加）。同上，分开存。
+   *
+   * 两类都装在这里（`latin` = 该写中文却写拉丁；`not-head-of-state` = 给非元首加了元首头衔），
+   * 因为修正指令里它们要**分开讲**（一类是换写法、一类是按原文职务改写，见 `buildRepairHint`）。
+   */
+  headOfState?: HeadOfStateHit[];
+  /** 命中的**日期缺月份**（2026-10-11 加）。同上，分开存。 */
+  dateAmbiguous?: DateAmbiguity;
 }
 
 /**
@@ -839,6 +898,59 @@ export function buildRepairHint(reject: GateReject): string {
         '被拦下的写法（左边错、右边对）：',
         ...reject.wrongNouns.slice(0, 5).map((h) => `  「${h.wrong}」→「${h.right}」（${h.why}）`),
         '请把这些写法全部改成右边那种，并检查译文里还有没有同类的错译。',
+      ].join('\n'),
+    );
+  }
+
+  // 块 5：元首写法（2026-10-11 加）。
+  //
+  // ⚠️ 两类**必须分开写**，因为修法完全不同：
+  //   · `latin` —— **同一个人**，只是写法不对 ⇒ 给「该换成哪个词」的字面映射；
+  //   · `not-head-of-state` —— 「总统」后面那个人**根本不是元首**（原文里他是别的职务）
+  //     ⇒ 不能靠替换名字修，必须按**原文写的职务**改写，并且**不许加元首头衔**。
+  // 合成一段的后果是把一条事实错误换成**另一条更严重的事实错误**：
+  // 模型会把「伊斯坎德尔·萨德洛夫」直接替换成「埃莫马利·拉赫蒙」——而原文明明是
+  // 另一个人的访谈（2026-10-07 id=11360 就是这个形状）。
+  if (reject.headOfState && reject.headOfState.length > 0) {
+    const latinHits = reject.headOfState.filter((h) => h.kind === 'latin');
+    const impersonate = reject.headOfState.filter((h) => h.kind === 'not-head-of-state');
+    const lines = ['⚠️ 另有一类问题：**国家元首的中文写法**。'];
+    if (latinHits.length > 0) {
+      lines.push(
+        '下面这些地方写成了拉丁转写 —— 它们是**同一个人**，只是写法不对，',
+        '必须改成**约定俗成的中文译名**：',
+        ...latinHits.slice(0, 5).map((h) => `  「${h.sample}」→ 该写「${h.right}」`),
+        '⚠️ 标题、摘要、正文里的**同一处**都要一起改，全篇只留一种写法。',
+      );
+    }
+    if (impersonate.length > 0) {
+      lines.push(
+        '下面这些地方**把不是元首的人写成了元首**，或用了非约定俗成的名字：',
+        ...impersonate.slice(0, 5).map((h) => `  「${h.sample}」—— ${h.why}`),
+        '⚠️ 这一类**不要靠替换名字修**：请回到原文看他实际是什么职务，按原文的职务写；',
+        '原文里此人并不担任元首时，**一个字都不许给他加元首头衔**。',
+      );
+    }
+    blocks.push(lines.join('\n'));
+  }
+
+  // 块 6：日期缺月份（2026-10-11 加）。
+  //
+  // 与块 3/4 同理，给的是**机械指令**（回原文找月份、补进去）。
+  // ⚠️ 必须同时说清「原文确实没有月份时不要补」—— 否则这段修正指令自己会制造
+  // **凭空出现的日期**，而提示词第 7 条 (e) 早就禁了这件事；闸门逼出来的编造
+  // 比原来的缺月份更糟。同一条「序数别当日期」的提醒也放在这里。
+  if (reject.dateAmbiguous) {
+    const samples = reject.dateAmbiguous.samples;
+    blocks.push(
+      [
+        '⚠️ 另有一类问题：**日期只写了「几号」，通篇没有月份**。',
+        `被拦下的写法：${samples.slice(0, 5).join('、')}`,
+        '请回到原文，找到这几处日期在**原文里的月份**，把它补进译文 ——',
+        '例如原文 «23-25 октября» 要写成「10 月 23 日至 25 日」，不是「23 日至 25 日」。',
+        '⚠️ 标题、摘要、正文里**每一处**这样的日期都要补，不要只改一处。',
+        '⚠️ 但如果原文里**确实没有**月份，就不要自己补一个；同时检查那个数字是不是',
+        '**序数**（«14-я выставка» = 第 14 届、«№5» = 第 5 号）—— 是序数就按序数译。',
       ].join('\n'),
     );
   }
@@ -967,6 +1079,20 @@ function normalizeResult(
   const combined = `${titleZh} ${summaryZh} ${contentZh}`;
   const currencyIssue = countryCode ? checkCurrencyCountryFit(countryCode, combined) : null;
   const wrongNouns = countryCode ? checkWrongProperNouns(countryCode, combined) : [];
+  // 第五类闸（2026-10-11 加）：**元首写法** —— 用户第二次报的「低级错误」核心一条。
+  // ⚠️ **刻意不按 `countryCode` 过滤**（与上面两条不同）：五国元首的中文写法是
+  // 同一套标准，「吉尔吉斯斯坦的稿子里把总统写成 `Sadyr Zhaparov`」和
+  // 「阿塞拜疆的稿子里把吉尔吉斯斯坦总统写成拉丁」是同一种错；
+  // 而且稿子被归错国时写法照样是错的。理由详见 `checkHeadOfStateNames` 的注释。
+  // 实测（2154 篇线上语料）命中 67 篇 3.1%，逐条判读**误报 0**。
+  const headOfState = checkHeadOfStateNames(countryCode, combined);
+  // 第六类闸（2026-10-11 加）：**日期缺月份**（用户报的「只写 23-25 号，是几月？」）。
+  // ⚠️ **必须把原文一起传进去**：原文本身就没有月份时这条判据不管 ——
+  // 逼模型去补一个原文里没有的月份等于让它**编**，编不出来就重试三次然后**丢稿**，
+  // 而项目纪律是「宁可留重复，不要丢稿」。见 `checkDateMonthAmbiguity` 的注释。
+  // 实测（2154 篇）：候选 8 篇，其中原文有月份的 7 篇判命中、逐条判读**误报 0**；
+  // 原文也没月份的那 1 篇放行（那一篇的真问题是「14-я 届数被误读成 14 日」，另记）。
+  const dateIssue = checkDateMonthAmbiguity(combined, `${originalTitle} ${originalContent}`);
 
   const ok =
     zhOk &&
@@ -975,7 +1101,9 @@ function normalizeResult(
     latinCyr.length === 0 &&
     impossible.length === 0 &&
     !currencyIssue &&
-    wrongNouns.length === 0;
+    wrongNouns.length === 0 &&
+    headOfState.length === 0 &&
+    !dateIssue;
   if (zhOk && mixed.length > 0) {
     console.log(`[translate] 译文含「汉字+西里尔」混排词 ${mixed.slice(0, 6).join('/')}，判不合格并重试`);
   }
@@ -1018,6 +1146,34 @@ function normalizeResult(
         .join('/')} ⇒ 重试带修正指令`,
     );
   }
+  if (headOfState.length > 0) {
+    translationStats.termGate.headOfState++;
+    if (translationStats.termGate.samples.length < 20) {
+      translationStats.termGate.samples.push({
+        kind: 'head-of-state',
+        detail: `[${countryName}] ${headOfState
+          .map((h) => (h.kind === 'latin' ? `${h.sample}→${h.right}` : h.sample))
+          .join('、')}`,
+      });
+    }
+    console.log(
+      `[translate] 质检拦下（术语·元首写法）：${headOfState
+        .map((h) => `${h.kind === 'latin' ? '拉丁写法' : '非元首'}:${h.sample}`)
+        .join(' / ')} ⇒ 重试带修正指令`,
+    );
+  }
+  if (dateIssue) {
+    translationStats.termGate.dateAmbiguous++;
+    if (translationStats.termGate.samples.length < 20) {
+      translationStats.termGate.samples.push({
+        kind: 'date-no-month',
+        detail: `[${countryName}] 只有「${dateIssue.samples.join('、')}」而无月份`,
+      });
+    }
+    console.log(
+      `[translate] 质检拦下（日期缺月份）：通篇只有「${dateIssue.samples.join('、')}」而无月份 ⇒ 重试带修正指令`,
+    );
+  }
 
   const rawCategory = typeof parsed.category === 'string' ? parsed.category : '';
   const category = (CATEGORY_IDS as string[]).includes(rawCategory)
@@ -1043,8 +1199,15 @@ function normalizeResult(
   // ⚠️ **术语类与写法类是并列的，不是二选一**（同 `impossibleMultiples` 的理由）：
   // 一篇稿子完全可以「人名被译了一半 + 货币写成别国的」，一次重试必须把两类都说清。
   // `kind` 只是给日志一个主标签，真正的载荷在各字段里。
-  const termKind: GateReject['kind'] | undefined =
-    currencyIssue ? 'currency-mismatch' : wrongNouns.length > 0 ? 'wrong-noun' : undefined;
+  const termKind: GateReject['kind'] | undefined = currencyIssue
+    ? 'currency-mismatch'
+    : wrongNouns.length > 0
+      ? 'wrong-noun'
+      : headOfState.length > 0
+        ? 'wrong-head-of-state'
+        : dateIssue
+          ? 'date-no-month'
+          : undefined;
   const reject: GateReject | undefined = !zhOk
     ? undefined
     : nameKind || impossible.length > 0 || termKind
@@ -1054,6 +1217,8 @@ function normalizeResult(
           ...(impossible.length > 0 ? { impossibleMultiples: [...new Set(impossible)] } : {}),
           ...(currencyIssue ? { currency: currencyIssue } : {}),
           ...(wrongNouns.length > 0 ? { wrongNouns } : {}),
+          ...(headOfState.length > 0 ? { headOfState } : {}),
+          ...(dateIssue ? { dateAmbiguous: dateIssue } : {}),
         }
       : undefined;
 
@@ -1612,18 +1777,27 @@ export async function translateNews(
   // 把「因为术语闸而丢」单独记账（见 `lastReject` 的说明）。
   // ⚠️ 只统计**术语类**：写法类（半译专名等）丢稿是老现象，混在一起会让这个数字
   // 失去意义 —— 它的用途是回答「新加的那道硬闸到底吃掉了多少稿子」。
-  if (lastReject?.currency || lastReject?.wrongNouns?.length) {
+  //
+  // ⚠️ 2026-10-11 把**元首写法**与**日期缺月份**也纳进来：它们在同一天成为硬闸，
+  // 因此同样有丢稿风险，而这两条恰恰是最需要盯的 —— 前者命中面大（实测 3.1%），
+  // 后者风险独特（详见 `checkDateMonthAmbiguity` 的「原文没有月份就不管」出口）。
+  // 漏记账的后果是「稿子在丢但看不见」，正是本项目最忌讳的形态。
+  const termDropDetail =
+    (lastReject?.currency ? lastReject.currency.reason : '') +
+    (lastReject?.wrongNouns?.length ? lastReject.wrongNouns.map((h) => h.wrong).join('/') : '') +
+    (lastReject?.headOfState?.length
+      ? lastReject.headOfState.map((h) => `${h.kind}:${h.sample}`).join('/')
+      : '') +
+    (lastReject?.dateAmbiguous ? lastReject.dateAmbiguous.samples.join('、') : '');
+  if (termDropDetail) {
     translationStats.termGate.dropped++;
     if (translationStats.termGate.dropSamples.length < 10) {
       translationStats.termGate.dropSamples.push(
-        `[${countryName}] ${title.slice(0, 40)}｜${
-          lastReject.currency ? lastReject.currency.reason : ''
-        }${lastReject.wrongNouns?.length ? lastReject.wrongNouns.map((h) => h.wrong).join('/') : ''}`,
+        `[${countryName}] ${title.slice(0, 40)}｜${termDropDetail}`,
       );
     }
     console.error(
-      `[translate] ⚠️ 这一篇是因为**术语闸**丢的（不是网络/额度失败）：` +
-        `${lastReject.currency?.reason || ''}${lastReject.wrongNouns?.map((h) => h.wrong).join('/') || ''}`,
+      `[translate] ⚠️ 这一篇是因为**术语闸**丢的（不是网络/额度失败）：${termDropDetail}`,
     );
   }
 

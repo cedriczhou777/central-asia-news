@@ -31,6 +31,7 @@ import {
   dedupeStoriesDeterministic,
   dedupeNearTitles,
   isNearSameTitleText,
+  describeOversizedClusters,
   filterOversizedGroups,
   hasConflictingNumbers,
   hasOppositePolarity,
@@ -477,6 +478,49 @@ section('filterOversizedGroups · 模型乱合并的兜底');
   const boundary = [[[0, 1]], [[0, 1, 2, 3]], [[0, 1, 2, 3, 4]]];
   const g2 = filterOversizedGroups(boundary.flat());
   ok('2 条与 4 条的组保留', g2.kept.length === 2 && g2.rejected === 1, JSON.stringify(g2));
+}
+
+// ----- 超限簇的**可观测性**：日志必须报「簇多大 + 全部成员」-----
+//
+// 2026-10-11 新增。守的是一个**纯观测**的缺陷，不是判据：
+// 原先两处 warn 都写成 `oversize.slice(0, 6) …`，于是 kg 那一轮 9 条同题稿
+// 被整簇否掉时，日志上只看到 6 条 —— 恰好把「9 条同题」这个形状盖住了。
+// 这条护栏的代价**全在被省略的那些条目上**，所以「省略了却不说」是致命的。
+
+section('describeOversizedClusters · 超限簇的日志必须报全量（不许静默截断）');
+
+{
+  const titles = Array.from({ length: 12 }, (_, i) => `第${i}条标题`);
+  const line = describeOversizedClusters([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]], (i) => titles[i]);
+
+  ok('报出真实条数（12，不是被 slice 之后的数量）', line.includes('[12 条]'), line.slice(0, 60));
+  ok(
+    '12 条成员**一个不少**地出现在日志里',
+    titles.every((t) => line.includes(t)),
+    titles.filter((t) => !line.includes(t)).join(','),
+  );
+  // 默认 perCluster 以内的簇不该出现「…另 N 条」这种省略标记
+  ok(
+    '没触发 perCluster 上限时不加省略标记（避免「明明全在却有省略号」的误导）',
+    !line.includes('另 '),
+    line.slice(0, 80),
+  );
+
+  // 故意给一个超出 perCluster 的簇：必须**显式写出被省掉的条数**，而不是悄悄丢
+  const many = Array.from({ length: 45 }, (_, i) => `T${i}`);
+  const long = describeOversizedClusters([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44]], (i) => many[i], 40);
+  ok('超过 perCluster ⇒ 显式报出「另 N 条」（5 = 45 − 40）', long.includes('另 5 条'), long.slice(-60));
+  ok('条数始终是真实值 45（不跟着 slice 缩水）', long.includes('[45 条]'), long.slice(0, 40));
+
+  // 多簇：**每一个**簇都要报（旧写法 `find(...)` 只报第一个）
+  const two = describeOversizedClusters(
+    [
+      [0, 1, 2, 3, 4],
+      [5, 6, 7, 8, 9, 10],
+    ],
+    (i) => `X${i}`,
+  );
+  ok('两个超限簇都出现', two.includes('[5 条]') && two.includes('[6 条]'), two);
 }
 
 // ============================================================
@@ -1502,6 +1546,25 @@ async function llmPipelineChecks(): Promise<void> {
     ok('全答是 → 一条都没删（簇超限整簇丢弃）', res.drops.length === 0, JSON.stringify(res.drops.map((d) => d.reason)));
     ok('保留了全部 5 条', res.kept.length === 5, String(res.kept.length));
     ok('error 说明是簇超限', Boolean(res.llm.error && res.llm.error.includes('簇')), String(res.llm.error));
+
+    // ★ 2026-10-11：整簇丢弃必须**可观测到是哪一簇、几条、里面是什么**。
+    // 在此之前只有上面那条 error 串（「有 N 个簇因超过 4 条被整簇丢弃」），
+    // 「丢的是哪一簇」只能靠读代码猜 —— kg 那一轮的 9 条同题稿就是这么消失得无影无踪的。
+    const oc = res.llm.oversizedClusters;
+    ok('超限簇被结构化带出', Array.isArray(oc) && oc.length === 1, JSON.stringify(oc));
+    ok('簇大小是 5（真实成员数，不是 slice 后的长度）', oc?.[0]?.size === 5, String(oc?.[0]?.size));
+    ok(
+      '★ `size` 与 `titles.length` 恒等（防「只 slice 了 titles 忘改 size」）',
+      typeof oc?.[0]?.size === 'number' &&
+        typeof oc?.[0]?.titles.length === 'number' &&
+        oc[0].size === oc[0].titles.length,
+      `size=${oc?.[0]?.size} titles=${oc?.[0]?.titles.length}`,
+    );
+    ok(
+      '★ 簇成员就是被丢掉的那 5 条（标题逐条对上，不是别的条目）',
+      JSON.stringify(oc?.[0]?.titles) === JSON.stringify(items.map((it) => it.title)),
+      JSON.stringify(oc?.[0]?.titles),
+    );
   }
 
   // --- ③ 模型返回不是合法 JSON：不合并，并留下 error（不能静默）---
