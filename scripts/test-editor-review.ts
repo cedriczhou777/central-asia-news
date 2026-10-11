@@ -41,9 +41,11 @@ import {
   isEditorReviewEnabled,
   locateFixTarget,
   MAX_DROPS,
+  MAX_DROPS_DUPLICATE,
   MAX_DROP_RATIO,
   MAX_FIXES,
   MAX_TITLE_LEN,
+  MAX_VERDICT_LEN,
   MIN_KEEP,
   ORIGINAL_EXCERPT_MAX,
   parseVerdict,
@@ -146,9 +148,17 @@ ok('提示词有版本号（改了提示词要能分辨）', EDITOR_PROMPT_VERSI
 // 「两次结论不同」也就分不清是换了提示词还是换了模型 —— 那正是这个字段存在的唯一理由。
 // 改动提示词时把它 +1，并同步这条断言（`AGENTS.md` 的改动清单里提到过）。
 ok(
-  '提示词版本号与 v5 对齐（改了提示词必须先改版本号）',
-  EDITOR_PROMPT_VERSION === 'v5',
+  '提示词版本号与 v6 对齐（改了提示词必须先改版本号）',
+  EDITOR_PROMPT_VERSION === 'v6',
   `现在是 ${EDITOR_PROMPT_VERSION} —— 若你刚改了提示词，请把 EDITOR_PROMPT_VERSION +1 并同步这条断言`,
+);
+// v6 的由来（一句话，详见 `MAX_DROPS_DUPLICATE` 与 `EDITOR_PROMPT_VERSION` 的 v6 段）：
+// 提示词要求「其余 N−1 条进 drops」，代码却把全部 drops 套 min(4, ⌊n/3⌋) 并超限**整组作废**
+// ⇒ 一件事被 ≥6 家报道时**算术上不可能**删干净。kg 10-10 那批就是这么留下 9 条同题稿的。
+ok(
+  'v6：duplicate 的条数上限**独立于** MAX_DROPS（分账是本版的核心改动）',
+  MAX_DROPS_DUPLICATE > MAX_DROPS,
+  `MAX_DROPS=${MAX_DROPS} / MAX_DROPS_DUPLICATE=${MAX_DROPS_DUPLICATE} —— 若两者相等，分账等于没做`,
 );
 // ⚠️ g2 的哨兵。**与上面那条分开**是有意的：g2 一个字都没动提示词，
 // 但换了判据 ⇒ 两轮数据的采纳数不可比。不多记一版，「两次结论不同」就分不清是
@@ -218,6 +228,33 @@ section('二、正常路径（合规处置确实生效）');
   ok('needsImage 被采纳', JSON.stringify(decision.needsImage) === JSON.stringify([0, 3]));
   ok('总评被带出', decision.verdict.includes('重复'));
   ok('没有任何护栏拒绝记录（正常路径不该有噪音）', audit.rejections.length === 0, JSON.stringify(audit.rejections));
+
+  // ★ 2026-10-11：总评上限从 `slice(0, 40)` 放到 `MAX_VERDICT_LEN`，且**截断不再静默**。
+  //
+  // 40 字把 kg 那一轮的总评砍在「本期稿件中关于楚河州100周年庆典的报道高度重复
+  // （标题与摘要雷同），且存在一条无」—— 恰好停在关键词之前。一个被砍掉半句的总评
+  // 读起来和一句本来就这么短的判词**没有区别**，所以这里要钉两件事：
+  // ① 40～200 字这一档**不许**再被砍；② 真的越界时必须自己声明「已截断、原始 N 字」。
+  {
+    const kgish =
+      '本期稿件中关于楚河州100周年庆典的报道高度重复（标题与摘要雷同），且存在一条无关的矿业法规修订稿混入，建议按同一事件合并后再发。';
+    ok('前置：这条夹具确实长于旧的 40 字上限（否则测不到「放开」这件事）', kgish.length > 40, `len=${kgish.length}`);
+    const rLong = applyVerdict(items, { verdict: kgish });
+    ok('40～200 字之间的总评**一字不动**地保留（旧写法会在第 40 字砍掉）', rLong.decision.verdict === kgish, `len=${rLong.decision.verdict.length}`);
+    ok('未越界时不加任何截断标记（不留噪音）', !rLong.decision.verdict.includes('已截断'));
+
+    const huge = '甲'.repeat(MAX_VERDICT_LEN + 37);
+    const rHuge = applyVerdict(items, { verdict: huge });
+    ok(`超长总评截到 ${MAX_VERDICT_LEN} 字`, rHuge.decision.verdict.startsWith('甲'.repeat(MAX_VERDICT_LEN)));
+    ok(
+      '★ 截断**不静默**：结尾写明原始字数（读的人不会再把它当成一句完整的判词）',
+      rHuge.decision.verdict.includes(`原始 ${MAX_VERDICT_LEN + 37} 字`) && rHuge.decision.verdict.includes('已截断'),
+      rHuge.decision.verdict.slice(-30),
+    );
+
+    // 非字符串 / 缺省：与旧写法同口径，给空串（不能变成 `undefined` 塞进 JSON）
+    ok('verdict 缺省 ⇒ 空串（不是 undefined）', applyVerdict(items, {}).decision.verdict === '');
+  }
 }
 
 // ============================================================
@@ -264,6 +301,10 @@ section('三之二、护栏 · drops 的三重上限');
   const r1 = applyVerdict(items8, { drops: [dupA, dupB] });
   ok(`删 ${2} 条（= 上限）被采纳`, r1.audit.appliedDrops === 2, JSON.stringify(r1.audit));
 
+  // ★ 2026-10-11（v6）语义变更：`duplicate` 与「其余两类」**分两本账**。
+  //   这里原来是「超比例上限 ⇒ 整组作废」（2 dup + 1 not_news = 3 > cap min(4,⌊8/3⌋)=2 ⇒ 全丢）。
+  //   现在 2 条 duplicate 走自己那本账（≤12），1 条 not_news 走旧账（≤2）⇒ **应当采纳 3 条**。
+  //   ⚠️ 这不是「放宽」：**每一类仍然各有各的上限**，且全批保留下限不变。
   const r2 = applyVerdict(items8, {
     drops: [
       dupA,
@@ -275,9 +316,93 @@ section('三之二、护栏 · drops 的三重上限');
       },
     ],
   });
-  ok('超比例上限 ⇒ **整组作废**（不是取前 2 条）', r2.audit.appliedDrops === 0, JSON.stringify(r2.audit));
-  ok('整组作废时保留全部稿件', r2.decision.finalIndices.length === 8);
-  ok('整组作废的理由写清了是比例超限', r2.audit.rejections.some((x) => x.includes('整组作废')), JSON.stringify(r2.audit.rejections));
+  ok('v6：duplicate 不再占用 not_news 的额度（2 dup + 1 not_news 三条全采纳）', r2.audit.appliedDrops === 3, JSON.stringify(r2.audit));
+  ok('v6：审计里两本账分开报（提议数 + 各自的上限）',
+    r2.audit.dupDrops === 2 && r2.audit.otherDrops === 1 &&
+      r2.audit.dupBudget === MAX_DROPS_DUPLICATE && r2.audit.otherBudget === 2,
+    JSON.stringify({ dupDrops: r2.audit.dupDrops, otherDrops: r2.audit.otherDrops, dupBudget: r2.audit.dupBudget, otherBudget: r2.audit.otherBudget }));
+
+  // 反向：**非重复那一类**超限仍然整组作废（旧行为必须原样保留 —— 分账不是取消护栏）
+  const news3 = (i: number) => ({
+    index: i,
+    kind: 'not_news' as const,
+    reason: `「${items8[i].title.slice(0, 8)}」是体育赛事，不是投资新闻`,
+  });
+  const r2b = applyVerdict(items8, { drops: [news3(5), news3(6), news3(7)] });
+  ok('v6 反向：not_news 类超比例上限（3 > min(4,⌊8/3⌋)=2）仍然**整组作废**', r2b.audit.appliedDrops === 0, JSON.stringify(r2b.audit));
+  ok('v6 反向：整组作废的理由写清了是哪一本账超限',
+    r2b.audit.rejections.some((x) => x.includes('整组作废') && x.includes('非重复类删除')),
+    JSON.stringify(r2b.audit.rejections));
+
+  // ★ v6 的核心：**一件事被 N 家报道**时必须能删干净
+  //
+  // 用真实线上标题（kg 2026-10-10「楚河州成立 100 周年庆典」，用户截图报「非常严重」那一批）。
+  // 9 条同题稿，要清干净得删 8 条 —— 旧规则 `min(MAX_DROPS=4, ⌊n/3⌋)` 一律整组作废。
+  {
+    const KG9 = [
+      '总统萨德尔·贾帕罗夫：发展需靠每个公民贡献',            // 0  锚点与其余 8 条的相似度全 <0.15
+      '楚河州贡献吉尔吉斯斯坦全国大部分工业产值',              // 1
+      '比什凯克庆祝楚河州成立100周年：总统宣布拨款100亿索姆用于发展', // 2
+      '吉尔吉斯斯坦总统出席楚河州成立100周年庆典',              // 3 ← 模型最可能选的锚点（信息最完整）
+      '楚河州是吉尔吉斯斯坦社会经济发展战略要地 — 总统',        // 4
+      '楚河州 100 周年庆典：10 亿索姆用于 67 个建设项目',        // 5
+      '比什凯克总统出席楚河州成立100周年庆典',                  // 6
+      '比什凯克「阿拉套」广场举行楚河州成立100周年庆典',        // 7
+      '楚河州发展获 100 亿索姆拨款，用于建设社会项目与工厂',      // 8
+    ];
+    // ⚠️ 批大小必须**贴近生产**：真链路上每国先截到 `PUSH_MAX_PER_COUNTRY`(=20) 再进总审，
+    //    kg 10-10 那一批是 20 出头。用 9 条当整批会撞上 `MIN_KEEP`（保留 ≥5），
+    //    于是测出来的是「保留下限」而不是「分账」—— 那正是我第一版夹具犯的错。
+    const items = mkItems(9, KG9).concat(mkItems(11));
+    const ANCHOR = 3;
+    // 逐条核对（这些数就是线上真实标题量出来的）：凡是达不到 DUP_SIM_FLOOR 的都必须**排除**，
+    // 否则下面的断言测的就不是上限、而是逐条闸了。
+    const droppable = [1, 2, 4, 5, 6, 7].filter(
+      (i) => similarity(items[i].title, items[ANCHOR].title) >= DUP_SIM_FLOOR,
+    );
+    ok(
+      `kg 真实那 9 条里，能挂在锚点 #${ANCHOR} 上的有 ${droppable.length} 条（其余相似度不够，逐条闸挡下 —— 已知残余）`,
+      droppable.length === 6,
+      `实际 ${droppable.length}：${droppable.join(',')}`,
+    );
+    ok(
+      `❗ 这 ${droppable.length} 条 > MAX_DROPS(${MAX_DROPS}) ⇒ 旧规则下**必然整组作废**（这就是用户看到的 9 条重复）`,
+      droppable.length > MAX_DROPS,
+    );
+    const rk = applyVerdict(items, {
+      drops: droppable.map((i) => ({
+        index: i,
+        kind: 'duplicate' as const,
+        sameAs: ANCHOR,
+        reason: dupReason(ANCHOR, items[ANCHOR].title.slice(0, 8)),
+      })),
+    });
+    ok(
+      'v6：这 6 条被判为重复后**全部采纳**（该事件 9 条 → 3 条）',
+      rk.audit.appliedDrops === 6,
+      JSON.stringify(rk.audit),
+    );
+    ok('v6：保留下来的是锚点 + 相似度不够的那 2 条（整批 20 → 14）', rk.decision.finalIndices.length === 14);
+
+    // ⚠️ 已知残余，必须**显式钉住**（否则后人会以为分账已经把这一类修完了）：
+    //   `MIN_KEEP = 5` 是更外面的一道账。批小到「删完不足 5 条」时**仍然整组作废**。
+    //   真链路上每国先截到 20 条再进总审，所以这条在≥15 条重复时才会咬人 ——
+    //   但它是存在的，别当成没有。
+    const smallBatch = mkItems(9, KG9);
+    const rkSmall = applyVerdict(smallBatch, {
+      drops: droppable.map((i) => ({
+        index: i,
+        kind: 'duplicate' as const,
+        sameAs: ANCHOR,
+        reason: dupReason(ANCHOR, smallBatch[ANCHOR].title.slice(0, 8)),
+      })),
+    });
+    ok(
+      `已知残余：同样的 ${droppable.length} 条在**整批只有 9 条**时仍被 MIN_KEEP 挡下（删完 3 < ${MIN_KEEP}）`,
+      rkSmall.audit.appliedDrops === 0 && rkSmall.audit.rejections.some((x) => x.includes('保留下限')),
+      JSON.stringify(rkSmall.audit.rejections),
+    );
+  }
 
   // 保留下限：6 条删 2 条只剩 4 < MIN_KEEP=5
   const items6 = mkItems(6);
@@ -295,6 +420,68 @@ section('三之二、护栏 · drops 的三重上限');
   ok('删 1 条（删完 = 保留下限）仍被采纳', r4.audit.appliedDrops === 1, JSON.stringify(r4.audit));
 
   ok(`MAX_DROPS 常量存在且有限（护栏可被断言）`, Number.isFinite(MAX_DROPS) && MAX_DROPS > 0, String(MAX_DROPS));
+  ok(
+    `MAX_DROPS_DUPLICATE 常量存在且有限（护栏可被断言）`,
+    Number.isFinite(MAX_DROPS_DUPLICATE) && MAX_DROPS_DUPLICATE > MAX_DROPS,
+    String(MAX_DROPS_DUPLICATE),
+  );
+
+  // 反向：**duplicate 那本账自己也有上限**（分账 ≠ 取消上限）。
+  // 用同一条标题铺满一批 ⇒ 任意两条相似度 = 1.0，逐条闸必然放行，测的就只剩上限。
+  {
+    const dupTitle = '吉尔吉斯斯坦总统出席楚河州成立100周年庆典';
+    const many = mkItems(20, Array.from({ length: 20 }, () => dupTitle));
+    const at = (k: number) =>
+      Array.from({ length: k }, (_, i) => ({
+        index: i + 1,
+        kind: 'duplicate' as const,
+        sameAs: 0,
+        reason: dupReason(0, '吉尔吉斯斯坦总统出席'),
+      }));
+    const okCase = applyVerdict(many, { drops: at(MAX_DROPS_DUPLICATE) });
+    ok(
+      `删 ${MAX_DROPS_DUPLICATE} 条（= duplicate 上限，20 条留 8 ≥ MIN_KEEP）被采纳`,
+      okCase.audit.appliedDrops === MAX_DROPS_DUPLICATE,
+      JSON.stringify(okCase.audit),
+    );
+    const badCase = applyVerdict(many, { drops: at(MAX_DROPS_DUPLICATE + 1) });
+    ok(
+      `删 ${MAX_DROPS_DUPLICATE + 1} 条（> 上限）⇒ **整组作废**（分账不是取消上限）`,
+      badCase.audit.appliedDrops === 0 && badCase.audit.rejections.some((x) => x.includes('duplicate 想删')),
+      JSON.stringify(badCase.audit),
+    );
+  }
+
+  // ---- sameAs 成环（2026-10-11 新增的闸）----
+  //
+  // 逐条闸只校验「下标合法 + 相似度达标」，`#1→#2` 与 `#2→#1` 互指能整组通过。
+  // 后果不是「少删一条」而是**一个事件被删空**，且 `drops` 里每条「和谁重复」
+  // 指向的都是另一个同样被删掉的条目 —— 报告自相矛盾，而没有任何字段能看出来。
+  {
+    const t = '吉尔吉斯斯坦总统出席楚河州成立100周年庆典';
+    // 8 条：删 2 条后剩 6 ≥ MIN_KEEP(5)，这样测到的才是「成环」而不是「保留下限」。
+    const cyc = mkItems(8, Array.from({ length: 8 }, () => t));
+    const r = applyVerdict(cyc, {
+      drops: [
+        { index: 1, kind: 'duplicate', sameAs: 2, reason: dupReason(2, '吉尔吉斯斯坦总统出席') },
+        { index: 2, kind: 'duplicate', sameAs: 1, reason: dupReason(1, '吉尔吉斯斯坦总统出席') },
+      ],
+    });
+    ok('sameAs 互指成环 ⇒ 两条都拒（否则这一组会被删空）', r.audit.appliedDrops === 0, JSON.stringify(r.audit));
+    ok(
+      '成环的理由把链**打印出来**（静默拒会让人以为模型没提）',
+      r.audit.rejections.some((x) => x.includes('成环') && /→/.test(x)),
+      JSON.stringify(r.audit.rejections),
+    );
+    // 反向：正常链（1→2→3，3 不被删）必须照常采纳 —— 不能把「多跳」当成环
+    const r2 = applyVerdict(cyc, {
+      drops: [
+        { index: 1, kind: 'duplicate', sameAs: 2, reason: dupReason(2, '吉尔吉斯斯坦总统出席') },
+        { index: 2, kind: 'duplicate', sameAs: 3, reason: dupReason(3, '吉尔吉斯斯坦总统出席') },
+      ],
+    });
+    ok('反向：两跳的链（1→2→3，3 幸存）**不是环**，照常采纳', r2.audit.appliedDrops === 2, JSON.stringify(r2.audit));
+  }
 }
 
 section('三之三、护栏 · drops 的逐条合规');
@@ -451,6 +638,23 @@ section('三之四、护栏 · fixes 的 before 按「定位」判定（g2；防
   const r6 = applyVerdict(items, { fixes: many });
   ok(`fixes 超过上限 ${MAX_FIXES} ⇒ 只采纳前 ${MAX_FIXES} 条`, r6.audit.appliedFixes === MAX_FIXES, JSON.stringify(r6.audit));
   ok(`提案 9 条里确实有 ${MAX_FIXES} 条以上是合规的（否则上一条断言测不到东西）`, r6.audit.proposedFixes === MAX_FIXES + 3);
+
+  // ★ 2026-10-11：被截断的那几条必须**点名**。
+  // 原先只有一句「fixes 超过上限 6 条 ⇒ 只采纳前 6 条」—— 被丢掉的是什么完全不可观测，
+  // 而它们正是「模型还想改什么」的完整答案（kg 那轮 16 条提案、采纳 6、被截的 10 条
+  // 里有没有真删/真改，就是这么变成不可查的）。这是 `fixes` 空转 71% 上唯一没量到的角。
+  const truncNote = r6.audit.rejections.find((x) => x.includes('超过上限'));
+  ok('超限留痕仍然存在（没被这轮改动挤掉）', Boolean(truncNote), JSON.stringify(r6.audit.rejections));
+  ok(
+    '★ 留痕点名被截断的**条数**（3 = 9 − 6），不再只有「只采纳前 6 条」',
+    Boolean(truncNote?.includes('被截断 3 条')),
+    String(truncNote),
+  );
+  ok(
+    '★ 被截断的每一条都带序号 + field（#6(title) / #7(summary) / #8(title)）',
+    ['#6(title)', '#7(summary)', '#8(title)'].every((s) => truncNote?.includes(s)),
+    String(truncNote),
+  );
 }
 
 section('三之五、护栏 · 终审写出的文字必须通过翻译层的闸（防「闸自己开口子」）');
@@ -685,6 +889,27 @@ section('五、提示词（buildEditorPrompt）');
   // ★ 缺陷③：封面。日报封面取第一位的图，所以「第一位没图」就是「封面是空图」。
   ok('提示词里写明了封面规则（第一条没图就让有图的靠前）', prompt.includes('封面规则'));
   ok('明说了封面取的是第一位那条的配图', prompt.includes('排在第一位的'));
+
+  // ★ v6：提示词第一节与**代码的预算**必须对齐（2026-10-11）。
+  //
+  // 这一版的根因不是模型判错，而是**提示词要求无上界、代码只准 4 条**：
+  // 「同一件事被不同媒体各写一遍时，只保留信息最完整的那一条，其余进 drops」
+  // 与 `min(MAX_DROPS, ⌊n/3⌋)` 叠起来 ⇒ 一件事被 ≥6 家报道时**必然整组作废**。
+  // 所以除了改代码，提示词也要**明说这一类不占别的额度** ——
+  // 否则模型按「少删更安全」的直觉自我设限，改完代码还是删不干净。
+  ok(
+    'v6：提示词要求把同一件事的 N−1 条**一次列全**',
+    prompt.includes('其余 N−1 条要一次列全'),
+    '缺这一句时模型会只列前几条（它看不到代码的预算，只能靠提示词知道）',
+  );
+  ok(
+    'v6：提示词说明了 duplicate 的条数**不与其它删除共用上限**（与 `MAX_DROPS_DUPLICATE` 对齐）',
+    prompt.includes('不与其它删除共用上限'),
+  );
+  ok(
+    'v6：提示词没有写出具体数字上限（写死数字 ⇒ 调 `MAX_DROPS_DUPLICATE` 时提示词就撒谎了）',
+    !/其余 N−1 条[\s\S]{0,200}?上限 (?:是|为|=)?\s*\d+/.test(prompt),
+  );
 }
 
 // ============================================================
@@ -1035,6 +1260,14 @@ section('八、版本指纹（GET 的 codeVersion）');
   ok(
     '护栏上限**从代码取**（调参后能确认线上拿到的是新值）',
     /maxDrops:\s*MAX_DROPS/.test(src) && /maxFixes:\s*MAX_FIXES/.test(src),
+  );
+  // v6：`maxDrops` 从「4 条管全部」变成「4 条管 not_news/unreliable，duplicate 另有 12」之后，
+  // 只读 `maxDrops: 4` 会让人以为行为没变 ⇒ duplicate 那本账必须是**独立的可读字段**，
+  // 它的存在本身就是「线上到底带没带上分账」的部署指纹。
+  ok(
+    'v6：duplicate 的独立上限也在 codeVersion 里（否则 maxDrops:4 会让人以为没变）',
+    /maxDropsDuplicate:\s*MAX_DROPS_DUPLICATE/.test(src),
+    '写成了字面量 —— 那样调 MAX_DROPS_DUPLICATE 之后它照样报旧值',
   );
   ok(
     '仍保留 lastRun（「进程年龄」指纹的载体：内存态，容器一重启就清零）',

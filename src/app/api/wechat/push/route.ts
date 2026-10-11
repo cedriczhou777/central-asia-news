@@ -33,6 +33,7 @@ import {
   EDITOR_GATE_VERSION,
   DUP_SIM_FLOOR,
   MAX_DROPS,
+  MAX_DROPS_DUPLICATE,
   MAX_FIXES,
   ORIGINAL_EXCERPT_MAX,
   QUOTE_MIN,
@@ -461,6 +462,16 @@ interface PushJudge {
   candidatesAbovePriority?: number;
   /** 模型答了「是同一件事」的对数 */
   mergedPairs?: number;
+  /**
+   * ★ **被大组护栏整簇否掉的簇**（2026-10-11 新增，口径见
+   * `SameEventLlm.oversizedClusters`）。
+   *
+   * 为什么必须推到推送 JSON 里：`ok:false` + `error` 只说「有簇超限被丢」，
+   * 「丢的是哪一簇、几条、里面是什么」此前**完全不可观测**（warn 只印第一个簇的前 6 条）。
+   * 2026-10-11 kg：一个 9 条的簇被丢 ⇒ 该国整批模型判组作废 ⇒ 9 条「楚河州 100 周年」
+   * 同题稿里至少 6 条进了草稿。没有这个字段，读推送结果的人只能看到 `ok:false`。
+   */
+  oversizedClusters?: Array<{ size: number; titles: string[] }>;
 }
 
 /**
@@ -525,7 +536,13 @@ interface PushReview extends ReviewAudit {
    * 只改本轮要发出去的那份 `content`（在开头插一张 `<img>`），所以这里是唯一的留痕。
    */
   imagesBorrowed: Array<{ title: string; fromTitle: string; sim: number }>;
-  /** 总评（模型给的，20 字内） */
+  /**
+   * 总评（模型给的）。
+   *
+   * ⚠️ 这里原先写「20 字内」，是**腐烂注释**：代码从来不是 20，2026-10-11 之前是
+   * `slice(0, 40)`，当天放到 200（唯一口径在 `editor-review.ts` 的 `MAX_VERDICT_LEN`）。
+   * 写死一个数字在同层两处，就必然会有一处先烂 —— 所以这里不再复述数字。
+   */
   verdict: string;
 }
 
@@ -875,6 +892,14 @@ export async function GET(request: NextRequest) {
       /** 终审护栏上限（调参后可以从这里确认线上拿到的是新值） */
       editorGuards: {
         maxDrops: MAX_DROPS,
+        /**
+         * ★ 2026-10-11 新增：`duplicate` 那一类**自己的一本账**（见 `MAX_DROPS_DUPLICATE`）。
+         *
+         * 必须在这一层报出来：`maxDrops` 从 4 变成「4，但 duplicate 另有 12」之后，
+         * 只读 `maxDrops: 4` 会以为行为没变 —— 而这个字段的存在本身就是
+         * 「线上到底带没带上分账」的**部署指纹**。
+         */
+        maxDropsDuplicate: MAX_DROPS_DUPLICATE,
         maxFixes: MAX_FIXES,
         /**
          * v3 新增的两道闸（2026-09-29 晚报换来的）—— 系数**从常量现算**，
@@ -1237,6 +1262,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
           ? { candidatesAbovePriority: llmJudge.candidatesAbovePriority }
           : {}),
         ...(llmJudge.pairs ? { mergedPairs: llmJudge.pairs.length } : {}),
+        // 超限簇的**全量**成员（含真实条数）—— 见 `PushJudge.oversizedClusters`。
+        // 只在真的发生整簇丢弃时带出，正常轮次里这个键不存在（不让 JSON 长出一条空噪音）。
+        ...(llmJudge.oversizedClusters ? { oversizedClusters: llmJudge.oversizedClusters } : {}),
       });
       if (llmJudge.error) {
         console.warn(`[${country.name}] 「同一件事」模型判组未生效，本轮只做了链接/原文去重：${llmJudge.error}`);
@@ -1460,16 +1488,25 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         // 所以按同一判例用 `console.warn`（不是 `console.log`）。
         //
         // 触发条件与 `PUSH_MAX_PER_COUNTRY` 直接耦合：每国上限 2026-10-10 由 15 涨到 20
-        // ⇒ 单国条目更多 ⇒ 想删的条数更容易超过 4 条。这条 warn 开始频繁出现时，
-        // 要动的是 `MAX_DROPS`（**先量后调，别拍**），不是放宽别的判据。
+        // ⇒ 单国条目更多 ⇒ 想删的条数更容易超过上限。
+        //
+        // ★ 2026-10-11 更新（这条 warn 上线第二天就被它自己抓到了，结论与当时的猜测**不同**）：
+        //   当时写的是「要动的是 `MAX_DROPS`（先量后调，别拍）」—— 量完发现**不该动 `MAX_DROPS`**：
+        //   撞上限的那批清一色是 `duplicate`（kg 10-10：一件事被 9 家报道，要删 8 条），
+        //   而 `MAX_DROPS` 的立意「删得多不是本事」针对的是**没有可指认字段**的
+        //   `not_news` / `unreliable`。⇒ 改成**按证据分账**：`duplicate` 走
+        //   `MAX_DROPS_DUPLICATE`，其余照旧。判据与取值依据见 `MAX_DROPS_DUPLICATE`。
+        //   这段历史留着是因为**它是一次「凭直觉说该调哪个参数」被实测推翻的实例**。
         const overDropCap = audit.rejections.find(
           (r) => r.startsWith('drops 整组作废') && r.includes('> 上限'),
         );
         if (overDropCap) {
           console.warn(
             `[${pc.country.name}] ⚠️ 总审删稿额度不足 ⇒ **整组作废、一条都没删**（重复会留在成品里）：${overDropCap}` +
-              `｜该国本轮 ${before} 条，额度 = min(MAX_DROPS, ${before}/3)。` +
-              `若反复出现，该调的是 MAX_DROPS（先量后调）。`,
+              `｜该国本轮 ${before} 条，两本账分别是 duplicate ≤${audit.dupBudget ?? MAX_DROPS_DUPLICATE}` +
+              `（提议 ${audit.dupDrops ?? '?'}）、其余 ≤${audit.otherBudget ?? '?'}（提议 ${audit.otherDrops ?? '?'}）。` +
+              '若反复出现在 duplicate 那本账上，再谈调 MAX_DROPS_DUPLICATE' +
+              '（先量后调 —— 10-11 就是这么发现「该动的是分账、不是阈值」的）。',
           );
         }
 

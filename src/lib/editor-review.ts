@@ -249,21 +249,115 @@ export function isEditorReviewEnabled(): boolean {
  *      和线上 `codeVersion` 里）。
  *   2. **`drops` 那侧一个字没动。** 复核结论是它判得对（详见 `FIX_LOCATE_FLOOR` 上方的
  *      C 类说明）—— 别因为「fixes 放宽了」就顺手去动它。
+ *
+ * - `v6`（2026-10-11）：**用户第五次报重复，这次的原因既不在判据、也不在材料、也不在措辞，
+ *   在「提示词要求无上界、代码只准 4 条」这个契约冲突上。**
+ *
+ *   证据是 kg `2026-10-10` 那一批（用户截图报「重复新闻，非常严重，多篇重复」）：
+ *   「楚河州成立 100 周年庆典」**9 条**同题稿全部进了草稿，而**总审其实早就看出来了** ——
+ *   它的 `verdict` 里写着「本期稿件中关于楚河州100周年庆典的报道高度重复（标题与摘要雷同）」。
+ *   判对了、也说了，却没生效：清干净要删 8 条，而闸的上限是 `min(MAX_DROPS=4, ⌊n/3⌋)`，
+ *   超限即**整组作废**⇒ 一条都没删。**这不是模型不行，是算术上不可能。**
+ *
+ *   ⇒ 这一版把两个问题拆开（详见 `MAX_DROPS_DUPLICATE`）：
+ *   1. **代码**：`drops` 的上限**按证据分账** —— `duplicate`（有 `sameAs`、代码当场量相似度）
+ *      走 `MAX_DROPS_DUPLICATE = 12`；`not_news` / `unreliable`（无可指认字段，只能靠引文）
+ *      照旧走 `MAX_DROPS = 4` + 比例上限。另加一道「sameAs 不许成环」的闸（成环 = 一个事件被删空）。
+ *   2. **提示词**：第一节补一句「同一件事被 N 家报道时，其余 N−1 条要一次列全」，
+ *      并说明这一类的条数不与其它删除共用上限 —— 否则模型会按「少删更安全」的直觉自我设限。
+ *
+ *   ⚠️ 与 g2 的关系：g2 那条「`drops` 那侧一个字没动」说的是**当次**（10-04）没动，
+ *   它当时保护的是**逐条判据**（`sameAs` / 引文 / kind），那一层 v6 也**仍然一个字没动**。
+ *   变的是**预算怎么分配**，不是「什么样的删除算合规」。
  */
-export const EDITOR_PROMPT_VERSION = 'v5';
+export const EDITOR_PROMPT_VERSION = 'v6';
 
 // ----- 护栏常量（导出是为了被回归脚本断言，别内联）-----
 
-/** 单国最多删几条。删得多不是本事 —— 多半是判据跑歪了。 */
+/**
+ * 单国最多删几条（**只算「无字段可指认」的那两类**：`not_news` / `unreliable`）。
+ * 删得多不是本事 —— 多半是判据跑歪了。
+ *
+ * ⚠️ 2026-10-11 起**不再**管 `duplicate` 那一类，见 {@link MAX_DROPS_DUPLICATE}。
+ */
 export const MAX_DROPS = 4;
 /** 最多删掉这一国稿件的这**个比例**（防止「20 篇删 4 篇」变成「3 篇删 1 篇」时比例失真） */
 export const MAX_DROP_RATIO = 1 / 3;
+
+/**
+ * `duplicate` 类删除的**独立**条数上限（2026-10-11 新增）。
+ *
+ * ## 它治的是什么：一个「提示词要求 N−1 条、代码只准 4 条」的契约冲突
+ *
+ * 提示词第一节写的是**无上界**的：
+ *
+ * > 同一件事被不同媒体各写一遍时，**只保留信息最完整的那一条**，其余进 drops（kind: "duplicate"）
+ *
+ * 而代码把**全部** drops 一起套上 `min(MAX_DROPS, ⌊n/3⌋)`，超了**整组作废**。
+ * 两者叠起来有一个算术后果：**一件事被 ≥6 家报道时，这份稿子不可能被清干净** ——
+ * 要删 5 条以上，闸就整组作废、一条都不删。这不是概率问题，是**恒等式**。
+ *
+ * 线上实测（用户 2026-10-11 报「重复新闻，非常严重，多篇重复」）：
+ * kg `2026-10-10` 一个批次里，「楚河州成立 100 周年庆典」**9 条**同题稿
+ * （id 12502/12503/12504/12505/12506/12508/12509/12530/12532，逐条比对过原文，
+ * 同一次活动、同一次讲话、同一笔 100 亿索姆拨款），
+ * 要清干净必须删 8 条 ⇒ 撞上限 ⇒ **整组作废 ⇒ 9 条全留**。
+ * 同一批次总审的 `verdict` 里已经写着「本期稿件中关于楚河州100周年庆典的报道高度重复」
+ * —— 也就是说**模型判对了、也说了，代码不让它生效**。
+ *
+ * ## 为什么是「另开一本账」而不是「把 MAX_DROPS 调大」
+ *
+ * `MAX_DROPS` 的立意是「删得多不是本事 —— 多半是判据跑歪了」，它成立的前提是
+ * **那类判断没有可指认的字段**：`not_news` / `unreliable` 只能靠模型自己写的引文佐证，
+ * 删多了确实可疑。`duplicate` 不一样：每条都有 `sameAs` 字段，代码**当场量**两条标题的
+ * 相似度（`DUP_SIM_FLOOR`），指错会被逐条拒。**「同一件事被 N 家报道」里的 N 是
+ * 那一天的新闻事实，不是模型判据的质量信号** —— 用同一个上限管两种东西，
+ * 就会在「一件事被 9 家报道」的那天把**正确的**删除一起作废。
+ * （这与 `AGENTS` 里那条「一种判断只需要一份机器能核对的证据」是同一个道理的两面。）
+ *
+ * ## 取值 **12** 的依据（不是拍的）
+ *
+ * 1. **下界由实测卡住**：必须 ≥ 实测最大同事件报道数 − 1 = 9 − 1 = **8**，否则线上那个
+ *    形态照旧清不掉。12 留出余量（覆盖到「一件事被 13 家报道」）。
+ * 2. **上界由 `MIN_KEEP` 兜住**：`MIN_KEEP = 5` 仍然适用于全批。注意总审的入参在
+ *    `PUSH_MAX_PER_COUNTRY`(=20) 处截断（2026-10-10 由 15 提到 20），所以
+ *    `n ≤ 20` —— 这条上限要咬人得同时满足「删 ≥13 条」且「删完不足 5 条」，也就是
+ *    「20 条里 13 条是同一件事」这种极端批。实测线上那批 kg 是 `n=18`（§7.1），
+ *    9 条同题 ⇒ 要删 8 条 ⇒ 8 ≤ 12 且 18−8=10 ≥ 5，**两头都过**。
+ *    也就是说这条上限多数时候不参与，它拦的是「模型把整批都判成重复」的退化。
+ * 3. ⚠️ 已知残余：`sameAs + DUP_SIM_FLOOR(0.15)` 这道逐条闸**偏弱**
+ *    （实测 kg 10-10 那批：每条平均有 3 条、p90 有 8 条邻居过得了 0.15）。
+ *    所以「另开一本账」换来的是**上限从 4 抬到 12**，不是「取消上限」。
+ *    真要再放宽，先把 0.15 这道闸做强（例如改用原文标题比对），别只动这里的数字。
+ */
+export const MAX_DROPS_DUPLICATE = 12;
 /** 无论模型怎么判，至少保留这么多条。低于它干脆一条都不删。 */
 export const MIN_KEEP = 5;
 /** 单国最多改几处文字（防止它把整份稿子重写一遍） */
 export const MAX_FIXES = 6;
 /** 标题长度上限（微信标题超过这个长度会被截断，改长了等于没改） */
 export const MAX_TITLE_LEN = 64;
+
+/**
+ * 总审「一句话总评」（`verdict`）的长度上限。
+ *
+ * ## 为什么从 `slice(0, 40)` 放到 200（2026-10-11）
+ *
+ * 提示词要的是「（一句话总评）」，没有给字数；那个 40 是**代码单方面加的**，
+ * 而且**截得不是地方**：2026-10-11 kg 的总评停在
+ * 「本期稿件中关于楚河州100周年庆典的报道高度重复（标题与摘要雷同），且存在一条无」
+ * —— 恰好砍在「存在一条无 **X**」这个结论的关键词**之前**。读日志的人看到的是
+ * 一个没写完的句子，会误判成「模型没说完 / 模型今天不行」，而它其实正指着
+ * 那一轮真正的缺陷（9 条同题稿）。
+ *
+ * ## 为什么不是「干脆不截」
+ *
+ * `verdict` 会进推送 JSON，而模型失控时能给出一整段（本项目在别处见过同类跑偏）。
+ * 上限本身是对的，错的是**上限值**与**截断不可见**。所以改成两层：
+ *   1. 上限放宽到 200（≈ 3 句，够装下上例那种完整判词）；
+ *   2. 越界时**在结尾写明原始字数**（见 `clipVerdict`）—— 截断不再静默。
+ */
+export const MAX_VERDICT_LEN = 200;
 
 /**
  * 喂给总审的**原文摘录**截断长度（v4 新增）。
@@ -504,7 +598,10 @@ export interface ReviewDecision {
    * 这个字段是只读的**报告**，不会改动任何内容 —— 与 `needsImage` 同一性质。
    */
   thinSource: number[];
-  /** 总评（一句话） */
+  /**
+   * 总评（一句话）。**有长度上限**：见 {@link MAX_VERDICT_LEN}
+   * （2026-10-11 之前是 40 且截断不可见，会砍出半句话——那段历史留在该常量的注释里）。
+   */
   verdict: string;
 }
 
@@ -526,6 +623,18 @@ export interface ReviewAudit {
   /** 模型提议删几条 / 实际删几条 */
   proposedDrops?: number;
   appliedDrops?: number;
+  /**
+   * 采纳的删除**按证据分账**（2026-10-11 新增）：`duplicate` 有 `sameAs` 可当场核对，
+   * 其余两类只能靠引文 ⇒ 两者各有一本账、各有各的上限（见 `MAX_DROPS_DUPLICATE`）。
+   *
+   * 为什么必须报：只说 `appliedDrops = 0` 的话，「模型没提」与「提了被上限整组作废」
+   * 长得一模一样；而这两个数一摆出来，是哪一类撞了上限就直接看得见。
+   */
+  dupDrops?: number;
+  otherDrops?: number;
+  /** 本次**实际生效**的两个上限（`MAX_DROPS_DUPLICATE` / `min(MAX_DROPS, ⌊n/3⌋)`）。 */
+  dupBudget?: number;
+  otherBudget?: number;
   /** 模型提议改几处 / 实际改几处 */
   proposedFixes?: number;
   appliedFixes?: number;
@@ -621,6 +730,10 @@ export const EDITOR_PROMPT = `你是一位资深中文财经媒体的**终审编
 若讲的是同一次签约则算同一件事，若是两场不同的活动则不算）。
 ⚠️ 每一次判重复，**必须同时给出 sameAs**：你认定与它重复的那条的序号。
 **指不出是哪一条，就不许删。**
+⚠️ 同一件事被 N 家报道时，**其余 N−1 条要一次列全**（每条都给 sameAs），
+不要因为「看着多」就只列前几条 —— 留下没列的那几条，读者看到的还是重复。
+（这一类的条数**不与其它删除共用上限**：代码会逐条核对 sameAs 与相似度，只有
+ kind 为 not_news / unreliable 的那种才受条数上限约束。所以该列多少就列多少。）
 ⚠️ 跨国重复**不归你管** —— 同一件事出现在两个国家的日报里是**预期行为**，不要为此建议删除。
 
 **二、抓出「数字对、话不通」的表述**
@@ -1137,15 +1250,75 @@ export function applyVerdict(
     dropSet.add(idx);
     dropRecords.push({ index: idx, kind, reason: reason.slice(0, 160), ...(sameAs !== undefined ? { sameAs } : {}) });
   }
-  // 比例/条数上限 + 保留下限，**三个条件同时**满足才允许删。
-  // 注意：这里不是在「取前 K 条」—— 而是整体作废。理由：模型给的理由是按它自己的
-  // 优先级排的，我们无从知道该留哪几条；而按顺序取前 K 条等于**替它做了取舍**，
+  // ---- duplicate 的 sameAs 不许成环（2026-10-11 新增）----
+  //
+  // 逐条闸只校验「下标合法 + 相似度达标」，所以 `#3→#5` 与 `#5→#3` 这种**互指**
+  // （以及更长的环）能整组通过。后果不是「少删一条」，是**一个事件被删空**：
+  // 环里所有条目一起进 drops，没有任何一条幸存，而 `dropRecords` 里每条
+  // 「和谁重复」指向的又是另一个同样被删掉的条目 —— 总审报告会自相矛盾
+  // （`drops` 说 A 与 B 重复 ⇒ 两条都没了），而**没有任何字段能看出这件事**。
+  //
+  // 判据：顺着 sameAs 走，走不出去（回到走过的点）就是环。只拒环上的那些条目
+  // （以及挂在环上的），其余照旧 —— 并且**把链打印出来**，静默拒会让下一个人
+  // 以为模型没提这条。
+  const dupSameAs = new Map<number, number>();
+  for (const d of dropRecords) {
+    if (d.kind === 'duplicate' && d.sameAs !== undefined) dupSameAs.set(d.index, d.sameAs);
+  }
+  if (dupSameAs.size > 0) {
+    const chainOf = (start: number): { text: string; cyclic: boolean } => {
+      const seen: number[] = [];
+      let cur = start;
+      for (;;) {
+        if (seen.includes(cur)) return { text: [...seen, cur].join('→'), cyclic: true };
+        seen.push(cur);
+        const next = dupSameAs.get(cur);
+        if (next === undefined) return { text: seen.join('→'), cyclic: false };
+        cur = next;
+      }
+    };
+    const cyclic = dropRecords.filter((d) => d.kind === 'duplicate' && chainOf(d.index).cyclic);
+    for (const c of cyclic) {
+      rejections.push(
+        `drops[${c.index}] 的 sameAs 链成环（${chainOf(c.index).text}）⇒ 拒绝：这一组会被整组删空，没有任何一条留下`,
+      );
+      dropSet.delete(c.index);
+    }
+    for (const c of cyclic) {
+      const k = dropRecords.indexOf(c);
+      if (k >= 0) dropRecords.splice(k, 1);
+    }
+  }
+
+  // ---- 上限：**按证据分账**（2026-10-11 改）----
+  //
+  // 原先是把全部 drops 套同一个 `min(MAX_DROPS, ⌊n/3⌋)`。那个形状对
+  // `not_news` / `unreliable` 是对的（没有可指认的字段 ⇒ 删多了可疑），
+  // 但对 `duplicate` 是错的：提示词第一节明写「只保留信息最完整的那一条，其余进 drops」，
+  // 那是**无上界**的要求 ⇒ 一件事被 ≥6 家报道时闸必然整组作废，**一条都删不掉**。
+  // 线上实例与取值依据见 `MAX_DROPS_DUPLICATE`。
+  //
+  // 注意：这里仍然不是在「取前 K 条」—— 而是整体作废。理由不变：模型给的理由是按
+  // 它自己的优先级排的，我们无从知道该留哪几条；按顺序取前 K 条等于**替它做了取舍**，
   // 那正是「静默多删」的来源。
-  const dropOk = dropSet.size <= dropCap && n - dropSet.size >= MIN_KEEP;
+  const dupDrops = dropRecords.filter((d) => d.kind === 'duplicate');
+  const otherDrops = dropRecords.filter((d) => d.kind !== 'duplicate');
+  audit.dupDrops = dupDrops.length;
+  audit.otherDrops = otherDrops.length;
+  audit.dupBudget = MAX_DROPS_DUPLICATE;
+  audit.otherBudget = dropCap;
+  // 两本账各自不超限 + 全批保留下限，**三个条件同时**满足才允许删。
+  // ⚠️ 仍然保留「一次把两本账都作废」而不是「只作废超限的那一类」：行为最好推理
+  //    （与 order 的处置一致）。代价是「一条越界的 not_news 会连累正确的重复删除」——
+  //    记在这里，真出现了再改成逐类作废（那时要一并想清楚「部分生效」怎么写进 audit）。
+  const dupOk = dupDrops.length <= MAX_DROPS_DUPLICATE;
+  const otherOk = otherDrops.length <= dropCap;
+  const dropOk = dupOk && otherOk && n - dropSet.size >= MIN_KEEP;
   if (dropSet.size > 0 && !dropOk) {
-    const why =
-      dropSet.size > dropCap
-        ? `想删 ${dropSet.size} 条 > 上限 ${dropCap} 条（${MAX_DROPS} 条 且 ≤${Math.round(MAX_DROP_RATIO * 100)}%）`
+    const why = !dupOk
+      ? `duplicate 想删 ${dupDrops.length} 条 > 上限 ${MAX_DROPS_DUPLICATE} 条`
+      : !otherOk
+        ? `${otherDrops.length} 条非重复类删除 > 上限 ${dropCap} 条（${MAX_DROPS} 条 且 ≤${Math.round(MAX_DROP_RATIO * 100)}%）`
         : `删完只剩 ${n - dropSet.size} 条 < 保留下限 ${MIN_KEEP} 条`;
     rejections.push(`drops 整组作废：${why}`);
     dropSet.clear();
@@ -1260,7 +1433,27 @@ export function applyVerdict(
       how: located.how,
     });
     if (fixes.length >= MAX_FIXES) {
-      if (rawFixes.length > MAX_FIXES) rejections.push(`fixes 超过上限 ${MAX_FIXES} 条 ⇒ 只采纳前 ${MAX_FIXES} 条`);
+      // ⚠️ 把**被截断的那几条**点出来（2026-10-11 新增）。
+      //
+      // 原先只有一句「只采纳前 6 条」—— 被丢掉的是什么**完全不可观测**，
+      // 而它们恰恰是「模型还想改什么」的全部答案。kg 那一轮 `proposedFixes=16`、
+      // 实际采纳 6，被截掉的 10 条里有没有真删/真改，就是这么变成不可查的
+      // （它是当前 `fixes` 空转 71% 这条结论上唯一没被量到的角）。
+      //
+      // 只打 `field` + `after` 前 30 字：够定位「它想改哪一条、改成什么方向」，
+      // 又不至于把 16 条全文塞进一行日志。**不做静默截断**：条数照实报。
+      if (rawFixes.length > MAX_FIXES) {
+        const truncated = rawFixes.slice(MAX_FIXES).map((f, k) => {
+          const o = (f ?? {}) as Record<string, unknown>;
+          const fld = typeof o.field === 'string' ? o.field : '?';
+          const after = typeof o.after === 'string' ? o.after.trim() : '';
+          return `#${MAX_FIXES + k}(${fld})「${after.slice(0, 30)}」`;
+        });
+        rejections.push(
+          `fixes 超过上限 ${MAX_FIXES} 条 ⇒ 只采纳前 ${MAX_FIXES} 条；` +
+            `被截断 ${truncated.length} 条：${truncated.join(' ')}`,
+        );
+      }
       break;
     }
   }
@@ -1291,10 +1484,26 @@ export function applyVerdict(
       fixes,
       needsImage: [...new Set(needsImage)],
       thinSource,
-      verdict: typeof raw.verdict === 'string' ? raw.verdict.slice(0, 40) : '',
+      verdict: clipVerdict(raw.verdict),
     },
     audit,
   };
+}
+
+/**
+ * 总评的**不静默**截断（上限见 {@link MAX_VERDICT_LEN}）。
+ *
+ * 与原先的 `slice(0, 40)` 有两处不同：
+ *   · 上限从 40 → 200；
+ *   · 越界时**在结尾写明原始字数**（`…（原始 N 字，已截断）`）。
+ *
+ * 第二条比第一条重要：静默截断的危险不在于「短」，在于**看的人不知道它短了** ——
+ * 一个被砍掉半句的总评，读起来和一句本来就这么短的判词没有区别。
+ */
+function clipVerdict(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  if (v.length <= MAX_VERDICT_LEN) return v;
+  return `${v.slice(0, MAX_VERDICT_LEN)}…（原始 ${v.length} 字，已截断）`;
 }
 
 /** 从模型返回文本里抽出 JSON（模型经常包一层 ```json）。 */
