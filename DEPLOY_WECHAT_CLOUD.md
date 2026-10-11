@@ -362,14 +362,23 @@ tar -czf deploy.tar.gz \
   --exclude=tsconfig.tsbuildinfo .
 ```
 
-> **`--exclude=assets` 不能省**：`assets/` 里是 49MB 的聊天截图和导出日志，
-> 跟应用运行毫无关系，但它在 `.gitignore` 里**却已经被历史提交跟踪过**
-> （gitignore 不会让已跟踪的文件失效），所以 tar 默认会把它全打进去 ——
-> 打出来的包会是 **42MB** 而不是 280KB，上传和构建都白等。
-> 打完顺手校验一下大小：`ls -lh deploy.tar.gz`。
+> **`--exclude=assets` 现在（2026-10-12 起）已经是「保险」而非「必需」** —— 这个标记保留着，
+> 但它的原始理由已经作废，别再照抄旧解释：
 >
-> （另：`--exclude=deploy.tar.gz` 也必须加，否则 tar 会把上一次的包打进新包里，
-> 报 `Can't add archive to itself` 并产生一个 42MB 的怪物包。）
+> - **旧理由（2026-10-12 之前，已作废）**：`assets/` 里是 48.2 MiB 的聊天截图和导出日志，
+>   跟应用运行毫无关系，但它在 `.gitignore` 里**却已经被历史提交跟踪过**
+>   （gitignore 不会让已跟踪的文件失效），所以 tar 默认会把它全打进去 ——
+>   打出来的包会是 **42MB** 而不是 280KB，上传和构建都白等。
+> - **为什么作废**：2026-10-12 已执行 `git rm -r --cached assets`（提交 `88f9fb2`）
+>   ⇒ assets 不再被 git 跟踪，tar 也不会再吃到它。**文件本身还在本地磁盘上**（48.2 MiB，168 个文件；`du -sh` 49M），
+>   只是不属于仓库内容了。
+> - **为什么还留着这个标记**：它是幂等的 —— 万一以后有人把 assets 加回跟踪，
+>   这个 `--exclude` 会挡住那次事故。**别顺手删掉它。**
+>
+> 打完顺手校验大小：`ls -lh deploy.tar.gz`（期望 ~280KB 量级；出现 40MB+ 就是又被打进去了）。
+>
+> （另：`--exclude=deploy.tar.gz` 也**必须**加，否则 tar 会把上一次的包打进新包里，
+> 报 `Can't add archive to itself` 并产生一个 42MB 的怪物包。这条**不随**上面的改动失效。）
 
 ```bash
 # 在云托管控制台上传 deploy.tar.gz

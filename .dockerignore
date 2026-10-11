@@ -1,9 +1,16 @@
 # Docker 构建上下文排除清单
 #
 # 背景：Dockerfile 里有 `COPY . .`，默认会把整个目录塞进构建上下文。
-# 本地仓库里躺着约 30MB 的文档截图（assets/），每次构建都要传一遍，
-# 云托管上还会拉长构建时间。这些文件代码里没有任何引用（已核对 src / scripts /
-# Dockerfile / next.config.ts / container.config.json / package.json）。
+#
+# ⚠️ 2026-10-12 订正两处过期表述（原文写着「约 30MB」，实测是 48.2 MiB）：
+#   ① 体量：`assets/` 是 168 个文件、**48.2 MiB**（= 50,570,072 字节 = 50.6 MB；
+#      `du -sh` 显示 49M，那是文件系统块取整，别据此写 49MB）—— 比被跟踪的
+#      其余全部内容（2.7 MiB）还大 18 倍；
+#   ② 「有没有被跟踪」：2026-10-12 起 assets 已 **`git rm -r --cached` 移出跟踪**（提交 `88f9fb2`），
+#      所以下面这一条现在的作用是**保险**而不是必需 —— 保留它，以防有人再把它加回跟踪。
+#
+# 判据：这些文件在 `src/` / `scripts/` / `package.json` / `next.config.mjs` /
+# `container.config.json` / `Dockerfile` 里**没有任何引用**（2026-10-12 重新逐个核对过）。
 
 # 依赖与构建产物 —— 容器内由 pnpm install / pnpm build 重新生成。
 # 若把本地（macOS）编译的产物复制进去，会覆盖容器内为 Linux 编译的版本。
@@ -17,7 +24,8 @@ dist
 .env.local
 .env.*.local
 
-# 文档截图与扣子时代遗留文件，约 30MB，代码中无引用
+# 文档截图与扣子时代遗留文件，48.2 MiB（168 个文件），代码中无引用
+# （assets 已于 2026-10-12 移出 git 跟踪，这一行留作保险）
 assets
 .coze
 
