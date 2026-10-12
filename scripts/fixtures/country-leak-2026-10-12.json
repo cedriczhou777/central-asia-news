@@ -1,0 +1,251 @@
+{
+  "meta": {
+    "purpose": "2026-10-12 实测：落在 5 国桶里、但通篇与本国无关的外国稿（当前词表下漏放）。任何修法都必须在这份语料上做到「全部拦下、本国稿一条不误伤」。",
+    "source": "GET /api/articles?limit=400（线上快照，抓于 2026-10-12 00:34 北京时间）",
+    "scan": "用项目自己的 selfKeywordsFor/regionKeywordsFor/foreignKeywordsFor('ingest') 跑：中译标题+摘要里命中外国词、且完全没命中本国词/区域词",
+    "result": "400 条中 30 条（7.5%）；分国 az 25 / tj 3 / uz 2；publishedAt 全部在 2026-10-09 ~ 2026-10-10（即当前词表下，不是 10-05 之前的存量）",
+    "caution": "只拿到 originalTitle，没有 RSS description ⇒ 这是一份「结果侧」语料，不是采集侧入参；做回归时用 originalTitle+原 description 复现才等价。"
+  },
+  "rows": [
+    {
+      "id": 12544,
+      "country": "az",
+      "source": "APA",
+      "publishedAt": "2026-10-10T19:46:02+00:00",
+      "originalTitle": "Rusiya dizel yanacağının ixracına qoyulan qadağanı qismən aradan qaldırıb",
+      "titleZh": "俄罗斯解除部分柴油出口禁令，计划向国际市场供应50万吨"
+    },
+    {
+      "id": 12578,
+      "country": "az",
+      "source": "Modern.az",
+      "publishedAt": "2026-10-10T18:50:00+00:00",
+      "originalTitle": "Hörmüzdə neft tankeri minaya düşüb",
+      "titleZh": "伊朗伊斯兰革命卫队称一艘超级油轮在霍尔木兹海峡触雷"
+    },
+    {
+      "id": 12545,
+      "country": "az",
+      "source": "APA",
+      "publishedAt": "2026-10-10T18:21:50+00:00",
+      "originalTitle": "Hörmüz boğazında nəhəng neft tankeri minaya düşərək partlayıb",
+      "titleZh": "伊朗伊斯兰革命卫队称在霍尔木兹海峡引爆一艘巨型油轮"
+    },
+    {
+      "id": 12571,
+      "country": "az",
+      "source": "Qafqazinfo",
+      "publishedAt": "2026-10-10T18:03:00+00:00",
+      "originalTitle": "“Düşünürəm ki, Ukraynanın yeni prezidenti seçməsinin vaxtı çatıb”",
+      "titleZh": "特朗普称乌克兰应选新总统"
+    },
+    {
+      "id": 12474,
+      "country": "uz",
+      "source": "UzA",
+      "publishedAt": "2026-10-10T17:40:27+00:00",
+      "originalTitle": "БТА: Пенсия ёшига етган вазирлик ходимлари ишдан бўшатилади",
+      "titleZh": "保加利亚创新与数字转型部将分阶段辞退所有达到退休年龄的官员"
+    },
+    {
+      "id": 12580,
+      "country": "az",
+      "source": "Modern.az",
+      "publishedAt": "2026-10-10T17:14:00+00:00",
+      "originalTitle": "Ukraynada prezidentin dəyişdirilməsinin vaxtıdır - Tramp",
+      "titleZh": "特朗普称乌克兰总统任期已到"
+    },
+    {
+      "id": 12572,
+      "country": "az",
+      "source": "Qafqazinfo",
+      "publishedAt": "2026-10-10T16:30:00+00:00",
+      "originalTitle": "Yanğında həlak olan Könül Vəlibəylinin qızı kömək istədi",
+      "titleZh": "亚美尼亚总理帕什ینی扬宣布辞职"
+    },
+    {
+      "id": 12587,
+      "country": "az",
+      "source": "Banker.az",
+      "publishedAt": "2026-10-10T16:14:44+00:00",
+      "originalTitle": "Çin Avropaya hibrid avtomobillərin ixracını azaltmaqla bağlı Aİ ilə razılığa gəlib",
+      "titleZh": "中国与欧盟达成协议，未来四年将减少向欧洲出口混合动力汽车"
+    },
+    {
+      "id": 12581,
+      "country": "az",
+      "source": "Modern.az",
+      "publishedAt": "2026-10-10T15:32:00+00:00",
+      "originalTitle": "Ər-Riyad hava limanında güclü partlayış oldu",
+      "titleZh": "沙特利雅得机场发生强烈爆炸"
+    },
+    {
+      "id": 12582,
+      "country": "az",
+      "source": "Modern.az",
+      "publishedAt": "2026-10-10T15:18:00+00:00",
+      "originalTitle": "Rusiyaya qarşı sanksiyaların yumşaldılmasını müzakirə etdilər",
+      "titleZh": "泽连斯基与马克龙讨论俄石油制裁松绑问题"
+    },
+    {
+      "id": 12574,
+      "country": "az",
+      "source": "Qafqazinfo",
+      "publishedAt": "2026-10-10T15:05:00+00:00",
+      "originalTitle": "Ər-Riyad hava limanında güclü partlayış olub",
+      "titleZh": "利雅得机场发生强烈爆炸"
+    },
+    {
+      "id": 12589,
+      "country": "az",
+      "source": "Banker.az",
+      "publishedAt": "2026-10-10T14:48:14+00:00",
+      "originalTitle": "Kallas: Aİ oktyabrın 12-də Rusiyaya qarşı indiyədək ən böyük sanksiyalar paketini təsdiqləyəcək",
+      "titleZh": "Kaya Kallas：欧盟批准对俄迄今最大制裁包"
+    },
+    {
+      "id": 12583,
+      "country": "az",
+      "source": "Modern.az",
+      "publishedAt": "2026-10-10T13:55:00+00:00",
+      "originalTitle": "Aİ Rusiyaya qarşı ən böyük sanksiya siyahısını təsdiqləyəcək",
+      "titleZh": "欧盟批准对俄约 1600 项新制裁"
+    },
+    {
+      "id": 12498,
+      "country": "uz",
+      "source": "NUZ.uz",
+      "publishedAt": "2026-10-10T13:36:03+00:00",
+      "originalTitle": "В Турции детям до 15 лет запретят пользоваться соцсетями",
+      "titleZh": "土耳其禁止 15 岁以下儿童使用社交媒体"
+    },
+    {
+      "id": 12546,
+      "country": "az",
+      "source": "APA",
+      "publishedAt": "2026-10-10T09:50:25+00:00",
+      "originalTitle": "Rusiya Gürcüstanda istehsal olunan \"Nabeglavi\" mineral suyunun və \"Coca-cola\" idxalını qadağan edib",
+      "titleZh": "俄罗斯禁止进口格鲁吉亚生产的“Nabeglavi”矿泉水和“Coca-Cola”"
+    },
+    {
+      "id": 12565,
+      "country": "az",
+      "source": "AZERTAC (ru)",
+      "publishedAt": "2026-10-10T09:41:00+00:00",
+      "originalTitle": "Турецкий министр: Страницы пользователей соцсетей в возрасте 15-18 лет будут закрытыми",
+      "titleZh": "土耳其部长：15-18岁用户社交账号将设为私密"
+    },
+    {
+      "id": 12549,
+      "country": "az",
+      "source": "APA",
+      "publishedAt": "2026-10-10T08:29:24+00:00",
+      "originalTitle": "Ukrayna Rostov vilayətində neft terminalı, dəmir yolu körpüsü və iki gəmiyə zərbə endirib",
+      "titleZh": "乌克兰袭击俄罗斯罗斯托夫州：石油终端、铁路桥及两艘船只受损"
+    },
+    {
+      "id": 12554,
+      "country": "az",
+      "source": "AZERTAC",
+      "publishedAt": "2026-10-10T06:52:00+00:00",
+      "originalTitle": "Oil prices climb on global markets",
+      "titleZh": "伦敦洲际交易所与纽约商品交易所原油价格分别上涨 0.44 美元和 0.36 美元"
+    },
+    {
+      "id": 12599,
+      "country": "tj",
+      "source": "Avesta",
+      "publishedAt": "2026-10-10T05:15:00+00:00",
+      "originalTitle": "Китай и ЕС опубликовали совместное заявление по итогам II сессии в рамках Конференции",
+      "titleZh": "中国与欧盟在贸易投资会议第二次会议后发布联合声明"
+    },
+    {
+      "id": 12407,
+      "country": "tj",
+      "source": "Avesta",
+      "publishedAt": "2026-10-09T11:01:36+00:00",
+      "originalTitle": "МИД КНР: стабильное развитие экономических связей с Европой отвечает интересам обеих сторон",
+      "titleZh": "中国外交部：稳定发展与中国欧洲经贸关系符合双方利益"
+    },
+    {
+      "id": 12320,
+      "country": "az",
+      "source": "Trend.az",
+      "publishedAt": "2026-10-09T10:53:40+00:00",
+      "originalTitle": "Mirziyoyev sets “Trust and Common Development” as CIS motto",
+      "titleZh": "米尔济约耶夫将“信任与共同发展”定为集体安全组织宗旨"
+    },
+    {
+      "id": 12397,
+      "country": "az",
+      "source": "Banker.az",
+      "publishedAt": "2026-10-09T10:31:36+00:00",
+      "originalTitle": "Çin “Porsche”nin bazarını öldürür – satışlar kəskin düşüb",
+      "titleZh": "Porsche 2026年前9个月销量下降16%至178,532辆"
+    },
+    {
+      "id": 12377,
+      "country": "az",
+      "source": "Haqqin.az",
+      "publishedAt": "2026-10-09T09:23:00+00:00",
+      "originalTitle": "Миллиарды сторонников Асада ушли в госфонд Сирии",
+      "titleZh": "叙利亚新政府没收阿萨德支持者资产以充实主权投资基金"
+    },
+    {
+      "id": 12392,
+      "country": "az",
+      "source": "Modern.az",
+      "publishedAt": "2026-10-09T09:14:00+00:00",
+      "originalTitle": "Ukrayna dronları Rusiyanın “Yandex” şirkətini vurdu",
+      "titleZh": "乌克兰无人机袭击俄罗斯 Yandex 公司"
+    },
+    {
+      "id": 12410,
+      "country": "tj",
+      "source": "Avesta",
+      "publishedAt": "2026-10-09T09:06:31+00:00",
+      "originalTitle": "При ударе по Запорожью погиб человек, девять получили ранения",
+      "titleZh": "俄罗斯军队向扎波罗热发射 6 枚制导炸弹致 1 死 9 伤"
+    },
+    {
+      "id": 12381,
+      "country": "az",
+      "source": "Qafqazinfo",
+      "publishedAt": "2026-10-09T07:37:00+00:00",
+      "originalTitle": "Kiyev sakinlərinə şəhəri müvəqqəti tərk etməyi məsləhət gördü",
+      "titleZh": "基辅市民被建议暂时离开城市"
+    },
+    {
+      "id": 12343,
+      "country": "az",
+      "source": "AZERTAC",
+      "publishedAt": "2026-10-09T07:10:00+00:00",
+      "originalTitle": "Gold prices rise by nearly $70 on global markets",
+      "titleZh": "COMEX 金价上涨近 70 美元至每盎司 4226.70 美元"
+    },
+    {
+      "id": 12344,
+      "country": "az",
+      "source": "AZERTAC",
+      "publishedAt": "2026-10-09T06:58:00+00:00",
+      "originalTitle": "Oil prices fall on global markets",
+      "titleZh": "伦敦洲际交易所与纽约商品交易所原油价格下跌"
+    },
+    {
+      "id": 12367,
+      "country": "az",
+      "source": "AZERTAC (ru)",
+      "publishedAt": "2026-10-09T06:26:00+00:00",
+      "originalTitle": "Золото подорожало почти на 70 долларов ВИДЕО",
+      "titleZh": "金价上涨近 70 美元"
+    },
+    {
+      "id": 12368,
+      "country": "az",
+      "source": "AZERTAC (ru)",
+      "publishedAt": "2026-10-09T06:24:00+00:00",
+      "originalTitle": "На биржах нефть подешевела ВИДЕО",
+      "titleZh": "伦敦ICE与纽约NYMEX原油价格下跌：Brent跌至102.78美元/桶，Light跌至90.3美元/桶"
+    }
+  ]
+}
