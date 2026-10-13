@@ -243,6 +243,28 @@ interface FetchSummary {
     /** 实际发起过翻译的文章篇数 —— 用来算「秒/篇」，与 `MEASURED_WORST_PER_ARTICLE_MS` 对照 */
     translatedArticles: number;
   };
+  /**
+   * 本轮的**内存峰值**与收尾占用（2026-10-13 加）。
+   *
+   * 加它的动机是「降规格」缺一个数：控制台的「内存使用率」只给**百分比**，
+   * 而分母是「本服务规格」还是「宿主机」直接决定 `0.5核1G` 那一档能不能降 ——
+   *   · 分母 = 本服务 2 GiB ⇒ 峰值 ≈266 MB ⇒ 1 GiB 有约 4 倍余量；
+   *   · 分母 = 宿主机     ⇒ 可能已接近 1 GiB ⇒ 一降就 OOM。
+   * 而 OOM 是**内核杀进程**：进程直接消失、不打应用日志 ⇒ 表现为「静默丢稿」。
+   * 所以这个数**不能靠试**，必须实测。
+   *
+   * `maxRssMB` 取 `process.resourceUsage().maxRSS` —— 它是**内核准的进程峰值**，
+   * 不是采样、也不是瞬时值 ⇒ **一轮就给出一轮的真实峰值**，不需要连续采样。
+   * `rssMB` / `heapUsedMB` 是收尾时刻的瞬时值，用来判断「峰值离收尾有多远」。
+   */
+  memory: {
+    /** 进程生命周期内的**峰值** RSS（MB）。由内核给，非采样。 */
+    maxRssMB: number;
+    /** 收尾时刻的 RSS（MB） */
+    rssMB: number;
+    /** 收尾时刻的 V8 已用堆（MB） */
+    heapUsedMB: number;
+  };
 }
 
 /** 抓取任务的执行状态。见 GET /api/fetch-news 的说明。 */
@@ -1558,10 +1580,25 @@ async function processFetchNews(
     );
   }
 
+  // ⏱ 内存读数（2026-10-13 加）：说明与判读规则见 `FetchSummary.memory`。
+  // 取在这里而不是函数开头 —— 这个对象是在**收尾时刻**构造的，峰值也应当到这时才读。
+  // ⚠️ `maxRSS` 一律按 **KB** 换算，**不要按平台分支**。Node 已经把平台差异吃掉了：
+  //    2026-10-13 在 darwin 上实测同进程 `maxRSS = 42128` 而 `memoryUsage().rss = 43171840 B`
+  //    （= 41 MB）⇒ `42128 KB ≈ 41 MB` 成立，说明 macOS 拿到的**也是 KB**。
+  //    （初版按 `darwin ? 字节 : KB` 写了分支，实测算出来是 0 MB —— 那是个会撒谎的仪器。）
+  const resourceUsage = process.resourceUsage();
+  const memSnapshot = process.memoryUsage();
+  const maxRssMB = Math.round(resourceUsage.maxRSS / 1024);
+
   return {
     date: targetDate,
     totalFetched,
     candidates: articlesToInsert.length,
+    memory: {
+      maxRssMB,
+      rssMB: Math.round(memSnapshot.rss / 1024 / 1024),
+      heapUsedMB: Math.round(memSnapshot.heapUsed / 1024 / 1024),
+    },
     // 去重分四段记账，别再合成一个数字：四段失败原因完全不同，
     // 合成后「今天为什么少了几篇」就查不出来了。
     dedup: {
