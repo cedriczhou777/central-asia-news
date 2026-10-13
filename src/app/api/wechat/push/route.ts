@@ -43,6 +43,11 @@ import {
 } from '@/lib/editor-review';
 import { pickDraftCover } from '@/lib/draft-cover';
 import { PUSH_MAX_PER_COUNTRY } from '@/lib/push-limits';
+import {
+  readMemorySnapshot,
+  MEMORY_PROBE_VERSION,
+  type MemorySnapshot,
+} from '@/lib/memory-probe';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
@@ -652,27 +657,13 @@ interface PushSummary {
    */
   review: PushReview[];
   /**
-   * 本轮的**进程内存读数**（2026-10-13 加），字段含义与 `fetch-news` 的 `FetchSummary.memory`
-   * 完全相同，这里只写**为什么推送端也必须有一份**：
+   * 本轮的**进程内存读数**（2026-10-13 加）。为什么要两侧都读、单位陷阱、
+   * 自洽断言 —— 全部在 `src/lib/memory-probe.ts`，**只在那里**。
    *
-   * `process.resourceUsage().maxRSS` 是**进程生命周期**的峰值（不是本轮、也不是采样），
-   * 而调度器是「触发抓取 → 等它跑完 → **再**触发推送」（`scheduler.ts` 的 `triggerAndWait` 串联），
-   * 抓取与推送**跑在同一个进程里**。所以只在抓取收尾读，读到的是「进程启动 → 抓取结束」这一段；
-   * 而**真正的峰值很可能在推送这一段**：图片要下载 + 转码（`ImagePayload.buf` / `sharp`），
-   * 总审还要把整批稿件连同摘要一起喂给模型。⇒ 只读抓取端会**系统性低估**，
-   * 而低估的代价正是「降规格后 OOM 静默丢稿」——恰好是这个探针要防的事。
-   *
-   * 两个数**不是**两个独立指标：`maxRSS` 单调不减，所以推送端那份 **≥** 抓取端那份，
-   * 判读时取**推送端**的为准（它就是本轮进程的真实峰值）。
+   * 判读要点（一句话）：`maxRSS` 单调不减，推送段跑在抓取段同一个进程里，
+   * 所以这里的值 **≥** `FetchSummary.memory`，**本字段才是本轮进程的真实峰值**。
    */
-  memory: {
-    /** 进程生命周期内的**峰值** RSS（MB）。由内核给，非采样。 */
-    maxRssMB: number;
-    /** 收尾时刻的 RSS（MB） */
-    rssMB: number;
-    /** 收尾时刻的 V8 已用堆（MB） */
-    heapUsedMB: number;
-  };
+  memory: MemorySnapshot;
 }
 
 interface PushRunState {
@@ -953,6 +944,16 @@ export async function GET(request: NextRequest) {
        * 它存在就说明这一版带上了护栏；改动 `hasConflictingNumbers` 时**必须一起加一**。
        */
       numericVetoVersion: NUMERIC_VETO_VERSION,
+      /**
+       * 内存探针的**部署指纹**（2026-10-13 加），值从 `@/lib/memory-probe` 现算。
+       *
+       * 为什么必须有它：探针是**加法**（`summary.memory` 多两个字段），
+       * 而且只在**跑完一轮**之后才可见 —— 于是「它到底上没上线」在跑轮之前
+       * **完全看不出来**。有指纹就能在**花钱之前**用一条无副作用的 `GET` 问清楚。
+       * ⚠️ 它只证明「这一版带上了探针」，不证明读得准；读数本身看 `summary.memory`。
+       * 用法：`curl -s "$URL/api/wechat/push" | grep -A2 memoryProbeVersion`
+       */
+      memoryProbeVersion: MEMORY_PROBE_VERSION,
       /**
        * 「借图」（`planCoverBorrows`）的配对下限。2026-09-29 新增。
        *
@@ -1667,11 +1668,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       });
     }
 
-    // ⏱ 内存读数（2026-10-13 加）：动机见 `PushSummary.memory`。
-    // ⚠️ `maxRSS` 一律按 **KB** 换算、**不要按平台分支** —— Node 已经把平台差异吃掉了
-    //    （macOS 上实测 `42128` 而 `rss = 41 MB`，见 fetch-news 同处注释）。
-    const resourceUsage = process.resourceUsage();
-    const memSnapshot = process.memoryUsage();
+    // ⏱ 内存读数（2026-10-13 加）：实现、单位陷阱与自洽断言都在 `src/lib/memory-probe.ts`。
+    const memory = readMemorySnapshot();
 
     return {
       hours,
@@ -1684,11 +1682,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       merges,
       judge: judgeRuns,
       review: reviews,
-      memory: {
-        maxRssMB: Math.round(resourceUsage.maxRSS / 1024),
-        rssMB: Math.round(memSnapshot.rss / 1024 / 1024),
-        heapUsedMB: Math.round(memSnapshot.heapUsed / 1024 / 1024),
-      },
+      memory,
     };
   } catch (error) {
     console.error('微信推送失败（本轮整体失败）:', error);

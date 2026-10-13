@@ -25,6 +25,11 @@ import {
 } from '@/lib/proper-nouns';
 import { isCountryRelevant, selfKeywordsFor } from '@/lib/country-relevance';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
+import {
+  readMemorySnapshot,
+  MEMORY_PROBE_VERSION,
+  type MemorySnapshot,
+} from '@/lib/memory-probe';
 
 // ⚠️ 不要在这里 new Parser / 直接调 parser.parseURL —— 用 `@/lib/feed-fetch` 的 `fetchFeed`。
 // 原因见那个文件的头部：直接 parseURL 时，「站点按 UA 返回网页」会被 xml2js 报成
@@ -244,27 +249,14 @@ interface FetchSummary {
     translatedArticles: number;
   };
   /**
-   * 本轮的**内存峰值**与收尾占用（2026-10-13 加）。
+   * 本轮的**内存读数**（2026-10-13 加）。动机、单位陷阱与自洽断言都在
+   * `src/lib/memory-probe.ts`，且**只在那里** —— 免得两处注释各说各话。
    *
-   * 加它的动机是「降规格」缺一个数：控制台的「内存使用率」只给**百分比**，
-   * 而分母是「本服务规格」还是「宿主机」直接决定 `0.5核1G` 那一档能不能降 ——
-   *   · 分母 = 本服务 2 GiB ⇒ 峰值 ≈266 MB ⇒ 1 GiB 有约 4 倍余量；
-   *   · 分母 = 宿主机     ⇒ 可能已接近 1 GiB ⇒ 一降就 OOM。
-   * 而 OOM 是**内核杀进程**：进程直接消失、不打应用日志 ⇒ 表现为「静默丢稿」。
-   * 所以这个数**不能靠试**，必须实测。
-   *
-   * `maxRssMB` 取 `process.resourceUsage().maxRSS` —— 它是**内核准的进程峰值**，
-   * 不是采样、也不是瞬时值 ⇒ **一轮就给出一轮的真实峰值**，不需要连续采样。
-   * `rssMB` / `heapUsedMB` 是收尾时刻的瞬时值，用来判断「峰值离收尾有多远」。
+   * ⚠️ 这是**抓取阶段收尾**时刻读的，而 `maxRSS` 覆盖的是**进程整个生命周期**；
+   * 推送阶段跑在**同一个进程**里，且峰值很可能出现在那一段
+   * ⇒ 判读请以 `PushSummary.memory` 为准，本字段是它的下界。
    */
-  memory: {
-    /** 进程生命周期内的**峰值** RSS（MB）。由内核给，非采样。 */
-    maxRssMB: number;
-    /** 收尾时刻的 RSS（MB） */
-    rssMB: number;
-    /** 收尾时刻的 V8 已用堆（MB） */
-    heapUsedMB: number;
-  };
+  memory: MemorySnapshot;
 }
 
 /** 抓取任务的执行状态。见 GET /api/fetch-news 的说明。 */
@@ -1580,25 +1572,15 @@ async function processFetchNews(
     );
   }
 
-  // ⏱ 内存读数（2026-10-13 加）：说明与判读规则见 `FetchSummary.memory`。
+  // ⏱ 内存读数（2026-10-13 加）：实现、单位陷阱与自洽断言都在 `src/lib/memory-probe.ts`。
   // 取在这里而不是函数开头 —— 这个对象是在**收尾时刻**构造的，峰值也应当到这时才读。
-  // ⚠️ `maxRSS` 一律按 **KB** 换算，**不要按平台分支**。Node 已经把平台差异吃掉了：
-  //    2026-10-13 在 darwin 上实测同进程 `maxRSS = 42128` 而 `memoryUsage().rss = 43171840 B`
-  //    （= 41 MB）⇒ `42128 KB ≈ 41 MB` 成立，说明 macOS 拿到的**也是 KB**。
-  //    （初版按 `darwin ? 字节 : KB` 写了分支，实测算出来是 0 MB —— 那是个会撒谎的仪器。）
-  const resourceUsage = process.resourceUsage();
-  const memSnapshot = process.memoryUsage();
-  const maxRssMB = Math.round(resourceUsage.maxRSS / 1024);
+  const memory = readMemorySnapshot();
 
   return {
     date: targetDate,
     totalFetched,
     candidates: articlesToInsert.length,
-    memory: {
-      maxRssMB,
-      rssMB: Math.round(memSnapshot.rss / 1024 / 1024),
-      heapUsedMB: Math.round(memSnapshot.heapUsed / 1024 / 1024),
-    },
+    memory,
     // 去重分四段记账，别再合成一个数字：四段失败原因完全不同，
     // 合成后「今天为什么少了几篇」就查不出来了。
     dedup: {
@@ -1785,6 +1767,15 @@ export async function GET() {
     // 想确认 Telegram 通没通、某个 RSS 源是不是死了，用这个模式，几分钟出结果且零成本。
     dryRunHint: 'POST {"skipTranslation": true} 可做零成本的信息源体检（只采集不入库）',
     sources: RSS_SOURCES.map((s) => ({ name: s.name, country: s.country })),
+    /**
+     * 内存探针的**部署指纹**（2026-10-13 加），值从 `@/lib/memory-probe` 现算。
+     *
+     * 为什么必须有它：探针是**加法**（多两个字段），而且只在**跑完一轮**之后才在
+     * `summary.memory` 里出现 —— 于是「它到底上没上线」在跑轮之前**完全看不出来**。
+     * 有指纹就能在**花钱之前**用一条无副作用的 `GET` 问清楚。
+     * ⚠️ 它只证明**这一版带上了探针**，不证明它读得准；读数本身要看 `summary.memory`。
+     */
+    memoryProbeVersion: MEMORY_PROBE_VERSION,
     /**
      * 行为开关的**活体回显**（2026-10-10 加，对齐 `GET /api/wechat/push` 的 `codeVersion`）。
      *
