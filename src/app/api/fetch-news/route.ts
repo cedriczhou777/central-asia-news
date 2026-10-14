@@ -30,6 +30,7 @@ import {
   MEMORY_PROBE_VERSION,
   type MemorySnapshot,
 } from '@/lib/memory-probe';
+import { KEEPALIVE_VERSION, readKeepaliveStatus } from '@/lib/keepalive';
 
 // ⚠️ 不要在这里 new Parser / 直接调 parser.parseURL —— 用 `@/lib/feed-fetch` 的 `fetchFeed`。
 // 原因见那个文件的头部：直接 parseURL 时，「站点按 UA 返回网页」会被 xml2js 报成
@@ -1776,6 +1777,28 @@ export async function GET() {
      * ⚠️ 它只证明**这一版带上了探针**，不证明它读得准；读数本身要看 `summary.memory`。
      */
     memoryProbeVersion: MEMORY_PROBE_VERSION,
+    /**
+     * 任务期自保活的**部署指纹**（2026-10-14 加），值从 `@/lib/keepalive` 现算。
+     *
+     * 与上面的 `memoryProbeVersion` 同一个理由：保活是**加法**，而且它最容易失效的方式
+     * 是**静默的** —— `KEEPALIVE_TARGET_URL` 没配、配错前缀、或者打的域名不对，
+     * 表现全都是「什么都没有发生」（既不打日志也没有错误），
+     * 而那时窗口可能已经被收窄 ⇒ 长轮次直接被缩容腰斩。所以必须在花钱之前能问清楚。
+     */
+    keepaliveVersion: KEEPALIVE_VERSION,
+    /**
+     * 自保活的**活体状态**。
+     *
+     * 读法（三个问题、三个字段）：
+     *   · 「这版带保活吗」 ⇒ `keepaliveVersion`（=1 才有下面这个对象，见 `@/lib/keepalive`）；
+     *   · 「配好了吗」     ⇒ `configured`。**false 时 `active` 永远是 false，且这不是错误** ——
+     *     没配 `KEEPALIVE_TARGET_URL` 时窗口就是唯一保活机制，与改动前行为一致；
+     *   · 「真的在打吗」   ⇒ `active` + `pings`。⚠️ `pings` 只在**跑完一轮**之后才有非零值，
+     *     因为它由 cron 那轮启动；窗口外拉这个接口只会看到上一轮留下的终态。
+     *     `targetHost` 是**只报 host** —— 报它是为了能一眼确认「打的确实是对的那个域名」，
+     *     而不是 localhost（原因见 `@/lib/keepalive` 头注释：平台只认经过它反向代理的请求）。
+     */
+    keepalive: readKeepaliveStatus(),
     /**
      * 行为开关的**活体回显**（2026-10-10 加，对齐 `GET /api/wechat/push` 的 `codeVersion`）。
      *

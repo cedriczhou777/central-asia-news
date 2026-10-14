@@ -48,6 +48,7 @@ import {
   MEMORY_PROBE_VERSION,
   type MemorySnapshot,
 } from '@/lib/memory-probe';
+import { KEEPALIVE_VERSION } from '@/lib/keepalive';
 
 // 使用微信云托管开放接口服务（免 IP 白名单、免 access_token）
 const WECHAT_API_BASE = 'http://api.weixin.qq.com/cgi-bin';
@@ -954,6 +955,15 @@ export async function GET(request: NextRequest) {
        * 用法：`curl -s "$URL/api/wechat/push" | grep -A2 memoryProbeVersion`
        */
       memoryProbeVersion: MEMORY_PROBE_VERSION,
+      /**
+       * 任务期自保活的**部署指纹**（2026-10-14 加），值从 `@/lib/keepalive` 现算。
+       *
+       * ⚠️ 这里**只报版本号、不报活体状态** —— 状态在 `GET /api/fetch-news` 的
+       * `keepalive` 字段里（那个接口才是保活靶子，所以状态放那儿最自然）。
+       * 两个接口都报同一个常量，是为了「哪一版先滚上」这件事在**滚动发布的中途**
+       * 也能看出来：两个值不一致 ⇒ 新容器只接管了一半流量。
+       */
+      keepaliveVersion: KEEPALIVE_VERSION,
       /**
        * 「借图」（`planCoverBorrows`）的配对下限。2026-09-29 新增。
        *

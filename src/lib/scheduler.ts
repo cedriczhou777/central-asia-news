@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { resolveSelfBaseUrl } from './runtime';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from './publish-schedule';
+import { startKeepalive, stopKeepalive, keepaliveCrossCheck } from './keepalive';
 
 // 北京时间定时任务
 //
@@ -183,6 +184,10 @@ export function waitBudgetCrossCheck(): Array<{ name: string; ok: boolean; detai
       ok: PUSH_HARD_WAIT_MS > PUSH_SOFT_WAIT_MS,
       detail: `软 ${min(PUSH_SOFT_WAIT_MS)} / 硬 ${min(PUSH_HARD_WAIT_MS)}`,
     },
+    // 任务期自保活的常量（2026-10-14 加）。挂进这张表而不是另起一个：
+    // 消费方（`startScheduler` 里那个 for 循环）已经在打 warn 了，加进来就自动被覆盖。
+    // 传进去的算式**就是** `runPublishCycle` 用的那一个 —— 同一个量只有一处出处。
+    ...keepaliveCrossCheck(FETCH_HARD_WAIT_MS + PUSH_HARD_WAIT_MS),
   ];
 }
 
@@ -402,23 +407,47 @@ async function runWechatPush(hours: number, period: string): Promise<WaitOutcome
 // 所以下一个时段不会替它补，但也**不会重复**；补的办法是抓取跑完后手工调
 //   POST /api/wechat/push {"hours": 24, "period": "manual"}
 async function runPublishCycle(hours: number, period: string) {
-  // 变量名刻意不叫 `fetch` —— 那会遮住全局的 fetch，将来在这个函数里加一次请求就会踩空。
-  const fetchOutcome = await runFetchNews();
-  if (!fetchOutcome.finished) {
-    console.error(
-      `[${new Date().toISOString()}] ⛔ 抓取未在 ${FETCH_HARD_WAIT_MS / 60_000} 分钟内完成` +
-      `（时段 ${period}）—— **本轮不推送**，避免推出一份缺国家的稿子。` +
-      `等抓取跑完后手工补：POST /api/wechat/push {"hours":24,"period":"manual"}`
-    );
-    return;
+  // ★ 任务期自保活（2026-10-14 新增）。
+  //
+  // 动机：`minNum = 0` 时平台「30 分钟无入站请求就缩容到 0」，而抓取全程是**出站**
+  // ⇒ 原来只能靠控制台那条 03:45–11:15 的定时扩缩容窗口把实例**钉住**，
+  // 代价是「**窗口长度 = 计费时长**」：2026-10-14 明细账单实测 T = 7.6156 h，
+  // 而真任务只有 4.48 h ⇒ **2.77 h（36%）是纯空转**。
+  // 本调用让实例只在真的在跑时自我续命 ⇒ 窗口可以收窄到「只够冷启动 + 注册 cron」。
+  // 完整动机、「为什么必须打公网域名而不是 localhost」、以及**未验证的前提**，
+  // 全部在 `src/lib/keepalive.ts` 的头注释里，这里不重述。
+  //
+  // 硬上限**由这里传**（不在 keepalive 里重写数字）：它与下面两个硬上限同源，
+  // 于是「保活最多活多久」与「最多等多久」在算术上不可能分叉 ——
+  // 一旦分叉，症状是「长轮次被腰斩却看不出原因」这种静默丢稿。
+  //
+  // ⚠️ 必须 `finally` 停：漏停是本机制**唯一会「反向变贵」**的失败模式
+  // （实例活到硬上限）。keepalive 内部另有一道自愈兜着（读到新 `finishedAt` 自动停）。
+  startKeepalive({
+    reason: `轮次开始（时段 ${period}）`,
+    hardMaxMs: FETCH_HARD_WAIT_MS + PUSH_HARD_WAIT_MS,
+  });
+  try {
+    // 变量名刻意不叫 `fetch` —— 那会遮住全局的 fetch，将来在这个函数里加一次请求就会踩空。
+    const fetchOutcome = await runFetchNews();
+    if (!fetchOutcome.finished) {
+      console.error(
+        `[${new Date().toISOString()}] ⛔ 抓取未在 ${FETCH_HARD_WAIT_MS / 60_000} 分钟内完成` +
+        `（时段 ${period}）—— **本轮不推送**，避免推出一份缺国家的稿子。` +
+        `等抓取跑完后手工补：POST /api/wechat/push {"hours":24,"period":"manual"}`
+      );
+      return;
+    }
+    if (fetchOutcome.overtime) {
+      console.warn(
+        `[${new Date().toISOString()}] ⚠️ 抓取是加时才完成的（耗时 ${Math.round(fetchOutcome.waitedMs / 60_000)} 分钟，` +
+        `软上限 ${FETCH_SOFT_WAIT_MS / 60_000} 分钟）—— 本轮照常推送，但请留意单篇耗时是否在恶化。`
+      );
+    }
+    await runWechatPush(hours, period);
+  } finally {
+    stopKeepalive('轮次结束（正常返回或异常抛出，两者都在此收口）');
   }
-  if (fetchOutcome.overtime) {
-    console.warn(
-      `[${new Date().toISOString()}] ⚠️ 抓取是加时才完成的（耗时 ${Math.round(fetchOutcome.waitedMs / 60_000)} 分钟，` +
-      `软上限 ${FETCH_SOFT_WAIT_MS / 60_000} 分钟）—— 本轮照常推送，但请留意单篇耗时是否在恶化。`
-    );
-  }
-  await runWechatPush(hours, period);
 }
 
 // 幂等锁：定时任务只允许注册一次。
