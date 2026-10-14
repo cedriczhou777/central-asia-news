@@ -58,8 +58,17 @@
  * 所以最坏情况也只是回到「原来那条 7.5 小时窗口」，**不会比现状贵**。
  */
 
-/** 本模块的部署指纹。它**纯属加法**，改一次加一 —— 用途见下面 `readKeepaliveStatus()`。 */
-export const KEEPALIVE_VERSION = 1;
+/**
+ * 本模块的部署指纹。它**纯属加法**，改一次加一 —— 用途见下面 `readKeepaliveStatus()`。
+ *
+ * 版本史：
+ *   · `1` —— 2026-10-14 首版（`a5614da`）。
+ *   · `2` —— 2026-10-15：`configured` / `targetHost` 改为**实时从环境变量现算**
+ *     （此前只在轮次启动时锁存 ⇒ 「环境变量注入成功了吗」在跑轮次之前**无法自证**；
+ *     而「加环境变量 + 重新部署」恰恰发生在**收窗口之前**，见 `readKeepaliveStatus()` 的注释），
+ *     并让 `startKeepalive()` **构造上不可能抛**。
+ */
+export const KEEPALIVE_VERSION = 2;
 
 /**
  * 两次 ping 的间隔。
@@ -98,11 +107,23 @@ export interface KeepaliveOptions {
 /** 活体状态。全部字段都会被 `GET /api/fetch-news` 原样回显。 */
 export interface KeepaliveStatus {
   version: number;
-  /** 配了 `KEEPALIVE_TARGET_URL` 吗。false ⇒ 整个机制不启用（而不是报错）。 */
+  /**
+   * **环境变量 `KEEPALIVE_TARGET_URL` 配上了吗**（前缀合法即算配了）。false ⇒ 整个机制不启用（而不是报错）。
+   *
+   * ⚠️ 它是**实时从环境变量现算**的，所以**不需要先跑一轮**就能读到真值 ——
+   * 这一点至关重要：「加环境变量 + 重新部署」这件事必须在**收窗口之前**验证，
+   * 而窗口一旦收窄、保活却没生效，长轮次会被缩容腰斩 ⇒ 丢一整天。
+   * 语义上请与 `active` 分开读：`configured` = 配上了没有，`active` = 此刻真的在保活。
+   */
   configured: boolean;
   /** 此刻在保活吗 */
   active: boolean;
-  /** 靶子 URL 的 host（只报 host：报出来是为了能一眼确认「打的是对的那个域名」） */
+  /**
+   * 靶子 URL 的 host（只报 host：报出来是为了能一眼确认「打的是对的那个域名」）。
+   *
+   * ⚠️ 与 `configured` 组合读：`configured:true` 而 `targetHost:null`
+   * = **配了、前缀也对，但 URL 本身不合法**（`new URL()` 解析不了 ⇒ 一定打不通）。
+   */
   targetHost: string | null;
   startReason: string | null;
   startedAt: string | null;
@@ -150,24 +171,37 @@ function freshState(): MutableState {
 const state: MutableState = freshState();
 
 /**
- * 解析靶子 URL。**没配就是没启用** —— 本模块不猜、不兜底到 localhost。
+ * **纯函数**：把环境变量的原始值判成靶子 URL（前缀不是 http(s) 就返回 null）。
+ *
+ * ⚠️ 这里**刻意不打印任何东西**。它会被 `readKeepaliveStatus()` 在**每次 GET 时**调用，
+ * 而状态接口会被调度器每 15 秒轮询一次 ⇒ 把 warn 放这里会刷屏。
+ * 告警统一放在下面那个只跑一次的 `resolveTargetUrl()` 里。
+ */
+function parseTargetUrl(raw: string | undefined): string | null {
+  const v = raw?.trim();
+  if (!v) return null;
+  // 只接受 http(s)：`ftp://` 之类打不通，早报错好过晚发现。
+  return /^https?:\/\//i.test(v) ? v : null;
+}
+
+/**
+ * 解析靶子 URL（**带告警**，只在轮次启动时调用一次）。**没配就是没启用** ——
+ * 本模块不猜、不兜底到 localhost。
  *
  * 为什么不做「兜底到 `resolveSelfBaseUrl()`」：那是 localhost，
  * 打它等于什么都没做（理由见文件头）。**静默地打一个无效的靶子，
  * 比明确地不启用更危险** —— 前者会让人以为保活已经在工作了。
  */
 function resolveTargetUrl(): string | null {
-  const raw = process.env.KEEPALIVE_TARGET_URL?.trim();
-  if (!raw) return null;
-  // 只接受 http(s)：`ftp://` 之类打不通，早报错好过晚发现。
-  if (!/^https?:\/\//i.test(raw)) {
+  const raw = process.env.KEEPALIVE_TARGET_URL;
+  const url = parseTargetUrl(raw);
+  if (!url && raw?.trim()) {
     console.warn(
       `[keepalive] ⚠️ KEEPALIVE_TARGET_URL 必须以 http:// 或 https:// 开头，` +
       `当前值被忽略（保活不启用）。`
     );
-    return null;
   }
-  return raw;
+  return url;
 }
 
 function hostOf(url: string): string | null {
@@ -269,14 +303,40 @@ function scheduleNext(delayMs: number): void {
 }
 
 /**
- * 启动保活。**幂等** —— 已在跑时只记一行日志，不重置计时。
+ * 启动保活（对外入口）。**幂等**，且**绝不抛**。
  *
  * 第一次 ping **刻意不等一个完整间隔再打**：实例可能刚被规则拉起（03:45），
  * 或者刚从 0 冷启动。等到第 15 分钟才打，用的是「最后一次平台可见的入站」到现在的时间，
  * 而那个时刻**可能已经过去很久**（例如规则拉起后实例空转到 30 分钟红线）。
  * 所以启动后立刻打一次，把「平台可见的最近一次入站」重新锚到现在。
+ *
+ * ## ⚠️ 为什么必须包一层 try/catch（2026-10-15）
+ *
+ * 调用方是 `scheduler.ts` 的 `runPublishCycle()`，而 `startKeepalive(...)` 写在它的
+ * **`try {` 之前**（`scheduler.ts:426` vs `:430`）—— 那里抛出去的异常**没有任何 catch**，
+ * 后果是那一轮**抓取与推送整轮不执行 = 丢一整天**。
+ *
+ * 本模块是**优化**不是**正确性**：它坏掉最多让实例多活一会儿（多花几分钱），
+ * 但绝不该有能力毁掉一轮日报。而它读的 `KEEPALIVE_TARGET_URL` 是**人手在控制台敲进去的**，
+ * 写错是常态 ⇒ **不让它的正确性依赖调用方的 try 边界**。
  */
 export function startKeepalive(options: KeepaliveOptions): void {
+  try {
+    startKeepaliveInner(options);
+  } catch (error) {
+    // 不重新抛出，也不静默：吞成一行 warn（本模块的既有约定 —— 自坏可以，静默不行）。
+    console.warn(
+      `[keepalive] ⚠️ 启动保活时内部异常，已忽略（本轮照常跑，只是少一层保活）：` +
+      `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`
+    );
+  }
+}
+
+/**
+ * 真正的启动逻辑。**幂等** —— 已在跑时只记一行日志，不重置计时。
+ * 不抛的保证由上面的 `startKeepalive()` 提供，所以这里只管写清逻辑。
+ */
+function startKeepaliveInner(options: KeepaliveOptions): void {
   const url = resolveTargetUrl();
   state.configured = url !== null;
 
@@ -338,10 +398,33 @@ export function stopKeepalive(reason: string): void {
   );
 }
 
-/** 读当前状态（给接口回显用）。返回副本，调用方拿不到内部可变对象。 */
+/**
+ * 读当前状态（给接口回显用）。返回副本，调用方拿不到内部可变对象。
+ *
+ * ## ⚠️ `configured` / `targetHost` 为什么是「现算」而不是「回显锁存值」（2026-10-15，`KEEPALIVE_VERSION=2`）
+ *
+ * 这两个字段原本只在 `startKeepalive()` 里写，而那个函数**只在轮次开始时被调用**。
+ * 于是有一个只会在结论里出错、不报错的缺口：
+ *
+ *   **「环境变量到底注入成功了没有」在跑过一轮之前，从外面完全看不出来** ——
+ *   `configured` 恒为 `false`，与「没配」长得一模一样。
+ *
+ * 而这件事偏偏必须在**收窗口之前**验证（窗口一收窄、保活却没生效 ⇒ 长轮次被缩容腰斩 = 丢一整天），
+ * 也就是说：**要验证的东西在窗口内才可见，而要做的决定在窗口外就得做**。
+ * 现算之后，一次零副作用的 `GET /api/fetch-news` 就能回答「环境变量在不在、值对不对」，
+ * 既不用先跑一轮，也不用进控制台翻日志。
+ *
+ * ⚠️ 因此这里**只能调纯函数 `parseTargetUrl()`**，不能调带告警的 `resolveTargetUrl()`——
+ * 后者会在每次 GET 时打 warn，而调度器每 15 秒轮询一次 ⇒ 刷屏。
+ */
 export function readKeepaliveStatus(): KeepaliveStatus {
   const { timer: _timer, ...snapshot } = state;
-  return snapshot;
+  const url = parseTargetUrl(process.env.KEEPALIVE_TARGET_URL);
+  return {
+    ...snapshot,
+    configured: url !== null,
+    targetHost: url ? hostOf(url) : null,
+  };
 }
 
 /** 平台空闲红线：30 分钟没有任何入站请求就缩容到 0（`container.config.json:234-240`）。 */

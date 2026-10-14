@@ -69,8 +69,17 @@ function withEnv(value: string | undefined, fn: () => void) {
 }
 
 const TARGET = 'https://central-asia-news.example.sh.run.tcloudbase.com/api/fetch-news';
-/** 与 `scheduler.ts` 里那个算式等值的数，只为本地断言用；生产侧不许写死这个数（见第五组）。 */
+/** 与 `scheduler.ts` 里那个算式等值的数，只为本地断言用；生产侧不许写死这个数（见第六组）。 */
 const HARD_MAX = 440 * 60_000;
+
+/**
+ * 源码断言（第六、七组）要读的文件。
+ * ⚠️ 必须在这里统一读：`const` 有 TDZ，第七组排在前面对模块级变量求值会直接 ReferenceError。
+ */
+const schedulerSrc = read('src/lib/scheduler.ts');
+const fetchRouteSrc = read('src/app/api/fetch-news/route.ts');
+const pushRouteSrc = read('src/app/api/wechat/push/route.ts');
+const keepaliveSrc = read('src/lib/keepalive.ts');
 
 // ============================================================
 // 一、常量关系
@@ -102,6 +111,144 @@ section('一、常量关系（改数字时本地就要红）');
     '★ 断言可达：平台红线那条的 detail 里必须出现「红线」（防止 name/detail 被换成空串后照样绿）',
     checks[0].detail.includes('红线'),
     `实际 detail = 「${checks[0].detail}」`,
+  );
+}
+
+// ============================================================
+// 七、★ 环境变量「注入成功了吗」必须能在跑轮次之前自证（KEEPALIVE_VERSION=2 起）
+// ============================================================
+
+section('七、★ 环境变量注入是否成功，必须在跑轮次之前就能自证');
+
+/**
+ * ⚠️ **本组必须排在任何 `startKeepalive()` 调用之前。**
+ *
+ * 它测的是「`configured` 是不是实时从环境变量现算」。修复前的实现只在
+ * `startKeepalive()` 里锁存这个字段 —— 于是只要本组跑到**后面**去，
+ * 锁存值早就被前面几组设成 `true` 了，**旧实现照样能通过全部断言** ⇒ 断言空转。
+ * 排在最前面，`state` 还是 `freshState()` 的 `configured:false`，
+ * 于是「配了合法 env 却读到 false」就能真的变红。
+ * （判据：把 `readKeepaliveStatus()` 改回 `return snapshot;` 跑一遍，本组必须失败。）
+ */
+withEnv(TARGET, () => {
+  const s = readKeepaliveStatus();
+  ok(
+    '★ 一次轮次都没跑过，配了合法 env ⇒ configured 就必须是 true',
+    s.configured === true,
+    '仍为 false ⇒ 说明它还在只回显锁存值，「环境变量注入成功了吗」在跑轮次前无法自证；' +
+      '而「加环境变量 + 重新部署」恰恰发生在收窗口之前',
+  );
+  ok(
+    '★ 一次轮次都没跑过 ⇒ targetHost 就该报出真实 host（能一眼核对域名打对了没）',
+    s.targetHost === 'central-asia-news.example.sh.run.tcloudbase.com',
+    `实际 = ${s.targetHost}`,
+  );
+  ok('配上了 ≠ 正在保活：此时 active 仍是 false', s.active === false);
+});
+
+withEnv(undefined, () => {
+  const s = readKeepaliveStatus();
+  ok('★ 反向自检：env 清空 ⇒ configured 必须变回 false', s.configured === false);
+  ok('★ 反向自检：env 清空 ⇒ targetHost 必须变回 null', s.targetHost === null);
+});
+
+withEnv('ftp://example.com/api/fetch-news', () => {
+  ok(
+    '反向自检：前缀不合法 ⇒ configured=false（不许把「配错了」报成「配好了」）',
+    readKeepaliveStatus().configured === false,
+  );
+});
+
+withEnv('   ', () => {
+  ok('反向自检：只有空白 ⇒ configured=false', readKeepaliveStatus().configured === false);
+});
+
+withEnv('https://', () => {
+  const s = readKeepaliveStatus();
+  ok(
+    '★ 前缀对但 URL 本身不合法 ⇒ configured=true 且 targetHost=null' +
+      '（两个字段组合起来才能区分「没配」与「值写错了」）',
+    s.configured === true && s.targetHost === null,
+    `实际 configured=${s.configured} targetHost=${s.targetHost}`,
+  );
+});
+
+{
+  // 状态接口会被调度器每 15 秒轮询一次。所以「现算」这件事不能带副作用 ——
+  // 把带告警的 resolveTargetUrl() 放进来会刷屏（这正是分成纯函数 + 告警两层的原因）。
+  const warns: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warns.push(args.map(String).join(' '));
+  };
+  try {
+    withEnv('ftp://example.com/api/fetch-news', () => {
+      for (let i = 0; i < 50; i++) readKeepaliveStatus();
+    });
+  } finally {
+    console.warn = origWarn;
+  }
+  ok(
+    '★ 轮询友好：连读 50 次状态（含非法 env 值）不许打任何 warn',
+    warns.length === 0,
+    `实际打了 ${warns.length} 条`,
+  );
+}
+
+{
+  // `startKeepalive(...)` 写在 runPublishCycle 的 `try {` **之前**（scheduler.ts:426 vs :430），
+  // 那里抛出去没有任何 catch ⇒ 整轮抓取与推送都不执行 = 丢一整天。
+  // 而它读的是**人手在控制台敲进去的**环境变量，写错是常态 ⇒ 必须构造上不可能抛。
+  const adversarial: Array<string | undefined> = [
+    undefined,
+    '',
+    '   ',
+    'ftp://example.com/x',
+    'https://',
+    'https://a b',
+    'https://[bad',
+    'javascript:alert(1)',
+    'HTTP://UPPER.example.com/x',
+    `https://x/${'y'.repeat(5000)}`,
+  ];
+  let threw: unknown = null;
+  for (const v of adversarial) {
+    withEnv(v, () => {
+      try {
+        startKeepalive({ reason: `离线回归：对抗输入 ${String(v).slice(0, 20)}`, hardMaxMs: HARD_MAX });
+      } catch (e) {
+        threw = e;
+      }
+      stopKeepalive('离线回归：对抗输入清理');
+    });
+  }
+  ok(
+    `★ startKeepalive 对 ${adversarial.length} 组对抗输入一律不抛（它在 try 之外，抛了就是丢一整天）`,
+    threw === null,
+    String(threw),
+  );
+}
+
+{
+  const at = keepaliveSrc.indexOf('export function readKeepaliveStatus');
+  const body = at >= 0 ? keepaliveSrc.slice(at, at + 2500) : '';
+  // 去掉注释再判：函数正文里的说明文字会提到 resolveTargetUrl() 这个名字，
+  // 不剥注释就会把「注释里提到」误判成「代码里调用」。
+  const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  ok(
+    '★ readKeepaliveStatus 的**代码**里只调纯函数 parseTargetUrl，不调带告警的 resolveTargetUrl',
+    at >= 0 && code.includes('parseTargetUrl(') && !code.includes('resolveTargetUrl('),
+    `截取长度=${body.length}`,
+  );
+}
+
+{
+  const at = keepaliveSrc.indexOf('export function startKeepalive(');
+  const body = at >= 0 ? keepaliveSrc.slice(at, at + 500) : '';
+  ok(
+    '★ 导出的 startKeepalive 包在 try/catch 里并转调 startKeepaliveInner（构造上不抛）',
+    at >= 0 && body.includes('try {') && body.includes('startKeepaliveInner(options)') && body.includes('catch'),
+    `截取长度=${body.length}`,
   );
 }
 
@@ -220,11 +367,6 @@ withEnv(TARGET, () => {
 // ============================================================
 
 section('六、★ 源码断言 —— 这个机制真的被接进链路了吗');
-
-const schedulerSrc = read('src/lib/scheduler.ts');
-const fetchRouteSrc = read('src/app/api/fetch-news/route.ts');
-const pushRouteSrc = read('src/app/api/wechat/push/route.ts');
-const keepaliveSrc = read('src/lib/keepalive.ts');
 
 ok('scheduler.ts 调用了 startKeepalive(', schedulerSrc.includes('startKeepalive({'));
 ok('scheduler.ts 调用了 stopKeepalive(', schedulerSrc.includes('stopKeepalive('));

@@ -1790,9 +1790,13 @@ export async function GET() {
      * 自保活的**活体状态**。
      *
      * 读法（三个问题、三个字段）：
-     *   · 「这版带保活吗」 ⇒ `keepaliveVersion`（=1 才有下面这个对象，见 `@/lib/keepalive`）；
-     *   · 「配好了吗」     ⇒ `configured`。**false 时 `active` 永远是 false，且这不是错误** ——
-     *     没配 `KEEPALIVE_TARGET_URL` 时窗口就是唯一保活机制，与改动前行为一致；
+     *   · 「这版带保活吗」 ⇒ `keepaliveVersion`（`>= 1` 才有下面这个对象，见 `@/lib/keepalive`）；
+     *   · 「配好了吗」     ⇒ `configured` + `targetHost`。**false 时 `active` 永远是 false，且这不是错误** ——
+     *     没配 `KEEPALIVE_TARGET_URL` 时窗口就是唯一保活机制，与改动前行为一致。
+     *     ⚠️ 2026-10-15（`KEEPALIVE_VERSION=2`）起这两个字段**实时现算**，所以
+     *     **不必先跑一轮**就能回答「环境变量注入成功了没有」——
+     *     这正是「加环境变量 + 重新部署」这一步要的判据（那时窗口还没收，还没跑过轮次）。
+     *     组合读法：`configured:true` 而 `targetHost:null` = 配了、前缀也对，但 **URL 本身不合法**；
      *   · 「真的在打吗」   ⇒ `active` + `pings`。⚠️ `pings` 只在**跑完一轮**之后才有非零值，
      *     因为它由 cron 那轮启动；窗口外拉这个接口只会看到上一轮留下的终态。
      *     `targetHost` 是**只报 host** —— 报它是为了能一眼确认「打的确实是对的那个域名」，
