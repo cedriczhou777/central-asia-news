@@ -31,6 +31,7 @@ import {
   type MemorySnapshot,
 } from '@/lib/memory-probe';
 import { KEEPALIVE_VERSION, readKeepaliveStatus } from '@/lib/keepalive';
+import { readRuntimeFacts } from '@/lib/runtime-facts';
 
 // ⚠️ 不要在这里 new Parser / 直接调 parser.parseURL —— 用 `@/lib/feed-fetch` 的 `fetchFeed`。
 // 原因见那个文件的头部：直接 parseURL 时，「站点按 UA 返回网页」会被 xml2js 报成
@@ -1803,6 +1804,28 @@ export async function GET() {
      *     而不是 localhost（原因见 `@/lib/keepalive` 头注释：平台只认经过它反向代理的请求）。
      */
     keepalive: readKeepaliveStatus(),
+    /**
+     * 运行时事实（2026-10-16 加），值从 `@/lib/runtime-facts` 现算。
+     *
+     * ## 它补的是哪个缺口
+     *
+     * **「改了环境变量 / 改了容器规格」这两类改动，从外部都验证不了**：
+     * 它们没有代码变化 ⇒ `codeVersion` 与任何 `*Version` 指纹都不变；
+     * 控制台只会多出一个版本，而「改环境变量」与「改规格」**用的是同一个备注**
+     * （都是 `server config change`）⇒ 版本列表也分不出是哪类改动。
+     * 于是只能反过来去猜「面板那个内存百分比是不是翻倍了」——间接、易错。
+     *
+     * ⇒ 这里把三件事做成进程内读数：
+     * · `nodeOptions` —— `NODE_OPTIONS` 有没有真的注入（**原样回显**）；
+     * · `heapSizeLimitMB` —— `--max-old-space-size` 有没有被 V8 采纳
+     *   （⚠️ 它比那个参数**略大**，因为 V8 的 `heap_size_limit` 是总堆上限）；
+     * · `memoryLimitMB` / `cpuQuotaCores` —— 容器规格。
+     *
+     * ⚠️ **字段整个不存在 = 线上还是旧版**（本条是加法，不改任何现有行为）。
+     * ⚠️ `memoryLimitMB` / `cpuQuotaCores` 为 `null` 的含义是「**这个环境没有暴露
+     * cgroup 限制**」，**不是「无限」**—— 见 `@/lib/runtime-facts` 的边界说明。
+     */
+    runtimeFacts: readRuntimeFacts(),
     /**
      * 行为开关的**活体回显**（2026-10-10 加，对齐 `GET /api/wechat/push` 的 `codeVersion`）。
      *

@@ -67,8 +67,14 @@
  *     （此前只在轮次启动时锁存 ⇒ 「环境变量注入成功了吗」在跑轮次之前**无法自证**；
  *     而「加环境变量 + 重新部署」恰恰发生在**收窗口之前**，见 `readKeepaliveStatus()` 的注释），
  *     并让 `startKeepalive()` **构造上不可能抛**。
+ *   · `3` —— 2026-10-16：**修掉 `baselineFinishedAt` 从未被赋值 ⇒ 自愈判据恒假**。
+ *     此前 `grep baselineFinishedAt` 全仓库只有 4 处（类型声明、`freshState()` 初值、
+ *     判据里读两次），**没有任何写入点** ⇒ `pingOnce()` 里那段自愈**永远不会触发**，
+ *     而 `scheduler.ts` 的注释却写着「keepalive 内部另有一道自愈兜着」——
+ *     一句**写在注释里但实际不存在的保证**。现在基线由**第一次 ping** 记下，
+ *     并在每次 `startKeepaliveInner()` 重新启用时清空（见 `pingOnce()` 里的说明）。
  */
-export const KEEPALIVE_VERSION = 2;
+export const KEEPALIVE_VERSION = 3;
 
 /**
  * 两次 ping 的间隔。
@@ -258,6 +264,37 @@ async function pingOnce(): Promise<boolean> {
     const finishedAt = body?.lastRun?.finishedAt ?? null;
     const running = body?.lastRun?.running;
 
+    /**
+     * 自愈基线：**第一次 ping 时**把当时的 `lastRun.finishedAt` 记下来。
+     *
+     * ## 为什么记在这里，而不是让调用方传进来
+     *
+     * 调用点（`scheduler.ts`）确实能通过 `readRunState()` 拿到这个值，但那条路有两个问题：
+     * ① 它得在 `startKeepalive()` **之前** `await` 一次 **localhost 的 `fetch`**，
+     *    而那次fetch **没有超时**——保活是「兜着别被回收」的机制，
+     *    不该被一个状态查询的挂起拖累（何况 `startKeepalive()` 写在 `try {` 之前）。
+     * ② 更根本的：它会造成 `keepalive ⇄ scheduler` 的循环 import，
+     *    而循环 import 在打包产物里的表现是「**有时能用**」，属于最难查的那类问题
+     *    （同一个理由，`hardMaxMs` 也是由调用点传进来的）。
+     *
+     * ## 为什么第一次 ping 记下的值**一定是本轮开始前的值**
+     *
+     * 第一次 ping 发生在 `startKeepaliveInner()` 之后**5 秒**（`scheduleNext(5_000)`），
+     * 而一轮要跑**几小时** ⇒ 此刻 `lastRun.finishedAt` 仍是**上一轮**的值。
+     * 两种情形都成立：
+     * · `running === true`（本轮刚起）⇒ `finishedAt` 是上一轮留下的；
+     * · `running === false`（本轮还没起来）⇒ 同样是上一轮留下的。
+     * ⚠️ 失效边界：**若哪天真出现「5 秒内跑完一轮」**，基线会记成新值 ⇒ 自愈不触发。
+     * 那时硬上限仍然兜着 ⇒ 最坏回到改动前那条窗口，**不会反向变贵**。
+     *
+     * ⚠️ 因此这条必须是**「仅第一次」**（`=== null` 才写）而不是「每次都更新」：
+     * 否则基线会被自己推着走，永远等于当前值 ⇒ 判据恒假（**那正是 1–2 版的老毛病**）。
+     */
+
+    if (state.baselineFinishedAt === null && finishedAt) {
+      state.baselineFinishedAt = finishedAt;
+    }
+
     console.log(
       `[keepalive] 保活 ping 成功（第 ${state.pings} 次，间隔 ${PING_INTERVAL_MS / 60_000} 分钟）` +
       `：running=${running} finishedAt=${finishedAt ?? null}`
@@ -360,6 +397,14 @@ function startKeepaliveInner(options: KeepaliveOptions): void {
   state.stoppedAt = null;
   state.stopReason = null;
   state.hardDeadline = new Date(Date.now() + options.hardMaxMs).toISOString();
+  /**
+   * 新的一轮 ⇒ 自愈基线必须**清空重记**。
+   *
+   * 不清的话，第二轮的基线还留着第一轮的值，而第二轮第一次 ping 看到的
+   * `finishedAt` 也正好是「第一轮的值」⇒ 两者相等、判据恒假，
+   * 于是自愈**只在第一轮有效**——一个更难发现的半失效版本。
+   */
+  state.baselineFinishedAt = null;
 
   // 立刻打第一次：把「平台可见的最近一次入站」重新锚到当下。
   // 用 5 秒而不是 0 秒 —— 刚被 cron 触发的这一瞬容器可能还在处理启动，

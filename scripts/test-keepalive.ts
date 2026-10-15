@@ -253,6 +253,67 @@ withEnv('https://', () => {
 }
 
 // ============================================================
+// 八、★ 自愈基线 `baselineFinishedAt` 必须真的有写入点
+// ============================================================
+
+section('八、★ 自愈基线 —— `baselineFinishedAt` 有写入点吗（1–2 版恒为 null ⇒ 自愈从未触发）');
+
+/**
+ * ## 为什么这组是源码断言
+ *
+ * 写入点落在 `pingOnce()` 里，而它要**真的发一次 ping**才走得到；本套件明令
+ * 「不起服务、不联网」，所以**这里做不到行为验证**。
+ * 那就钉住两件能钉住的：① 写入语句存在且被 `=== null` 守卫；
+ * ② `startKeepaliveInner()` 里有清空（否则第二轮基线是上一轮的 ⇒ 自愈只在第一轮有效）。
+ *
+ * ## 为什么措辞这么具体
+ *
+ * 这个字段的原症状就是**判据恒假**（2026-10-16 实测：`grep baselineFinishedAt`
+ * 全仓库只有 4 处、**零写入点**）。若断言写成
+ * `status.baselineFinishedAt !== null` 这类形式，两边都是 `null` 时**恒真**，
+ * 就是一条不会变红的假断言 —— 所以必须写成「**存在某个具体的赋值语句**」。
+ */
+{
+  const pingAt = keepaliveSrc.indexOf('async function pingOnce(');
+  const pingBody = pingAt >= 0 ? keepaliveSrc.slice(pingAt, pingAt + 3200) : '';
+  const innerAt = keepaliveSrc.indexOf('function startKeepaliveInner(');
+  const innerBody = innerAt >= 0 ? keepaliveSrc.slice(innerAt, innerAt + 1800) : '';
+
+  ok('找得到 pingOnce()（截取窗口非空，否则下面几条会空转）',
+    pingAt >= 0 && pingBody.length > 500, `截取长度=${pingBody.length}`);
+  ok('找得到 startKeepaliveInner()（同上）',
+    innerAt >= 0 && innerBody.length > 500, `截取长度=${innerBody.length}`);
+
+  ok('★ pingOnce() 里真的有 `state.baselineFinishedAt = finishedAt`（1–2 版缺的就是这句）',
+    pingBody.includes('state.baselineFinishedAt = finishedAt'));
+  ok('★ 那句被 `=== null` 守卫（否则基线被自己推着走、判据又恒假）',
+    pingBody.includes('if (state.baselineFinishedAt === null && finishedAt)'));
+  ok('★ 守卫不是 `!== null`（那是「每次都更新」，等于没有基线）',
+    !pingBody.includes('if (state.baselineFinishedAt !== null'));
+
+  ok('★ startKeepaliveInner() 里把基线清空（新的一轮必须重记）',
+    innerBody.includes('state.baselineFinishedAt = null'));
+}
+
+/**
+ * 行为侧能钉的那一条：启动一次之后基线必须是 `null`（尚未记，等第一次 ping）。
+ * 先 `stopKeepalive()` 再启动，**不依赖前面各组的执行顺序**。
+ */
+withEnv(TARGET, () => {
+  stopKeepalive('离线回归：第八组之前先停');
+  startKeepalive({ reason: '离线回归：第八组', hardMaxMs: HARD_MAX });
+  const s = readKeepaliveStatus();
+  ok(
+    '★ 刚启动、还没发过 ping 时 baselineFinishedAt 必须是 null（此时它拿不到也用不上）',
+    s.baselineFinishedAt === null,
+    `实际 ${JSON.stringify(s.baselineFinishedAt)}`,
+  );
+  ok('KEEPALIVE_VERSION >= 3（3 = 自愈基线真的有写入点的那一版）',
+    KEEPALIVE_VERSION >= 3, `实际 ${KEEPALIVE_VERSION}`);
+  stopKeepalive('离线回归：第八组收尾');
+});
+
+// ============================================================
 // 二、fail-safe：没配靶子就必须不启用，且不许抛
 // ============================================================
 
