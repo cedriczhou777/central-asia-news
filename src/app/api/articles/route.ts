@@ -64,6 +64,27 @@ function rowToApi(row: ArticleRow) {
     publishedAt: row.published_at,
     tags: row.tags || [],
     isFeatured: row.is_featured,
+    /**
+     * **入库时刻**（2026-10-18 加）。
+     *
+     * ## 为什么加它
+     *
+     * 之前所有关于「这一轮跑了多久」的读数都只能从 `GET /api/wechat/push` 的
+     * `lastRun.finishedAt` 拿，而那是**进程内存态** —— 定时扩缩容窗口一关、
+     * 实例被回收，读数就没了（这个项目已经因此连续三次丢数据：10-17 的轮次耗时、
+     * 10-16 与 10-17 的 `dupDrops`/`dupBudget`/`rejections`）。
+     *
+     * `created_at` 是**数据库里的列**，写进去就一直在 ⇒
+     * **同一批稿子的最早/最晚入库时刻，随时都能读，不依赖「有人恰好在窗口内」。**
+     *
+     * ## 它能回答什么、不能回答什么
+     *
+     * · `min(created_at)` ≈ **入库阶段开始**（抓取+翻译已跑完）
+     * · `max(created_at)` ≈ **入库阶段结束**，即抓取那一大段的终点
+     * · ⚠️ 它**不含推送**：草稿是入库之后另做的一步（历史上那一步约 8 分钟）。
+     *   要拿含推送的精确耗时，仍然要在窗口内读 `lastRun.finishedAt`。
+     */
+    createdAt: row.created_at,
   };
 }
 

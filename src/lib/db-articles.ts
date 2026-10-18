@@ -64,7 +64,7 @@ export interface ArticleRow {
  * 还能再离线兜一层。
  */
 const ARTICLE_COLUMNS =
-  'id, title, summary, content, country_code, category, source_name, source_url, original_title, original_content, original_language, published_at, tags, is_featured' as const;
+  'id, title, summary, content, country_code, category, source_name, source_url, original_title, original_content, original_language, published_at, tags, is_featured, created_at' as const;
 
 export async function getArticles(filters?: {
   country_code?: string;

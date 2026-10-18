@@ -258,6 +258,21 @@ ok(
 );
 ok('★ 反向自检：未改动的源码上宽投影判据不误报', findBadWideSelects(dbSrc).length === 0);
 
+// ----- 2026-10-18：`createdAt` 必须真的从库里读出来并回显 -----
+//
+// 为什么要求它「真的被 select」：本项目栽过「选择列漏了某字段 ⇒ 接口安静地少一个键」
+// （`requiredColumn` 的注释里写着 2026-09-29 那次五国全判成「无原文正文」的假漏斗）。
+// ⇒ 这里同时钉住**列被 select** 与**响应里出现**两处，少一处都算红。
+{
+  const cols = dbSrc.match(/const ARTICLE_COLUMNS[\s\S]*?'([^']*)' as const;/) || [];
+  ok('★ ARTICLE_COLUMNS 里必须有 created_at（否则接口会安静地少这个键）',
+    (cols[1] || '').includes('created_at'), `实际列：${cols[1]}`);
+  const articlesRouteSrc = readFileSync(resolve(__dirname, '..', 'src/app/api/articles/route.ts'), 'utf8');
+  ok('★ /api/articles 的 rowToApi 必须回显 createdAt', articlesRouteSrc.includes('createdAt: row.created_at'));
+  ok('createdAt 的说明里必须写清它**不含推送**（别让人当成轮次耗时）',
+    articlesRouteSrc.includes('不含推送'));
+}
+
 // ----- 汇总 -----
 
 console.log(`\n${'='.repeat(60)}`);
