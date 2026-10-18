@@ -164,10 +164,73 @@ ok(
 // 但换了判据 ⇒ 两轮数据的采纳数不可比。不多记一版，「两次结论不同」就分不清是
 // 换了提示词、换了模型、还是换了闸 —— 那正是 `promptVersion` 这个字段存在的唯一理由。
 ok(
-  '闸版本号与 g2 对齐（改了 `locateFixTarget` 的判据必须先改版本号）',
-  EDITOR_GATE_VERSION === 'g2',
-  `现在是 ${EDITOR_GATE_VERSION} —— 若你刚改了定位判据，请把 EDITOR_GATE_VERSION +1 并同步这条断言`,
+  '闸版本号与 g3 对齐（改了判据必须先改版本号）',
+  EDITOR_GATE_VERSION === 'g3',
+  `现在是 ${EDITOR_GATE_VERSION} —— 若你刚改了定位判据或标题标记剥离，请把 EDITOR_GATE_VERSION +1 并同步这条断言`,
 );
+
+// ============================================================
+// g3：标题里的「（有图）/（无图）」必须被剥掉，且必须留痕
+// ============================================================
+section('g3：标题标记剥离（用户 2026-10-18 拿截图报「标题末尾有『无图』」）');
+
+/**
+ * 判据说明：只测纯函数是不够的 —— 纯函数写好了、却**没接到 fixes 循环上**，
+ * 探针照样全绿（这就是本项目栽过的「模块写好了、但没人调用它」）。
+ * ⇒ 这几组刻意**端到端**跑 `applyVerdict`。
+ */
+{
+  const dirty = '比什凯克重启地铁建设计划，尽管规划评估显示成本高昂且需求低（无图）';
+  const run = (after: string, field: 'title' | 'summary') => {
+    const rows: ReviewItem[] = Array.from({ length: 3 }, (_, i) => ({
+      title: i === 0 ? dirty : `探针第 ${i} 条（不含任何真实新闻内容）`,
+      summary: i === 0 ? dirty : '探针摘要',
+      category: 'society',
+      source: 'probe',
+      time: '1970-01-01 00:00',
+      hasImage: false,
+      relevance: 0,
+      contentPeek: '',
+      originalTitle: `PROBE ORIGINAL TITLE ${i}`,
+      originalExcerpt: `PROBE ORIGINAL BODY ${i}`,
+      originalLang: 'xx',
+    }));
+    return applyVerdict(rows, {
+      fixes: [{ index: 0, field, before: dirty, after, why: '探针' }],
+      order: [0, 1, 2],
+    } as unknown as Parameters<typeof applyVerdict>[1]);
+  };
+
+  const t = run(dirty, 'title');
+  const got = t.decision.fixes.find((f) => f.field === 'title')?.after ?? '';
+
+  ok('★ 标题里的「（无图）」被剥掉了', !/有无]图/.test(got), `实际「${got}」`);
+  ok('★ 剥完的标题保留了正文部分',
+    got.includes('比什凯克重启地铁建设计划'), `实际「${got}」`);
+  ok('★ audit.titleMarkersStripped 记了 1（不许静默）',
+    (t.audit.titleMarkersStripped ?? 0) === 1, `实际 ${t.audit.titleMarkersStripped}`);
+  ok('★ rejections 里有留痕，能说清剥掉的是什么',
+    (t.audit.rejections ?? []).some((r) => r.includes('剥掉标记') && r.includes('无图')),
+    `实际 ${JSON.stringify((t.audit.rejections ?? []).slice(-2))}`);
+
+  // 反向自检：summary 字段**不该**被这条规则动（摘要里有标记不算错）
+  const s = run(dirty, 'summary');
+  ok('summary 字段不受影响（判据只针对标题）',
+    (s.decision.fixes.find((f) => f.field === 'summary')?.after ?? '') === dirty);
+
+  // 反向自检：裸的「有图」两字不碰（判据只吃成对括号）
+  const bare = '某公司发布有图数据集';
+  const b = run(bare, 'title');
+  ok('裸的「有图」不剥（误报为零的取舍）',
+    (b.decision.fixes.find((f) => f.field === 'title')?.after ?? '') === bare);
+
+  const probe = runEditorProbes().editorTitleMarkerProbe;
+  ok('★ 探针字段存在且报告「剥1处」',
+    typeof probe === 'string' && probe.includes('剥1处'),
+    `实际「${probe}」`);
+  ok('★ 探针里带「✔」（说明剥完确实没有标记残留）',
+    typeof probe === 'string' && probe.includes('✔'), `实际「${probe}」`);
+}
 // v4 的触发条件是**用户拿着截图逐条报错**（2026-10-01 晚报）：凭空年份、量级错、
 // 州名错、张冠李戴的国名、标题与正文自相矛盾…… 这些**没有一条**能靠「中文自洽性」查到，
 // 全都要求拿原文对照。而总审从来没看过原文 ⇒ v4 的第一件事就是把原文喂进去。

@@ -479,8 +479,11 @@ export const FIX_LOCATE_FLOOR = 0.15;
  *
  * - `g1`（v5 同期）：`before` 必须与本行逐字相同，否则拒。
  * - `g2`（2026-10-04）：按 `locateFixTarget` 判「定位成不成立」。
+ * - `g3`（2026-10-18）：**标题**里剥掉「（有图）/（无图）」这类括号标记（`stripTitleMarkers`），
+ *   并在 `audit.titleMarkersStripped` 留痕。⚠️ 它**只动标题**、**不拒绝整条 fix** ——
+ *   拒绝会把模型整段重写一起丢掉，那是更大的副作用。
  */
-export const EDITOR_GATE_VERSION = 'g2';
+export const EDITOR_GATE_VERSION = 'g3';
 
 /**
  * 提示词 JSON 示例里的**占位符**。
@@ -638,6 +641,14 @@ export interface ReviewAudit {
   /** 模型提议改几处 / 实际改几处 */
   proposedFixes?: number;
   appliedFixes?: number;
+  /**
+   * g3 起：从标题里剥掉的「（有图）/（无图）」标记**共几处**。
+   *
+   * 为什么要有这个数：剥离是**静默改变了要发出去的文字**，所以必须留一个可查的数。
+   * 恒为 0 说明线上还没出现过（也就是这一版的修法没被触发过）；
+   * 突然变大说明模型开始频繁抄清单里的标记 ⇒ 该去看提示词那一行（`renderItems`）。
+   */
+  titleMarkersStripped?: number;
   /** order 是否被采纳（不是完整排列时会被整条作废） */
   orderAccepted?: boolean;
   /**
@@ -761,6 +772,13 @@ export const EDITOR_PROMPT = `你是一位资深中文财经媒体的**终审编
 所以 —— 如果最重要的一条**没有图**，而排在它后面、重要性**大致相当**的某一条**有图**，
 **就把有图的那条放到第一位**。只有当第一条**明显**比后面几条都重要时，才让它无图占首位。
 这一条是读者的第一眼印象，别让封面变成一张没有信息的空图。
+
+⚠️ **标题里不许出现任何标记**（2026-10-18 补）。清单里每行末尾那个「有图 / 无图」
+**只是给你排版用的，它不是标题的一部分** —— 你在标题里写出来，读者就会看到
+「…需求低（无图）」这种东西。
+**标题只能是新闻本身**：主体 + 事件 +（有信息量的）数字或金额。
+⭐ 顺带提醒：标题也**不要写成摘要**（不要「尽管…且…」这种评论腔），
+读者要的是「发生了什么」，一句话说清即可；细节留给摘要。
 
 **四、指出重要但缺图的条目**
 用 needsImage 列出序号，只列你判断「值得读者点开看」的条目。
@@ -907,6 +925,51 @@ function renderItems(items: ReviewItem[]): string {
       return `${i}. [${it.category}] ${it.title}\n   摘要：${it.summary}\n   来源：${it.source}｜时间：${it.time}｜${img}｜相关性分：${it.relevance}${peek}${origin}`;
     })
     .join('\n');
+}
+
+/**
+ * 标题里的「（有图）/（无图）」这类**成对括号标记**（2026-10-18，`EDITOR_GATE_VERSION` g3）。
+ *
+ * ## 根因就在上面那个 `renderItems()` 里
+ *
+ * 待审清单的每一行都是 `来源｜时间｜**有图**｜相关性分`，
+ * 而**标题就在同一行的开头**。总审模型要重写标题，于是它把「有图 / 无图」也抄了进去——
+ * 线上真实出现过的两条：
+ * ·「比什凯克重启地铁建设计划，尽管规划评估显示成本高昂且需求低**（无图）**」
+ * ·「扎帕罗夫：贾拉拉巴德州多个大型项目正在推进，包括国际机场建设与中吉乌铁路**（有图）**」
+ *
+ * ⚠️ 这**不是概括能力问题，是提示词泄漏**：那两个字是我们自己写进去的。
+ * 提示词侧已经补了一条禁令，但禁令是**软约束**——
+ * 本项目已有的血泪（「500 座新教学楼」的正反例早就写在翻译提示词里、线上照样出现）
+ * 说明**光靠提示词压不住**，所以这里加一道**确定性兜底**。
+ *
+ * ## 为什么只剥「成对括号」这一种形状
+ *
+ * 误报 = 静默把好稿子改坏，而这一类改动**读者会看见**（标题里凭空多个词）。
+ * 所以判据收到最窄：必须是 `（有图）`／`(有图)`／`【无图】`／`[无图]` 这类
+ * **括号包裹**的标记。裸的「有图」两字不碰 ——
+ * 理论上存在「某公司发布有图… 」这类真实标题（虽然极罕见），不冒险。
+ */
+const TITLE_IMAGE_MARKER = /[（(【\[]\s*[有无]图\s*[）)】\]]/g;
+
+export interface TitleMarkerStrip {
+  /** 剥掉标记、并去掉标记留下的多余空白之后的标题 */
+  text: string;
+  /** 被剥掉的那些标记原文（照抄，便于留痕） */
+  stripped: string[];
+}
+
+export function stripTitleMarkers(raw: string): TitleMarkerStrip {
+  const stripped: string[] = [];
+  const text = raw
+    .replace(TITLE_IMAGE_MARKER, (m) => {
+      stripped.push(m);
+      return '';
+    })
+    // 只合并**两个以上**的连续空格，不碰单空格（英文专名靠它分词）
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  return { text, stripped };
 }
 
 /** 把「别的国家里出现过的相近标题」渲染成上下文块。 */
@@ -1407,7 +1470,26 @@ export function applyVerdict(
       );
       continue;
     }
-    const after = typeof o.after === 'string' ? o.after.trim() : '';
+    let after = typeof o.after === 'string' ? o.after.trim() : '';
+    // g3（2026-10-18）：标题里剥掉「（有图）/（无图）」这类括号标记，**并留痕**。
+    // 成因见 `stripTitleMarkers` 的注释：那两个词是我们自己在 `renderItems` 的清单里
+    // 写的，模型重写标题时顺手抄了进去。
+    // ⚠️ **不静默**：剥了几处、剥掉的是什么，都进 `audit` 与 `rejections` ——
+    // 「标题被改过」这件事必须可查，否则下次看到标题变短只能靠猜。
+    // ⚠️ 这里**不拒绝整条 fix**：拒绝会把模型整段重写一起丢掉（那是更大的副作用）；
+    // 剥离是让它的意图（重写标题）保留下来、只去掉不该出现的那几个字。
+    if (field === 'title') {
+      const s = stripTitleMarkers(after);
+      if (s.stripped.length > 0) {
+        audit.titleMarkersStripped = (audit.titleMarkersStripped ?? 0) + s.stripped.length;
+        rejections.push(
+          `fixes[${idx}].title 标题里剥掉标记 ${s.stripped.join(' ')}` +
+            `（成因：本模块待审清单每行末尾都带「有图/无图」，模型把它抄进了标题）` +
+            `剥离后：「${s.text}」`,
+        );
+        after = s.text;
+      }
+    }
     // v3：照抄示例占位符的改写直接拒。`after` 是要**发出去的文字**，把一句
     // 「（只改正错处）」写进标题是最恶劣的一种回抄（旧提示词的 `after` 是「（改正后）」，
     // 恰好没被抄到；现在把这条留痕钉住，不再靠运气）。
@@ -1731,6 +1813,39 @@ export function runEditorProbes(): Record<string, string> {
     );
   })();
 
+  /**
+   * g3 的探针：**端到端**跑一次 `applyVerdict`，用线上真实出现过的那个形状
+   * （标题尾部带「（无图）」），报「剥了几处 + 剥完是什么」。
+   *
+   * ⚠️ 刻意**不只调纯函数**：只测 `stripTitleMarkers` 会得到一个恒真的绿灯——
+   * 纯函数写好了、却**没接到 fixes 循环上**，探针照样显示正常。
+   * 本项目栽过同一种错（「模块写好了、但没人调用它」，见 `test-keepalive` 第五组）。
+   */
+  const titleMarker = (() => {
+    const dirty = '比什凯克重启地铁建设计划，尽管规划评估显示成本高昂且需求低（无图）';
+    const rows: ReviewItem[] = Array.from({ length: 3 }, (_, i) => ({
+      title: i === 0 ? dirty : `探针第 ${i} 条（不含任何真实新闻内容）`,
+      summary: '探针摘要',
+      category: 'society',
+      source: 'probe',
+      time: '1970-01-01 00:00',
+      hasImage: false,
+      relevance: 0,
+      contentPeek: '',
+      originalTitle: `PROBE ORIGINAL TITLE ${i}`,
+      originalExcerpt: `PROBE ORIGINAL BODY ${i}`,
+      originalLang: 'xx',
+    }));
+    const { decision, audit } = applyVerdict(rows, {
+      fixes: [{ index: 0, field: 'title', before: dirty, after: dirty, why: '探针' }],
+      order: [0, 1, 2],
+    } as unknown as RawVerdict);
+    const got = decision.fixes.find((f) => f.field === 'title')?.after ?? '(未采纳)';
+    const stripped = audit.titleMarkersStripped ?? 0;
+    const clean = stripped > 0 && !/[\s（(【[][无不]图[\s）)】\]]/.test(got);
+    return `剥${stripped}处｜结果「${got}」${clean ? '✔' : '❗没剥干净'}`;
+  })();
+
   return {
     editorOrderExampleProbe: orderExample,
     editorDropGuardProbe: dropGuard,
@@ -1738,6 +1853,7 @@ export function runEditorProbes(): Record<string, string> {
     editorDupEvidenceProbe: dupEvidence,
     editorNotNewsQuoteProbe: notNewsQuote,
     editorFixLocateGateProbe: fixLocate,
+    editorTitleMarkerProbe: titleMarker,
   };
 }
 
