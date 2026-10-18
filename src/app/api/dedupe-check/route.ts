@@ -102,6 +102,42 @@ function windowStart(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
+/**
+ * 解析成对出现的「绝对区间」（2026-10-18 加）—— `dedupe-check?from=…&to=…` 或 `?date=YYYY-MM-DD`。
+ *
+ * ## 为什么必须加它（那天踩的坑）
+ *
+ * 原本只能用 `?days=N`＝「最近 N 天」，于是想复现**某一天**的判组时只能：
+ * 把 `days` 调大 ⇒ **每国 `perCountryLimit` 上限 200，而窗口是按 `published_at` 倒序取**
+ * ⇒ 截掉的是**最老的那批** —— 恰好就是要查的那几天。
+ * 实测五天窗口里 kz 662 篇 / az 415 / uz 317 / kg 353，**每国都会被砍到 200**。
+ *
+ * ⇒ 更糟的是：那一批**根本没有被问到过** ⇒ 任何「它漏了 / 它抓到了」的结论都缺一个基准。
+ *
+ * ## 边界
+ *
+ * · `date=YYYY-MM-DD` 取的是 **UTC 那一日**（`published_at` 是 UTC，与 `/api/articles?date=` 同口径）。
+ * · 只给 `from` 或只给 `to` 都合法（半开区间）。
+ * · 两个都给时以 `to` 为上界；`to` 早于 `from` 时**不报错、原样传下去**（让查询返回空，
+ *   而不是悄悄换成「最近 N 天」）—— 那正是本条要消灭的那种「看起来有结果、其实不是那一批」。
+ */
+function parseRange(
+  from: string | null,
+  to: string | null,
+): { since: string | null; until: string | null } {
+  const raw = from || to || null;
+  if (!raw) return { since: null, until: null };
+  const isDay = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  if (isDay) {
+    const start = new Date(`${raw}T00:00:00Z`);
+    if (Number.isNaN(start.getTime())) return { since: null, until: null };
+    return { since: start.toISOString(), until: new Date(start.getTime() + 24 * 3600 * 1000).toISOString() };
+  }
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return { since: null, until: null };
+  return { since: from ? d.toISOString() : null, until: to ? new Date(to).toISOString() : null };
+}
+
 interface Row {
   id: number;
   title: string;
@@ -254,10 +290,16 @@ export async function GET(request: NextRequest) {
   const withLlm = searchParams.get('llm') === '1';
   const sampleLimit = Math.min(Number(searchParams.get('sample')) || 15, 50);
 
-  const since = windowStart(days);
+  // 「绝对区间」优先；没给才退回「最近 N 天」。两者互斥，绝不混用
+  // （混用会让人以为查到的是指定那一批，其实不是 —— 那正是本条要消灭的失败方式）。
+  const abs = parseRange(
+    searchParams.get('from') ?? searchParams.get('date'),
+    searchParams.get('to'),
+  );
+  const since = abs.since ?? windowStart(days);
   let rows: Row[];
   try {
-    rows = (await getArticleIdentities(since)) as Row[];
+    rows = (await getArticleIdentities(since, abs.until ?? undefined)) as Row[];
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: `读取文章失败：${err instanceof Error ? err.message : String(err)}` },
@@ -315,7 +357,15 @@ export async function GET(request: NextRequest) {
   const result: Record<string, unknown> = {
     ok: true,
     mode: 'report-only（只读，不写任何数据）',
-    window: { days, since },
+    window: {
+      days,
+      since,
+      until: abs.until,
+      /** `absolute` = 查的是指定区间（`date`/`from`/`to`）；`relative` = 仍是「最近 N 天」 */
+      mode: abs.since || abs.until ? 'absolute' : 'relative',
+      /** 给了绝对区间时 `days` 被忽略 —— 明说，免得读的人以为 days 还在起作用 */
+      daysIgnored: Boolean(abs.since || abs.until),
+    },
     totals: {
       articles: rows.length,
       /** 用同一套判据跑一遍会剩下多少 */
@@ -340,6 +390,8 @@ export async function GET(request: NextRequest) {
      * 指纹必须零成本可读：拿它当**部署指纹**用，期望值见 `judge-prompts` 的版本历史。
      */
     judgePromptVersion: JUDGE_PROMPT_VERSION,
+    /** 2026-10-18：`window.until` / `window.mode` 出现 ⇒ 这一版支持绝对区间（部署指纹）。 */
+    dedupeRangeVersion: 1,
     /**
      * ★ 召回层的**默认三值** —— 也就是**生产真正在跑的口径**。
      *

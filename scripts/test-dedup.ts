@@ -2420,6 +2420,30 @@ async function promptFingerprintChecks(): Promise<void> {
   );
 }
 
+// ----- 2026-10-18：dedupe-check 支持绝对区间（复现「某一天」的判组）-----
+//
+// 起因（实测踩到的坑）：投诉里的稿子分布在**好几天**，而 `?days=N` 只能看「最近 N 天」；
+// 把 days 调大又会被 `perCountryLimit=200` + `published_at` 倒序截掉**最老的那批**
+// —— 恰好就是要查的那几天 ⇒ 那批**从没被问到过** ⇒ 任何「漏了/抓到了」的结论都缺基准。
+// ⚠️ 所以这三条钉的是**「必须能把区间报出来」** —— 静默生效又看不出查的是哪一批，
+// 就是这次要消灭的那种失败方式。
+const dedupeRouteSrc = readFileSync(resolve(process.cwd(), 'src/app/api/dedupe-check/route.ts'), 'utf8');
+function dedupeRangeChecks() {
+  console.log('\n--- dedupe-check 绝对区间（?date= / ?from= &to=）---');
+  ok('★ 必须把 until 传给 getArticleIdentities（否则上界形同虚设）',
+    dedupeRouteSrc.includes('getArticleIdentities(since, abs.until ?? undefined)'));
+  ok('★ 响应必须报出 until（否则不知道查的是哪一批）',
+    dedupeRouteSrc.includes('until: abs.until'));
+  ok('★ 响应必须报出 mode=absolute/relative（区分「指定区间」与「最近 N 天」）',
+    dedupeRouteSrc.includes("mode: abs.since || abs.until ? 'absolute' : 'relative'"));
+  ok('★ 给了绝对区间时 days 被忽略，必须明说',
+    dedupeRouteSrc.includes('daysIgnored'));
+  ok('★ 必须有部署指纹 dedupeRangeVersion（不然分不清线上是哪一版）',
+    dedupeRouteSrc.includes('dedupeRangeVersion'));
+  ok('★ date 参数与 /api/articles?date 同口径（UTC 那一日）',
+    dedupeRouteSrc.includes('T00:00:00Z'));
+}
+
 // ----- 汇总 -----
 
 function summarize() {
@@ -2442,6 +2466,7 @@ llmPipelineChecks()
   .then(promptVersionChecks)
   .then(recallKnobChecks)
   .then(promptFingerprintChecks)
+  .then(dedupeRangeChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);
