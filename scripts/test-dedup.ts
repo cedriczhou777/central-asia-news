@@ -2420,6 +2420,45 @@ async function promptFingerprintChecks(): Promise<void> {
   );
 }
 
+// ----- 2026-10-18：extractFirstJsonObject（修「模型多说一句话 ⇒ 整国判组作废」）-----
+//
+// 起因（**线上实测**，不是设想）：`GET /api/dedupe-check?mode=group&llm=1&days=2` 里
+// **kz 的 164 条**报 `模型返回不是合法 JSON（已按「不合并」处理）`，而 az/kg/uz 都正常。
+// 旧写法是 `indexOf('{')` 到 `lastIndexOf('}')` 整段切 —— 只要模型在 JSON 之后多说一句、
+// 而那句话里带 `{` 或 `}`，切出来就不是合法 JSON ⇒ **该国判组全部作废**。
+//
+// ⚠️ 这条修法**只改「怎么切」，不改「切出来之后怎么判」** ⇒ 不可能新增任何误删。
+function jsonExtractionChecks() {
+  console.log('\n--- JSON 提取（extractFirstJsonObject）---');
+  const legacy = (t: string): boolean => {
+    const a = t.indexOf('{');
+    const b = t.lastIndexOf('}');
+    if (a < 0 || b <= a) return false;
+    try { JSON.parse(t.slice(a, b + 1)); return true; } catch { return false; }
+  };
+  const CASES: Array<[string, string, number[][]]> = [
+    ['干净 JSON', '{"groups":[[0,1,2]]}', [[0, 1, 2]]],
+    ['JSON 后带客套话、且含右花括号', '{"groups":[[0,1,2]]}\n\n说明：以上按事件归组。{注}', [[0, 1, 2]]],
+    ['JSON 后带含左花括号的补充', '{"groups":[[3,4]]}\n补充：{"x":1} 是别的字段', [[3, 4]]],
+    ['JSON 字符串值里含花括号', '{"groups":[[5,6]],"note":"涉及 {x} 的情况"}', [[5, 6]]],
+    ['被 json 围栏包住', '```json\n{"groups":[[7,8]]}\n```', [[7, 8]]],
+  ];
+  for (const [name, text, want] of CASES) {
+    const got = parseEventGroups(text, 20);
+    ok('JSON 提取：' + name + ' ⇒ 能解出判组', JSON.stringify(got) === JSON.stringify(want), '得到 ' + JSON.stringify(got));
+  }
+  ok('没有 JSON 对象时返回 null（不许瞎凑组）', parseEventGroups('模型今天拒绝回答。', 20) === null);
+  ok('括号没配对（被 max tokens 截断）时返回 null', parseEventGroups('{"groups":[[0,1', 20) === null);
+  const mustBeLegacyBroken = [
+    '{"groups":[[0,1,2]]}\n\n说明：以上按事件归组。{注}',
+    '{"groups":[[3,4]]}\n补充：{"x":1} 是别的字段',
+  ];
+  ok(
+    '反向自检：上面两个用例在**旧写法**下确实切不出合法 JSON（否则这次修法是无的放矢）',
+    mustBeLegacyBroken.every((t) => !legacy(t)),
+  );
+}
+
 // ----- 汇总 -----
 
 function summarize() {
@@ -2442,6 +2481,7 @@ llmPipelineChecks()
   .then(promptVersionChecks)
   .then(recallKnobChecks)
   .then(promptFingerprintChecks)
+  .then(jsonExtractionChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);
