@@ -1287,66 +1287,15 @@ export function describeOversizedClusters(
  * （包括「模型返回 ```json 围栏」「返回越界下标」「返回单元素组」这些脏输出），
  * 这样这层解析逻辑不需要真的调模型就能回归。
  */
-/**
- * 从模型返回里**取出第一个完整的 JSON 对象**（2026-10-18 新增）。
- *
- * ## 为什么必须要有这个函数（2026-10-18 实测）
- *
- * 原写法是 `text.indexOf('{')` 到 `text.lastIndexOf('}')` 整段切。
- * 那只对「JSON 后面一个字都没有」成立。**只要模型多说一句话**（而它反复爱加），
- * 只要那句话里带 `{` 或 `}`，切出来的片段就**不是合法 JSON**
- * ⇒ `parseEventGroups` 返回 `null` ⇒ **整国的判组全部按「不合并」处理**。
- *
- * 实测：`GET /api/dedupe-check?mode=group&llm=1&days=2` 里 **kz 的 164 条**
- * 报的是 `模型返回不是合法 JSON（已按「不合并」处理）` ——
- * 而 az/kg/uz 都正常 ⇒ **这不是模型整体坏了，是这一个国家的这一次输出多了点什么。**
- *
- * ## 它是怎么不产生误判的
- *
- * 只改**「怎么切」**，不改「切出来之后怎么判」：
- * `MAX_GROUP_SIZE`、`DUP_SIM_FLOOR`、逐条相似度闸**一个字都没动**。
- * ⇒ 切对了，判据照旧；切不对就退化成原来的「不合并」⇒ **不可能新增任何误删**。
- */
-export function extractFirstJsonObject(text: string): string | null {
-  const start = text.indexOf('{');
-  if (start < 0) return null;
-
-  // 括号配对扫描。必须**跳过字符串字面量**，否则一个含 `{` 的说明文字会把配对带偏
-  //（模型很爱在 JSON 里写 `"note": "涉及 {x} 的情况"`）。
-  let depth = 0;
-  let inStr = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inStr) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') { inStr = true; continue; }
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
-
 export function parseEventGroups(text: string, total: number): number[][] | null {
-  // ① 先用**括号配对**取第一个完整对象；② 取不到再退回旧的「首 { 到末 }」整段切
-  //（那段切法在「JSON 后没有别的东西」时等价，配对失败时它偶尔还能救回来）。
-  const sliced = extractFirstJsonObject(text) ?? (() => {
-    const a = text.indexOf('{');
-    const b = text.lastIndexOf('}');
-    return a >= 0 && b > a ? text.slice(a, b + 1) : null;
-  })();
-  if (sliced === null) return null;
+  // 模型偶尔会给 JSON 套上 ```json 围栏，或前后带一句客套话，所以取第一个 {...} 块。
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(sliced);
+    parsed = JSON.parse(text.slice(start, end + 1));
   } catch {
     return null;
   }
