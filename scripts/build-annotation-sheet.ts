@@ -82,6 +82,72 @@ for (const a of arts) {
   }
 }
 
+
+/**
+ * 「同一事件组内数字打架」的提取器（2026-10-20）。
+ *
+ * ## 为什么这个信号特别干净
+ *
+ * 之前试的「中英量级对照」噪声极大（同一篇里中文的数字和原文的数字指的不是同一个东西）。
+ * 而这里**不需要做事件判定** —— 输入是**已经被 pair 模式确认是同一事件**的组，
+ * ⇒ 同一个事件里的金额/数量**本来就该一致** ⇒ 组内出现量级不一致 ⇒ **必有一错**。
+ *
+ * 实测（UTC 10-19 那一批，168 对确认同事件）：11 对「同单位差 ≥9.5 倍」，
+ * 其中 **10 对指向同一个错误源**（「乌美协议 12 亿 vs 120 亿」），
+ * 查原文确认：**错的是那 3 条写「12 亿」的**（原文是 12 billion / 12 млрд = 120 亿）
+ * ⇒ ★ **模型把「十亿」直接对译成「亿」，少了一个零。**
+ *
+ * ⚠️ 因此它的正确用法**不是「删稿」**（那太危险），而是
+ * **「少数派是错的」⇒ 把少数派改成多数派的值**（错误的后果只是改一个数字，
+ * 而正确的那个值有多数派背书）。
+ */
+const MAG_UNITS: Array<[RegExp, number, string]> = [
+  [/([\d.,]+)\s*亿(美元|欧元|里拉|坚戈|苏姆|马纳特|塔吉克索姆)/, 1e8, 'CUR'],
+  [/([\d.,]+)\s*万(美元|欧元|里拉|坚戈|苏姆|马纳特|塔吉克索姆)/, 1e4, 'CUR'],
+  [/([\d.,]+)\s*亿美元/, 1e8, 'USD'],
+  [/([\d.,]+)\s*万美元/, 1e4, 'USD'],
+  [/([\d.,]+)\s*亿千瓦时/, 1e8, 'KWH'],
+  [/([\d.,]+)\s*万千瓦时/, 1e4, 'KWH'],
+  [/([\d.,]+)\s*亿(吨|立方米)/, 1e8, 'QTY'],
+  [/([\d.,]+)\s*%/, 1, 'PCT'],
+  [/([\d.,]+)\s*(人|名|座|所|台|辆|机组)/, 1, 'CNT'],
+];
+
+function amountsOf(text: string): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  for (const [re, mult, unit] of MAG_UNITS) {
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+    for (const m of text.matchAll(g)) {
+      const num = Number(String(m[1] ?? '').replace(/[^\d.]/g, ''));
+      if (!Number.isFinite(num) || num === 0) continue;
+      const arr = out.get(unit) ?? [];
+      arr.push(num * mult);
+      out.set(unit, arr);
+    }
+  }
+  return out;
+}
+
+/** 找出「同事件、同单位、量级差 ≥9.5 倍」的配对。 */
+function magnitudeClashes(rows: Row[]) {
+  const out: Array<{ c: string; a: string; b: string; sim: number; unit: string; va: number; vb: number }> = [];
+  for (const r of rows) {
+    const ma = amountsOf(r.a);
+    const mb = amountsOf(r.b);
+    for (const [unit, av] of ma) {
+      const bv = mb.get(unit);
+      if (!bv) continue;
+      for (const x of av) {
+        for (const y of bv) {
+          const ratio = x > y ? x / y : y / x;
+          if (ratio >= 9.5) out.push({ ...r, unit, va: x, vb: y });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 const L: string[] = [];
 L.push('# 待标注清单（人工勾一遍，每条约 5 秒）');
 L.push('');
@@ -95,6 +161,7 @@ L.push('');
 L.push('    A1=A  A2=B  A3=A  A4=B      A=两条只该留一条   B=两条都要留');
 L.push('    B1=错  B2=对                 B 段：错=译文量级错了   对=译文没错');
 L.push('    C1=A  C2=B                  C 段：A=这句不该出现   B=应该留着');
+L.push('    D1=甲  D2=乙                 D 段：甲/乙 = 哪一条的数字是错的');
 L.push('');
 L.push('---');
 L.push('');
@@ -150,6 +217,53 @@ metaRows.forEach((r, i) => {
   L.push('  - 句子：' + r.s);
   L.push('');
 });
+L.push('---');
+L.push('');
+const clashes = magnitudeClashes(merged);
+L.push('## D. 同一事件组内「数字打架」（' + clashes.length + ' 条）');
+L.push('');
+L.push('> **这批最干净的一条线索**：输入是**已被模型确认是同一事件**的组，');
+L.push('> 同一个事件里的金额/数量**本来就该一致** ⇒ 打架就必有一错。');
+L.push('> 2026-10-20 实测：UTC 10-19 那批 168 对确认同事件里，11 对量级差 ≥9.5 倍，');
+L.push('> 其中 10 对指向**同一个错误源** —— 查原文确认「乌美协议 12 亿 vs 120 亿」里，');
+L.push('> **错的是那 3 条写「12 亿」的**（原文是 12 billion / 12 млрд = 120 亿）');
+L.push('> ⇒ **模型把「十亿」直接对译成了「亿」，少了一个零。**');
+L.push('>');
+L.push('> 请你判断：**是甲错还是乙错**（不是「都不该留」—— 它们是同一件事，该留一条）。');
+L.push('');
+{
+  // 去重：同一个（甲,乙）标题对只列一次，但**记下它出现在几对上**
+  // —— 否则同一个错误源会在清单里重复十几行，白白占掉你的时间。
+  const seen = new Map<string, { r: (typeof clashes)[number]; n: number }>();
+  for (const r of clashes) {
+    const big = r.va > r.vb ? r.a : r.b;
+    const small = r.va > r.vb ? r.b : r.a;
+    const k = big + '||' + small;
+    const hit = seen.get(k);
+    if (hit) hit.n++;
+    else seen.set(k, { r, n: 1 });
+  }
+  const uniq = [...seen.values()];
+  uniq.forEach((u, i) => {
+    const r = u.r;
+    const big = r.va > r.vb ? r.a : r.b;
+    const small = r.va > r.vb ? r.b : r.a;
+    L.push('**D' + (i + 1) + '**　[ ] 甲错（把乙改成甲的数）　　[ ] 乙错（把甲改成乙的数）　　单位=' + r.unit + '　国=' + r.c + '　（出现在 ' + u.n + ' 对上）');
+    L.push('  - 甲：' + big);
+    L.push('  - 乙：' + small);
+    L.push('');
+  });
+  L.push('> 去重后 ' + uniq.length + ' 个「打架点」（原始 ' + clashes.length + ' 对）。');
+  L.push('>');
+  L.push('> ⚠️ **我已把 uz 与 kz 这两处的原文查过了，方向是**：');
+  L.push('> · uz：原文 `12 млрд` / `12 billion` = **120 亿** ⇒ 写「**120 亿**」的**对**，写「**12 亿**」的**错**（3 条）；');
+  L.push('> · kz：原文 `8 млрд` / `8 миллиардов` = **80 亿** ⇒ 写「**80 亿**」的**对**，写「**8 亿**」的**错**。');
+  L.push('> ⇒ ★ **根因锁定：模型缺少「1 十亿 = 10 亿」这一步换算** —— 它把「8 billion」写成「8 亿」、');
+  L.push('>   把「12 billion」写成「12 亿」，**都是少一个零**。');
+  L.push('> ⚠️ 而「多数派是对的」**不成立**（uz 那组是 3 错 : 2 对）⇒ **组内打架只能告诉你「这里有一个错」，');
+  L.push('>   要定是哪一个，**必须对照原文**。');
+  L.push('');
+}
 L.push('---');
 L.push('');
 L.push('## 附：我自己的两条排查结论（供你复核，不在上面的勾选里）');
