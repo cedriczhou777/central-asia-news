@@ -8,6 +8,7 @@ import {
   MIN_HAN_TITLE,
   MIN_HAN_CONTENT,
 } from './utils';
+import { findMagnitudeMismatches, type MagnitudeMismatch } from './magnitude-guard';
 import type { Category } from './data/types';
 import {
   checkCurrencyCountryFit,
@@ -269,6 +270,13 @@ interface TranslationStats {
     /** 日期缺月份：命中篇次（2026-10-11 加，**只在原文有月份时才可能命中**） */
     dateAmbiguous: number;
     /**
+     * 量级错（2026-10-20 加）：命中篇次。
+     *
+     * 形态：原文 `12 млрд` / `12 billion`（= 120 亿）被写成「12 亿」——
+     * **模型把「十亿」当成了「亿」**，少一个零。
+     */
+    magnitude: number;
+    /**
      * **因为术语闸而最终不入库的篇数**（所有通道 + 所有重试都没过）。
      *
      * ⚠️ 这是三个计数里唯一需要**盯着不为 0** 的：`currency`/`wrongNoun` 变多说明闸在
@@ -279,7 +287,7 @@ interface TranslationStats {
     dropped: number;
     /** 逐条样本（截断到 20 条），上线首日复核用 */
     samples: Array<{
-      kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month';
+      kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month' | 'magnitude-mismatch';
       detail: string;
     }>;
     /** 丢稿样本（截断到 10 条）—— `dropped` 不为 0 时看这里 */
@@ -291,7 +299,7 @@ const emptyStats = (): TranslationStats => ({
   providerCounts: {},
   errors: [],
   termGate: {
-    currency: 0,
+    currency: 0, magnitude: 0,
     wrongNoun: 0,
     headOfState: 0,
     dateAmbiguous: 0,
@@ -754,7 +762,9 @@ export interface GateReject {
     | 'currency-mismatch'
     | 'wrong-noun'
     | 'wrong-head-of-state'
-    | 'date-no-month';
+    | 'date-no-month'
+    /** 2026-10-20 加：量级错（`12 млрд` 被写成「12 亿」这一类）。 */
+    | 'magnitude-mismatch';
   /** 被拦下的词（截断到前几个） */
   tokens: string[];
   /**
@@ -784,6 +794,14 @@ export interface GateReject {
   headOfState?: HeadOfStateHit[];
   /** 命中的**日期缺月份**（2026-10-11 加）。同上，分开存。 */
   dateAmbiguous?: DateAmbiguity;
+  /**
+   * 命中的**量级错**（2026-10-20 加）。同上，分开存。
+   *
+   * 形态：原文 `12 млрд` / `12 billion`（= 12 × 10⁹ = **120 亿**）被译成「**12 亿**」——
+   * 即**模型把「十亿」直接当成了「亿」**，少一个零。uz 与 kz 都犯过。
+   * 判据与实测见 `lib/magnitude-guard.ts`。
+   */
+  magnitude?: MagnitudeMismatch[];
 }
 
 /**
@@ -839,6 +857,39 @@ export function buildRepairHint(reject: GateReject): string {
         '⚠️ 你上一次的输出**没有通过质检**，原因：' + what + '。',
         '被拦下的词：' + reject.tokens.slice(0, 8).join('、'),
         ...fix,
+      ].join('\n'),
+    );
+  }
+
+  // 块 1b：**量级错**（2026-10-20 加）——
+  //
+  // 为什么必须由修正指令把「正确值」直接算出来给它：它不是随手写错，
+  // 而是**把「十亿 / billion」当成了「亿」**（`12 млрд` ⇒ 「12 亿」）。
+  // 只说「量级错了」它大概率还是这么写；**把正确的中文写法给它**（`120 亿`）
+  // 它照抄即可。
+  if (reject.magnitude && reject.magnitude.length > 0) {
+    const lines = reject.magnitude.slice(0, 4).map((m) => {
+      const v = m.raw.value;
+      const correct =
+        v >= 1e8 ? `${(v / 1e8).toLocaleString('zh-CN')} 亿`
+        : v >= 1e4 ? `${(v / 1e4).toLocaleString('zh-CN')} 万`
+        : `${v.toLocaleString('zh-CN')}`;
+      return (
+        `原文「${m.raw.raw}」= ${correct}；你写成了「${m.closest?.raw ?? '-'}」` +
+        `（差 ${m.ratio >= 1000 ? (m.ratio / 1000).toFixed(1) + ' 千倍' : m.ratio.toFixed(0) + ' 倍'}）`
+      );
+    });
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**数字的量级错了**，原因：',
+        '**你把原文的「十亿 / billion」当成了「亿」，少写了一个零**（或者反过来多了一个零）。',
+        '换算关系是固定的：',
+        '  · 1 млрд / 1 billion / 十亿 = **10 亿**（不是 1 亿）',
+        '  · 1 млн / 1 million / 百万 = **100 万**（不是 1 万）',
+        '  · 1 тыс / 1 thousand / 千 = **1000**（不是 1000 个「万」）',
+        '具体这一处：',
+        ...lines.map((l) => '  · ' + l),
+        '请把上面这些数字按**正确的中文写法**改一遍（其余内容不要动）。',
       ].join('\n'),
     );
   }
@@ -1175,6 +1226,44 @@ function normalizeResult(
     );
   }
 
+  // ---- 量级闸（2026-10-20 加）----
+  //
+  // 成因（真实语料实测）：**模型把「十亿 / billion」直接当成了「亿」** ——
+  // 原文 `12 млрд` / `12 billion` = 12 × 10⁹ = **120 亿**，译文却写成「**12 亿**」，
+  // **少一个零**。uz 与 kz 都犯过；最严重的一次 `500 тыс`（= 50 万）被写成「5 亿」，
+  // **差 1000 倍**。
+  //
+  // ⚠️ **为什么这道闸值得开**：提示词里**早就写了**这条换算规则
+  // （`:601`「「млрд」/「十亿」= 十亿」）⇒ **光靠提示词压不住**，
+  // 而这种错**读者一眼就能看出荒谬**（「12 亿 vs 120 亿」差十倍）⇒ 代价极高。
+  //
+  // ⚠️ **误报后果很轻**：它只触发**重试**（带精确的修正说明），**不删稿**。
+  // 实测（1485 篇真实语料逐条读过）：命中 38 篇，**36 篇明确真错、2 篇存疑**，
+  // 而收紧前的宽松判据误报约 21% ⇒ 现在约 0–5%。
+  const magnitudeIssues = findMagnitudeMismatches(
+    `${originalTitle}\n${originalContent}`,
+    `${titleZh}\n${summaryZh}\n${contentZh}`,
+  );
+  if (magnitudeIssues.length > 0) {
+    translationStats.termGate.magnitude = (translationStats.termGate.magnitude ?? 0) + 1;
+    if (translationStats.termGate.samples.length < 20) {
+      translationStats.termGate.samples.push({
+        kind: 'magnitude-mismatch',
+        detail: `[${countryName}] ` +
+          magnitudeIssues
+            .map((m) => `原文「${m.raw.raw}」(${m.raw.value}) vs 译文「${m.closest?.raw ?? '-'}」(${m.closest?.value ?? '-'})`)
+            .join('、'),
+      });
+    }
+    console.log(
+      `[translate] 质检拦下（量级）：` +
+        magnitudeIssues
+          .map((m) => `原文「${m.raw.raw}」(${m.raw.value}) 译文写成「${m.closest?.raw ?? '-'}」(${m.closest?.value ?? '-'})`)
+          .join(' / ') +
+        ` ⇒ 重试带修正指令`,
+    );
+  }
+
   const rawCategory = typeof parsed.category === 'string' ? parsed.category : '';
   const category = (CATEGORY_IDS as string[]).includes(rawCategory)
     ? (rawCategory as Category)
@@ -1207,10 +1296,12 @@ function normalizeResult(
         ? 'wrong-head-of-state'
         : dateIssue
           ? 'date-no-month'
-          : undefined;
+          : magnitudeIssues.length > 0
+            ? 'magnitude-mismatch'
+            : undefined;
   const reject: GateReject | undefined = !zhOk
     ? undefined
-    : nameKind || impossible.length > 0 || termKind
+    : nameKind || impossible.length > 0 || termKind || magnitudeIssues.length > 0
       ? {
           kind: nameKind ?? termKind ?? 'impossible-multiple',
           tokens: [...new Set([...halfTranslated, ...mixed, ...latinCyr])],
@@ -1219,6 +1310,7 @@ function normalizeResult(
           ...(wrongNouns.length > 0 ? { wrongNouns } : {}),
           ...(headOfState.length > 0 ? { headOfState } : {}),
           ...(dateIssue ? { dateAmbiguous: dateIssue } : {}),
+          ...(magnitudeIssues.length > 0 ? { magnitude: magnitudeIssues } : {}),
         }
       : undefined;
 
