@@ -903,6 +903,15 @@ export async function GET(request: NextRequest) {
        * 不分开放就没法拿两轮数据做 A/B（详见 `EDITOR_GATE_VERSION` 的注释）。
        */
       editorGateVersion: EDITOR_GATE_VERSION,
+      /**
+       * **量级闸**的版本（2026-10-20 加）。
+       *
+       * 存在的唯一目的：**分清线上跑的是不是带这道闸的那一版**。
+       * ⚠️ 这道闸**没有活体探针**（它是翻译期的一道闸，只有真跑一轮才会命中），
+       * 所以「上线了没」只能靠这个字段 —— 没有它就又是一次「推了但不知道有没有生效」。
+       * 命中数看 `lastRun.summary.translation.termGate.magnitude`。
+       */
+      magnitudeGuardVersion: 1,
       /** 终审护栏上限（调参后可以从这里确认线上拿到的是新值） */
       editorGuards: {
         maxDrops: MAX_DROPS,
