@@ -54,6 +54,7 @@
  */
 import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint, buildPrompt } from '../src/lib/translate';
 import { findMagnitudeMismatches, parseAmount } from '../src/lib/magnitude-guard';
+import { findContentIssues, buildContentIssueHint } from '../src/lib/content-gate';
 import { COUNTRY_CURRENCY, HEAD_OF_STATE } from '../src/lib/proper-nouns';
 import { RSS_SOURCES } from '../src/lib/data/rss-sources';
 import { readFileSync } from 'fs';
@@ -999,6 +1000,52 @@ section('量级闸：模型把「十亿」当成了「亿」');
     parseAmount('15,5') === 15.5, `实际 ${parseAmount('15,5')}`);
   ok('★ 千分位逗号：1,234 要读成 1234（不是 1.234）',
     parseAmount('1,234') === 1234, `实际 ${parseAmount('1,234')}`);
+}
+
+// ============================================================
+// 2026-10-20：内容层闸（元评语 / 量词歧义 / 亲属词开头）
+// ============================================================
+//
+// 实测（1485 篇真实语料）：命中 7 处，**逐条读过 ⇒ 全部真错、误报 0**。
+// ⚠️ 「指标类必须写出具体数值」**曾经也做成确定性闸，实测误报 60%+ ⇒ 已撤掉**：
+// 「利率/通胀/GDP/汇率」在**政策讨论**语境里出现时本来就不该给数值，
+// 而「这个指标**在这里**该不该给数值」判不准 ⇒ 改由提示词强化处理。
+section('内容层闸：元评语 / 量词歧义 / 亲属词开头');
+{
+  const hit = (t: string) => findContentIssues(t, t);
+  const kinds = (t: string) => hit(t).map((i) => i.kind);
+
+  // ---- 元评语（用户投诉 4）----
+  ok('★「最后一句是……」必须被抓（对文章本身的评述）',
+    kinds('阿塞拜疆央行公布了数据。最后一句是具体事实。').includes('meta-comment'));
+  ok('★「最后一段为……」也要抓',
+    kinds('正文写完了。最后一段为总结。').includes('meta-comment'));
+  ok('★ 正常新闻里的「值得注意」不该被抓（误报会白花一次翻译）',
+    !kinds('值得注意的是，该协议对双方都有利。').includes('meta-comment'));
+
+  // ---- 量词歧义（用户投诉 10）----
+  ok('★「750 座新教学楼」必须被抓',
+    kinds('玛纳斯市新建一所 750 座新教学楼即将投入使用。').includes('ambiguous-quantifier'));
+  ok('★「275 座位的现代化学校」**不该**抓（原文 `школа на 275 мест` 译成「座位」是准确的）',
+    !kinds('新建一所 275 座位的现代化学校即将投入使用。').includes('ambiguous-quantifier'));
+  ok('★「一座桥」不抓（正常汉语）',
+    !kinds('政府将新建一座桥横跨该河。').includes('ambiguous-quantifier'));
+  ok('★「500 所学校」不抓（所 用在学校上是标准汉语）',
+    !kinds('全国共有 500 所学校。').includes('ambiguous-quantifier'));
+
+  // ---- 亲属词开头（用户投诉 3）----
+  ok('★「女儿向哈萨克斯坦开发银行申请…」必须被抓（谁的女儿？）',
+    kinds('女儿向哈萨克斯坦开发银行申请 10.01 兆瓦水电站融资').includes('kin-unclear'));
+  ok('★「某某的女儿」不抓（前面有专名就清楚了）',
+    !kinds('前紧急情况部长之女 Galia 向哈萨克斯坦开发银行申请融资').includes('kin-unclear'));
+
+  // ---- 修正指令必须把「该写成什么样」给出来 ----
+  const hint = buildContentIssueHint(hit('女儿向哈萨克斯坦开发银行申请 10.01 兆瓦水电站融资'));
+  ok('★ 亲属词的修正指令里要给出正确写法',
+    hint.includes('前紧急情况部长之女') || hint.includes('主体写清楚'), `实际：${hint.slice(0, 120)}`);
+  const hint2 = buildContentIssueHint(hit('玛纳斯市新建一所 750 座新教学楼即将投入使用。'));
+  ok('★ 量词的修正指令里要给出正确写法',
+    hint2.includes('容纳') || hint2.includes('学生名额'), `实际：${hint2.slice(0, 120)}`);
 }
 
 // ============================================================

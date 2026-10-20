@@ -9,6 +9,7 @@ import {
   MIN_HAN_CONTENT,
 } from './utils';
 import { findMagnitudeMismatches, type MagnitudeMismatch } from './magnitude-guard';
+import { findContentIssues, buildContentIssueHint, type ContentIssue } from './content-gate';
 import type { Category } from './data/types';
 import {
   checkCurrencyCountryFit,
@@ -276,6 +277,8 @@ interface TranslationStats {
      * **模型把「十亿」当成了「亿」**，少一个零。
      */
     magnitude: number;
+    /** 内容层三类问题被拦下的次数（2026-10-20 加）。 */
+    contentIssue?: number;
     /**
      * **因为术语闸而最终不入库的篇数**（所有通道 + 所有重试都没过）。
      *
@@ -287,7 +290,7 @@ interface TranslationStats {
     dropped: number;
     /** 逐条样本（截断到 20 条），上线首日复核用 */
     samples: Array<{
-      kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month' | 'magnitude-mismatch';
+      kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month' | 'magnitude-mismatch' | 'content-issue';
       detail: string;
     }>;
     /** 丢稿样本（截断到 10 条）—— `dropped` 不为 0 时看这里 */
@@ -561,6 +564,25 @@ export const TRANSLATE_PROMPT = `你是一位面向国际投资者的中亚与�
      同样的道理适用于**系数 / 折算率**：写「系数 1.5」时，必须同时说清它是**乘**还是**除** ——
      只说「1.5 倍系数」，投资者无法判断电价是涨了还是跌了。
 
+   ★ **(aa) 指标类新闻，标题与摘要里必须写出具体数值**（2026-10-20 加）。
+     读者要的是数字，不是「有所上升」「创下新高」「将继续保持高位」这种说法。
+     ⚠️ 数值若只出现在正文末尾，**等于没写** —— 标题和摘要才是读者先看到的地方。
+     ✓ 「国家银行确定 10 月 17 日的汇率」⇒「……汇率：美元兑索姆 87.42，欧元兑索姆 94.17」
+     ✗ 「国家银行发布宏观经济预测：美元汇率、通货膨胀和石油价格」
+       （⇒ 预测值必须写进摘要：美元兑索姆 512.3、通胀率 8.9%、布伦特 71 美元）
+     ★ 但**政策讨论里本来就不该给数值**的场合不要硬凑：
+     「该措施可能促使部分信贷利率下降」「融资规模与期限尚未披露」——
+     这类**如实写「尚未披露 / 可能 / 有待确定」**就是对的。
+
+   ★ **(ab) 「驻…大使/公使/领事」的方向不能颠倒**（2026-10-20 加）。
+     中文「X 驻 Y 大使」只有一个含义：**X 派驻到 Y 的大使**。
+     ⚠️ 把两个国名写反是最容易被读者一眼看出的错（用户 2026-10-20 报过：
+     原文是「日本驻阿塞拜疆大使」，译文写成「阿塞拜疆驻日本大使」）。
+     ✓ 原文「посол Японии в Азербайджане」⇒「**日本**驻**阿塞拜疆**大使」
+     ✗ 「阿塞拜疆驻日本大使」（把两个国名对调了）
+     ★ 判据：**先看原文里「谁的」+「驻在哪儿」，再落笔**；
+       拿不准就把原文里的两个国名按原文顺序写进标题。
+
    ★ **(b) 量词必须来自「数字实际修饰的名词」，不能来自旁边的名词。**
      做法：**先判定原文那个词是不是一个「单位词 / 计量词」**，再决定中文怎么写。
      下面这些词（各国写法都算）几乎总是单位词，看到就要警觉：
@@ -764,7 +786,9 @@ export interface GateReject {
     | 'wrong-head-of-state'
     | 'date-no-month'
     /** 2026-10-20 加：量级错（`12 млрд` 被写成「12 亿」这一类）。 */
-    | 'magnitude-mismatch';
+    | 'magnitude-mismatch'
+    /** 2026-10-20 加：内容层三类问题（指标无数值 / 量词歧义 / 元评语）。 */
+    | 'content-issue';
   /** 被拦下的词（截断到前几个） */
   tokens: string[];
   /**
@@ -802,6 +826,13 @@ export interface GateReject {
    * 判据与实测见 `lib/magnitude-guard.ts`。
    */
   magnitude?: MagnitudeMismatch[];
+  /**
+   * 命中的**内容层问题**（2026-10-20 加）。同上，分开存。
+   *
+   * 三类：指标类没写数值 / 量词歧义（`N 座教学楼`）/ 元评语（`最后一句是…`）。
+   * ⚠️ 它们的**误报后果很轻**：只触发重试，**不删稿**。
+   */
+  contentIssues?: ContentIssue[];
 }
 
 /**
@@ -892,6 +923,14 @@ export function buildRepairHint(reject: GateReject): string {
         '请把上面这些数字按**正确的中文写法**改一遍（其余内容不要动）。',
       ].join('\n'),
     );
+  }
+
+  // 块 1c：**内容层三类问题**（2026-10-20 加）——
+  //
+  // 为什么单独成块：这三条**在提示词里都写过**（量词的正反例在 `:566-567`），
+  // 模型仍然照犯 ⇒ 只说「你写错了」没用，必须**把该写成什么样直接给它**。
+  if (reject.contentIssues && reject.contentIssues.length > 0) {
+    blocks.push(buildContentIssueHint(reject.contentIssues));
   }
 
   // 块 2：中文里逻辑不成立的「下降 N 倍」。
@@ -1264,6 +1303,32 @@ function normalizeResult(
     );
   }
 
+  // ---- 内容层闸（2026-10-20 加）----
+  //
+  // 三类：① 指标类没写具体数值；② 量词歧义（「750 座新教学楼」）；③ 元评语（「最后一句是…」）。
+  // ⚠️ 与量级闸同一套处置：**只触发重试，不删稿**；误报后果只是多花一次翻译费。
+  // ⚠️ 检查的是**标题+摘要+正文**（不是只查标题）——
+  //   数值若出现在正文里就放过，判据才不至于误伤。
+  // ⚠️ 指标类那条**只看标题+摘要**（读者先看到的是这两个），量词/元评语看全篇。
+  const contentIssues = findContentIssues(
+    `${titleZh}\n${summaryZh}`,
+    `${titleZh}\n${summaryZh}\n${contentZh}`,
+  );
+  if (contentIssues.length > 0) {
+    translationStats.termGate.contentIssue = (translationStats.termGate.contentIssue ?? 0) + 1;
+    if (translationStats.termGate.samples.length < 20) {
+      translationStats.termGate.samples.push({
+        kind: 'content-issue',
+        detail: `[${countryName}] ` + contentIssues.map((i) => `${i.kind}:${i.sample}`).join('、'),
+      });
+    }
+    console.log(
+      `[translate] 质检拦下（内容）：` +
+        contentIssues.map((i) => `${i.kind}「${i.sample}」`).join(' / ') +
+        ` ⇒ 重试带修正指令`,
+    );
+  }
+
   const rawCategory = typeof parsed.category === 'string' ? parsed.category : '';
   const category = (CATEGORY_IDS as string[]).includes(rawCategory)
     ? (rawCategory as Category)
@@ -1298,10 +1363,12 @@ function normalizeResult(
           ? 'date-no-month'
           : magnitudeIssues.length > 0
             ? 'magnitude-mismatch'
-            : undefined;
+            : contentIssues.length > 0
+              ? 'content-issue'
+              : undefined;
   const reject: GateReject | undefined = !zhOk
     ? undefined
-    : nameKind || impossible.length > 0 || termKind || magnitudeIssues.length > 0
+    : nameKind || impossible.length > 0 || termKind || magnitudeIssues.length > 0 || contentIssues.length > 0
       ? {
           kind: nameKind ?? termKind ?? 'impossible-multiple',
           tokens: [...new Set([...halfTranslated, ...mixed, ...latinCyr])],
@@ -1311,6 +1378,7 @@ function normalizeResult(
           ...(headOfState.length > 0 ? { headOfState } : {}),
           ...(dateIssue ? { dateAmbiguous: dateIssue } : {}),
           ...(magnitudeIssues.length > 0 ? { magnitude: magnitudeIssues } : {}),
+          ...(contentIssues.length > 0 ? { contentIssues } : {}),
         }
       : undefined;
 

@@ -912,6 +912,13 @@ export async function GET(request: NextRequest) {
        * 命中数看 `lastRun.summary.translation.termGate.magnitude`。
        */
       magnitudeGuardVersion: 1,
+      /**
+       * **内容层闸**的版本（2026-10-20 加）：元评语 / 量词歧义 / 亲属词开头。
+       *
+       * ⚠️ 与量级闸一样**没有活体探针**（翻译期才命中）⇒ 「上线了没」只能靠这个字段。
+       * 命中数看 `lastRun.summary.translation.termGate.contentIssue`。
+       */
+      contentGateVersion: 1,
       /** 终审护栏上限（调参后可以从这里确认线上拿到的是新值） */
       editorGuards: {
         maxDrops: MAX_DROPS,
