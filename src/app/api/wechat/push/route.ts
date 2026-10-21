@@ -12,7 +12,8 @@ import {
   PAIR_PRIORITY_SIM,
   TITLE_NEAR_MIN_SIM,
   NUMERIC_VETO_VERSION,
-} from '@/lib/same-event';
+
+  PAIR_SIM_FLOOR,} from '@/lib/same-event';
 import { investmentRelevanceOf, compareByInvestmentRelevance } from '@/lib/investment-score';
 import { pairRecallKnobProbe } from '@/lib/dedupe-knobs';
 import {
@@ -912,6 +913,14 @@ export async function GET(request: NextRequest) {
        * 命中数看 `lastRun.summary.translation.termGate.magnitude`。
        */
       magnitudeGuardVersion: 1,
+      /**
+       * **相似度地板**的值（2026-10-21 加）。
+       *
+       * 存在的唯一目的：**分清线上跑的是哪一版**。
+       * ⚠️ 这个数**有 177 对真实判读撑着**（见 `same-event.ts` 的 `PAIR_SIM_FLOOR` 注释）
+       * ⇒ **别随手改**；要改先重跑那 177 对的判读。
+       */
+      pairSimFloor: PAIR_SIM_FLOOR,
       /**
        * **内容层闸**的版本（2026-10-20 加）：元评语 / 量词歧义 / 亲属词开头。
        *
