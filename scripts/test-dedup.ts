@@ -54,6 +54,8 @@ import {
   TITLE_NEAR_MIN_CHARS,
   TITLE_NEAR_MIN_SIM,
   type StoryLike,
+  applySimFloor,
+  PAIR_SIM_FLOOR,
 } from '../src/lib/same-event';
 import { promptBuilderFor } from '../src/lib/judge-prompts';
 import {
@@ -1787,7 +1789,23 @@ async function promptVersionChecks(): Promise<void> {
 
     const { seen, ask } = fakeAsk(() => '{"same": [0]}');
     const res = await judgeExplicitPairs([{ a: 0, b: 1 }], items, { ask });
-    ok('指定配对即使低于召回下限也照样问模型', seen.length === 1 && res.pairs.length === 1, `seen=${seen.length} pairs=${res.pairs.length}`);
+    ok('指定配对即使低于召回下限也照样问模型', seen.length === 1, `seen=${seen.length} pairs=${res.pairs.length}`);
+    // ★ 2026-10-21：这对标题 sim 极低 ⇒ **被相似度地板驳回**（判「是」也不采信）。
+    // ⇒ 「问模型」与「采信判定」是**两件事**：地板管的是后者。
+    ok('★ 低于相似度地板的判定不采信（问过了，但不合并）', res.pairs.length === 0, `pairs=${res.pairs.length}`);
+    ok('★ 被地板驳回的对要报在 belowFloor 里（**不能混进「模型判否」**）',
+      (res.belowFloor?.length ?? 0) === 1, `belowFloor=${JSON.stringify(res.belowFloor)}`);
+    // 高 sim 的指定配对 ⇒ 地板不拦
+    {
+      const hiItems = [
+        { title: '哈萨克斯坦总统与柬埔寨首相洪马内举行会谈' },
+        { title: '哈萨克斯坦总统托卡耶夫与柬埔寨首相洪马内举行会谈' },
+      ];
+      const { seen: seenHi, ask: askHi } = fakeAsk(() => '{"same": [0]}');
+      const resHi = await judgeExplicitPairs([{ a: 0, b: 1 }], hiItems, { ask: askHi });
+      ok('★ 高于地板的指定配对照常采信', seenHi.length === 1 && resHi.pairs.length === 1,
+        `seen=${seenHi.length} pairs=${resHi.pairs.length}`);
+    }
     ok('指定配对的标题原样进了提示词', Boolean(seen[0]?.includes('塔吉克斯坦举行马拉松比赛')));
     ok('candidateCount = 给定的对数（不是召回出来的对数）', res.candidateCount === 1, String(res.candidateCount));
   }
@@ -2444,6 +2462,31 @@ function dedupeRangeChecks() {
     dedupeRouteSrc.includes('T00:00:00Z'));
 }
 
+// ----- 2026-10-21：相似度地板（applySimFloor）-----
+//
+// 依据是 **177 对真实判读**（`dedupe-check?mode=pair` 判为「是同一件事」的对全部去重 289 对，
+// 逐条人工判读）得到的「相似度 vs 真重复率」曲线：
+//   sim [0.20,0.24) → 21% ｜ [0.24,0.28) → 30% ｜ [0.28,0.34) → 52% ｜ [0.34,0.46) → 75%
+// ⇒ 低分档里模型判「是」的一大半是错的 ⇒ 低于 0.28 就不采信。
+// ⚠️ 这一刀**只减少误删**，不会新增任何误删（它只把「判是」改成「不合并」）。
+function simFloorChecks() {
+  const asked = [{ sim: 0.2 }, { sim: 0.26 }, { sim: 0.28 }, { sim: 0.4 }];
+  // 0=0.20 低于地板｜1=0.26 低于地板｜2=0.28 等于地板（要采信）｜3=0.4 高于地板
+  const r = applySimFloor([0, 1, 2, 3], asked);
+  ok('★ 低于地板的对被驳回（不合并）', r.belowFloor.length === 2 && r.belowFloor.includes(0) && r.belowFloor.includes(1),
+    `belowFloor=${JSON.stringify(r.belowFloor)}`);
+  ok('★ 等于地板的对要采信（边界是闭区间）', r.kept.includes(2), `kept=${JSON.stringify(r.kept)}`);
+  ok('★ 高于地板的对要采信', r.kept.includes(3), `kept=${JSON.stringify(r.kept)}`);
+  ok('★ kept 与 belowFloor 合起来正好是模型的判定（不能丢对）',
+    r.kept.length + r.belowFloor.length === 4, `kept=${r.kept.length} below=${r.belowFloor.length}`);
+  ok('★ 越界的下标要丢掉（不能当成采信）',
+    applySimFloor([99], asked).kept.length === 0 && applySimFloor([99], asked).belowFloor.length === 0);
+  ok('★ 地板常量是 0.28（**这个数有 177 对判读撑着，别随手改**）', PAIR_SIM_FLOOR === 0.28, `实际 ${PAIR_SIM_FLOOR}`);
+  ok('★ 地板可以显式传（便于 A/B 与回归）',
+    applySimFloor([0, 3], asked, 0.35).kept.length === 1);
+}
+
+
 // ----- 汇总 -----
 
 function summarize() {
@@ -2467,6 +2510,7 @@ llmPipelineChecks()
   .then(recallKnobChecks)
   .then(promptFingerprintChecks)
   .then(dedupeRangeChecks)
+  .then(simFloorChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);

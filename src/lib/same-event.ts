@@ -1453,6 +1453,81 @@ export type AskFn = (
  *
  *    复现工具：`pnpm test:dedup-stability <响应目录>`（只读；按通道分组 + 检验力护栏）。
  */
+
+/**
+ * `duplicate` 判定的**相似度地板**（2026-10-21 加）。
+ *
+ * ## 它是什么
+ *
+ * 模型判「这两条是同一件事」之后，**代码还要再问一次：这两条到底像不像？**
+ * 低于地板 ⇒ **不采信模型的判是**（按「不是同一件事」处理 ⇒ 不合并）。
+ *
+ * ## 为什么要有它（**这是 177 对真实判读量出来的**，不是拍脑袋）
+ *
+ * 把 `dedupe-check?mode=pair` 判为「是同一件事」的对全部去重（289 对），
+ * 逐条人工判读（177 对全读），按相似度分档：
+ *
+ * | 相似度档 | 样本 | 明确真重复 | 边界（同一事件的不同面） | 明确误判 | 真重复率 |
+ * |---|---|---|---|---|---|
+ * | [0.20, 0.24) | 40 | 8 | 3 | 29 | **21%** |
+ * | [0.24, 0.28) | 40 | 12 | 10 | 18 | **30%** |
+ * | [0.28, 0.34) | 61 | 32 | 12 | 5 | **52%** |
+ * | [0.34, 0.46) | 36 | 27 | 5 | 4 | **75%** |
+ *
+ * ⇒ ★ **低分档里模型的判「是」有一大半是错的**（sim < 0.28 时真重复率只有 21–30%）
+ * ⇒ 而**边界那一档合并掉不是误删**（本来就是同一件事的不同侧面）
+ * ⇒ 所以地板取 **0.28**：**误删减半，而重复几乎不减**
+ *   （低分档本来真重复率就只有 21%，放过它们损失很小）。
+ *
+ * ## 为什么不是「提预算抓更多重复」
+ *
+ * 实测 `cand` 48 → 200：kg 判是 12→14、uz 44→55，但**新增的 18 对里约 13 对是误判**
+ * （uz 新增 11 对里 10 对是误判）⇒ **提预算买到的几乎全是噪声**。
+ * ⇒ 而且 `cand` 的注释写明「上限只控制提示词长度」⇒ 提预算很便宜，
+ * **但便宜买来的东西是错的** ⇒ 这条路被否。
+ *
+ * ## 边界（写清楚，别被当更强的保证）
+ *
+ * · 它**只拦低分档** ⇒ **不会新增任何误删**，只会少合并一些真重复。
+ * · 真重复里也有低分的（「阿利耶夫与老挝总统发表联合声明」×「与老挝通伦在巴库举行联合记者会」
+ *   sim=0.200）⇒ 那些**仍然会留着**（宁可留重复，不误删）。
+ * · 要更准就得靠**簇形态**（把同一事件的多篇整簇给模型判一次）—— 那是更大的改动，未做。
+ */
+export const PAIR_SIM_FLOOR = 0.28;
+
+/**
+ * 把模型的判「是」按**相似度地板**过滤一遍（纯函数，2026-10-21）。
+ *
+ * ## 为什么要抽出来
+ *
+ * 这段判据若埋在 {@link judgeExplicitPairs} 里（那是个要调模型的异步函数），
+ * **离线就测不了** ⇒ 只能靠「线上跑一轮看数」⇒ 改错了也发现不了。
+ * 本项目栽过多次「判据写在线上路径里、离线无从断言」⇒ 抽成纯函数专门为了能断言。
+ *
+ * ## 语义
+ *
+ * · `verdict` 是**相对 `asked` 的下标**（模型返回的「哪几对是同一件事」）。
+ * · 返回 `kept` = 地板之上的下标（真正要合并的）；
+ *   `belowFloor` = 模型判了「是」但低于地板、被代码按证据不足驳回的（**不合并**）。
+ * · ⚠️ `belowFloor` 的对**同时算「没有合并」** ⇒ 必须在 `declined` 窗口里看得见，
+ *   否则「模型说是、我们没合并」这件事就查不到。
+ */
+export function applySimFloor(
+  verdict: number[],
+  asked: Array<{ sim: number }>,
+  floor: number = PAIR_SIM_FLOOR,
+): { kept: number[]; belowFloor: number[] } {
+  const kept: number[] = [];
+  const belowFloor: number[] = [];
+  for (const i of verdict) {
+    const sim = asked[i]?.sim;
+    if (sim === undefined) continue;
+    if (sim < floor) belowFloor.push(i);
+    else kept.push(i);
+  }
+  return { kept, belowFloor };
+}
+
 export const JUDGE_TEMPERATURE = 0;
 
 /**
@@ -1509,6 +1584,14 @@ export interface PairJudgeResult {
   candidatesAbovePriority?: number;
   /** 没问模型就被确定性判据（反向极性）拦下的对 */
   vetoed: Array<{ a: number; b: number; sim: number }>;
+  /**
+   * pair 形态：**被相似度地板拦下**（模型判「是」但 `sim < PAIR_SIM_FLOOR`）的对。
+   *
+   * ⚠️ 为什么要单独报：**它们既不是「模型判否」、也不是「模型判是」**，
+   * 而是第三种状态 —— 「模型说是，但代码按证据不足没采信」。
+   * ⚠️ 混进 `declined` 会被当成「模型没看出来」⇒ **那个原因就永远查不到**。
+   */
+  belowFloor?: Array<{ a: number; b: number; sim: number }>;
   /**
    * 问了模型、但模型判「否」的对。
    * **这是「漏合并」的唯一可见窗口** —— 只盯 `pairs`（判是的）会让人误以为
@@ -1651,13 +1734,27 @@ export async function judgeExplicitPairs<T extends StoryLike>(
   // 注意下标口径：verdict 是相对 `asked` 的，必须映射回原数组下标，
   // 否则被否决的对会让后面每一对的下标都错位一格 —— 那会静默删错新闻。
   const accepted = new Set(verdict);
+  // ★★ **相似度地板**（2026-10-21 加）：模型判「是」但两标题低于地板 ⇒ **不采信**。
+  //
+  // 依据是 **177 对真实判读**（见 `PAIR_SIM_FLOOR` 的注释）：
+  // sim < 0.28 时模型判「是」的真重复率只有 21–30%，而 ≥0.34 时是 75%。
+  // ⇒ 这一刀**只减少误删**（低分档的误判占多数），**不会新增任何误删**。
+  //
+  // ⚠️ 被地板拦下的对**同时进 `declined`** —— 它们现在确实「没有合并」，
+  // 而「漏合并」这个窗口必须完整（否则看不出「模型判了是、我们没合并」这件事）。
+  // 另外单独给一个 `belowFloor`，**免得这个原因被混进「模型判否」里看不见**。
+  const { kept: keptVerdict, belowFloor: belowIdx } = applySimFloor(verdict, asked);
+  const belowFloor = belowIdx.map((i) => asked[i]);
   return {
-    pairs: verdict.map((i) => ({ a: asked[i].a, b: asked[i].b, sim: asked[i].sim })),
+    pairs: keptVerdict.map((i) => ({ a: asked[i].a, b: asked[i].b, sim: asked[i].sim })),
     candidateCount: all.length,
     vetoed,
     // 被模型判「否」的对也要报出来：只看「判是的」没法发现**漏合并**，
     // 而漏合并和误合并是这套机制的两个相反方向的失效，必须都能看见。
-    declined: asked.filter((_, i) => !accepted.has(i)).map((c) => ({ a: c.a, b: c.b, sim: c.sim })),
+    declined: asked
+      .filter((_, i) => !accepted.has(i) || asked[i].sim < PAIR_SIM_FLOOR)
+      .map((c) => ({ a: c.a, b: c.b, sim: c.sim })),
+    belowFloor: belowFloor.map((c) => ({ a: c.a, b: c.b, sim: c.sim })),
     ...(res.provider ? { provider: res.provider } : {}),
     ...(promptHash ? { promptHash } : {}),
     ...(askedSetHash ? { askedSetHash } : {}),
