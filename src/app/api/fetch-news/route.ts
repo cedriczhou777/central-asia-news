@@ -223,7 +223,7 @@ interface FetchSummary {
       dateAmbiguous: number;
       dropped: number;
       samples: Array<{
-        kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month' | 'magnitude-mismatch' | 'content-issue';
+        kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month' | 'magnitude-mismatch' | 'content-issue' | 'meta-stripped';
         detail: string;
       }>;
       dropSamples: string[];

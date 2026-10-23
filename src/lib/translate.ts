@@ -9,7 +9,7 @@ import {
   MIN_HAN_CONTENT,
 } from './utils';
 import { findMagnitudeMismatches, type MagnitudeMismatch } from './magnitude-guard';
-import { findContentIssues, buildContentIssueHint, type ContentIssue } from './content-gate';
+import { findContentIssues, buildContentIssueHint, stripMetaComments, type ContentIssue } from './content-gate';
 import type { Category } from './data/types';
 import {
   checkCurrencyCountryFit,
@@ -279,6 +279,8 @@ interface TranslationStats {
     magnitude: number;
     /** 内容层三类问题被拦下的次数（2026-10-20 加）。 */
     contentIssue?: number;
+    /** 元评语被**机械剥离**的句数（2026-10-23 加）。 */
+    metaStripped?: number;
     /**
      * **因为术语闸而最终不入库的篇数**（所有通道 + 所有重试都没过）。
      *
@@ -290,7 +292,7 @@ interface TranslationStats {
     dropped: number;
     /** 逐条样本（截断到 20 条），上线首日复核用 */
     samples: Array<{
-      kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month' | 'magnitude-mismatch' | 'content-issue';
+      kind: 'currency' | 'wrong-noun' | 'head-of-state' | 'date-no-month' | 'magnitude-mismatch' | 'content-issue' | 'meta-stripped';
       detail: string;
     }>;
     /** 丢稿样本（截断到 10 条）—— `dropped` 不为 0 时看这里 */
@@ -1089,6 +1091,27 @@ function normalizeResult(
   );
   const contentZh = stripNote(typeof parsed.content === 'string' ? parsed.content : originalContent);
 
+  // ---- 元评语**机械剥离**（2026-10-23）----
+  //
+  // ⚠️ 这是在**闸之前**做的「清理」，不是「拦截」——
+  // 而这个区分是关键（见 `content-gate.ts` 的 `stripMetaComments` 注释）：
+  // · **拦截**路线（产生 reject）有个致命问题：闸命中 ⇒ `ok=false` ⇒ 三次不过 ⇒ **不入库** ⇒ 静默丢稿。
+  // · **清理**路线（直接删掉那一句）⇒ 零重试、零丢稿、零误删风险。
+  // ⇒ 而且它**绕开了整个 reject 接线问题**（那正是 10-20 那两道新闸失效的原因）。
+  const metaStrippedSummary = stripMetaComments(summaryZh);
+  const metaStrippedContent = stripMetaComments(contentZh);
+  const metaRemoved = [...metaStrippedSummary.removed, ...metaStrippedContent.removed];
+  if (metaRemoved.length > 0) {
+    translationStats.termGate.metaStripped = (translationStats.termGate.metaStripped ?? 0) + metaRemoved.length;
+    if (translationStats.termGate.samples.length < 20) {
+      translationStats.termGate.samples.push({
+        kind: 'meta-stripped',
+        detail: `[${countryName}] 剥掉元评语：${metaRemoved.map((r) => `「${r}」`).join('、')}`,
+      });
+    }
+    console.log(`[translate] 剥掉元评语（不拦截、不重试）：${metaRemoved.map((r) => `「${r}」`).join('、')}`);
+  }
+
   // 语言闸：汉字个数够（见 utils.isChineseText 的说明，**不是**占比）
   const zhOk = isChineseText(titleZh, MIN_HAN_TITLE) && isChineseText(contentZh, MIN_HAN_CONTENT);
 
@@ -1311,8 +1334,8 @@ function normalizeResult(
   //   数值若出现在正文里就放过，判据才不至于误伤。
   // ⚠️ 指标类那条**只看标题+摘要**（读者先看到的是这两个），量词/元评语看全篇。
   const contentIssues = findContentIssues(
-    `${titleZh}\n${summaryZh}`,
-    `${titleZh}\n${summaryZh}\n${contentZh}`,
+    `${titleZh}\n${metaStrippedSummary.text}`,
+    `${titleZh}\n${metaStrippedSummary.text}\n${metaStrippedContent.text}`,
   );
   if (contentIssues.length > 0) {
     translationStats.termGate.contentIssue = (translationStats.termGate.contentIssue ?? 0) + 1;
@@ -1385,8 +1408,8 @@ function normalizeResult(
   return {
     result: {
       titleZh: ok ? titleZh : originalTitle,
-      summaryZh: ok ? summaryZh : originalContent.substring(0, 100),
-      contentZh: ok ? contentZh : originalContent,
+      summaryZh: ok ? metaStrippedSummary.text : originalContent.substring(0, 100),
+      contentZh: ok ? metaStrippedContent.text : originalContent,
       category: ok ? category : null,
       investorRelevant: ok && parsed.investorRelevant === true,
       translated: ok,

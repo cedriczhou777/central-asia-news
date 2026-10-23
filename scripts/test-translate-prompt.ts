@@ -54,7 +54,7 @@
  */
 import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint, buildPrompt } from '../src/lib/translate';
 import { findMagnitudeMismatches, parseAmount } from '../src/lib/magnitude-guard';
-import { findContentIssues, buildContentIssueHint } from '../src/lib/content-gate';
+import { findContentIssues, buildContentIssueHint , stripMetaComments} from '../src/lib/content-gate';
 import { COUNTRY_CURRENCY, HEAD_OF_STATE } from '../src/lib/proper-nouns';
 import { RSS_SOURCES } from '../src/lib/data/rss-sources';
 import { readFileSync } from 'fs';
@@ -1047,6 +1047,43 @@ section('内容层闸：元评语 / 量词歧义 / 亲属词开头');
   ok('★ 量词的修正指令里要给出正确写法',
     hint2.includes('容纳') || hint2.includes('学生名额'), `实际：${hint2.slice(0, 120)}`);
 }
+
+// ============================================================
+// 2026-10-23：元评语**机械剥离**
+// ============================================================
+//
+// 起因（线上实测）：10-21 与 10-22 两批各残留 1 条「最后一句是具体事实。」
+// ⇒ 而**总审只改内存对象、不写回库** ⇒ 库里存的就是**翻译阶段**的文本
+// ⇒ 那句话是**翻译模型自己加的**，而**原文里根本没有**。
+//
+// ⚠️⚠️ 顺带查出**同类的接线 bug（第二次！）**：10-20 加的量级闸与内容层闸
+// **只产生 `reject`、没接进 `ok`** ⇒ `result.translated` 仍为 true
+// ⇒ `translateNews` 里 `if (result.translated && …) return result;` **抢先命中**
+// ⇒ **`reject` 被完全忽略** ⇒ **那两道闸从来没生效过**。
+// ⇒ 所以这次改用「**机械剥离**」⇒ **不依赖 reject 机制** ⇒ 绕开整个接线问题。
+// ⇒ 且剥离**零重试、零丢稿、零误删风险**（只删一句明确是评语的句子）。
+function metaStripChecks() {
+  const strip = stripMetaComments;
+  const r1 = strip('正文写完事实。最后一句是具体事实。');
+  ok('★「最后一句是具体事实。」必须被剥掉', r1.removed.length === 1 && r1.removed[0] === '最后一句是具体事实。',
+    `removed=${JSON.stringify(r1.removed)}`);
+  ok('★ 剥完之后正文里不能再有它', !r1.text.includes('最后一句是'));
+  ok('★ 剥掉后其余正文一个字都不能少',
+    r1.text.startsWith('正文写完事实。'), `实际：${r1.text}`);
+
+  ok('★「值得注意的是」不剥（正常新闻）', strip('值得注意的是，该协议对双方都有利。').removed.length === 0);
+  ok('★「综上所述」不剥（正常新闻）', strip('综上所述，双方同意深化合作。').removed.length === 0);
+  ok('★ 引号里的「最后一句是谎言」不剥（那是原文引述）',
+    strip('正文说：他说「最后一句是谎言」。').removed.length === 0);
+  ok('★「最后一段为……」也要剥',
+    strip('正文写完了。最后一段为总结。').removed.length === 1);
+  ok('★ 干净的正文剥不动（不能动一个字）',
+    strip('乌兹别克斯坦纳马干地区一名公司主管因涉嫌欺诈被拘留。').text === '乌兹别克斯坦纳马干地区一名公司主管因涉嫌欺诈被拘留。');
+}
+
+// 这个文件的断言都是**顶层执行**的 ⇒ 函数形式的检查组必须在这里显式调用。
+metaStripChecks();
+
 
 // ============================================================
 // 汇总

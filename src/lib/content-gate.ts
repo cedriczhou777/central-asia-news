@@ -150,6 +150,45 @@ export function findContentIssues(headText: string, fullText?: string): ContentI
   return out;
 }
 
+/**
+ * **机械剥离**元评语（2026-10-23）。
+ *
+ * ## 为什么是「剥离」而不是「拦下重试」
+ *
+ * 元评语（「最后一句是具体事实。」）是**一整句独立的评述**，删掉它不损失任何事实
+ * ⇒ ⇒ **直接删掉最干净**：零重试、零丢稿、零误删风险。
+ * ⚠️ 而「拦下重试」那条路有个致命问题：闸命中 ⇒ `ok=false` ⇒ 三次不过 ⇒ **这篇稿子不入库**
+ * ⇒ **静默丢稿** —— 本项目最忌讳的形态（`translate.ts` 的 `GateReject` 注释里写着
+ * 「宁可留重复，不要丢稿」）。
+ *
+ * ## ⚠️ 这是 2026-10-23 才发现的接线 bug（**同类问题第二次**）
+ *
+ * ① 我 10-20 加这道闸时，**只让它产生 `reject`，没把它接进 `ok`** ⇒
+ *    `result.translated` 仍为 true ⇒ `translateNews` 里 `if (result.translated && …) return result;`
+ *    **抢先命中** ⇒ **`reject` 被完全忽略** ⇒ **闸从来没生效过**。
+ *    （线上那两条「12 亿→120 亿」其实**不是闸的功劳**，是模型自己改对的。）
+ * ② 这次改用「剥离」⇒ **不依赖 reject 机制** ⇒ 绕开整个接线问题。
+ * ⇒ ⚠️ **教训：新增质检闸必须确认它真的会让 `ok` 变 false（或走剥离），否则就是装饰。**
+ *
+ * ## 剥离范围（极窄）
+ *
+ * 只删**整句**且**匹配元评语模式**的句子。
+ * ⚠️ 「值得注意的是」「综上所述」**不删** —— 那是正常新闻（真实语料里出现过）。
+ */
+const META_SENTENCE =
+  /(^|[。！？!?\n])\s*(最后一句(?:是|为|写的是)[^。！？!?\n]*[。！？!?]?|最后一段(?:是|为|写的是)[^。！？!?\n]*[。！？!?]?|上文(?:所说|提到)的[^。！？!?\n]*[。！？!?]?)/g;
+
+/** 剥掉正文/摘要里的元评语句子。返回剥离后的文本与被删掉的句子。 */
+export function stripMetaComments(text: string): { text: string; removed: string[] } {
+  const removed: string[] = [];
+  const out = text.replace(META_SENTENCE, (_m, p1: string, p2: string) => {
+    removed.push(p2.trim());
+    // 保留句末标点，避免把两句话粘在一起（"…事实。下一句" ⇒ "…事实。下一句"）
+    return p1;
+  });
+  return { text: out.replace(/[ \t]{2,}/g, ' '), removed };
+}
+
 /** 给修正指令用的成段说明（按 kind 归并，一类只讲一次）。 */
 export function buildContentIssueHint(issues: ContentIssue[]): string {
   const blocks: string[] = [];
