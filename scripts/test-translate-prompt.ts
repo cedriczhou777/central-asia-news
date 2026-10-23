@@ -52,7 +52,7 @@
  * 因为「口径没写进去」和「写进去了但模型不听」是两种不同的故障，
  * 混在一起查会查错方向。
  */
-import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint, buildPrompt } from '../src/lib/translate';
+import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint, buildPrompt , buildSoftHint} from '../src/lib/translate';
 import { findMagnitudeMismatches, parseAmount } from '../src/lib/magnitude-guard';
 import { findContentIssues, buildContentIssueHint , stripMetaComments} from '../src/lib/content-gate';
 import { COUNTRY_CURRENCY, HEAD_OF_STATE } from '../src/lib/proper-nouns';
@@ -1084,6 +1084,38 @@ function metaStripChecks() {
 // 这个文件的断言都是**顶层执行**的 ⇒ 函数形式的检查组必须在这里显式调用。
 metaStripChecks();
 
+
+// ============================================================
+// 2026-10-23：软闸（量级 / 内容层）
+// ============================================================
+//
+// ⚠️ 为什么软闸要单独一套：10-23 发现 10-20 加的量级闸与内容层闸**只产生 `reject`**，
+// 而 `reject` 在 `translateNews` 里被 `result.translated` 抢先 ⇒ **闸从来没生效过**。
+// ⇒ 而它们**不能进 `ok`**（进了 ⇒ 三次不过 ⇒ 静默丢稿）。
+// ⇒ 所以走「软闸」：**命中 ⇒ 带说明重试一次；再命中就放行**。
+//
+// 这三条断言守的就是「**软闸不是第二个装饰品**」。
+{
+  // 这个文件里没有统一的「读源码」变量（都是内联 readFileSync）⇒ 这里自己读一份。
+  const translateSrcForTest = readFileSync(resolve(process.cwd(), 'src/lib/translate.ts'), 'utf8');
+  const hintMag = buildSoftHint({
+    magnitude: [{ raw: { value: 12000000000, label: '十亿', raw: '12 млрд' }, closest: { value: 1200000000, label: '亿', raw: '12 亿' }, ratio: 10 } as never],
+  });
+  ok('★ 软闸的说明里要给出正确的换算（1 十亿 = 10 亿）',
+    hintMag.includes('10 亿') && hintMag.includes('12 млрд'), `实际：${hintMag.slice(0, 120)}`);
+  const hintContent = buildSoftHint({
+    content: [{ kind: 'ambiguous-quantifier', sample: '750 座新教学楼', detail: '歧义' } as never],
+  });
+  ok('★ 软闸的说明里要给出内容层该怎么改（量词）',
+    hintContent.includes('容纳') || hintContent.includes('学生名额'), `实际：${hintContent.slice(0, 120)}`);
+  ok('★ 软闸与硬闸**共用同一份说明**（buildSoftHint 内部走 buildRepairHint）',
+    /return buildRepairHint\(/.test(translateSrcForTest));
+  ok('★ 软闸**最多重试一次**：第二次命中必须放行（不许走 translated:false 那条路）',
+    /softRetried[\s\S]{0,400}?放行（不丢稿）/.test(translateSrcForTest));
+  ok('★ softRetried 是**跨通道共享**的一个布尔（不是每个通道各算一次 ⇒ 否则成本失控）',
+    /let softRetried = false;/.test(translateSrcForTest) &&
+      /softRetried = true;/.test(translateSrcForTest));
+}
 
 // ============================================================
 // 汇总

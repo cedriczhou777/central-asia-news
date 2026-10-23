@@ -111,6 +111,28 @@ export interface TranslateResult {
   // 翻译是否真正成功（中文验证通过）
   translated: boolean;
   provider: string;
+  /**
+   * **软闸命中**（2026-10-23 加）。
+   *
+   * ⚠️ 为什么软闸要**单独一个字段**、而不是塞进 `GateReject`：
+   * `GateReject` 的语义是「硬闸拦下」⇒ 它会让 `ok=false` ⇒ 三次不过 ⇒ **这篇稿子不入库**
+   * ⇒ **静默丢稿**（本项目最忌讳的形态）。
+   * ⇒ 而量级错（`12 млрд` 写成「12 亿」，差 10 倍 / 1000 倍）与内容层问题
+   * （量词歧义 / 亲属词不清）**不值得用丢稿来换** ⇒ 它们走软闸：
+   * **命中 ⇒ 带精确说明重试一次；再命中就放行**（宁可留一个错数字，也不丢稿）。
+   *
+   * ⚠️ 这也是 10-20 那两道闸**一直没生效**的根因：它们只产生 `reject`，
+   * 而 `reject` 在 `translateNews` 里被 `result.translated` 抢先 ⇒ 被完全忽略。
+   */
+  softIssues?: SoftIssues;
+}
+
+/** 软闸命中的内容（量级 + 内容层）。 */
+export interface SoftIssues {
+  /** 量级错（`12 млрд` → 「12 亿」这一类） */
+  magnitude?: MagnitudeMismatch[];
+  /** 内容层问题（量词歧义 / 亲属词开头；元评语走机械剥离，不走这里） */
+  content?: ContentIssue[];
 }
 
 interface ChatProvider {
@@ -281,6 +303,10 @@ interface TranslationStats {
     contentIssue?: number;
     /** 元评语被**机械剥离**的句数（2026-10-23 加）。 */
     metaStripped?: number;
+    /** 软闸触发重试的次数（2026-10-23 加）。 */
+    softRetry?: number;
+    /** 软闸重试后仍命中、**放行**的次数（2026-10-23 加）—— 这个数上涨说明闸太紧。 */
+    softGivenUp?: number;
     /**
      * **因为术语闸而最终不入库的篇数**（所有通道 + 所有重试都没过）。
      *
@@ -854,6 +880,22 @@ export interface GateReject {
  * 带上「上一次错在哪、该改成什么」能把第二次的成功率显著抬起来，
  * 代价只是一段提示词。**注意别把这份要求本身写进 content**（提示词里已有同样的禁令）。
  */
+/**
+ * 软闸的修正说明（2026-10-23）。
+ *
+ * ⭐ **直接复用硬闸的说明生成器** ⇒ 「量级该怎么改」「内容层该怎么改」只有一份说法。
+ * （`buildRepairHint` 里那两个块读的就是 `reject.magnitude` 与 `reject.contentIssues`，
+ *   这里把软闸的命中塞进同名字段即可。）
+ */
+export function buildSoftHint(soft: SoftIssues): string {
+  return buildRepairHint({
+    kind: 'magnitude-mismatch',
+    tokens: [],
+    ...(soft.magnitude && soft.magnitude.length > 0 ? { magnitude: soft.magnitude } : {}),
+    ...(soft.content && soft.content.length > 0 ? { contentIssues: soft.content } : {}),
+  });
+}
+
 export function buildRepairHint(reject: GateReject): string {
   const blocks: string[] = [];
 
@@ -1060,7 +1102,7 @@ function normalizeResult(
   originalContent: string,
   provider: string,
   countryName: string,
-): { result: TranslateResult; reject?: GateReject } {
+): { result: TranslateResult; reject?: GateReject; softIssues?: SoftIssues } {
   // ---- 交付前的确定性清理（**先清理、再过闸** —— 顺序是量出来的，别改）----
   //
   // 删掉「含西里尔、且一个汉字都没有」的括注：`增值税（НДС）`、`议会（Жогорку Кенеш）`、
@@ -1352,6 +1394,21 @@ function normalizeResult(
     );
   }
 
+  // ---- 软闸命中（2026-10-23）----
+  //
+  // ⚠️ 这两类问题**不进 `ok`、也不进 `reject`**：
+  // · 进 `ok` ⇒ 三次不过 ⇒ **这篇稿子不入库** ⇒ 静默丢稿（本项目最忌讳）。
+  // · 进 `reject` ⇒ `translateNews` 里 `result.translated` 抢先返回 ⇒ **闸形同虚设**
+  //   （这正是 10-20 加的量级闸与内容层闸**从来没生效过**的原因）。
+  // ⇒ 它们由 `translateNews` 的**软闸分支**处理：带说明重试一次，再命中就放行。
+  const softIssues: SoftIssues | undefined =
+    magnitudeIssues.length > 0 || contentIssues.length > 0
+      ? {
+          ...(magnitudeIssues.length > 0 ? { magnitude: magnitudeIssues } : {}),
+          ...(contentIssues.length > 0 ? { content: contentIssues } : {}),
+        }
+      : undefined;
+
   const rawCategory = typeof parsed.category === 'string' ? parsed.category : '';
   const category = (CATEGORY_IDS as string[]).includes(rawCategory)
     ? (rawCategory as Category)
@@ -1416,6 +1473,9 @@ function normalizeResult(
       provider,
     },
     ...(reject ? { reject } : {}),
+    // ★ 软闸命中**单独返回**：它**不进 `ok`**（进了 ⇒ 三次不过 ⇒ 丢稿），
+    // 也不进 `reject`（那会被 `result.translated` 抢先 ⇒ 闸形同虚设 —— 10-20 的教训）。
+    ...(softIssues ? { softIssues } : {}),
   };
 }
 
@@ -1885,6 +1945,14 @@ export async function translateNews(
    * B 家写错人名」这种情况误记成「两种都有」。刻度写在字段名里（`lastReject`）。
    */
   let lastReject: GateReject | undefined;
+  /**
+   * 软闸**是否已经重试过一次**（2026-10-23）。
+   *
+   * ⚠️ 必须是**跨通道共享**的一个布尔，而不是每个通道各算一次
+   * ⇒ 否则 5 个通道各重试一次 ⇒ 一篇稿子最多多花 5 次翻译 ⇒ 成本失控。
+   * ⇒ 「最多多花一次」是这道闸的设计承诺。
+   */
+  let softRetried = false;
 
   for (const provider of PROVIDERS) {
     if (!process.env[provider.keyEnv]) {
@@ -1904,11 +1972,47 @@ export async function translateNews(
       if (call.text) {
         const parsed = parseLlmJson(call.text);
         if (parsed) {
-          const { result, reject } = normalizeResult(parsed, title, content, provider.name, countryName);
+          // ⚠️ **必须保持单行**：`test-proper-nouns.ts` 有一条源码断言钉着
+          // 「`normalizeResult` 收到了 countryName」（缺它就判不了国家）
+          // ⇒ 改成多行会让那条断言失配 ⇒ 门禁红。
+          const { result, reject, softIssues } = normalizeResult(parsed, title, content, provider.name, countryName);
           if (result.translated && result.contentZh !== content) {
-            translationStats.providerCounts[provider.name] =
-              (translationStats.providerCounts[provider.name] || 0) + 1;
-            return result;
+            // ★★ 软闸分支（2026-10-23）。
+            //
+            // 量级错（`12 млрд` 写成「12 亿」，差 10 倍 / 1000 倍）与内容层问题
+            // （量词歧义 / 亲属词不清）**不进硬闸** ⇒ 因为硬闸三次不过就**丢稿**。
+            //
+            // ⇒ 这里：**第一次命中 ⇒ 带精确说明重试一次；第二次仍命中 ⇒ 放行**。
+            // ⇒ 误报的最坏后果 = **多花一次翻译** ⇒ **绝不丢稿**。
+            // ⇒ 而**软闸必须在这里拦一道**：若直接 `return result`，
+            //    软闸就又变成「只在 `ok=false` 时才生效」的装饰品（10-20 的教训）。
+            if (softIssues && (softIssues.magnitude?.length || softIssues.content?.length)) {
+              const bits: string[] = [];
+              if (softIssues.magnitude?.length) bits.push(`量级 ${softIssues.magnitude.length} 处`);
+              if (softIssues.content?.length) bits.push(`内容层 ${softIssues.content.length} 处`);
+              if (softRetried) {
+                // 已经重试过一次了 ⇒ 放行。**宁可留一个错数字，也不丢稿。**
+                translationStats.termGate.softGivenUp =
+                  (translationStats.termGate.softGivenUp ?? 0) + 1;
+                console.log(
+                  `[translate] 软闸重试后仍命中（${bits.join(' + ')}）⇒ 放行（不丢稿）`,
+                );
+                translationStats.providerCounts[provider.name] =
+                  (translationStats.providerCounts[provider.name] || 0) + 1;
+                return result;
+              }
+              softRetried = true;
+              translationStats.termGate.softRetry = (translationStats.termGate.softRetry ?? 0) + 1;
+              repairHint = buildSoftHint(softIssues);
+              console.log(
+                `[translate] 软闸拦下（${bits.join(' + ')}）⇒ 带修正说明重试一次（再命中就放行）`,
+              );
+              // ⚠️ **不 return** ⇒ 落到下面的退避与下一次尝试。
+            } else {
+              translationStats.providerCounts[provider.name] =
+                (translationStats.providerCounts[provider.name] || 0) + 1;
+              return result;
+            }
           }
           if (reject) {
             // 质检拦下 ⇒ 下一次重试带上「错在哪、该改成什么」
