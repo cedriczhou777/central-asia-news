@@ -300,7 +300,14 @@ try {
   ok('★ 三个字段（标题/摘要/正文）都被清理（漏一个就会在成品里露出来）', triple);
 
   // 不许进闸：`ok` 的合取里不能出现清理函数
-  const okExpr = translateSrc.slice(translateSrc.indexOf('const ok ='), translateSrc.indexOf('const rawCategory'));
+  // ⚠️⚠️ 2026-10-23：**范围原来取得太宽** —— 切到 `const rawCategory` 会把
+  // `const ok` 与它后面**整段日志/检出块**（约 5000 字符）都圈进来
+  // ⇒ 于是这个守卫**实际在守「整个区间里没有清理函数」**，而不是它宣称的
+  // 「`ok` 的合取里没有清理函数」⇒ **一直是假通过**。
+  // ⇒ 改成只切 **`const ok = … ;` 这一条语句**（到它的第一个分号为止）。
+  const okStart = translateSrc.indexOf('const ok =');
+  const okEnd = translateSrc.indexOf(';', okStart);
+  const okExpr = translateSrc.slice(okStart, okEnd);
   ok(
     '★ 清理**没有**被写进 `ok` 的合取里（它是清理，不是判据 ⇒ 不会造成丢稿）',
     !okExpr.includes('stripCyrillicParentheticals') && !okExpr.includes('stripNote'),
@@ -309,8 +316,31 @@ try {
   // 失败回退必须是**原文**（本来就该带西里尔），不能被清理
   ok(
     '★ `translated:false` 时返回的是 `originalTitle` / `originalContent`（原文回退，不清理）',
-    /titleZh:\s*ok\s*\?\s*titleZh\s*:\s*originalTitle/.test(translateSrc) &&
-      /contentZh:\s*ok\s*\?\s*contentZh\s*:\s*originalContent/.test(translateSrc),
+    // ⚠️ 中间那个变量名**不钉死**：2026-10-23 加了「元评语机械剥离」之后，
+    // 成功分支的变量从 `contentZh` 变成了 `metaStrippedContent.text`
+    // （剥离后的中文）⇒ 但**回退语义一个字没变**：仍是 `originalContent`。
+    // ⇒ 钉「`: originalContent` 结尾」而不是钉中间那个名字。
+    /titleZh:\s*ok\s*\?\s*[\w.]+\s*:\s*originalTitle/.test(translateSrc) &&
+      /contentZh:\s*ok\s*\?\s*[\w.]+\s*:\s*originalContent/.test(translateSrc),
+  );
+
+  // ★ 2026-10-23：**新增的清理（元评语剥离）也不许进 `ok`**。
+  // 理由与上面那条「清理没进 ok」完全一样：进 `ok` ⇒ 三次不过 ⇒ 静默丢稿。
+  // ⇒ 而 10-20 加的量级闸/内容层闸**恰恰需要让 `ok` 变 false** ⇒ 与这条纪律冲突
+  // ⇒ 所以它们必须走「**软闸**」（命中 ⇒ 带修正说明重试，**耗尽后放行**），**不进 `ok`**。
+  ok(
+    '★ 新增的清理（元评语剥离）**没有**被写进 `ok` 的合取里（否则三次不过就丢稿）',
+    !okExpr.includes('metaStripped') && !okExpr.includes('stripMetaComments'),
+  );
+  ok(
+    '★ 10-20 加的量级闸/内容层闸**也不在 `ok` 的合取里**（它们要走「软闸」：'
+      + '命中 ⇒ 重试，**耗尽后放行** ⇒ 不丢稿）',
+    !okExpr.includes('magnitudeIssues') && !okExpr.includes('contentIssues'),
+  );
+  ok(
+    '★ 剥离函数**只出现在清理路径**（`normalizeResult` 里），没有进 `ok`',
+    /metaStrippedSummary\s*=\s*stripMetaComments\(/.test(translateSrc) &&
+      /metaStrippedContent\s*=\s*stripMetaComments\(/.test(translateSrc),
   );
 
   // 指纹：新增的行为必须自己带一个跑真代码的探针
