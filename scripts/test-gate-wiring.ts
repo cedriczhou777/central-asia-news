@@ -1,0 +1,166 @@
+/**
+ * **闸门接线审计**（2026-10-24）—— 「每个质检闸，它真的接上了吗？」
+ *
+ * ## 为什么要有这个脚本
+ *
+ * 2026-10-23 查出一个**极难发现的失效**：
+ * 10-20 加的「量级闸」与「内容层闸」只产生了 `reject`，**没接进 `ok`** ⇒
+ * `result.translated` 仍为 true ⇒ `translateNews` 里
+ * `if (result.translated && …) return result;` **抢先命中** ⇒
+ * **`reject` 被完全忽略** ⇒ **那两道闸从来没生效过**。
+ *
+ * ⚠️⚠️ 而它**外表完全看不出来**：有代码、有注释、有测试、有统计字段、有部署指纹，
+ * **线上还「看起来正常」**（模型自己偶尔会改对）⇒ ⇒ **只能靠「逐个核对接线」发现**。
+ *
+ * ## 这个脚本查什么
+ *
+ * 对每个机制查两件事：
+ * ① **它被调用了吗**（代码里有没有出现）；
+ * ② **★ 它的输出真的进了最终结果吗**（返回值 / 判定列表用的是不是它算出来的那份）。
+ *
+ * ② 才是关键 —— ① 成立而 ② 不成立，就是「装饰品闸」。
+ *
+ * ## 为什么必须是**门禁的一部分**
+ *
+ * 因为**人会忘**。⇒ 以后每加一道闸，这个脚本会自动问它「你真的接上了吗」。
+ * ⇒ 门禁红 ⇒ 就是有闸没接上 ⇒ **当场就能查出来**，而不是等用户投诉。
+ */
+
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+
+const R = (f: string) => readFileSync(resolve(process.cwd(), f), 'utf8');
+
+let passed = 0;
+const failures: string[] = [];
+
+function section(name: string): void {
+  console.log(`\n${'-'.repeat(60)}\n${name}\n${'-'.repeat(60)}`);
+}
+function ok(desc: string, cond: boolean, detail = ''): void {
+  if (cond) {
+    passed++;
+    console.log(`  ✓ ${desc}`);
+  } else {
+    failures.push(`${desc}${detail ? `　→ ${detail}` : ''}`);
+    console.log(`  ✗ ${desc}${detail ? `　→ ${detail}` : ''}`);
+  }
+}
+
+const tr = R('src/lib/translate.ts');
+const ed = R('src/lib/editor-review.ts');
+const se = R('src/lib/same-event.ts');
+const pu = R('src/app/api/wechat/push/route.ts');
+const fe = R('src/app/api/fetch-news/route.ts');
+const dc = R('src/app/api/dedupe-check/route.ts');
+
+/** `normalizeResult` 的函数体（从它到下一个函数声明）。 */
+const nrm = tr.slice(tr.indexOf('function normalizeResult'), tr.indexOf('function resolveModel'));
+/** `normalizeResult` 的返回语句。 */
+const ret = tr.slice(tr.indexOf('return {\n    result: {\n      titleZh'), tr.indexOf('function resolveModel'));
+/** `translateNews` 的函数体。 */
+const tn = tr.slice(tr.indexOf('export async function translateNews'));
+
+// ============================================================
+// 一、翻译层：每道闸的输出**真的进了返回值**吗
+// ============================================================
+section('翻译层：机械清理/改写 ⇒ 真的进了返回值');
+
+// ★ 链条：titleZh → stripNote → stripTrailingPhotoLabel → westernScaleToChinese
+ok('FOTO 剥离被调用', nrm.includes('stripTrailingPhotoLabel(titleZh)'));
+ok(
+  '★ 返回的 title 是「剥过 FOTO + 改写过西式量级词」的那一份',
+  ret.includes('titleZh: ok ? westernTitle.text'),
+  ret.match(/titleZh: ok \? [^\n]*/)?.[0] ?? '（没找到 titleZh 的返回）',
+);
+ok('西式量级词改写被调用（摘要/正文各一次）',
+  nrm.includes('westernScaleToChinese(metaStrippedSummary.text)') &&
+    nrm.includes('westernScaleToChinese(metaStrippedContent.text)'));
+ok('★ 返回的 summary 是改写后的', ret.includes('summaryZh: ok ? westernSummary.text'));
+ok('★ 返回的 content 是改写后的', ret.includes('contentZh: ok ? westernContent.text'));
+ok('元评语剥离被调用（摘要 + 正文）',
+  nrm.includes('stripMetaComments(summaryZh)') && nrm.includes('stripMetaComments(contentZh)'));
+ok('★ 两条清理**串成一条链**（westernScale 作用在剥离后的文本上）',
+  nrm.includes('westernScaleToChinese(metaStrippedSummary.text)') &&
+    nrm.includes('westernScaleToChinese(metaStrippedContent.text)'),
+  'westernScale 必须吃 metaStripped 的输出，否则同时命中两种问题时元评语会漏掉');
+ok('★ 检出用的是**最终文本**（western 之后）',
+  nrm.includes('findContentIssues(\n    `${westernTitle.text}') ||
+    nrm.includes('`${westernTitle.text}\n${westernSummary.text}`'));
+
+// ============================================================
+// 二、软闸：它真的拦得住、且耗尽后**不丢稿**
+// ============================================================
+section('软闸：命中 ⇒ 重试一次；再命中 ⇒ 放行（绝不丢稿）');
+
+ok('translateNews 解构了 softIssues', tn.includes('const { result, reject, softIssues }'));
+ok('★ 有「第一次命中 ⇒ 带说明重试」的分支',
+  tn.includes('repairHint = buildSoftHint(softIssues)') && tn.includes('softRetried = true;'));
+ok('★ 命中时**不 return**（要落到下一次尝试）', tn.includes('// ⚠️ **不 return**'));
+ok('★ 第二次命中 ⇒ 放行（不是 translated:false）',
+  tn.includes('softGivenUp') &&
+    /软闸重试后仍命中[\s\S]{0,600}return result;/.test(tn),
+);
+ok('★ softRetried 是跨通道共享的一个布尔（不是每通道各算一次）',
+  /let softRetried = false;/.test(tn) && /softRetried = true;/.test(tn));
+ok('★ softIssues 不在 `ok` 的合取里（进去 ⇒ 三次不过 ⇒ 丢稿）',
+  !/const ok =[\s\S]{0,500}magnitudeIssues/.test(nrm) &&
+    !/const ok =[\s\S]{0,500}contentIssues/.test(nrm));
+ok('★ softIssues 真的从 normalizeResult 返回了',
+  nrm.includes('...(softIssues ? { softIssues } : {})'));
+
+// ============================================================
+// 三、相似度地板：它真的影响「哪些对被合并」吗
+// ============================================================
+section('相似度地板：低于地板的判定不采信');
+
+ok('applySimFloor 被调用', se.includes('applySimFloor(verdict, asked)'));
+ok('★ pairs 用的是 keptVerdict（地板之上的）', se.includes('pairs: keptVerdict.map'));
+ok('★ 被地板驳回的也进了 declined（漏合并窗口完整）',
+  se.includes('!accepted.has(i) || asked[i].sim < PAIR_SIM_FLOOR'));
+ok('★ 被驳回的**单独**报在 belowFloor（不混进「模型判否」）',
+  se.includes('belowFloor: belowFloor.map') && se.includes('belowFloor?: Array<'));
+
+// ============================================================
+// 四、总审侧：清理不许进 `ok`（进 `ok` ⇒ 丢稿）
+// ============================================================
+section('总审侧：「有图/无图」标记不许进 ok');
+
+ok('stripTitleMarkers 被调用', ed.includes('stripTitleMarkers(after)'));
+ok('★ 清理不在 ok 的合取里', !/const ok =[\s\S]{0,300}stripTitleMarkers/.test(ed));
+
+// ============================================================
+// 五、簇形态：**只挂诊断**，不许进生产
+// ============================================================
+section('簇形态：只挂体检接口，生产链路仍走 pair');
+
+ok('★ 生产路径没有指定 cluster', !pu.includes("mode: 'cluster'"));
+ok('体检接口放行了 mode=cluster', dc.includes("'cluster'"));
+
+// ============================================================
+// 六、观测：每个闸的计数都要能从接口读到
+// ============================================================
+section('观测：每个闸的计数都在接口的类型里');
+
+for (const k of [
+  'magnitude',
+  'contentIssue',
+  'metaStripped',
+  'photoLabelStripped',
+  'westernScaleRewritten',
+  'softRetry',
+  'softGivenUp',
+]) {
+  ok(`termGate.${k} 可观测`, fe.includes(k) || tr.includes(k));
+}
+
+// ============================================================
+console.log(`\n${'='.repeat(64)}`);
+if (failures.length === 0) {
+  console.log(`✅ 全部通过：${passed} 项断言`);
+  process.exit(0);
+} else {
+  console.log(`❌ ${failures.length} 项失败 / 共 ${passed + failures.length} 项：`);
+  for (const f of failures) console.log(`   - ${f}`);
+  process.exit(1);
+}

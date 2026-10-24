@@ -1142,11 +1142,6 @@ function normalizeResult(
     typeof parsed.summary === 'string' ? parsed.summary : originalContent.substring(0, 100),
   );
   const contentZh = stripNote(typeof parsed.content === 'string' ? parsed.content : originalContent);
-  // ★ 「N 百万 / N 十亿」⇒ 改写成中文的「万 / 亿」（**纯机械改写，不重试**）。
-  // 用户 2026-10-24 报过：「30.12 百万」数值对但不符合中文习惯。
-  const westernSummary = westernScaleToChinese(summaryZh);
-  const westernContent = westernScaleToChinese(contentZh);
-  const westernTitle = westernScaleToChinese(photoStripped.text);
 
   // ---- 元评语**机械剥离**（2026-10-23）----
   //
@@ -1168,6 +1163,16 @@ function normalizeResult(
     }
     console.log(`[translate] 剥掉元评语（不拦截、不重试）：${metaRemoved.map((r) => `「${r}」`).join('、')}`);
   }
+
+  // ★ 「N 百万 / N 十亿」⇒ 改写成中文的「万 / 亿」（**纯机械改写，不重试**）。
+  // 用户 2026-10-24 报过：「30.12 百万」数值对但不符合中文习惯。
+  // ⚠️⚠️ **必须串成一条链**（2026-10-24 审计抓到）：
+  //   `summaryZh` → 剥元评语 → 改写西式量级词 → 返回值。
+  // ⇒ 之前 westernScale 是从**原始** `summaryZh` 算的 ⇒ **没经过元评语剥离**
+  // ⇒ 一篇稿子**同时**有两种问题时，元评语会漏掉（两条清理各算各的）。
+  const westernSummary = westernScaleToChinese(metaStrippedSummary.text);
+  const westernContent = westernScaleToChinese(metaStrippedContent.text);
+  const westernTitle = westernScaleToChinese(photoStripped.text);
 
   // 语言闸：汉字个数够（见 utils.isChineseText 的说明，**不是**占比）
   const zhOk = isChineseText(titleZh, MIN_HAN_TITLE) && isChineseText(contentZh, MIN_HAN_CONTENT);
@@ -1407,8 +1412,8 @@ function normalizeResult(
   }
 
   const contentIssues = findContentIssues(
-    `${titleZh}\n${metaStrippedSummary.text}`,
-    `${titleZh}\n${metaStrippedSummary.text}\n${metaStrippedContent.text}`,
+    `${westernTitle.text}\n${westernSummary.text}`,
+    `${westernTitle.text}\n${westernSummary.text}\n${westernContent.text}`,
   );
   if (contentIssues.length > 0) {
     translationStats.termGate.contentIssue = (translationStats.termGate.contentIssue ?? 0) + 1;
