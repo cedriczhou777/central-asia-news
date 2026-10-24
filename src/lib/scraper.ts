@@ -1,3 +1,4 @@
+import { fetchTelegramPreviewDirect } from './telegram-preview';
 import * as cheerio from 'cheerio';
 
 export interface ScrapedArticle {
@@ -483,12 +484,39 @@ export async function fetchTelegramRSS(channelId: string): Promise<TelegramFetch
   const viaWorker = await fetchTelegramByWorker(channelId);
   if (viaWorker.articles.length > 0) return viaWorker;
 
+  // ★ 2026-10-25：**直连**兜底（Worker → 直连 → RSSHub）。
+  //
+  // 为什么要加这一级：原来的兜底只有「Worker → RSSHub 公共实例」，而
+  // **Worker 在 `*.workers.dev`（大陆连不到）、RSSHub 公共实例在大陆同样连不到**
+  // ⇒ 12 个频道（占配置源 34%）**一条都进不来**（2026-10-24 实测 `okCount: 0`）。
+  //
+  // 而 Worker 做的事只是「抓 `t.me/s/<频道>` 的公开预览页」⇒ **容器自己做同一件事**即可
+  // ⇒ **不需要域名、不需要 Cloudflare、不需要任何新凭据**。
+  //
+  // ⚠️ 这一级放在 RSSHub **之前**：直连只发 1 个请求，而 RSSHub 要试两个公共实例
+  // （每个 15 秒超时）⇒ 直连更快、更省。
+  const direct = await fetchTelegramPreviewDirect(channelId);
+  if (direct.posts.length > 0) {
+    return {
+      articles: direct.posts.map((p) => ({
+        title: p.title,
+        url: p.url,
+        publishedAt: p.date ? new Date(p.date) : null,
+        summary: p.summary,
+      })),
+      error: null,
+    };
+  }
+
   const viaRSSHub = await fetchTelegramByRSSHub(channelId);
   if (viaRSSHub.length > 0) return { articles: viaRSSHub, error: null };
 
   return {
     articles: [],
-    error: viaWorker.error || 'Worker 与 RSSHub 兜底均未返回内容',
+    error:
+      viaWorker.error ||
+      (direct.error ? `直连 t.me 失败：${direct.error}` : null) ||
+      'Worker、直连与 RSSHub 兜底均未返回内容',
   };
 }
 

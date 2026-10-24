@@ -1,8 +1,50 @@
 import { NextResponse } from 'next/server';
 import { probeTelegramChannel } from '@/lib/scraper';
+import { fetchTelegramPreviewDirect } from '@/lib/telegram-preview';
 import { DEFAULT_TELEGRAM_CHANNELS, parseTelegramChannels } from '@/lib/telegram-channels';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * ★ 2026-10-25：**直连 t.me 的探测**（容器自己发一次请求）。
+ *
+ * 为什么必须单独探测而不是只看 Worker 的结果：
+ * Worker 挂在 `*.workers.dev`（大陆连不到）⇒ `okCount: 0` **只说明 Worker 不可达**，
+ * **不能推断「t.me 也不可达」** ⇒ 而「容器能不能直连 t.me」决定了
+ * **要不要绑自定义域名**（要）还是**加一条直连兜底就行**（不用）。
+ * ⇒ 这个数是那两条路的**分水岭**，必须能直接看到。
+ */
+async function directTelegramProbe(): Promise<{
+  url: string;
+  ok: boolean;
+  status: number | null;
+  latencyMs: number;
+  postCount: number;
+  error: string | null;
+}> {
+  const url = 'https://t.me/s/tengrinews';
+  const startedAt = Date.now();
+  try {
+    const res = await fetchTelegramPreviewDirect('tengrinews', 12000);
+    return {
+      url,
+      ok: res.posts.length > 0,
+      status: res.status,
+      latencyMs: res.latencyMs,
+      postCount: res.posts.length,
+      error: res.error,
+    };
+  } catch (err) {
+    return {
+      url,
+      ok: false,
+      status: null,
+      latencyMs: Date.now() - startedAt,
+      postCount: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
 
 /** 对照组：用容器自己发起一次到「国内肯定可达」的请求，作为网络基线。 */
 async function egressControl(): Promise<{ url: string; ok: boolean; status: number | null; latencyMs: number; error: string | null }> {
@@ -53,6 +95,8 @@ export async function GET() {
   }
 
   const control = await egressControl();
+  // ★ 直连 t.me 的读数（**分水岭**：能直连 ⇒ 不用绑域名；不能 ⇒ 必须绑）
+  const direct = await directTelegramProbe();
   const okCount = channels.filter((c) => c.postCount > 0).length;
   const notReachable = channels.filter((c) => c.status === null).length;
 
@@ -82,6 +126,8 @@ export async function GET() {
       channelCount: channels.length,
       okCount,
       egressControl: control,
+      /** ★ 容器**直连 t.me** 的读数 —— 「要不要绑自定义域名」的分水岭 */
+      directTelegram: direct,
       verdict,
       channels,
     },
