@@ -226,6 +226,10 @@ export interface DedupResult<T> {
      * `titles` 却忘了同步 `size`」这类改动，在读数时立刻暴露成 `size≠titles.length`，
      * 而不是变成一个悄悄缩小的簇——那正是本字段要治的病。
      */
+    /** 簇形态的聚类统计（2026-10-24 加，仅 `mode=cluster` 时有值） */
+
+    clusterStats?: { clusterCount: number; pairClusters: number; bigClusters: number; maxCluster: number };
+
     oversizedClusters?: Array<{ size: number; titles: string[] }>;
   };
 }
@@ -735,7 +739,7 @@ export function dedupeStoriesDeterministic<T extends StoryLike>(items: T[]): {
  * 仅为 `GET /api/dedupe-check?mode=group` 的对照实验保留 —— 想复核「长串找组为什么不行」时
  * 能原地重现，不必回滚代码。若要清理，删掉这两处 + 体检接口的 `mode` 分支即可。
  */
-export type JudgeMode = 'pair' | 'group';
+export type JudgeMode = 'pair' | 'group' | 'cluster';
 
 /** 单次交给模型的条目上限。超了就分块，块间不重叠。 */
 const LLM_BLOCK_SIZE = 60;
@@ -2088,6 +2092,22 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
       }
       judgedGroups = kept;
     }
+  } else if (mode === 'cluster') {
+    // ---- 簇形态（2026-10-24）----
+    //
+    // ⚠️ **只挂在体检接口上**（`?mode=cluster`）—— 生产链路仍然是 `pair`。
+    // ⇒ 等实测证明它比 pair 准，再谈接入（别在没证据的时候动生产）。
+    const res = await judgeSameEventClusters(keptAfterIdentity, judge);
+    raws = res.raw;
+    judgedProvider = res.provider;
+    if (res.error) judgedError = res.error;
+    judgedGroups = res.groups;
+    if (res.stats) llm.clusterStats = res.stats;
+    console.info(
+      `[same-event] 簇形态：${res.stats?.clusterCount ?? 0} 个簇` +
+        `（2 条 ${res.stats?.pairClusters ?? 0} 个走 pair、≥3 条 ${res.stats?.bigClusters ?? 0} 个逐簇问）` +
+        `，最大簇 ${res.stats?.maxCluster ?? 0} 条 ⇒ 采信 ${res.groups.length} 组`,
+    );
   } else {
     const res = await judgeSameEventGroups(keptAfterIdentity, judge);
     raws = res.raw;
@@ -2142,4 +2162,248 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
 
   const kept = keptAfterIdentity.filter((_, i) => !droppedIndexes.has(i));
   return { kept, drops, llm, numericSpared };
+}
+
+
+/* ==========================================================================================
+ * 簇形态（cluster）：**小簇上的 group**（2026-10-24）
+ * ==========================================================================================
+ *
+ * ## 为什么要有它
+ *
+ * `pair` 形态是**两两判** ⇒ 「同一件事被 N 家报道」时，
+ * N 条稿子要判 N-1 对，而**每对只看到两条** ⇒ 模型无法判断
+ * 「这 4 条是同一件事的不同侧面」还是「4 件不同的事」。
+ * 实测（177 对人工判读）：真重复里 **25% 是「同一事件的不同侧面」**
+ * （「会见哈恰图良」×「结束访亚美尼亚返回」、「向消防员颁奖」×「下令各村设消防站」）
+ * ⇒ 那一档 sim 0.28–0.45 正是「边界」集中区。
+ *
+ * ⭐ 而 `group` 形态（把 100+ 条一起给模型）是**反例**：
+ * 实测模型会退化成乱合并（一次给出 33–60 条的组）⇒ 已被项目否掉。
+ *
+ * ⇒ **簇形态 = 小簇上的 group**：先把候选连成**小簇**，再对每个簇问一次。
+ *
+ * ## 簇有多大？（**先量后做**，2026-10-24 实测 1010 篇真实语料）
+ *
+ * 一级聚类（sim ≥ 0.2 的连通分量）：75 个簇，覆盖 465 篇；
+ * 分布 = 2 条 50 个 / 3 条 10 个 / 4 条 4 个 / 5 条 3 个 / 6 条 2 个 / 7 条 1 个
+ * / 9 条 1 个 / **19 条 1 个 / 45 条 1 个 / 92 条 1 个 / 120 条 1 个**
+ * ⇒ ⚠️ **有 4 个巨簇吞掉了 68.6% 的篇幅** ⇒ 连通分量在**传递性膨胀**
+ * （同国同话题的稿子通过低相似度的链条连成一片）⇒ 一级聚类**不能直接用**。
+ *
+ * ⇒ 所以是**两级**：巨簇内部用**更高的阈值**（0.35 = 现有优先档）再切一次。
+ * 实测结果：簇总数 88、**最大簇 11 条**、85% 的簇 ≤4 条、只有 2 个簇仍 >4 条
+ * ⇒ ⭐ **`MAX_GROUP_SIZE` 的护栏几乎用不上** ⇒ 簇形态可行。
+ *
+ * ## 成本控制（⭐ 关键设计）
+ *
+ * 簇里 **69% 是 2 条** ⇒ 而 2 条正是 `pair` 形态能处理的
+ * ⇒ ⇒ **2 条簇交给 `judgeExplicitPairs`（每国 1 次调用，和现在一样）**，
+ * **只有 ≥3 条的簇才逐簇问模型** ⇒ 调用数从「1 次/国」变成「1 次/国 + 约 5 次/国」。
+ *
+ * ## ⚠️ 它**只加法、不改判据**
+ *
+ * · 2 条簇的对**照样过 `PAIR_SIM_FLOOR`**（0.28）⇒ 低分对不采信，与现状一致。
+ * · 簇内判定复用 `buildJudgePrompt` / `parseEventGroups` / `filterOversizedGroups`
+ *   —— **与 `group` 形态同一套提示词** ⇒ 「什么叫同一件事」的判据只有一份。
+ * · ⚠️ **生产链路仍然是 `pair`**：本形态先只挂在体检接口上（`?mode=cluster`），
+ *   等实测证明它比 pair 准再谈接入。
+ */
+
+/** 簇形态的聚类参数（默认值有实测支撑，见上面的注释）。 */
+export const CLUSTER_FINE_SIM = 0.35;
+/** 超过这个条数的一级簇要**再切一次**（实测 4 个巨簇吞掉 68.6% 篇幅）。 */
+export const CLUSTER_SPLIT_ABOVE = 6;
+
+/**
+ * 把条目按相似度连成**簇**（两级，纯函数、不调模型 ⇒ 可离线断言）。
+ *
+ * @returns 每个元素是一组下标（相对 `items`）。
+ */
+export function clusterCandidates<T extends StoryLike>(
+  items: T[],
+  options: { minSim?: number; fineSim?: number; splitAbove?: number } = {},
+): number[][] {
+  const minSim = options.minSim ?? PAIR_CANDIDATE_MIN_SIM;
+  const fineSim = options.fineSim ?? CLUSTER_FINE_SIM;
+  const splitAbove = options.splitAbove ?? CLUSTER_SPLIT_ABOVE;
+
+  /** 连通分量（相似度 ≥ thr 的边构成的极大连通子图）。 */
+  const components = (idx: number[], thr: number): number[][] => {
+    const adj = new Map<number, Set<number>>();
+    for (let a = 0; a < idx.length; a++) {
+      for (let b = a + 1; b < idx.length; b++) {
+        const i = idx[a];
+        const j = idx[b];
+        if (similarity(items[i]?.title || '', items[j]?.title || '') < thr) continue;
+        if (!adj.has(i)) adj.set(i, new Set());
+        if (!adj.has(j)) adj.set(j, new Set());
+        adj.get(i)!.add(j);
+        adj.get(j)!.add(i);
+      }
+    }
+    const seen = new Set<number>();
+    const out: number[][] = [];
+    for (const start of adj.keys()) {
+      if (seen.has(start)) continue;
+      const comp: number[] = [];
+      const stack = [start];
+      seen.add(start);
+      while (stack.length) {
+        const x = stack.pop()!;
+        comp.push(x);
+        for (const y of adj.get(x) ?? []) {
+          if (!seen.has(y)) {
+            seen.add(y);
+            stack.push(y);
+          }
+        }
+      }
+      if (comp.length >= 2) out.push(comp);
+    }
+    return out;
+  };
+
+  /**
+   * ★ **硬拆**：把一个仍然过大的簇按相似度**贪心**切成小组。
+   *
+   * 为什么必须有这一步（2026-10-24 实测发现）：
+   * 「巨簇用 0.35 再切」**并不总是切得开** —— 像
+   * 「哈萨克斯坦第 0 号相同话题的稿件报道内容」这类**同模板标题**，
+   * 彼此相似度远高于 0.35 ⇒ 细切后仍是一条 10 条的大簇。
+   * ⇒ 而**模型拿到一锅就会乱合并**（旧 group 形态就是这么失败的，33–60 条一锅）⇒
+   * ⇒ 必须有「**无论如何都不超过上限**」的硬保证，而不是「指望阈值能切开」。
+   *
+   * 贪心规则：反复取簇内**最像的一对**单独成组，其余留在原簇里继续切
+   * ⇒ 与「按相似度降序配对」的直觉一致，且**不丢任何条目**。
+   */
+  const hardSplit = (c: number[]): number[][] => {
+    const out: number[][] = [];
+    let rest = [...c];
+    while (rest.length > MAX_GROUP_SIZE) {
+      let best = { sim: -1, a: -1, b: -1 };
+      for (let a = 0; a < rest.length; a++) {
+        for (let b = a + 1; b < rest.length; b++) {
+          const sim = similarity(items[rest[a]]?.title || '', items[rest[b]]?.title || '');
+          if (sim > best.sim) best = { sim, a: rest[a], b: rest[b] };
+        }
+      }
+      if (best.a < 0) break;
+      out.push([best.a, best.b]);
+      rest = rest.filter((x) => x !== best.a && x !== best.b);
+    }
+    if (rest.length >= 2) out.push(rest);
+    return out;
+  };
+
+  const all = items.map((_, i) => i);
+  const coarse = components(all, minSim);
+  const out: number[][] = [];
+  for (const c of coarse) {
+    if (c.length <= splitAbove) {
+      out.push(c);
+      continue;
+    }
+    // ★ 巨簇 ⇒ 在更高的阈值下再切一次（否则会把整批稿子连成一簇）
+    for (const fine of components(c, fineSim)) {
+      // ⚠️ 细切之后**仍然可能过大**（同模板标题切不开）⇒ 必须再硬拆一次。
+      if (fine.length > MAX_GROUP_SIZE) out.push(...hardSplit(fine));
+      else out.push(fine);
+    }
+  }
+  return out.sort((a, b) => b.length - a.length || a[0] - b[0]);
+}
+
+/**
+ * 簇形态的判定：**2 条簇走 pair（一次调用问完）＋ ≥3 条簇逐簇问模型**。
+ */
+export async function judgeSameEventClusters<
+  T extends StoryLike & { category?: string | null; summary?: string | null },
+>(
+  items: T[],
+  options: JudgeOptions = {},
+): Promise<{
+  groups: number[][];
+  provider?: string;
+  error?: string;
+  raw?: string[];
+  /** 聚类统计（体检用） */
+  stats?: { clusterCount: number; pairClusters: number; bigClusters: number; maxCluster: number };
+}> {
+  // ⚠️ `fineSim` / `splitAbove` **不来自 `JudgeOptions`**（那个接口是「问模型」的参数，
+  // 而这两个是「怎么聚类」的参数）⇒ 用 `clusterCandidates` 的默认值。
+  const clusters = clusterCandidates(items, { minSim: options.minSim });
+  const pairPairs: Array<{ a: number; b: number }> = [];
+  const bigClusters: number[][] = [];
+  for (const c of clusters) {
+    if (c.length === 2) pairPairs.push({ a: c[0], b: c[1] });
+    else if (c.length >= 3) bigClusters.push(c);
+  }
+
+  const groups: number[][] = [];
+  const raws: string[] = [];
+  let provider: string | undefined;
+  let error: string | undefined;
+
+  // ---- 2 条簇：一次调用问完（与 pair 形态同一条路径 ⇒ 同样的地板、同样的提示词）----
+  if (pairPairs.length > 0) {
+    const res = await judgeExplicitPairs(pairPairs, items, options);
+    if (options.collectRaw) raws.push(...(res.raw ?? []));
+    if (res.provider) provider = res.provider;
+    if (res.error) error = res.error;
+    for (const p of res.pairs) groups.push([p.a, p.b]);
+  }
+
+  // ---- ≥3 条簇：逐簇问（复用 group 形态的提示词与解析）----
+  for (const c of bigClusters) {
+    const rows = c.map((idx, i) => ({
+      i,
+      title: (items[idx]?.title || '').slice(0, TITLE_MAX),
+      summary: (items[idx]?.summary || '').replace(/\s+/g, ' ').slice(0, SUMMARY_MAX),
+      category: items[idx]?.category || '-',
+    }));
+    const res = await resolveAsk(options)(buildJudgePrompt(rows));
+    if (options.collectRaw) raws.push(res.ok ? res.text : `调用失败：${res.error}`);
+    if (!res.ok) {
+      // ⚠️ `res.error` 在这里是 **string**（不是 `{error: string}`）——
+      //    `askLlmJson` 的失败分支就是字符串，别照抄别处的 `'error' in res.error`。
+      error = error || res.error;
+      continue;
+    }
+    if (res.provider) provider = res.provider;
+    const parsed = parseEventGroups(res.text, c.length);
+    if (!parsed) {
+      error = error || '模型返回不是合法 JSON（该簇已按「不合并」处理）';
+      continue;
+    }
+    const { kept, rejected } = filterOversizedGroups(parsed);
+    if (rejected > 0) {
+      console.warn(
+        `[same-event] 簇形态：${rejected} 个分组超过上限 ${MAX_GROUP_SIZE} 条，整组不采信：` +
+          describeOversizedClusters(
+            parsed.filter((g) => g.length > MAX_GROUP_SIZE),
+            (i) => rows[i]?.title,
+          ),
+      );
+    }
+    for (const g of kept) groups.push(g.map((i) => c[i]));
+  }
+
+  const result: {
+    groups: number[][];
+    provider?: string;
+    error?: string;
+    raw?: string[];
+    stats?: { clusterCount: number; pairClusters: number; bigClusters: number; maxCluster: number };
+  } = { groups };
+  if (provider) result.provider = provider;
+  if (error) result.error = error;
+  if (options.collectRaw) result.raw = raws;
+  result.stats = {
+    clusterCount: clusters.length,
+    pairClusters: pairPairs.length,
+    bigClusters: bigClusters.length,
+    maxCluster: clusters.reduce((m, c) => Math.max(m, c.length), 0),
+  };
+  return result;
 }

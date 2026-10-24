@@ -443,7 +443,14 @@ export async function GET(request: NextRequest) {
         : judgeMode === 'nothink'
           ? ({ thinking: { type: 'disabled' } } as Record<string, unknown>)
           : undefined; // auto：沿用通道默认值
-    const taskMode = searchParams.get('mode') === 'group' ? 'group' : 'pair';
+    // ⚠️ `cluster` 是 2026-10-24 新增的第三种形态（**小簇上的 group**），
+// **只挂体检接口，生产链路不用它**。见 `same-event.ts` 末尾的簇形态注释。
+const taskMode =
+  searchParams.get('mode') === 'group'
+    ? 'group'
+    : searchParams.get('mode') === 'cluster'
+      ? 'cluster'
+      : 'pair';
     const debug = searchParams.get('debug') === '1';
     /**
      * 判组提示词版本（`pv=1` / `pv=3`）。不传 = 当前版本。

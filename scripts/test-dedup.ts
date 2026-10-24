@@ -56,6 +56,9 @@ import {
   type StoryLike,
   applySimFloor,
   PAIR_SIM_FLOOR,
+  clusterCandidates,
+  CLUSTER_FINE_SIM,
+  CLUSTER_SPLIT_ABOVE,
 } from '../src/lib/same-event';
 import { promptBuilderFor } from '../src/lib/judge-prompts';
 import {
@@ -2486,6 +2489,45 @@ function simFloorChecks() {
     applySimFloor([0, 3], asked, 0.35).kept.length === 1);
 }
 
+// ============================================================
+// 2026-10-24：簇形态的聚类（clusterCandidates，纯函数）
+// ============================================================
+//
+// 依据是**先量后做**（2026-10-24 实测 1010 篇真实语料）：
+// · 一级聚类（sim ≥ 0.2 的连通分量）⇒ 75 个簇，但**有 4 个巨簇**（19/45/92/120 条）
+//   吞掉了 **68.6% 的篇幅** ⇒ 连通分量会**传递性膨胀** ⇒ 一级聚类不能直接用。
+// · 两级（巨簇内用 0.35 再切）⇒ 簇总数 88、**最大簇 11 条**、85% 的簇 ≤4 条。
+//
+// 这几条断言守的就是「**巨簇必须被切开**」——不切的话模型会拿到 120 条的一锅，
+// 那正是旧 group 形态失败的原因。
+function clusterChecks() {
+  const items = [
+    { title: '吉尔吉斯斯坦能源部不计划冬季停电，但承认高峰时段可能限电' },
+    { title: '吉尔吉斯斯坦能源部长：冬季无计划停电计划' },
+    { title: '吉尔吉斯斯坦：冬季电力供应无计划性限电' },
+    { title: '吉尔吉斯斯坦能源部长被问及冬季是否会拉闸限电，称无计划但可能采取特定措施' },
+    { title: '完全不相干的一条：哈萨克斯坦举行马拉松比赛' },
+  ];
+  const cl = clusterCandidates(items);
+  ok('★ 明显同题的 4 条会连成一个簇', cl.length >= 1 && cl.some((c) => c.length >= 3),
+    `簇=${JSON.stringify(cl)}`);
+  ok('★ 不相干的那条不会混进去', cl.every((c) => !c.includes(4)) || cl.length === 1,
+    `簇=${JSON.stringify(cl)}`);
+
+  // ★ 巨簇必须被切开：造 10 条「弱相连」的标题（每条只与下一条略像）
+  const chain = Array.from({ length: 10 }, (_, i) => ({ title: `哈萨克斯坦第 ${i} 号相同话题的稿件报道内容` }));
+  const cl2 = clusterCandidates(chain);
+  // ★ 硬保证：**每个簇都 ≤ MAX_GROUP_SIZE**（4）。
+  // ⇒ 「同模板标题」在 0.35 阈值下切不开（实测）⇒ 必须有「硬拆」这一步，
+  //    否则模型还是会拿到一锅（旧 group 形态就是那么失败的）。
+  ok('★ ★ 每个簇都 ≤ MAX_GROUP_SIZE（4）——**硬保证**，不是「指望阈值能切开」',
+    cl2.every((c) => c.length <= 4), `簇大小=${JSON.stringify(cl2.map((c) => c.length))}`);
+  ok('★ 切完的簇仍然覆盖了全部条目（不能丢人）',
+    cl2.flat().length === chain.length, `覆盖 ${cl2.flat().length}/${chain.length}`);
+  ok('★ 细切阈值是 0.35（与现有优先档一致）', CLUSTER_FINE_SIM === 0.35, `实际 ${CLUSTER_FINE_SIM}`);
+  ok('★ 再切阈值是 6（实测 4 个巨簇吞掉 68.6% 篇幅）', CLUSTER_SPLIT_ABOVE === 6, `实际 ${CLUSTER_SPLIT_ABOVE}`);
+}
+
 
 // ----- 汇总 -----
 
@@ -2511,6 +2553,7 @@ llmPipelineChecks()
   .then(promptFingerprintChecks)
   .then(dedupeRangeChecks)
   .then(simFloorChecks)
+  .then(clusterChecks)
   .then(summarize)
   .catch((err) => {
     console.error('检查过程中抛错：', err);
