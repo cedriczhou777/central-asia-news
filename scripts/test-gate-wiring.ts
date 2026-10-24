@@ -130,6 +130,28 @@ ok('stripTitleMarkers 被调用', ed.includes('stripTitleMarkers(after)'));
 ok('★ 清理不在 ok 的合取里', !/const ok =[\s\S]{0,300}stripTitleMarkers/.test(ed));
 
 // ============================================================
+// 四之二、★ 总审的跨批次提示：占位符在模板里 + 真的传下去
+// ============================================================
+//
+// ⚠️ 2026-10-25 晚上在这儿**连续踩了两次同一种错**：
+//   ① `reviewDraft` 内部调 `buildEditorPrompt` 时**没把 `recentSimilar` 传下去**；
+//   ② 模板里**没有 `{RECENT_PUBLISHED}` 这个占位符**（`.replace` 挂在一个不存在的占位符上）。
+// ⇒ 而这两种都**不报错、测试也可能全绿** ⇒ 只能靠「查每一环」钉住。
+section('总审：跨批次提示的每一环都接上了');
+
+ok('★ 模板里有 {RECENT_PUBLISHED} 占位符',
+  ed.includes('{RECENT_PUBLISHED}\n') || ed.includes('\n{RECENT_PUBLISHED}'),
+  '模板里没有这个占位符 ⇒ .replace 挂在空处 ⇒ 整段提示不会出现');
+ok('★ 有对它的 .replace', ed.includes(".replace('{RECENT_PUBLISHED}'"));
+ok('★ buildEditorPrompt 的参数里有 recentSimilar',
+  /export function buildEditorPrompt\(args: \{[\s\S]{0,700}recentSimilar\?:/.test(ed));
+ok('★ ★ reviewDraft 把它传给了 buildEditorPrompt（**漏这一行 ⇒ 功能为零**）',
+  /buildEditorPrompt\(\{[\s\S]{0,600}recentSimilar/.test(ed),
+  'reviewDraft → buildEditorPrompt 这一环没接上');
+ok('★ 措辞含「可以不重复发」（用户口径：宁多勿少）', ed.includes('可以不重复发'));
+ok('★ 措辞含「即使重复也请保留」（用户口径：重大事件重复无妨）', ed.includes('即使重复也请保留'));
+
+// ============================================================
 // 五、簇形态：**只挂诊断**，不许进生产
 // ============================================================
 section('簇形态：只挂体检接口，生产链路仍走 pair');

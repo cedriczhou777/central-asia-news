@@ -1129,6 +1129,59 @@ section('六、crossCountryOverlaps（跨国重复只报不改）');
 
 section('七、reviewDraft 端到端（失败无损 / 成功生效）');
 
+// ============================================================
+// 2026-10-25：跨批次重复的提示（最近 48h 已发过的稿子）
+// ============================================================
+//
+// ⭐ 这几条断言是**端到端**的：断言「**reviewDraft 实际发给模型的 prompt 里**有那段提示」，
+// 而不是断言「某个函数存在」——
+// 因为本项目已在同一条路上栽过三次（2026-10-20 的量级闸、10-24 的两条清理、10-25 的这一次）：
+// **判据写了、函数有了、参数加了，但中间那一环没接上 ⇒ 功能为零而外表完全正常。**
+async function crossBatchChecks(): Promise<void> {
+  section('跨批次重复：提示真的进了 prompt');
+  const items = [
+    { title: '贝莱因乌兹别克斯坦获准以 207 亿美元收购 Perfectum 并满足一系列条件', summary: 'x', category: 'investment' },
+    { title: '完全另一件事：某地举行马拉松比赛', summary: 'y', category: 'society' },
+  ];
+  let captured = '';
+  const ask = async (p: string) => {
+    captured = p;
+    return {
+      ok: true as const,
+      text: JSON.stringify({ order: [0, 1], fixes: [], drops: [] }),
+      provider: 'test',
+    };
+  };
+  await reviewDraft({
+    countryName: '乌兹别克斯坦',
+    items: items as never,
+    recentSimilar: [
+      {
+        title: '维欧恩以 2.07 亿美元收购乌兹别克斯坦移动运营商 Perfectum',
+        matchedTitle: '维欧恩以 2.07 亿美元收购乌兹别克斯坦移动运营商 Perfectum',
+        sim: 0.457,
+      },
+    ],
+    ask: ask as never,
+  });
+  ok('★ prompt 里出现了「最近 48 小时已经发过的稿子」这段',
+    captured.includes('最近 48 小时已经发过的稿子'), `实际前 200 字：${captured.slice(0, 200)}`);
+  ok('★ prompt 里带出了那条已发过的标题',
+    captured.includes('维欧恩以 2.07 亿美元收购乌兹别克斯坦移动运营商 Perfectum'));
+  ok('★ 措辞说了「可以不重复发」（用户口径：宁多勿少）',
+    captured.includes('可以不重复发'));
+  ok('★ 措辞说了「重大事件即使重复也请保留」（用户口径：重大事件重复无妨）',
+    captured.includes('重大事件') && captured.includes('即使重复也请保留'));
+  ok('★ 占位符没漏在 prompt 里',
+    !captured.includes('{RECENT_PUBLISHED}') && !captured.includes('{OTHER_COUNTRIES}'));
+
+  // 不给 recentSimilar 时，这段必须**整段消失**（不能留空壳）
+  captured = '';
+  await reviewDraft({ countryName: '乌兹别克斯坦', items: items as never, ask: ask as never });
+  ok('★ 没有跨批次素材时，那段整段不出现',
+    !captured.includes('最近 48 小时已经发过的稿子'));
+}
+
 async function endToEnd(): Promise<void> {
   const items = mkItems(8);
   const originalTitles = items.map((i) => i.title);
@@ -2227,6 +2280,7 @@ section('十二、活体探针（期望值可达性）');
 // ============================================================
 
 endToEnd()
+  .then(() => crossBatchChecks())
   .then(() => {
     console.log(`\n${'='.repeat(64)}`);
     if (failures.length === 0) {

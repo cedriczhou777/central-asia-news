@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
+import { findCrossBatchDuplicates, CROSS_BATCH_SIM_FLOOR } from '@/lib/cross-batch-dup';
 import { beijingDate, extractFirstImage, latinCyrillicTokens, stripCyrillicParentheticals } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 import {
@@ -1410,6 +1411,49 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         items: p.articles.map((a) => toReviewItem(a)),
       }));
 
+      // ★ 2026-10-25：**跨批次重复**的素材（昨天/前天发过的标题）。
+      //
+      // ⚠️⚠️ **必须按 `id` 排除本轮**：查库是按 **`published_at`（源站发布时间）**，
+      // 而源站文章常常是**几天前**发布的 ⇒ ⇒ **本轮的稿子也会落在「昨天」这个区间里**
+      // ⇒ 不排除就会「自己跟自己匹配」⇒ 既是假重复、也会让计数虚高。
+      //
+      // ⇒ 查「昨天 + 前天」两整天（≈48h）；**不含今天** ⇒ 本轮天然不重叠（再叠加 id 排除，双保险）。
+      const crossBatchSimilar = new Map<
+        string,
+        Array<{ title: string; matchedTitle: string; sim: number }>
+      >();
+      try {
+        const yesterday = beijingDate(new Date(Date.now() - 86_400_000));
+        const dayBefore = beijingDate(new Date(Date.now() - 2 * 86_400_000));
+        for (const p of prepared) {
+          const recent = await getArticlesByDateRange(dayBefore, yesterday, p.country.code);
+          if (recent.length === 0) continue;
+          const currentIds = new Set(p.articles.map((a) => a.id));
+          const recentTitles = recent
+            .filter((a) => !currentIds.has(a.id))
+            .map((a) => a.title || '')
+            .filter(Boolean);
+          if (recentTitles.length === 0) continue;
+          const hits = findCrossBatchDuplicates(
+            p.articles.map((a) => a.title || ''),
+            recentTitles,
+          );
+          if (hits.length > 0) {
+            crossBatchSimilar.set(
+              p.country.name,
+              hits.map((h) => ({ title: h.title, matchedTitle: h.matchedTitle, sim: h.sim })),
+            );
+            console.log(
+              `[${p.country.name}] 跨批次相似 ${hits.length} 条（地板 ${CROSS_BATCH_SIM_FLOOR}）` +
+                `，例：${hits[0].title} ←→ ${hits[0].matchedTitle}（${hits[0].sim.toFixed(2)}）`,
+            );
+          }
+        }
+      } catch (err) {
+        // ★ 这一段**不许影响发布**：查不到就当没有跨批次重复 ⇒ 沿用旧行为。
+        console.error('[push] 跨批次重复素材查询失败，本轮沿用旧行为：', err);
+      }
+
       for (let i = 0; i < prepared.length; i++) {
         const pc = prepared[i];
         const others = perCountryItems.filter((_, j) => j !== i);
@@ -1418,6 +1462,18 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         // 所以这里绝不能让模型替我们做「跨国去重」。
         const overlaps = crossCountryOverlaps(perCountryItems[i].items, others);
 
+        // ★ 2026-10-25：**跨批次重复**（昨天/前天发过、今天又发）。
+        //
+        // 为什么总审自己看不见：它只拿到**本轮**那十几条 ⇒ 而「昨天发过的那条」根本不在清单里。
+        // 实测：「贝莱因…以 207 亿美元收购 Perfectum」（10-20 批）与
+        // 「维欧恩以 2.07 亿美元收购 Perfectum」（10-19 批）是**同一件事，隔了一天分两批发**。
+        //
+        // ⭐ 这里**只提示、不删** ⇒ 删不删由总审决定（它有原文对照，
+        // 也知道哪条是重大事件 —— `relevanceScore` 在线上恒为 0，当不了判据）。
+        // 用户口径（2026-10-25）：「不同天之间的重复没问题，但不要太多了；
+        // 如果确实是重大事件，那么重复也没太大问题。」
+        const recentSimilar = crossBatchSimilar.get(pc.country.name) ?? [];
+
         let decision: Awaited<ReturnType<typeof reviewDraft>>['decision'] | null = null;
         let audit: ReviewAudit;
         try {
@@ -1425,6 +1481,7 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
             countryName: pc.country.name,
             items: perCountryItems[i].items,
             overlaps,
+            recentSimilar,
           });
           decision = res.decision;
           audit = res.audit;

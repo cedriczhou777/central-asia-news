@@ -729,6 +729,7 @@ export const EDITOR_PROMPT = `你是一位资深中文财经媒体的**终审编
 {ITEMS}
 
 {OTHER_COUNTRIES}
+{RECENT_PUBLISHED}
 【你要做的七件事，按优先级】
 
 **一、合并「同一件事」（最重要）**
@@ -991,10 +992,55 @@ ${lines}
 `;
 }
 
+/**
+ * 渲染「**最近 48 小时已经发过**」的相近稿（2026-10-25 加）。
+ *
+ * ## 为什么要有它
+ *
+ * 用户 2026-10-20 / 10-24 两次报「又出现重复」，而查下来是**两半**：
+ * 同批次内的重复由判组处理；★ **跨批次的重复（昨天发过、今天又发）总审看不见**
+ * （它只拿到本轮那 15 条）⇒ 一直没处理。
+ * 实测：「贝莱因…以 207 亿美元收购 Perfectum」（10-20 批）与
+ * 「维欧恩以 2.07 亿美元收购 Perfectum」（10-19 批）是**同一件事，隔了一天分两批发**。
+ *
+ * ## 措辞是**按用户口径**写的（2026-10-25 用户原话）
+ *
+ * 「不同天之间的重复没问题，但**不要太多了**；如果确实是**重大事件**，那么重复也没太大问题。」
+ * ⇒ 所以这段话必须同时说清两件事：
+ * ① 同一件事**可以不重复发**（倾向合并）；
+ * ② 但**重大事件即使重复也请保留**（读者需要看到最新进展）。
+ *
+ * ⚠️ 而「重大」**不能**用 `relevanceScore` 判断 —— 它**在线上恒为 0**
+ * （英文词表匹配中文，见 `investment-score.ts` 的注释）⇒ 只能交给总审自己判断
+ * （它有原文对照，也已经在做取舍）。
+ */
+function renderRecentPublished(
+  hits: Array<{ title: string; matchedTitle: string; sim: number }>,
+): string {
+  if (hits.length === 0) return '';
+  const lines = hits
+    .slice(0, 12)
+    .map(
+      (h) =>
+        `- 本篇「${h.title}」 ←→ ${Math.round(h.sim * 100)}% 像最近发过的「${h.matchedTitle}」`,
+    )
+    .join('\n');
+  return `【最近 48 小时已经发过的稿子】以下本篇与最近发过的稿子高度相似：\n${lines}\n\
+—— 如果它们说的是**同一件事**，本篇**可以不重复发**（读者会觉得内容重复）；\n\
+—— 但如果它是**重大事件**（重大政策、大额投资、重大事故、领导人动向、突发新闻），\n\
+   **即使重复也请保留** —— 重大事件重复出现是正常的，读者需要看到最新进展。\n\
+（相似度只是提示，最终由你判断；这两条都不确定时，**保留**更安全。）\n\n`;
+}
+
 export function buildEditorPrompt(args: {
   countryName: string;
   items: ReviewItem[];
   overlaps?: Array<{ withCountry: string; title: string; otherTitle: string; sim: number }>;
+  /**
+   * ★ 2026-10-25：**最近 48 小时已经发过的相近稿**（跨批次重复的提示）。
+   * ⇒ 只提供「像不像」的提示，**删不删由总审自己判断**（它有原文对照）。
+   */
+  recentSimilar?: Array<{ title: string; matchedTitle: string; sim: number }>;
 }): string {
   const n = args.items.length;
   // JSON 示例里的 order 用**恒等排列**（[0,1,2,...,n-1]）。
@@ -1016,7 +1062,8 @@ export function buildEditorPrompt(args: {
     // 内容里读不到 —— 所以这里不是「顺手带上」，是那条判据的前置条件。
     .replace(/\{COUNTRY\}/g, args.countryName)
     .replace('{ITEMS}', `${args.countryName}（${n} 篇）\n${renderItems(args.items)}`)
-    .replace('{OTHER_COUNTRIES}', renderOtherCountries(args.overlaps ?? []));
+    .replace('{OTHER_COUNTRIES}', renderOtherCountries(args.overlaps ?? []))
+    .replace('{RECENT_PUBLISHED}', renderRecentPublished(args.recentSimilar ?? []));
 }
 
 // ----- 护栏 -----
@@ -2000,6 +2047,8 @@ export async function reviewDraft(args: {
   countryName: string;
   items: ReviewItem[];
   overlaps?: Array<{ withCountry: string; title: string; otherTitle: string; sim: number }>;
+  /** ★ 2026-10-25：跨批次重复的提示（最近 48h 已发过的相近稿）—— 只提示，删不删由总审判 */
+  recentSimilar?: Array<{ title: string; matchedTitle: string; sim: number }>;
   ask?: ReviewAskFn;
 }): Promise<{ decision: ReviewDecision; audit: ReviewAudit }> {
   const n = args.items.length;
@@ -2029,6 +2078,9 @@ export async function reviewDraft(args: {
     countryName: args.countryName,
     items: args.items,
     ...(args.overlaps ? { overlaps: args.overlaps } : {}),
+    // ★ 2026-10-25：**必须传下去** —— 漏了这一行，整段跨批次提示就不会出现在 prompt 里
+    // ⇒ 判据「写了」而功能「为零」（这已是本项目第三次同类失效，2026-10-23 / 10-24 各一次）。
+    ...(args.recentSimilar ? { recentSimilar: args.recentSimilar } : {}),
   });
   const ask: ReviewAskFn = args.ask ?? ((p) => askLlmJson(p, { temperature: 0 }));
   const res = await ask(prompt);
