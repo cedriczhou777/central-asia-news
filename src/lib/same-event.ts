@@ -2227,91 +2227,79 @@ export function clusterCandidates<T extends StoryLike>(
   const minSim = options.minSim ?? PAIR_CANDIDATE_MIN_SIM;
   const fineSim = options.fineSim ?? CLUSTER_FINE_SIM;
   const splitAbove = options.splitAbove ?? CLUSTER_SPLIT_ABOVE;
+  const n = items.length;
+  const sim = (a: number, b: number) => similarity(items[a]?.title || '', items[b]?.title || '');
 
-  /** 连通分量（相似度 ≥ thr 的边构成的极大连通子图）。 */
-  const components = (idx: number[], thr: number): number[][] => {
-    const adj = new Map<number, Set<number>>();
-    for (let a = 0; a < idx.length; a++) {
-      for (let b = a + 1; b < idx.length; b++) {
-        const i = idx[a];
-        const j = idx[b];
-        if (similarity(items[i]?.title || '', items[j]?.title || '') < thr) continue;
-        if (!adj.has(i)) adj.set(i, new Set());
-        if (!adj.has(j)) adj.set(j, new Set());
-        adj.get(i)!.add(j);
-        adj.get(j)!.add(i);
-      }
-    }
-    const seen = new Set<number>();
-    const out: number[][] = [];
-    for (const start of adj.keys()) {
-      if (seen.has(start)) continue;
-      const comp: number[] = [];
-      const stack = [start];
-      seen.add(start);
-      while (stack.length) {
-        const x = stack.pop()!;
-        comp.push(x);
-        for (const y of adj.get(x) ?? []) {
-          if (!seen.has(y)) {
-            seen.add(y);
-            stack.push(y);
-          }
-        }
-      }
-      if (comp.length >= 2) out.push(comp);
-    }
-    return out;
-  };
-
-  /**
-   * ★ **硬拆**：把一个仍然过大的簇按相似度**贪心**切成小组。
-   *
-   * 为什么必须有这一步（2026-10-24 实测发现）：
-   * 「巨簇用 0.35 再切」**并不总是切得开** —— 像
-   * 「哈萨克斯坦第 0 号相同话题的稿件报道内容」这类**同模板标题**，
-   * 彼此相似度远高于 0.35 ⇒ 细切后仍是一条 10 条的大簇。
-   * ⇒ 而**模型拿到一锅就会乱合并**（旧 group 形态就是这么失败的，33–60 条一锅）⇒
-   * ⇒ 必须有「**无论如何都不超过上限**」的硬保证，而不是「指望阈值能切开」。
-   *
-   * 贪心规则：反复取簇内**最像的一对**单独成组，其余留在原簇里继续切
-   * ⇒ 与「按相似度降序配对」的直觉一致，且**不丢任何条目**。
-   */
-  const hardSplit = (c: number[]): number[][] => {
-    const out: number[][] = [];
-    let rest = [...c];
-    while (rest.length > MAX_GROUP_SIZE) {
-      let best = { sim: -1, a: -1, b: -1 };
-      for (let a = 0; a < rest.length; a++) {
-        for (let b = a + 1; b < rest.length; b++) {
-          const sim = similarity(items[rest[a]]?.title || '', items[rest[b]]?.title || '');
-          if (sim > best.sim) best = { sim, a: rest[a], b: rest[b] };
-        }
-      }
-      if (best.a < 0) break;
-      out.push([best.a, best.b]);
-      rest = rest.filter((x) => x !== best.a && x !== best.b);
-    }
-    if (rest.length >= 2) out.push(rest);
-    return out;
-  };
-
-  const all = items.map((_, i) => i);
-  const coarse = components(all, minSim);
-  const out: number[][] = [];
-  for (const c of coarse) {
-    if (c.length <= splitAbove) {
-      out.push(c);
-      continue;
-    }
-    // ★ 巨簇 ⇒ 在更高的阈值下再切一次（否则会把整批稿子连成一簇）
-    for (const fine of components(c, fineSim)) {
-      // ⚠️ 细切之后**仍然可能过大**（同模板标题切不开）⇒ 必须再硬拆一次。
-      if (fine.length > MAX_GROUP_SIZE) out.push(...hardSplit(fine));
-      else out.push(fine);
+  // ---- 全部候选对（按相似度降序）----
+  const pairs: Array<{ a: number; b: number; sim: number }> = [];
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) {
+      const v = sim(a, b);
+      if (v >= minSim) pairs.push({ a, b, sim: v });
     }
   }
-  return out.sort((a, b) => b.length - a.length || a[0] - b[0]);
+  pairs.sort((x, y) => y.sim - x.sim || x.a - y.a || x.b - y.b);
+
+  // ---- 贪心找「团」：簇内**两两都过阈** ----
+  //
+  // ⚠️⚠️ 为什么必须是「团」而不是「连通分量」（2026-10-24 实测发现）：
+  // 连通分量里会混进「只跟某一个成员像」的稿子 ⇒
+  // ① 簇被撑大（实测一级簇最大 120 条）⇒ 模型拿到一锅就会乱合并；
+  // ② 而**硬拆**又会把「本来该一起判的 N 条」切散
+  //    （实测：用户报的那 4 条「冬季限电」被拆成两个 4 条簇 ⇒ 仍然漏）。
+  //
+  // ⭐ 「团」同时解决这两条：簇内两两都过阈 ⇒ 不会混进不相干的 ⇒ 不会撑大；
+  // 而「同一件事的 N 条」两两都过阈（实测那 4 条是 0.214–0.344）⇒ 它们**自成一簇**。
+  const used = new Set<number>();
+  const out: number[][] = [];
+  for (const p of pairs) {
+    if (used.has(p.a) || used.has(p.b)) continue;
+    const cluster = [p.a, p.b];
+    // 扩展：拉入与簇内**所有**成员都过阈的未占用条目（受上限约束）
+    while (cluster.length < MAX_GROUP_SIZE) {
+      let best = -1;
+      let bestMin = -1;
+      for (let k = 0; k < n; k++) {
+        if (used.has(k) || cluster.includes(k)) continue;
+        let min = Infinity;
+        for (const m of cluster) min = Math.min(min, sim(k, m));
+        if (min >= minSim && min > bestMin) {
+          bestMin = min;
+          best = k;
+        }
+      }
+      if (best < 0) break;
+      cluster.push(best);
+    }
+    for (const k of cluster) used.add(k);
+    out.push(cluster);
+  }
+
+  // ---- 仍然过大的簇（团也组不出大簇时）⇒ 硬拆 ----
+  // ⚠️ 团的大小天然 ≤ `MAX_GROUP_SIZE`（扩展时受它约束）⇒ 这一段是**兜底**，
+  //    防止将来有人把上限调大而忘了这里。
+  const final: number[][] = [];
+  for (const c of out) {
+    if (c.length > MAX_GROUP_SIZE) {
+      let rest = [...c];
+      while (rest.length > MAX_GROUP_SIZE) {
+        let best = { sim: -1, a: -1, b: -1 };
+        for (let a = 0; a < rest.length; a++) {
+          for (let b = a + 1; b < rest.length; b++) {
+            const v = sim(rest[a], rest[b]);
+            if (v > best.sim) best = { sim: v, a: rest[a], b: rest[b] };
+          }
+        }
+        if (best.a < 0) break;
+        final.push([best.a, best.b]);
+        rest = rest.filter((x) => x !== best.a && x !== best.b);
+      }
+      if (rest.length >= 2) final.push(rest);
+    } else {
+      final.push(c);
+    }
+  }
+  return final.sort((a, b) => b.length - a.length || a[0] - b[0]);
 }
 
 /**

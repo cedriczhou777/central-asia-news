@@ -2522,6 +2522,11 @@ function clusterChecks() {
   //    否则模型还是会拿到一锅（旧 group 形态就是那么失败的）。
   ok('★ ★ 每个簇都 ≤ MAX_GROUP_SIZE（4）——**硬保证**，不是「指望阈值能切开」',
     cl2.every((c) => c.length <= 4), `簇大小=${JSON.stringify(cl2.map((c) => c.length))}`);
+  // ★ 2026-10-24 修：硬保证必须覆盖**所有**超限簇（一级簇 ≤6 之前被直接保留 ⇒ 出过 5–6 条的簇）。
+  ok('★ ★ 一级簇也不许超过上限（之前 ≤6 就直接保留 ⇒ 出过 5–6 条的簇）',
+    clusterCandidates(Array.from({ length: 7 }, (_, i) => ({ title: `哈萨克斯坦第 ${i} 号报道内容` })))
+      .every((c) => c.length <= 4),
+    '一级簇直接超限');
   ok('★ 切完的簇仍然覆盖了全部条目（不能丢人）',
     cl2.flat().length === chain.length, `覆盖 ${cl2.flat().length}/${chain.length}`);
   ok('★ 细切阈值是 0.35（与现有优先档一致）', CLUSTER_FINE_SIM === 0.35, `实际 ${CLUSTER_FINE_SIM}`);
