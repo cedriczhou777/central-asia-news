@@ -708,3 +708,35 @@ export function beijingDate(d: Date = new Date()): string {
     day: '2-digit',
   }).format(d);
 }
+
+/**
+ * 剥掉标题**结尾**的「照片」标记（2026-10-24）。
+ *
+ * ## 为什么需要
+ *
+ * 源站标题里常带一个「照片」标签：俄语 `Фото`、阿塞拜疆语/土耳其语 `Foto`、
+ * 乌兹别克语 `Foto` ⇒ 译文会照抄成「…首批学生见面会 **- FOTO**」。
+ * ⇒ 用户 2026-10-24 报的就是这个：「没必要的注释（此处 foto 我理解也是有图的意思），不需要出现」。
+ *
+ * ## 形状收得极窄（误报 = 静默把好标题改坏）
+ *
+ * · **只在标题结尾**（`… - FOTO`、`… — Фото`）⇒ 正文里出现的「foto」不碰。
+ * · **必须带分隔符**（`-` / `—` / `–` / `|` / `·`）⇒ 光秃秃的「FOTO」不碰
+ *   （那可能是标题的一部分）。
+ * · 大小写不敏感（`Foto` / `FOTO` / `фото` 都算）。
+ * · ⚠️ **只剥这一种词**（foto / фото）⇒ 「有图 / 无图」是**我们自己的**清单标记，
+ *   由 `stripTitleMarkers` 单独处理，两者不要混。
+ */
+const TRAILING_PHOTO_LABEL = /\s*[-—–|]\s*(?:фото|foto)\s*$/i;
+
+export function stripTrailingPhotoLabel(raw: string): { text: string; stripped: string[] } {
+  const stripped: string[] = [];
+  const text = raw
+    .replace(TRAILING_PHOTO_LABEL, (m) => {
+      stripped.push(m.trim());
+      return '';
+    })
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  return { text, stripped };
+}

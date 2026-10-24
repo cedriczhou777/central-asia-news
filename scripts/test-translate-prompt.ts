@@ -55,6 +55,8 @@
 import { TRANSLATE_PROMPT, langLabel, CATEGORY_IDS, buildRepairHint, buildPrompt , buildSoftHint} from '../src/lib/translate';
 import { findMagnitudeMismatches, parseAmount } from '../src/lib/magnitude-guard';
 import { findContentIssues, buildContentIssueHint , stripMetaComments} from '../src/lib/content-gate';
+import { westernScaleToChinese } from '../src/lib/magnitude-guard';
+import { stripTrailingPhotoLabel } from '../src/lib/utils';
 import { COUNTRY_CURRENCY, HEAD_OF_STATE } from '../src/lib/proper-nouns';
 import { RSS_SOURCES } from '../src/lib/data/rss-sources';
 import { readFileSync } from 'fs';
@@ -1083,6 +1085,7 @@ function metaStripChecks() {
 
 // 这个文件的断言都是**顶层执行**的 ⇒ 函数形式的检查组必须在这里显式调用。
 metaStripChecks();
+userComplaintsChecks();
 
 
 // ============================================================
@@ -1115,6 +1118,63 @@ metaStripChecks();
   ok('★ softRetried 是**跨通道共享**的一个布尔（不是每个通道各算一次 ⇒ 否则成本失控）',
     /let softRetried = false;/.test(translateSrcForTest) &&
       /softRetried = true;/.test(translateSrcForTest));
+}
+
+
+// ============================================================
+// 2026-10-24：用户 2026-10-24 报的 4 条（量级词表 / FOTO / 中英混搭 / 西式量级词）
+// ============================================================
+//
+// ① **量级词表漏了当地写法**（真 bug）：1995 篇真实语料里原文的量级词有 **15 种写法**，
+//    而判据只认 3 种 ⇒ 漏掉 `milyard`(38 次)、`milyon`(33)、`mlrd`(14)、`mln`(3)
+//    ⇒ **用户报的「207 亿」就是 `207 mln`（乌兹别克语的 million）**。
+// ② **「- FOTO」**（源站标题带的照片标签）⇒ 必须在**翻译层**剥（库里存的是总审之前的文本）。
+// ③ **专名中英混搭**（「马科·Rubio」）⇒ 软闸。
+// ④ **「N 百万 / N 十亿」**不符合中文习惯 ⇒ 纯机械改写（零误报、零成本）。
+function userComplaintsChecks() {
+  // ① 量级词表：当地写法必须认得
+  ok('★ 乌兹别克语的「mln」(million) 必须认得 —— 用户报的「207 亿」就是它',
+    findMagnitudeMismatches('207 mln dollarga', '以 207 亿美元收购').length === 1);
+  ok('★ 阿塞拜疆/土耳其语的「milyard」(十亿) 必须认得',
+    findMagnitudeMismatches('2 milyard barrel', '触雷的 2 亿美元油轮').length === 1);
+  ok('★ 哈萨克/乌兹别克语的「mlrd」(十亿) 必须认得',
+    findMagnitudeMismatches('5 mlrd tenge', '5 亿坚戈').length === 1);
+  ok('★ 俄语的「млн/млрд」仍然认得（别改坏）',
+    findMagnitudeMismatches('12 млрд долларов', '签署 12 亿美元协议').length === 1);
+
+  // ② 「- FOTO」
+  ok('★ 标题结尾的「- FOTO」要剥掉',
+    stripTrailingPhotoLabel('首批学生见面会 - FOTO').text === '首批学生见面会');
+  ok('★ 「— Фото」也要剥（西里尔）',
+    stripTrailingPhotoLabel('标题 — Фото').text === '标题');
+  ok('★ 正文里的 foto 不剥',
+    stripTrailingPhotoLabel('正文里有 foto 的句子').stripped.length === 0);
+  ok('★ 正常标题不剥',
+    stripTrailingPhotoLabel('正常的标题').stripped.length === 0);
+
+  // ③ 专名中英混搭
+  const kinds = (t: string) => findContentIssues(t, t).map((i) => i.kind);
+  ok('★「马科·Rubio」这种中英混搭要抓（用户报过）',
+    kinds('沙夫卡特·米尔济约耶夫会晤美国国务卿马科·Rubio 并签署 12 亿美元投资协议')
+      .includes('mixed-script-name'));
+  ok('★ 地名词里的「·」不抓（塔什干·撒马尔罕）',
+    !kinds('塔什干·撒马尔罕举行地区论坛').includes('mixed-script-name'));
+  ok('★ 全拉丁的人名不抓',
+    !kinds('Rosatom 首席执行官 Alexey Likhachev 访问核电站').includes('mixed-script-name'));
+  ok('★ 全中文的人名不抓',
+    !kinds('马科·鲁比奥会晤米尔济约耶夫').includes('mixed-script-name'));
+
+  // ④ 西式量级词中文化
+  ok('★「30.12 百万索姆」要改成「3012 万索姆」（用户报过：数值对但不符合中文习惯）',
+    westernScaleToChinese('总预算为 30.12 百万索姆。').text === '总预算为 3012 万索姆。');
+  ok('★「3 十亿坚戈」要改成「30 亿坚戈」',
+    westernScaleToChinese('该项目价值 3 十亿坚戈。').text === '该项目价值 30 亿坚戈。');
+  ok('★「300 万人」不改（中文本来这么说）',
+    westernScaleToChinese('该项目涉及 300 万人。').rewritten.length === 0);
+  ok('★「百万富翁」不改',
+    westernScaleToChinese('百万富翁的传奇。').rewritten.length === 0);
+  ok('★「十亿分之一的精度」不改',
+    westernScaleToChinese('十亿分之一的精度。').rewritten.length === 0);
 }
 
 // ============================================================

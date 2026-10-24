@@ -33,7 +33,8 @@
 export type ContentIssueKind =
   | 'ambiguous-quantifier'
   | 'kin-unclear'
-  | 'meta-comment';
+  | 'meta-comment'
+  | 'mixed-script-name';
 
 export interface ContentIssue {
   kind: ContentIssueKind;
@@ -65,6 +66,24 @@ const AMBIGUOUS_QUANTIFIER =
  */
 const KIN_FIRST_WORD =
   /^(?:女儿|儿子|母亲|父亲|妻子|丈夫|哥哥|姐姐|弟弟|妹妹|祖父|祖母|外孙|外孙女|侄子|侄女|女婿|儿媳|遗孀)/;
+
+/**
+ * **专名中英混搭**（2026-10-24）：「中文音译 + `·` + 拉丁字母」。
+ *
+ * ## 为什么是问题
+ *
+ * 项目的口径（2026-09-23 起）是「**人名/公司名/机构名保留拉丁，国名/州名/城市继续中文**」
+ * ⇒ 要么**全拉丁**（`Marco Rubio`），要么**全中文**（`马科·鲁比奥`）。
+ * ⇒ 而模型有时会**混搭**：「马科·**Rubio**」（用户 2026-10-24 报过：
+ * 「美国国务卿鲁比奥这肯定是个约定俗成的中文翻译啊，你要不然全英文，要不然全中文，
+ * 搞这个半中文半英文，就非常奇怪」）。
+ *
+ * ## 判据（机械、零误报）
+ *
+ * **一个「·」前面是汉字、后面紧跟拉丁字母** ⇒ 就是混搭。
+ * ⚠️ 「·」在中文里也用于**地名词**（「塔什干·撒马尔罕」）⇒ 但那两边都是汉字 ⇒ 不匹配。
+ */
+const MIXED_SCRIPT_NAME = /[\u4e00-\u9fa5]\s*·\s*[A-Za-z][A-Za-z'’-]{1,}/;
 
 /** 元评语：**只收「对文章本身的评述」这一类极窄的模式。 */
 const META_COMMENT = /(最后一句(?:是|为|写的是)|最后一段(?:是|为|写的是)|上文(?:所说|提到)的)/g;
@@ -126,7 +145,19 @@ export function findContentIssues(headText: string, fullText?: string): ContentI
   }
   AMBIGUOUS_QUANTIFIER.lastIndex = 0;
 
-  // ---- ③ 亲属词开头（指代不清）----
+  // ---- ③ 专名中英混搭 ----
+  const mixed = MIXED_SCRIPT_NAME.exec(text);
+  if (mixed) {
+    out.push({
+      kind: 'mixed-script-name',
+      sample: mixed[0].trim(),
+      detail:
+        `「${mixed[0].trim()}」是**中文音译 + 拉丁**混搭。` +
+        `要么全用中文译名（马科·鲁比奥），要么全用拉丁原名（Marco Rubio），不要一半一半。`,
+    });
+  }
+
+  // ---- ④ 亲属词开头（指代不清）----
   const kin = KIN_FIRST_WORD.exec(text.trim());
   if (kin) {
     out.push({
@@ -213,6 +244,20 @@ export function buildContentIssueHint(issues: ContentIssue[]): string {
         s2,
         '请把主体写清楚：例如「前紧急情况部长之女 Galia Zhumanazarova 向哈萨克斯坦开发银行申请…」，',
         '或者改成不依赖亲属关系就能明白的说法（例如「Osiris Energy 公司…」）。',
+      ].join('\n'),
+    );
+  }
+  if (byKind.has('mixed-script-name')) {
+    const s3 = byKind.get('mixed-script-name')!.map((i) => `  · ${i.sample}`).join('\n');
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**专名中英混搭**了。',
+        '具体是：',
+        s3,
+        '本项目的口径是「人名/公司名/机构名保留拉丁，国名/州名/城市继续中文」——',
+        '所以一个人名要么**全用拉丁原名**（Marco Rubio），',
+        '要么**全用中文译名**（马科·鲁比奥），**不许一半一半**。',
+        '请把上面这些改成其中一种。',
       ].join('\n'),
     );
   }

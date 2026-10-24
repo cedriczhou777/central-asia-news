@@ -42,10 +42,28 @@ const CN_SCALED: Array<{ re: RegExp; mult: number; label: string }> = [
   { re: /([\d][\d.,]*)\s*万/g, mult: 1e4, label: '万' },
 ];
 
-/** 原文侧的「带量级词」的数。★ 换算关系是确定的：1 млрд = 10 亿、1 млн = 100 万。 */
+/**
+ * 原文侧的「带量级词」的数。★ 换算关系是确定的：1 млрд = 10 亿、1 млн = 100 万。
+ *
+ * ⚠️⚠️ **词表必须覆盖各源语言的当地写法**（2026-10-24 实测补的）：
+ * 1995 篇真实语料里，原文实际出现的量级词有 **15 种写法**，而只看「млн/млрд/тыс」
+ * 会漏掉这些**当地写法**：
+ * · `milyard`（**38 次**，阿塞拜疆/土耳其语的「十亿」）
+ * · `milyon`（**33 次**，土耳其语的「百万」）
+ * · `mlrd`（**14 次**，哈萨克/乌兹别克语的「十亿」）
+ * · `mln`（3 次，乌兹别克语的「百万」）← **用户报的「207 亿」就是它**
+ * ⇒ 漏掉它们 ⇒ **阿塞拜疆的「十亿」类错误必然反复发生**（az 是 5 国之一）。
+ *
+ * ⚠️ 词形变化（复数/格）用**前缀匹配**覆盖：`миллионов`/`миллиона`/`тысячи`/`тысячах`
+ * 都能被 `миллион`/`тысяч` 匹配上（正则不做词尾锚定 ⇒ 多余的后缀被忽略）。
+ * ⚠️ 顺序上**长写法在前**（`milyard` 先于 `mln`），避免短写法先吃掉前缀。
+ */
 const RAW_SCALED: Array<{ re: RegExp; mult: number; label: string }> = [
-  { re: /([\d][\d.,]*)\s*(?:млрд|миллиард|billion)/gi, mult: 1e9, label: '十亿' },
-  { re: /([\d][\d.,]*)\s*(?:млн|миллион|million)/gi, mult: 1e6, label: '百万' },
+  // 十亿：俄/乌/哈/土/阿塞拜疆的各种写法
+  { re: /([\d][\d.,]*)\s*(?:млрд|миллиард|billion|milyard|milyar|mlrd)/gi, mult: 1e9, label: '十亿' },
+  // 百万：俄/乌/哈/土/阿塞拜疆的各种写法
+  { re: /([\d][\d.,]*)\s*(?:млн|миллион|million|milyon|mln)/gi, mult: 1e6, label: '百万' },
+  // 千
   { re: /([\d][\d.,]*)\s*(?:тыс|тысяч|thousand)/gi, mult: 1e3, label: '千' },
 ];
 
@@ -72,6 +90,21 @@ export interface ScaledAmount {
   label: string;
   /** 原文里的写法（留痕用） */
   raw: string;
+  /**
+   * **数值部分**（去掉量级词与分隔符后的数字，如 `207 млн` ⇒ `207`）。
+   *
+   * ⚠️ 为什么要单独留它（2026-10-24 实测发现）：一篇稿子里常有**多个**量级词，
+   * 而译文里对应的数**可能根本没被译出来** ⇒ 于是「取最接近的译文值」会配到
+   * **另一个数**上（实测：`5,5 тыс` 对上了译文里的「55 亿」⇒ 报差 100 万倍 ⇒ **误报**）。
+   * ⇒ 而**量级错一定是「同一个数、换了个量级词」** ⇒ 数值部分必须对得上
+   * （取前缀即可：`200 млн` → 译文「2000 万」也算对得上）。
+   */
+  digits: string;
+}
+
+/** 取数值部分：去掉分隔符（`,` `.` 空格）只留数字。 */
+function digitsOf(raw: string): string {
+  return raw.replace(/[^\d]/g, '');
 }
 
 /**
@@ -94,7 +127,7 @@ function collectScaled(text: string, table: typeof CN_SCALED): ScaledAmount[] {
     for (const m of src.matchAll(g)) {
       const n = parseAmount(String(m[1] ?? ''));
       if (!Number.isFinite(n) || n === 0) continue;
-      out.push({ value: n * mult, label, raw: m[0].trim() });
+      out.push({ value: n * mult, label, raw: m[0].trim(), digits: digitsOf(String(m[1] ?? '')) });
     }
   }
   return out;
@@ -114,6 +147,17 @@ export interface MagnitudeMismatch {
  *
  * ⚠️ **只在译文侧也有带量级词的数时才判** —— 否则「原文提到、译文没提」会被误当成量级错。
  */
+/**
+ * 两个数值部分是否「对得上」：**一个是另一个的前缀**（或完全相同）。
+ *
+ * ⚠️ 用前缀而不是「完全相等」：实测「`200 млн` 被写成「2000 万」」也是真错
+ * （数值 200 → 2000，差了一个零）⇒ 完全相等会漏掉这一类。
+ */
+function digitsMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
 export function findMagnitudeMismatches(
   originalText: string,
   translatedText: string,
@@ -128,9 +172,14 @@ export function findMagnitudeMismatches(
   for (const r of raws) {
     // ① **每个原文值只配「最接近的那个」译文值** ——
     //    跨所有组合会制造额外命中（原文 3 个数 × 译文 4 个数 = 12 种组合）。
+    // ★ 只在「**数值部分对得上**」的译文值里挑最接近的那个。
+    // ⇒ 「量级错」一定是同一个数换了个量级词 ⇒ 数值部分必须一致（取前缀即可：
+    //   `200 млн` → 译文「2000 万」也算对得上）。
+    // ⇒ 而原文里那些**根本没被译出来**的数（`5,5 тыс`）就配不上 ⇒ **误报被排除**。
     let best: ScaledAmount | null = null;
     let bestDiff = Infinity;
     for (const c of cns) {
+      if (!digitsMatch(r.digits, c.digits)) continue;
       const diff = Math.abs(c.value - r.value);
       if (diff < bestDiff) { bestDiff = diff; best = c; }
     }
@@ -163,4 +212,56 @@ export function describeMagnitudeMismatch(m: MagnitudeMismatch): string {
     `译文里最接近的是「${c?.raw ?? '（无）'}」= ${c ? c.value.toLocaleString() : '-'}（${c?.label ?? '-'}），` +
     `差 ${m.ratio >= 1000 ? (m.ratio / 1000).toFixed(1) + ' 千倍' : m.ratio.toFixed(1) + ' 倍'}`
   );
+}
+
+/**
+ * 把**西式量级词**改成中文的「万 / 亿」（2026-10-24）。
+ *
+ * ## 问题
+ *
+ * 中文不用「百万 / 十亿」这两个词（那是英文/俄文直译过来的），中文说「万 / 亿」。
+ * 模型有时会照抄：「总预算为 **30.12 百万**索姆」⇒ 用户 2026-10-24 报过
+ * 「3012 万和 30.12 百万，数值是一致的，但 30.12 百万不符合中文习惯」。
+ *
+ * ## 为什么能**机械改写**（不需要模型、不需要重试）
+ *
+ * `N 百万` = N × 10⁶ = **N×100 万**（`30.12 百万` ⇒ `3012 万`）；
+ * `N 十亿` = N × 10⁹ = **N×10 亿**（`3 十亿` ⇒ `30 亿`）。
+ * ⇒ 换算是确定的 ⇒ 直接改写即可，**零误报、零成本**。
+ *
+ * ## 形状收得极窄（误报 = 静默把好稿子改坏）
+ *
+ * · **只认「数字 + 百万/十亿」**，且**后面必须紧跟货币或重量单位**
+ *   （美元 / 欧元 / 索姆 / 坚戈 / 马纳特 / 里亚 / 卢布 / 吨 / 千克 …）。
+ * ⇒ 「**300 万人**」「**百万富翁**」「**十亿分之一的精度**」这些**中文本来就这么说**的，一个都不碰。
+ * · 只在**数字与量级词之间**是空格时改（`30.12 百万`）⇒ 贴着写的不改。
+ */
+const WESTERN_SCALE = /(\d[\d.,]*)\s+(百万|十亿)(?=\s*(?:美元|美金|欧元|英镑|索姆|苏姆|坚戈|马纳特|里拉|卢布|塔吉克索姆|坦|阿尼|迪拉姆|里亚尔|腾格|格里夫纳|雷伊|福林|兹罗提|库姆|索姆|克朗|克鲁尼||第纳尔|里亚尔|吨|千克|公里|米|平方|立方|千瓦|兆瓦|度))/g;
+
+/** 把「N 百万 / N 十亿」改写成「N×100 万 / N×10 亿」。 */
+export function westernScaleToChinese(text: string): { text: string; rewritten: string[] } {
+  const rewritten: string[] = [];
+  const out = text.replace(WESTERN_SCALE, (_m, num: string, unit: string) => {
+    const n = parseAmount(num);
+    if (!Number.isFinite(n) || n === 0) return _m;
+    const factor = unit === '百万' ? 1e6 : 1e9;
+    const v = n * factor;
+    let cn: string;
+    if (v >= 1e8) {
+      cn = `${trimNum(v / 1e8)} 亿`;
+    } else if (v >= 1e4) {
+      cn = `${trimNum(v / 1e4)} 万`;
+    } else {
+      cn = trimNum(v);
+    }
+    rewritten.push(`${num} ${unit} → ${cn}`);
+    return cn;
+  });
+  return { text: out, rewritten };
+}
+
+/** 去掉多余的小数尾零（`3012.000000` ⇒ `3012`）。 */
+function trimNum(n: number): string {
+  const r = Math.round(n * 1e6) / 1e6;
+  return Number.isInteger(r) ? String(r) : String(r);
 }

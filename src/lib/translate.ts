@@ -7,8 +7,9 @@ import {
   stripCyrillicParentheticals,
   MIN_HAN_TITLE,
   MIN_HAN_CONTENT,
+  stripTrailingPhotoLabel,
 } from './utils';
-import { findMagnitudeMismatches, type MagnitudeMismatch } from './magnitude-guard';
+import { findMagnitudeMismatches, type MagnitudeMismatch , westernScaleToChinese} from './magnitude-guard';
 import { findContentIssues, buildContentIssueHint, stripMetaComments, type ContentIssue } from './content-gate';
 import type { Category } from './data/types';
 import {
@@ -303,6 +304,10 @@ interface TranslationStats {
     contentIssue?: number;
     /** 元评语被**机械剥离**的句数（2026-10-23 加）。 */
     metaStripped?: number;
+    /** 「N 百万 / N 十亿」被改写成中文「万 / 亿」的次数（2026-10-24 加）。 */
+    westernScaleRewritten?: number;
+    /** 标题结尾的「照片」标记被剥掉的次数（2026-10-24 加）。 */
+    photoLabelStripped?: number;
     /** 软闸触发重试的次数（2026-10-23 加）。 */
     softRetry?: number;
     /** 软闸重试后仍命中、**放行**的次数（2026-10-23 加）—— 这个数上涨说明闸太紧。 */
@@ -1128,10 +1133,20 @@ function normalizeResult(
   // 剩下的命中一篇不少地仍然触发重试 —— 清理没有让任何**真缺陷**漏过去。
   const stripNote = (s: string) => stripCyrillicParentheticals(s);
   const titleZh = stripNote(typeof parsed.title === 'string' ? parsed.title : originalTitle);
+  // ★ 剥掉标题**结尾**的「照片」标记（`- FOTO` / `— Фото`）——
+  // 源站标题里带的，模型会照抄；用户 2026-10-24 报过「不需要出现」。
+  // ⚠️ 必须在**翻译层**剥（不只是总审侧）：**库里存的是总审改写之前的文本** ⇒
+  //    不在入库前剥掉，它就永远留在库里。
+  const photoStripped = stripTrailingPhotoLabel(titleZh);
   const summaryZh = stripNote(
     typeof parsed.summary === 'string' ? parsed.summary : originalContent.substring(0, 100),
   );
   const contentZh = stripNote(typeof parsed.content === 'string' ? parsed.content : originalContent);
+  // ★ 「N 百万 / N 十亿」⇒ 改写成中文的「万 / 亿」（**纯机械改写，不重试**）。
+  // 用户 2026-10-24 报过：「30.12 百万」数值对但不符合中文习惯。
+  const westernSummary = westernScaleToChinese(summaryZh);
+  const westernContent = westernScaleToChinese(contentZh);
+  const westernTitle = westernScaleToChinese(photoStripped.text);
 
   // ---- 元评语**机械剥离**（2026-10-23）----
   //
@@ -1375,6 +1390,22 @@ function normalizeResult(
   // ⚠️ 检查的是**标题+摘要+正文**（不是只查标题）——
   //   数值若出现在正文里就放过，判据才不至于误伤。
   // ⚠️ 指标类那条**只看标题+摘要**（读者先看到的是这两个），量词/元评语看全篇。
+  const westernRewrites = [
+    ...westernTitle.rewritten,
+    ...westernSummary.rewritten,
+    ...westernContent.rewritten,
+  ];
+  if (westernRewrites.length > 0) {
+    translationStats.termGate.westernScaleRewritten =
+      (translationStats.termGate.westernScaleRewritten ?? 0) + westernRewrites.length;
+    console.log(`[translate] 西式量级词改写成中文：${westernRewrites.join('；')}`);
+  }
+  if (photoStripped.stripped.length > 0) {
+    translationStats.termGate.photoLabelStripped =
+      (translationStats.termGate.photoLabelStripped ?? 0) + photoStripped.stripped.length;
+    console.log(`[translate] 剥掉标题结尾的照片标记：${photoStripped.stripped.join('、')}`);
+  }
+
   const contentIssues = findContentIssues(
     `${titleZh}\n${metaStrippedSummary.text}`,
     `${titleZh}\n${metaStrippedSummary.text}\n${metaStrippedContent.text}`,
@@ -1464,9 +1495,9 @@ function normalizeResult(
 
   return {
     result: {
-      titleZh: ok ? titleZh : originalTitle,
-      summaryZh: ok ? metaStrippedSummary.text : originalContent.substring(0, 100),
-      contentZh: ok ? metaStrippedContent.text : originalContent,
+      titleZh: ok ? westernTitle.text : originalTitle,
+      summaryZh: ok ? westernSummary.text : originalContent.substring(0, 100),
+      contentZh: ok ? westernContent.text : originalContent,
       category: ok ? category : null,
       investorRelevant: ok && parsed.investorRelevant === true,
       translated: ok,
