@@ -651,6 +651,31 @@ interface PushSummary {
   /** 各国 L2 的执行情况，用来区分「没有重复」和「判组没跑成」 */
   judge: Array<PushJudge & { country_code: string }>;
   /**
+   * ★ 2026-10-25：**跨批次重复**的命中情况（昨天/前天发过、今天又发）。
+   *
+   * ## 为什么必须有它
+   *
+   * 跨批次重复的判据是「**只提示、不删**」⇒ **删没删、删了几条，取决于总审的判断**
+   * ⇒ ⇒ **光看「草稿里有几条」看不出它有没有用**。
+   * ⇒ 而**这些数字会随实例回收一起消失**（`lastRun.summary` 是内存态）
+   * ⇒ ⇒ 轮次跑完后**必须立刻读一次**才拿得到 ⇒ 所以它必须**在 summary 里**。
+   *
+   * ## 怎么读
+   *
+   * · `hits` = 提示给总审的「可能重复」条数（**含误报** —— 实测误报约 4/6）；
+   * · `deleted` = 总审据此**真的删掉**的条数（这才是效果）；
+   * · ⇒ **`hits` 大而 `deleted` 小是正常的**（总审有原文对照，会放过误报）⇒
+   *   **别把 `hits` 当成「删掉的重复数」**。
+   */
+  crossBatch: {
+    /** 提示给总审的「可能重复」条数（按国） */
+    hits: Array<{ country_code: string; count: number; sample: string }>;
+    /** 总审据此真的删掉的条数（按国） */
+    deleted: Array<{ country_code: string; count: number }>;
+    /** 相似度地板 */
+    floor: number;
+  };
+  /**
    * 各国草稿的**总审**结果（2026-09-29 新增）。
    *
    * 与 `merges` / `judge` 的分工：那两项是**判组（L2）**干的（只判「是不是同一件事」），
@@ -1149,6 +1174,9 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     const skipped: PushSkip[] = [];
     // 判组合并的审计轨迹：谁被合进了谁（见 `PushMerge`）。L2 打开后这是唯一的可审计出口。
     const merges: PushMerge[] = [];
+  // ★ 跨批次重复的计数（2026-10-25）：`hits` = 提示给总审的条数，`deleted` = 总审真删的条数。
+  const crossBatchHits: Array<{ country_code: string; count: number; sample: string }> = [];
+  const crossBatchDeleted: Array<{ country_code: string; count: number }> = [];
     const judgeRuns: Array<PushJudge & { country_code: string }> = [];
     const reviews: PushReview[] = [];
     /** 阶段 ① 的产出：已选题、待总审、待发布的稿件（见 `PreparedCountry`） */
@@ -1447,6 +1475,11 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
               `[${p.country.name}] 跨批次相似 ${hits.length} 条（地板 ${CROSS_BATCH_SIM_FLOOR}）` +
                 `，例：${hits[0].title} ←→ ${hits[0].matchedTitle}（${hits[0].sim.toFixed(2)}）`,
             );
+            crossBatchHits.push({
+              country_code: p.country.code,
+              count: hits.length,
+              sample: `${hits[0].title} ←→ ${hits[0].matchedTitle}（${hits[0].sim.toFixed(2)}）`,
+            });
           }
         }
       } catch (err) {
@@ -1548,6 +1581,14 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
               if (url) donors.push({ title: a.title || '', imageUrl: url });
             }
             console.log(`[${pc.country.name}][总审合并][${d.kind}] 删除：${a?.title || ''}｜理由：${d.reason}`);
+            // ★ 2026-10-25：统计「总审**据跨批次提示**真删了几条」——
+            // 这才是跨批次判据的**实际效果**（`hits` 只是提示数，实测含 ~4/6 的误报）。
+            // 判据：**被删的这条**的标题出现在本国的跨批次清单里。
+            if (d.kind === 'duplicate' && a && recentSimilar.some((r) => r.title === a.title)) {
+              const hit = crossBatchDeleted.find((x) => x.country_code === pc.country.code);
+              if (hit) hit.count++;
+              else crossBatchDeleted.push({ country_code: pc.country.code, count: 1 });
+            }
           }
           for (const ni of decision.needsImage) {
             const a = pc.articles[ni];
@@ -1772,6 +1813,12 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       failures,
       skipped,
       merges,
+    // ★ 跨批次重复的计数（2026-10-25）—— `hits` 是提示数（含误报），`deleted` 才是真删的。
+    crossBatch: {
+      hits: crossBatchHits,
+      deleted: crossBatchDeleted,
+      floor: CROSS_BATCH_SIM_FLOOR,
+    },
       judge: judgeRuns,
       review: reviews,
       memory,

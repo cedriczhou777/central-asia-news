@@ -324,6 +324,19 @@ export interface TelegramWorkerProbe {
   /** 成功为 null；否则是原始错误说明 */
   error: string | null;
   latencyMs: number;
+  /**
+   * ★ 2026-10-26：**这条探测走的是哪条路**（`worker` / `direct` / `none`）。
+   *
+   * ## 为什么必须有它
+   *
+   * 原来 `probeTelegramChannel` **只测 Worker** ⇒ 而生产抓取走的是
+   * **Worker → 直连 → RSSHub** 的三级兜底 ⇒ ⇒ **体检的 `okCount` 与生产真能抓到几个对不上**
+   * ⇒ ⇒ 会出现「体检说通、生产抓不到」（2026-10-25 的实际情况：直连也不通，但体检看不出）。
+   * ⇒ 现在：**Worker 失败就顺带试直连**（每频道只多 1 个请求）⇒
+   * ⇒ `okCount` 至少能反映「Worker + 直连」这两级的真实能力，
+   * 且 `via` 让人一眼看出**是哪一级通了**（这决定下一步该做什么）。
+   */
+  via?: 'worker' | 'direct' | 'none';
 }
 
 /**
@@ -418,7 +431,29 @@ async function fetchTelegramByWorker(channelId: string): Promise<TelegramFetchOu
  */
 export async function probeTelegramChannel(channelId: string): Promise<TelegramWorkerProbe> {
   const { probe } = await requestTelegramByWorker(channelId);
-  return probe;
+  if (probe.postCount > 0) {
+    return { ...probe, via: 'worker' };
+  }
+  // ★ Worker 拿不到 ⇒ **顺带试直连**（生产兜底链的第二级）。
+  // ⇒ 不试 RSSHub：它要连两个公共实例、每个 15 秒超时 ⇒ 12 个频道会让这个诊断接口超时。
+  // ⇒ （RSSHub 通不通由 `fetchTelegramRSS` 在生产里兜着，诊断接口不必重复测。）
+  const direct = await fetchTelegramPreviewDirect(channelId, 12000);
+  if (direct.posts.length > 0) {
+    return {
+      ...probe,
+      status: direct.status,
+      postCount: direct.posts.length,
+      error: null,
+      latencyMs: direct.latencyMs,
+      requestUrl: `https://t.me/s/${channelId.replace(/^@/, '')}`,
+      via: 'direct',
+    };
+  }
+  return {
+    ...probe,
+    error: probe.error ?? (direct.error ? `直连 t.me 也失败：${direct.error}` : null),
+    via: 'none',
+  };
 }
 
 /**

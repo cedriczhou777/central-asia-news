@@ -109,6 +109,20 @@ for (const r of KEY_RULES) {
 }
 
 // ============================================================
+// 三之二、★ 体检接口必须与生产一致（`okCount` 的含义）
+// ============================================================
+section('★ 体检：okCount 必须反映「Worker + 直连」的真实能力');
+
+ok('★ probeTelegramChannel 走的不只是 Worker（**只测 Worker ⇒ okCount 与生产对不上**）',
+  /probeTelegramChannel[\s\S]{0,900}fetchTelegramPreviewDirect/.test(sc),
+  '体检只测 Worker ⇒ 会出现「体检说通、生产抓不到」（2026-10-25 的实际情况）');
+ok('★ probe 会标明走的哪条路（via）',
+  /via\?: 'worker' \| 'direct' \| 'none'/.test(sc));
+ok('★ 兜底链顺序仍是 Worker → 直连 → RSSHub',
+  sc.indexOf('fetchTelegramByWorker(channelId)') < sc.indexOf('fetchTelegramPreviewDirect(channelId)') &&
+    sc.indexOf('fetchTelegramPreviewDirect(channelId)') < sc.indexOf('fetchTelegramByRSSHub(channelId)'));
+
+// ============================================================
 // 三、兜底链顺序（Worker → 直连 → RSSHub）
 // ============================================================
 section('兜底链：Worker → 直连 → RSSHub');
