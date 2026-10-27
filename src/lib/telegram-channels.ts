@@ -32,9 +32,18 @@ export const DEFAULT_TELEGRAM_CHANNELS =
   // 哈萨克斯坦：Tengrinews（最大民营新闻社）
   'kz:@tengrinews, ' +
   // 乌兹别克斯坦：Kun.uz（最大新闻站）、Gazeta.uz（独立媒体）、Spot.uz（商业财经）
-  'uz:@kunuzofficial@gazetauz@spotuz, ' +
+  'uz:@kunuzofficial@gazetauz@spotuz' +
+  // 2026-10-27 加。**实测**（`pnpm analyze:source-yield`）：抓到 19 条 → 过投资相关性闸 8 条（42%）
+  // ⇒ ⚠️ 过闸率一般、且**最新一条是 2026-10-21**（比其它频道旧 5 天）⇒ 所以它的定位是
+  // 「补条数」，不是补新鲜度。⚠️ 也**正好说明「能抓到 ≠ 有内容」**：另外三个候选频道
+  // （@interfaxAZ 最新 2022-03-01、@khabaronline 2025-02-09、@orda_kz 2026-08-31）
+  // **能抓 20 条但内容是几个月到几年前的** ⇒ ⇒ 已被排除，**不要加回来**。
+  ' @kun_uz, ' +
   // 吉尔吉斯斯坦：AKIpress（通讯社）、Economist.kg（商业财经）、Sputnik 吉语台
-  'kg:@akipress@economist_kg@sputnik_kyrgyzstan, ' +
+  'kg:@akipress@economist_kg@sputnik_kyrgyzstan' +
+  // 2026-10-27 加。**实测**：抓到 20 条 → **过投资相关性闸 16 条（80%）**，最新一条 2026-10-26
+  // ⇒ ⭐ 是本轮实测的**过闸率最高 + 内容最新**的候选频道 ⇒ 直接加。
+  ' @kg24news, ' +
   // 塔吉克斯坦：Asia-Plus（主要独立媒体）、Sputnik 塔语台
   // （Khovar 国家通讯社没有可读的公开频道，只能靠 RSS）
   'tj:@asiaplus@sputnik_tajikistan, ' +

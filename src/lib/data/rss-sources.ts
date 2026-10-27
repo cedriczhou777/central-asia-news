@@ -121,6 +121,13 @@ export const RSS_SOURCES: RSSSource[] = [
   { name: 'Tengrinews', url: 'https://tengrinews.kz/news.rss', country: 'kz', language: 'ru' },
   { name: 'Kursiv.kz', url: 'https://kz.kursiv.media/feed/', country: 'kz', language: 'ru' },
 
+  // 2026-10-27 加。**实测**（`pnpm analyze:source-yield`）：抓到 40 条 → **过投资相关性闸 35 条（88%）**
+  // ⇒ 是本轮实测过的**过闸率最高的候选源**。
+  // ⚠️ 语言是**哈萨克语** ⇒ 翻译走的是「源语言不明」的兜底路径（见 `translate.ts` 的
+  // `sourceLanguage` 处理）⇒ 实测译文质量正常（「Алатау станет городом международного уровня」
+  // ⇒ 「阿拉木图将成为国际级城市」）。
+  { name: 'LSM.kz', url: 'https://lsm.kz/rss', country: 'kz', language: 'kk' },
+
   // 乌兹别克斯坦（2026-09-24 从 4 源扩到 8 源：uz 只有 41 条候选，属于偏薄的一档）
   { name: 'UzA', url: 'https://uza.uz/rss/', country: 'uz', language: 'ru' },
   { name: 'Gazeta.uz', url: 'https://www.gazeta.uz/rss', country: 'uz', language: 'ru' },
@@ -131,6 +138,11 @@ export const RSS_SOURCES: RSSSource[] = [
   { name: 'UzDaily', url: 'https://www.uzdaily.uz/en/rss', country: 'uz', language: 'en' },
   { name: 'NUZ.uz', url: 'https://nuz.uz/feed/', country: 'uz', language: 'ru' },
   { name: 'Review.uz', url: 'https://review.uz/ru/rss', country: 'uz', language: 'ru' },
+
+  // 2026-10-27 加。**实测**：抓到 40 条 → 过投资相关性闸 22 条（55%）
+  // ⇒ ⚠️ 内容**偏社会/生活类**（首条是「囚犯获释」），投资相关的比例只有一半 ⇒
+  // ⇒ 所以它补的是**条数**，不是高质量稿。
+  { name: 'Zamin.uz', url: 'https://zamin.uz/rss', country: 'uz', language: 'uz' },
 
   // 吉尔吉斯斯坦（2026-09-19 换血：旧的两个源 410/404 已死）
   { name: 'Kabar', url: 'https://kabar.kg/rss', country: 'kg', language: 'ky' },
@@ -148,6 +160,11 @@ export const RSS_SOURCES: RSSSource[] = [
   // 不过那是同一个编辑部、同一批稿件，L0/L1（canonical URL + 原标题指纹）本来就该合并掉，
   // 风险远低于「这条渠道整个是死的」。
   { name: 'Sputnik Kyrgyzstan', url: 'https://sputnik.kg/export/rss2/archive/index.xml', country: 'kg', language: 'ru' },
+
+  // 2026-10-27 加。**实测**：抓到 40 条 → 过投资相关性闸 23 条（57%）
+  // ⇒ 俄语源（与其它 kg 源同语言）⇒ 翻译质量无语言风险。
+  // ⇒ 它补的正是 **kg 这一国**（kg 是五国里入库最少的：每轮 23 篇 vs kz 53 篇）。
+  { name: '24.kg', url: 'https://24.kg/rss/', country: 'kg', language: 'ru' },
 
   // 塔吉克斯坦（**全项目最薄：只有 18 条候选、3 个可用源**，优先补的就是这里）
   { name: 'Khovar', url: 'https://khovar.tj/rss/', country: 'tj', language: 'ru' },
