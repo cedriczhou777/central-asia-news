@@ -118,6 +118,19 @@ export interface DedupResult<T> {
    */
   llm: {
     ran: boolean;
+    /**
+     * ★ **「判组完全生效」**（2026-10-27 修）。
+     *
+     * ⚠️ 旧语义是「**有没有判出至少一组**」⇒ ⇒ **「跑了、但没发现重复」**
+     * （最正常的情况）会被显示成 `false` ⇒ ⇒ 排查时**误判成故障**
+     * （2026-10-27 实测：kg / az / tj 三国 `ok:false` 且**没有 `error`**）。
+     *
+     * ⇒ 现在：**`ok` = 「判组完全生效」** ⇒ 两档都要满足：
+     * · 没有 `judgedError`（没失败、没超限）**且** 确实问了模型（`candidateCount > 0`）
+     *   ⇒ `true` ✔
+     * · 没问模型（没有候选对）**或** 有 error ⇒ `false` ✔
+     *   （「没问模型」这一档是既有守卫 `test-dedup` 要求的，2026-10-27 门禁抓到过）
+     */
     ok: boolean;
     /** 本次实际用的任务形态（`pair` = 逐对二选一，`group` = 长串找组，已停用） */
     mode: JudgeMode;
@@ -2126,6 +2139,24 @@ export async function dedupeStories<T extends StoryLike & { category?: string | 
   }
   if (judgedGroups.length === 0) {
     // 一组都没有（含调用失败、返回不合法、簇超限被丢）：确定性去重的结果照常返回
+    //
+    // ⚠️⚠️ 2026-10-27：**「一条都没判出」不等于「失败」**。
+    //
+    // 旧写法：`llm.ok = true` 只在「判出了至少一组」时才执行 ⇒ ⇒
+    // 「**跑了、但没发现重复**」（最正常的情况）时 `ok` 保持 `false`
+    // ⇒ ⇒ 线上实测：kg / az / tj 三国的 `ok:false` **而且没有 `error`**
+    // ⇒ ⇒ 被显示成「失败」⇒ **排查时会误判成故障**（我 10-27 就是被这个误导了一下）。
+    //
+    // ⇒ 现在要区分**三种**情况（2026-10-27 第二次改才想清楚）：
+    //   ① **没有候选对** ⇒ 模型**根本没被问** ⇒ `ran=true` 但**没实际判定**
+    //      ⇒ `ok = false`（既有守卫 `test-dedup` 明确要求这一点，2026-10-27 门禁抓到过）
+    //   ② **有候选、模型答「都不是」** ⇒ 判组**完全生效**（最正常的情况：没有重复）
+    //      ⇒ `ok = true` ✔（旧写法在这里也给了 false ⇒ 排查时会误判成故障）
+    //   ③ **调用失败 / 返回不合法 / 簇超限被丢** ⇒ `ok = false` ✔
+    // ⇒ 判据 = 「没有 error」**且**「确实问了模型」。
+    // ⇒ ⚠️ 只影响可观测性：`llm.ok` 只被 `fetch-news` 的 summary 与
+    // `dedupe-check` **透传**出去，不参与任何行为判断 ⇒ 改它零风险。
+    llm.ok = !judgedError && (llm.candidateCount ?? 0) > 0;
     return { kept: keptAfterIdentity, drops, llm, numericSpared };
   }
 
