@@ -651,6 +651,28 @@ interface PushSummary {
   /** 各国 L2 的执行情况，用来区分「没有重复」和「判组没跑成」 */
   judge: Array<PushJudge & { country_code: string }>;
   /**
+   * ★ **被「每国篇数上限」砍掉的候选数**（2026-10-27 加）。
+   *
+   * ## 为什么必须有（原来一个字都没有）
+   *
+   * 上限是 `PUSH_MAX_PER_COUNTRY`（现 20）⇒ 若某国去重后有 30 篇 ⇒ 只推 20 ⇒
+   * ⇒ **被砍掉的 10 篇在响应里完全不可见** ⇒ ⇒ 排查「这一国怎么只有 12 篇」时
+   * ⇒ **分不清是「判据吃掉了」还是「上限砍掉了」** ⇒ 而这两种要动的地方**完全不同**
+   * （前者动判据，后者动上限或加供给）。
+   *
+   * ⇒ 与 `skipped`（整国跳过）**分层**：那个记「这一国一篇都没有」，
+   * 这个记「这一国有，但多出来的被上限砍了」。
+   */
+  candidatesDroppedByLimit: Array<{
+    country_code: string;
+    /** 被砍掉的条数 */
+    dropped: number;
+    /** 去重后、砍上限之前的合格候选数 */
+    total: number;
+    /** 本轮的上限值 */
+    limit: number;
+  }>;
+  /**
    * ★ 2026-10-25：**跨批次重复**的命中情况（昨天/前天发过、今天又发）。
    *
    * ## 为什么必须有它
@@ -1174,6 +1196,16 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     const skipped: PushSkip[] = [];
     // 判组合并的审计轨迹：谁被合进了谁（见 `PushMerge`）。L2 打开后这是唯一的可审计出口。
     const merges: PushMerge[] = [];
+  // ★ 被「每国篇数上限」砍掉的候选数（按国）—— 2026-10-27 加
+  const candidatesDroppedByLimit: Array<{
+    country_code: string;
+    /** 被砍掉的条数 */
+    dropped: number;
+    /** 去重后、砍上限之前的合格候选数 */
+    total: number;
+    /** 本轮的上限值 */
+    limit: number;
+  }> = [];
   // ★ 跨批次重复的计数（2026-10-25）：`hits` = 提示给总审的条数，`deleted` = 总审真删的条数。
   const crossBatchHits: Array<{ country_code: string; count: number; sample: string }> = [];
   const crossBatchDeleted: Array<{ country_code: string; count: number }> = [];
@@ -1375,6 +1407,23 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
 
       // 今日精选：取完去重后的前 N 篇（宽松上限，只防文章过长，不写死篇数）
       const selectedArticles = dedupedArticles.slice(0, maxPerCountry);
+
+      // ★ 2026-10-27：**被「每国篇数上限」砍掉多少**（原来完全没记账）。
+      //
+      // 为什么必须有：上限是 20 ⇒ 若某国合格候选 30 篇 ⇒ 只推 20 ⇒
+      // ⇒ **被砍掉的 10 篇在响应里一个字都没有** ⇒ ⇒ 排查「这一国怎么只有 12 篇」时
+      // ⇒ **分不清是「判据吃掉了」还是「上限砍掉了」**（这两种要动的地方完全不同）。
+      // ⇒ 与判据层的 `excludedByReason` **分层记账**，不混在一起。
+      const droppedByLimit = dedupedArticles.length - selectedArticles.length;
+      if (droppedByLimit > 0) {
+        candidatesDroppedByLimit.push({
+          country_code: country.code,
+          dropped: droppedByLimit,
+          /** 去重后、砍上限之前的合格候选数 */
+          total: dedupedArticles.length,
+          limit: maxPerCountry,
+        });
+      }
 
       console.log(
         `为${country.name}精选${selectedArticles.length}篇投资相关新闻` +
@@ -1813,6 +1862,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       failures,
       skipped,
       merges,
+      // ★ 被每国篇数上限砍掉的候选数（2026-10-27）—— 与「判据层」的 excludedByReason 分层
+      candidatesDroppedByLimit,
     // ★ 跨批次重复的计数（2026-10-25）—— `hits` 是提示数（含误报），`deleted` 才是真删的。
     crossBatch: {
       hits: crossBatchHits,
