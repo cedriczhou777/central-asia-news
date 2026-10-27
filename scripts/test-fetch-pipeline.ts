@@ -140,7 +140,15 @@ ok('★ 未配置 TELEGRAM_INGEST_SECRET ⇒ 一律 401（不许「没配置就�
 ok('★ secret 不匹配 ⇒ 401', /provided !== expected[\s\S]{0,120}status: 401/.test(ingest));
 ok('★ secret 从 header 读（不是 query、不是 body）', /headers\.get\('x-ingest-secret'\)/.test(ingest));
 ok('★ 查重失败 ⇒ fail-closed（本批不入库）',
-  /查重失败[\s\S]{0,200}status: 503/.test(ingest));
+  /查重失败 ⇒ 本批不入库/.test(ingest) && /throw new Error/.test(ingest),
+  '查重失败必须抛出（后台处理里抛 ⇒ 记进 ingestState.error）');
+ok('★ ★ 处理是**异步**的（立刻 202，后台跑）—— 同步扛不住网关的 ~30 秒预算',
+  /status: 202/.test(ingest) && /void processIngest\(/.test(ingest),
+  '翻译一条 ~37 秒 ⇒ 同步做必然 503 ⇒ 必须立刻返回 202 + 后台跑');
+ok('★ 有 GET 能查状态（异步之后「跑成什么样」只能在这里看）',
+  /export async function GET/.test(ingest) && /ingestState/.test(ingest));
+ok('★ 并发保护：上一批在跑就跳过（不重复触发）',
+  /上一批 ingest 仍在处理/.test(ingest));
 ok('★ 频道不在表里 ⇒ 400（不知道国家就不能入库）',
   /不在频道表里[\s\S]{0,160}status: 400/.test(ingest));
 

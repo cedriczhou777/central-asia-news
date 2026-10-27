@@ -44,6 +44,9 @@ interface IngestResult {
   translated?: number;
   inserted?: number;
   failed?: number;
+  /** ★ 接口是**异步**的 ⇒ 正常返回是 `{ queued: true, ... }`（202） */
+  queued?: boolean;
+  message?: string;
   error?: string;
 }
 
@@ -60,7 +63,10 @@ async function postToIngest(channel: string, posts: unknown[]): Promise<IngestRe
         'x-ingest-secret': INGEST_SECRET,
       },
       body: JSON.stringify({ channel, posts }),
-      signal: AbortSignal.timeout(120_000),
+      // ⚠️ 60 秒足够：接口是**异步**的（立刻 202，翻译在云托管后台跑）
+    // ⇒ ⇒ 这里等的是「排队成功」，不是「翻译完成」。
+    // ⇒ ⚠️ 若超过 60 秒还没回来 ⇒ 说明接口在同步做（会撞网关的 ~30 秒预算）⇒ 报错。
+    signal: AbortSignal.timeout(60_000),
     });
     const text = await res.text();
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
@@ -84,7 +90,6 @@ async function main(): Promise<void> {
 
   let grabbed = 0;
   let sent = 0;
-  let inserted = 0;
   let failedChannels = 0;
 
   for (const e of entries) {
@@ -110,10 +115,10 @@ async function main(): Promise<void> {
     const res = await postToIngest(e.channel, r.posts);
     if (res.ok) {
       sent += r.posts.length;
-      inserted += res.inserted ?? 0;
       console.log(
         `✓ ${e.country} ${e.channel} 抓到 ${r.posts.length} 条（最新 ${newest}）` +
-          `⇒ 入库 ${res.inserted ?? 0} 条（翻译失败 ${res.failed ?? 0}）`,
+          `⇒ 已排队${res.queued ? '（异步处理中，翻译在云托管后台跑）' : ''}` +
+          (res.message ? `｜${res.message}` : ''),
       );
     } else {
       failedChannels++;
@@ -123,7 +128,8 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `\n★ 抓取 ${grabbed} 条｜送入 ${sent} 条｜入库 ${inserted} 条｜异常频道 ${failedChannels} 个`,
+    `\n★ 抓取 ${grabbed} 条｜已排队 ${sent} 条｜异常频道 ${failedChannels} 个` +
+      `（翻译与入库在云托管后台跑 ⇒ 结果看 GET /api/telegram-ingest）`,
   );
   // ⚠️ 一条都没抓到 ⇒ **必须失败**（否则 cron 会静悄悄地跑空，白跑一天）
   if (grabbed === 0) {

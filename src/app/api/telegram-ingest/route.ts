@@ -52,6 +52,38 @@ const DEDUP_WINDOW_DAYS = 3;
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * 本模块级的「最近一次 ingest」状态（**内存态**，随实例回收消失）。
+ *
+ * ## 为什么需要它
+ *
+ * ⚠️⚠️ **同步接口扛不住**：翻译一条要 ~37 秒 ⇒ 一批 5 条 ≈ 3 分钟
+ * ⇒ ⇒ **远超云托管网关的 ~30 秒预算**（2026-10-27 实测：
+ * 冷启动那次 `x-cloudbaserun-scale-timecost: 24056` ⇒ 第一个请求直接 503）
+ * ⇒ ⇒ 所以**必须异步**：立刻返回 202，翻译在后台跑。
+ *
+ * ⇒ 而异步之后，「跑成什么样」就**必须有个地方能查** ⇒ ⇒ 这个状态 +
+ * `GET /api/telegram-ingest` 就是那个地方（与 `fetch-news` 的 `lastRun` 同构）。
+ */
+interface IngestState {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  /** 正在处理/刚处理的批次摘要 */
+  summary: Record<string, unknown> | null;
+  error: string | null;
+}
+
+let ingestState: IngestState = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  durationMs: null,
+  summary: null,
+  error: null,
+};
+
 interface IngestPost {
   title?: string;
   url?: string;
@@ -106,6 +138,72 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   const countryName = countryList.find((c) => c.code === country)?.name || country;
 
+  // ⚠️⚠️ **立刻返回，后台异步处理**（2026-10-27 实测的硬约束）。
+  //
+  // 翻译一条要 ~37 秒 ⇒ 一批 N 条 ≈ N×37 秒 ⇒ **远超网关的 ~30 秒预算**
+  // ⇒ ⇒ 同步做必然 503（而且**会白跑**：翻译费花了、稿子却没进库）。
+  // ⇒ ⇒ 做法与 `fetch-news` 的 POST 完全同构：**立刻 202 + 后台跑 + 状态可查**。
+  //
+  // ⚠️ 并发保护：同一时间只跑一批 ⇒ 否则 Actions 重跑会与上一批抢翻译通道。
+  if (ingestState.running) {
+    return NextResponse.json(
+      {
+        ok: true,
+        queued: false,
+        message: '上一批 ingest 仍在处理，本次跳过（不重复触发）',
+        running: true,
+        startedAt: ingestState.startedAt,
+      },
+      { status: 202 },
+    );
+  }
+  const startedAt = new Date().toISOString();
+  ingestState = {
+    running: true,
+    startedAt,
+    finishedAt: null,
+    durationMs: null,
+    summary: null,
+    error: null,
+  };
+  // ⚠️ 不 await ⇒ 立刻返回。
+  void processIngest(channel, country, countryName, posts).then(
+    (summary) => {
+      ingestState = {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        summary,
+        error: null,
+      };
+    },
+    (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[telegram-ingest] 后台处理失败:', err);
+      ingestState = {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        summary: null,
+        error: message,
+      };
+    },
+  );
+  return NextResponse.json(
+    { ok: true, queued: true, channel, country, accepted: posts.length, startedAt },
+    { status: 202 },
+  );
+}
+
+/** 真正的处理逻辑（后台跑）。返回的结果会进 `ingestState.summary`。 */
+async function processIngest(
+  channel: string,
+  country: string,
+  countryName: string,
+  posts: IngestPost[],
+): Promise<Record<string, unknown>> {
   // ---- 查重（幂等）：判据与「闸 2」逐字同源 ----
   const since = new Date(Date.now() - DEDUP_WINDOW_DAYS * 86_400_000).toISOString();
   let knownUrls = new Set<string>();
@@ -120,12 +218,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } catch (err) {
     // ⚠️ **查不出来 ⇒ 不入库**（fail-closed，与采集侧闸 2 同一取舍：
     // 重复入库会直接进草稿推给读者、不可撤销；漏入库下一轮还能补）。
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `查重失败 ⇒ 本批不入库：${err instanceof Error ? err.message : String(err)}`,
-      },
-      { status: 503 },
+    // ⇒ 这里是**后台处理**⇒ ⇒ 抛出去让 `processIngest` 的失败分支记进 `ingestState.error`。
+    throw new Error(
+      `查重失败 ⇒ 本批不入库：${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
@@ -243,7 +338,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  return NextResponse.json({
+  return {
     ok: errors.length === 0,
     channel,
     country,
@@ -255,5 +350,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     skippedDetail: { junk: skippedJunk, notInvestorRelevant: skippedIrrelevant, alreadyInDb: skippedDup },
     errors: errors.slice(0, 5),
     samples: samples.slice(0, 5),
-  });
+  };
+}
+
+/**
+ * `GET /api/telegram-ingest` —— **看最近一次 ingest 的状态/结果**。
+ *
+ * 为什么需要它：处理是异步的（见 POST 的说明）⇒ ⇒ 「跑成什么样」只能在这里看。
+ * ⇒ 与 `fetch-news` 的 `GET` 读 `lastRun` 完全同构。
+ */
+export async function GET(): Promise<NextResponse> {
+  return NextResponse.json(ingestState, { headers: { 'Cache-Control': 'no-store' } });
 }
