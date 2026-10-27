@@ -726,6 +726,11 @@ export function langLabel(sourceLanguage: string): string {
   if (sourceLanguage === 'ky') return '吉尔吉斯语';
   if (sourceLanguage === 'kk') return '哈萨克语';
   if (sourceLanguage === 'az') return '阿塞拜疆语';
+  // ★ 2026-10-27 新增：`Zamin.uz` 是乌兹别克语源 ⇒ 不补这一条，模型会收到
+  // 「其他语言」这种等于没说的提示（原文是乌兹别克文时尤其伤）。
+  // ⇒ 是 `scripts/test-translate-prompt.ts` 逐语言核对源清单时**当场抓到**的
+  // ⇒ ⇒ 那条守卫的价值就在这里：源清单新增语言 ⇒ 必须同步补映射。
+  if (sourceLanguage === 'uz') return '乌兹别克语';
   return '其他语言';
 }
 
