@@ -45,6 +45,7 @@
     "analyze:currency": "tsx scripts/analyze-currency.ts",
     "analyze:country-filter": "tsx scripts/analyze-country-filter.ts",
     "analyze:pair-recall": "tsx scripts/analyze-pair-recall.ts",
+    "analyze:floor": "tsx scripts/measure-floor.ts",
     "analyze:judge-order": "tsx scripts/analyze-judge-order.ts",
     "analyze:recall-floor": "tsx scripts/analyze-recall-floor.ts",
     "analyze:guard-clusters": "tsx scripts/analyze-guard-clusters.ts",
