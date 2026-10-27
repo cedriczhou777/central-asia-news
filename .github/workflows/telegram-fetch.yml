@@ -1,0 +1,60 @@
+# Telegram 抓取（跑在 GitHub Actions 上，出口在境外）
+#
+# ## 为什么需要它
+#
+# 微信云托管在大陆 ⇒ 连不上 `t.me`（实测直连 254ms 就 `fetch failed`）、
+# 也连不上 `*.workers.dev` ⇒ ⇒ **12 个 Telegram 频道（占配置源的 34%）一条都进不来**。
+# 而 **GitHub 的 runner 在境外** ⇒ 实测能直连 t.me 并抓到 **208 条/轮**。
+#
+# ## 只需要两个 Secret（仓库 Settings → Secrets and variables → Actions）
+#
+#   INGEST_URL     = https://<服务域名>/api/telegram-ingest
+#   INGEST_SECRET  = 与云托管环境变量 TELEGRAM_INGEST_SECRET **一致**的那串
+#
+# ⚠️ 仓库**必须是公开的** ⇒ 私有仓库的 Actions 免费额度不成立（每月 2000 分钟是公开仓库的额度）。
+#    本仓库是公开的 ⇒ 每天一次、每次约 2 分钟 ⇒ 一年约 1095 分钟 ⇒ 额度充足。
+#
+# ## 时间为什么定在北京 02:00（UTC 18:00）
+#
+# 云托管那一轮是**北京 04:00** ⇒ 抓取必须**在它之前**完成并入库，
+# 否则当天的日报就用不上这些稿子。
+# ⚠️ ⚠️ **GitHub 的定时任务可能延迟 5–30 分钟**（官方说明）⇒
+# ⇒ 所以定在 02:00，**留 2 小时余量**；最坏延到 03:30 也还赶得上。
+#
+# ⚠️ 用的是 **UTC 的 cron**（GitHub 不按时区）⇒ 北京 02:00 = UTC 18:00。
+
+name: fetch-telegram
+
+on:
+  schedule:
+    # UTC 18:00 = 北京 02:00（比云托管那一轮早 2 小时）
+    - cron: '0 18 * * *'
+  # 允许手动触发（调试 / 补跑用）
+  workflow_dispatch:
+
+concurrency:
+  # 同一时间只跑一个（避免两次抓取互相重复推送）
+  group: fetch-telegram
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ⚠️ 只装跑这个脚本需要的东西（`tsx` + 类型）⇒ 不装全仓库依赖 ⇒ 快且省额度。
+      # ⚠️ `--ignore-scripts` 是必要的：仓库里有 postinstall 之类会跑构建的脚本。
+      - name: 安装依赖
+        run: npm install --no-save --ignore-scripts tsx typescript
+
+      - name: 抓取并送入云托管
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+        run: npx tsx scripts/fetch-telegram.ts
