@@ -453,15 +453,33 @@ section('八、接线断言（三条抓取路径都必须补正文；推送侧�
   // 取回/抽取的实现只此一份（在 `article-body.ts` 里）；fetch-news 只有一个
   // 薄壳 `backfillBody` 负责「决定要不要抓 + 抓完喘口气 + 记账」。
   // 出现第二份「自己解析正文」的实现，就是分叉的开始。
+  // ⚠️ 2026-10-27：薄壳搬到了 `src/lib/fetch-pipeline.ts` ⇒ **导入也跟着搬了**
+  // ⇒ ⇒ 这条断言要改成「**两个文件里合计有一处**从 article-body 导入 fetchArticleBody」。
+  const pipelineSrc0 = readFileSync(resolve(__dirname, '../src/lib/fetch-pipeline.ts'), 'utf8');
+  // ⚠️ 路径两种写法都要认：`'@/lib/article-body'`（别名）与 `'./article-body'`（相对）
+  // ⇒ pipeline.ts 用的是相对路径（2026-10-27 第一次写断言时只认别名 ⇒ 数到 0 处）。
+  const importRe = /from\s*'(?:@\/lib\/)?\.?\/?article-body'/g;
+  const articleBodyImports =
+    (fetchSrc.match(importRe) || []).length + (pipelineSrc0.match(importRe) || []).length;
   ok(
     '抓取实现从 article-body 导入（不是在本文件里再写一份抽取逻辑）',
-    fetchSrc.includes("from '@/lib/article-body'") && /import\s*\{[\s\S]*?fetchArticleBody[\s\S]*?\}\s*from\s*'@\/lib\/article-body'/.test(fetchSrc),
-    "fetch-news 没有从 '@/lib/article-body' 导入 fetchArticleBody",
+    articleBodyImports === 1 &&
+      /import\s*\{[\s\S]*?fetchArticleBody[\s\S]*?\}\s*from\s*'(?:@\/lib\/)?\.?\/?article-body'/.test(
+        pipelineSrc0,
+      ),
+    `从 article-body 导入的处数=${articleBodyImports}（应为 1，且在 fetch-pipeline.ts 里）`,
   );
+  // ⚠️ 2026-10-27：薄壳**搬到** `src/lib/fetch-pipeline.ts` 了（为了让 ingest 接口共用）
+  // ⇒ ⇒ 断言要改成「**两个文件合计只有一处定义**」
+  // ⇒ （原来只看 route.ts ⇒ 搬到 lib 之后它数到 0 处 ⇒ 门禁当场报红 —— 守卫起作用了。）
+  const pipelineSrc2 = readFileSync(resolve(__dirname, '../src/lib/fetch-pipeline.ts'), 'utf8');
+  const backfillDefs =
+    (fetchSrc.match(/async function backfillBody\s*\(/g) || []).length +
+    (pipelineSrc2.match(/async function backfillBody\s*\(/g) || []).length;
   ok(
-    '补正文的薄壳只有一处定义（三处调用、一份实现）',
-    (fetchSrc.match(/async function backfillBody\s*\(/g) || []).length === 1,
-    `找到 ${(fetchSrc.match(/async function backfillBody\s*\(/g) || []).length} 处定义`,
+    '补正文的薄壳只有一处定义（**route.ts + fetch-pipeline.ts 合计**，四处调用、一份实现）',
+    backfillDefs === 1,
+    `找到 ${backfillDefs} 处定义`,
   );
 
   // 路径 ②：Telegram
