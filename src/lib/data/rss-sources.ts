@@ -195,6 +195,13 @@ export const RSS_SOURCES: RSSSource[] = [
   { name: 'Haqqin.az', url: 'https://haqqin.az/rss', country: 'az', language: 'ru' },
   { name: 'Qafqazinfo', url: 'https://qafqazinfo.az/rss', country: 'az', language: 'az' },
   { name: 'Modern.az', url: 'https://modern.az/rss', country: 'az', language: 'az' },
+  // 2026-10-27 加（`pnpm analyze:source-scan` 扫出 → `check-source-dup.ts` 判重通过）。
+  // ★ **英文版** ⇒ 与上面的阿塞拜疆语版**内容独立**（判重：最高重叠 42%，阈值 60%）。
+  // ⇒ 而同一次扫描里的另外三个候选**都被判重挡掉了**（都是同一份内容的不同入口）：
+  //   `azertag.az/rss.xml`（与 APA 100% 重叠）、`modern.az/feed`（与 APA 100%）、
+  //   `modern.az/az/rss`（与 Modern.az 100%）。
+  // ⇒ ⇒ **加源前必须判重**，否则会白占候选额度（而候选额度直接决定判组阶段的 O(n²) 成本）。
+  { name: 'Modern.az (en)', url: 'https://modern.az/en/rss', country: 'az', language: 'en' },
   { name: 'Banker.az', url: 'https://banker.az/feed/', country: 'az', language: 'az' },
 
   // 区域综合媒体
