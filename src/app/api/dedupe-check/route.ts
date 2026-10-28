@@ -450,7 +450,12 @@ const taskMode =
     ? 'group'
     : searchParams.get('mode') === 'cluster'
       ? 'cluster'
-      : 'pair';
+      : // ★ 2026-10-27 新增：`pair-split` = **超限簇改为「簇内再问一次」**
+        //   （生产仍走 `pair`；这个 mode 只给体检接口做对照 ⇒ 零生产风险）。
+        //   ⇒ 用途：拿**同一批数据**对比「整簇丢弃」与「簇内细分」的效果。
+        searchParams.get('mode') === 'pair-split'
+          ? 'pair-split'
+          : 'pair';
     const debug = searchParams.get('debug') === '1';
     /**
      * 判组提示词版本（`pv=1` / `pv=3`）。不传 = 当前版本。
