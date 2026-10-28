@@ -243,17 +243,6 @@ export interface DedupResult<T> {
 
     clusterStats?: { clusterCount: number; pairClusters: number; bigClusters: number; maxCluster: number };
 
-    /**
-     * ★ `pair-split` 形态下「超限簇改为簇内再问一次」的统计（2026-10-27）。
-     *
-     * · `splitsAsked` = 实际再问了几次（**每个超限簇一次**，有硬上限防成本爆掉）
-     * · `splitFailed` = 其中失败、退回「整簇丢弃」了几次
-     *
-     * ⇒ 生产（`mode: 'pair'`）里这个字段恒为 `undefined` ⇒
-     * ⇒ **线上行为完全不变**，只有体检接口 `mode=pair-split` 才会出现它。
-     */
-    splitStats?: { splitsAsked: number; splitFailed: number };
-
     oversizedClusters?: Array<{ size: number; titles: string[] }>;
   };
 }
@@ -763,7 +752,7 @@ export function dedupeStoriesDeterministic<T extends StoryLike>(items: T[]): {
  * 仅为 `GET /api/dedupe-check?mode=group` 的对照实验保留 —— 想复核「长串找组为什么不行」时
  * 能原地重现，不必回滚代码。若要清理，删掉这两处 + 体检接口的 `mode` 分支即可。
  */
-export type JudgeMode = 'pair' | 'group' | 'cluster' | 'pair-split';
+export type JudgeMode = 'pair' | 'group' | 'cluster';
 
 /** 单次交给模型的条目上限。超了就分块，块间不重叠。 */
 const LLM_BLOCK_SIZE = 60;
@@ -1260,90 +1249,6 @@ function buildJudgePrompt(rows: Array<{ i: number; title: string; summary: strin
  * ⇒ 「全有全无」不是在掩盖缺陷，它是在**拒绝采信一串已经退化的判定**。
  *   要改的是喂进来的相似度（`similarity()` 对固定前缀过敏），不是这里的取舍。
  */
-/**
- * ★ **超限簇的「再问一次」拆分**（2026-10-27 新增，`mode: 'pair-split'`）。
- *
- * ## 它解决什么
- *
- * `filterOversizedGroups` 把超过 `MAX_GROUP_SIZE` 的簇**整簇丢弃** ⇒
- * ⇒ 簇里那些**真重复**也一起没了（2026-10-27 线上实测：kz 一个 6 条簇里
- * 有「感谢各国领导人祝贺共和国日」×2、「向奥地利总统致贺电」×2 两组真重复，
- * 它们与另外 2 条不同的事混在一起 ⇒ 整簇丢 ⇒ 两组真重复全漏 ⇒ 用户看到重复）。
- *
- * ## 为什么**不是**「几何拆分」（2026-10-07 已经量过一次并否掉）
- *
- * 2026-10-07 用真实快照量过：把超限簇按相似度硬拆 ⇒ 得到 **16 处真合并 / 26 处误合并**
- * ⇒ ⇒ 纯几何拆分**误合并比真合并还多** ⇒ ⇒ 不能用。
- *
- * ## 这里为什么不一样：★ **不是从零找簇，是「在已有簇内再细分」**
- *
- * 簇是**模型判过「是」的对**用并查集连起来的 ⇒ ⇒ 簇里的每一条对模型都说过「是」
- * ⇒ ⇒ 现在的问题只是「**传递**」：A-B 是、B-C 是 ⇒ A、C 被连到一起（但可能不是同一件事）。
- *
- * ⇒ 所以正解是**再问模型一次，但只问「这个簇内部」**：
- * 「这 6 条里，哪几条是同一件事？」⇒ 模型在**已有簇**里细分，比**从零找簇**容易得多
- * （簇形态 `mode: 'cluster'` 实测更差，正是因为它让模型从零找）。
- *
- * ## 关键实现细节
- *
- * `judgeSameEventGroups` 内部**自己就会**再过一次 `filterOversizedGroups`
- * ⇒ ⇒ 它返回的子组**已经不含超限的** ⇒ ⇒
- * ⇒ **「只丢仍超限的子组、保留同簇里其余子组」这个目标自动达成**，本函数只做下标映射。
- *
- * ## 成本与安全
- *
- * · 每个超限簇**多问一次模型** ⇒ ⇒ 有硬上限（`maxSplits`，默认 3）⇒ 防止成本爆掉。
- * · **默认不启用**（生产仍走 `pair`）⇒ ⇒ 零生产风险；只有体检接口 `mode=pair-split` 才走它。
- * · 模型调用失败 ⇒ ⇒ 退回「整簇丢弃」（与旧行为一致）⇒ ⇒ 不会因为新逻辑而丢更多。
- */
-export async function splitOversizedClusters<
-  T extends StoryLike & { category?: string | null; summary?: string | null },
->(
-  clusters: number[][],
-  items: T[],
-  judge: JudgeOptions = {},
-  max: number = MAX_GROUP_SIZE,
-  maxSplits = 3,
-): Promise<{ kept: number[][]; rejected: number; splitsAsked: number; splitFailed: number }> {
-  const kept: number[][] = [];
-  let rejected = 0;
-  let splitsAsked = 0;
-  let splitFailed = 0;
-  for (const g of clusters) {
-    if (g.length <= max) {
-      kept.push(g);
-      continue;
-    }
-    if (splitsAsked >= maxSplits) {
-      // 成本上限 ⇒ 剩下的簇按旧行为整簇丢弃。
-      rejected++;
-      continue;
-    }
-    splitsAsked++;
-    const subset = g.map((i) => items[i]).filter(Boolean);
-    if (subset.length < 2) {
-      rejected++;
-      continue;
-    }
-    const res = await judgeSameEventGroups(subset, judge);
-    if (res.error || res.groups.length === 0) {
-      // 模型没给出可用细分 ⇒ 退回旧行为（整簇丢弃）⇒ **不会比原来更差**。
-      splitFailed++;
-      rejected++;
-      continue;
-    }
-    // 下标映射：subset 的相对下标 → 原始下标
-    for (const sub of res.groups) {
-      const mapped = sub.map((i) => g[i]).filter((i) => Number.isInteger(i));
-      if (mapped.length >= 2) kept.push(mapped.sort((a, b) => a - b));
-      else rejected++;
-    }
-    // ⚠️ 簇里**没被任何子组覆盖**的条目 ⇒ 视为「模型认为它们各自独立」⇒ 保留（不删）。
-    // ⇒ 这正是本函数的目的：**宁可不删，也别把真重复一起丢光**。
-  }
-  return { kept, rejected, splitsAsked, splitFailed };
-}
-
 export function filterOversizedGroups(
   groups: number[][],
   max: number = MAX_GROUP_SIZE,
