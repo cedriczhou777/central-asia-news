@@ -44,7 +44,7 @@ import {
   type ReviewItem,
 } from '@/lib/editor-review';
 import { pickDraftCover } from '@/lib/draft-cover';
-import { PUSH_MAX_PER_COUNTRY } from '@/lib/push-limits';
+import { PUSH_MAX_PER_COUNTRY, PUSH_JUDGE_CANDIDATE_CAP } from '@/lib/push-limits';
 import {
   readMemorySnapshot,
   MEMORY_PROBE_VERSION,
@@ -671,6 +671,12 @@ interface PushSummary {
     total: number;
     /** 本轮的上限值 */
     limit: number;
+    /**
+     * ★ 砍在哪一步（2026-10-28）：
+     * · `before_judge` = **判组前**截断候选（防崩的硬闸，砍的是相关性最低的尾部）
+     * · 不填 = 判组**后**、出稿上限那一层（去重后仍多于 `PUSH_MAX_PER_COUNTRY`）
+     */
+    stage?: 'before_judge';
   }>;
   /**
    * ★ 2026-10-25：**跨批次重复**的命中情况（昨天/前天发过、今天又发）。
@@ -1196,7 +1202,8 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     const skipped: PushSkip[] = [];
     // 判组合并的审计轨迹：谁被合进了谁（见 `PushMerge`）。L2 打开后这是唯一的可审计出口。
     const merges: PushMerge[] = [];
-  // ★ 被「每国篇数上限」砍掉的候选数（按国）—— 2026-10-27 加
+  // ★ 被「上限」砍掉的候选数（按国）—— 2026-10-27 加；2026-10-28 扩到两处
+  //   （`stage` 区分是「判组前」还是「判组后」砍的）
   const candidatesDroppedByLimit: Array<{
     country_code: string;
     /** 被砍掉的条数 */
@@ -1205,6 +1212,12 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     total: number;
     /** 本轮的上限值 */
     limit: number;
+    /**
+     * ★ 砍在哪一步（2026-10-28）：
+     * · `before_judge` = **判组前**截断候选（防崩的硬闸，砍的是相关性最低的尾部）
+     * · 不填 = 判组**后**、出稿上限那一层（去重后仍多于 `PUSH_MAX_PER_COUNTRY`）
+     */
+    stage?: 'before_judge';
   }> = [];
   // ★ 跨批次重复的计数（2026-10-25）：`hits` = 提示给总审的条数，`deleted` = 总审真删的条数。
   const crossBatchHits: Array<{ country_code: string; count: number; sample: string }> = [];
@@ -1342,10 +1355,33 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
         return false;
       });
 
+      // ★ 2026-10-28：**判组前**按投资相关性截断候选（防「某天稿件一多就崩」）。
+      // ⇒ 背景见 `PUSH_JUDGE_CANDIDATE_CAP` 的注释（这正是「草稿箱只有 2 篇」的根因）。
+      // ⇒ `scoredArticles` 已按 `compareByInvestmentRelevance` 排好序 ⇒ 截掉的是**相关性最低的尾部**。
+      const judgeCandidates =
+        eligible.length > PUSH_JUDGE_CANDIDATE_CAP
+          ? eligible.slice(0, PUSH_JUDGE_CANDIDATE_CAP)
+          : eligible;
+      if (judgeCandidates.length < eligible.length) {
+        candidatesDroppedByLimit.push({
+          country_code: country.code,
+          dropped: eligible.length - judgeCandidates.length,
+          total: eligible.length,
+          limit: PUSH_JUDGE_CANDIDATE_CAP,
+          stage: 'before_judge',
+        });
+        console.warn(
+          `[${country.name}] ⚠️ 进判组的候选被截断：` +
+            `合格 ${eligible.length} 条 → 只把前 ${PUSH_JUDGE_CANDIDATE_CAP} 条送进判组` +
+            `（砍掉 ${eligible.length - judgeCandidates.length} 条相关性最低的）` +
+            `—— 这是**防崩的硬闸**，不是「没稿子」；被砍的那些不推。`,
+        );
+      }
+
       // 「同一件事」去重：链接 / 原文指纹（确定性）+ 模型判组（L2，每国 1 次调用）。
       // 判据与入库端**完全同源**（同一个 `dedupeStories`），不另起一套。
       const { kept: dedupedArticles, drops: eventDrops, llm: llmJudge } =
-        await dedupeStories(eligible);
+        await dedupeStories(judgeCandidates);
       for (const d of eventDrops) {
         console.log(`[${country.code}][${d.reason}] 跳过重复：${d.dropped.title} ← 保留：${d.kept.title}`);
         merges.push({

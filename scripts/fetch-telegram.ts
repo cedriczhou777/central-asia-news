@@ -40,6 +40,10 @@ const CHANNEL_GAP_MS = 2000;
 
 interface IngestResult {
   ok: boolean;
+  /** ★ HTTP 状态码（**必须打出来** —— 否则日志里只有「送不进去」，远程无从诊断） */
+  httpStatus?: number;
+  /** ★ 响应体前若干字（错误时最有用的是 nginx 的 503 页面 / JSON 的 error 字段） */
+  httpBody?: string;
   accepted?: number;
   translated?: number;
   inserted?: number;
@@ -69,7 +73,14 @@ async function postToIngest(channel: string, posts: unknown[]): Promise<IngestRe
     signal: AbortSignal.timeout(60_000),
     });
     const text = await res.text();
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
+    if (!res.ok) {
+      return {
+        ok: false,
+        httpStatus: res.status,
+        httpBody: text.slice(0, 300),
+        error: `HTTP ${res.status}: ${text.slice(0, 200)}`,
+      };
+    }
     try {
       return JSON.parse(text) as IngestResult;
     } catch {
@@ -123,6 +134,23 @@ async function main(): Promise<void> {
     } else {
       failedChannels++;
       console.warn(`✗ ${e.country} ${e.channel} 抓到了但送不进去：${res.error}`);
+      // ⇒ 把「失败原因怎么查」直接写进日志：Actions 的日志是**唯一的远程诊断手段**
+      // ⇒ ⇒ 所以这里必须自解释（2026-10-28 踩过：日志只写「送不进去」，
+      // ⇒ ⇒ 结果 14 个频道全是 503 也看不出是「网关预算不够 / 异步版没上线」）。
+      if (res.httpStatus === 401) {
+        console.warn(
+          `   ⇢ 401 ⇒ **Secret 不匹配**：检查 Actions Secret「INGEST_SECRET」与云托管环境变量` +
+            `「TELEGRAM_INGEST_SECRET」是否完全一致（两边都要设，且内容相同）`,
+        );
+      } else if (res.httpStatus === 503) {
+        console.warn(
+          `   ⇢ 503 ⇒ **网关超时/实例不可用**：最可能是**线上还是同步版 ingest**` +
+            `（同步版要跑完翻译 ⇒ 远超网关 ~30 秒预算 ⇒ 必然 503）` +
+            `⇒ 确认异步版（立刻返回 202）已部署：` +
+            `curl -X POST <域名>/api/telegram-ingest -H 'x-ingest-secret: …' -d '{"channel":"@x","posts":[]}'` +
+            ` ⇒ **返回 202 才是异步版，返回 200 就是还没上线**`,
+        );
+      }
     }
     await new Promise((s) => setTimeout(s, CHANNEL_GAP_MS));
   }
