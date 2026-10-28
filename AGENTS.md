@@ -723,8 +723,15 @@
 #### 前提：先把「现在到底有几层在干活」说清楚（已核对代码，别凭记忆）
 
 - `dedupeStories` 的**两个生产调用点口径已经分叉**（2026-09-28 起，别再当成对称的两个）：
-  - `wechat/push/route.ts:684` —— **裸调用**，走 `isLlmJudgeEnabled()`
-    ⇒ **L2 自 2026-09-28 起默认开**（只有 `SAME_EVENT_JUDGE=off` 才关）。
+  - `wechat/push/route.ts` —— **裸调用**（`dedupeStories(judgeCandidates)`，**不传 `useLlm`**），
+    走 `isLlmJudgeEnabled()` ⇒ **L2 自 2026-09-28 起默认开**（只有 `SAME_EVENT_JUDGE=off` 才关）。
+    ⇒ ⚠️ **2026-10-28 变了「传什么进去」**：`judgeCandidates` = `eligible`（按投资相关性排序后）
+    **再截断到 `PUSH_JUDGE_CANDIDATE_CAP = 60` 条** ⇒ ⇒ 截断的是**相关性最低的尾部**，
+    砍掉的条数报在 `summary.candidatesDroppedByLimit`（`stage: 'before_judge'`）。
+    ⇒ 理由：`dedupeStories` 内部**两两配对**是 **O(n²)**（kz 一国 165 篇 ⇒ 约 1.35 万次
+    bigram 集合运算）⇒ 而容器只有 **0.25 核** ⇒ ⇒ 不截断会让整轮在逐国发布的中途崩掉
+    （2026-10-28 实测：草稿箱只有前两国的稿子，后三国整轮没出来）。
+    ⇒ ⚠️ **L2 的开关口径没变**：仍然是「不传 `useLlm`，跟默认值走（L2 开）」。
     翻转的理由、护栏、实测 12 组合并见 `same-event.ts` 的 `DedupOptions.useLlm`。
   - `fetch-news/route.ts:1124`（闸 3）—— **显式 `{ useLlm: false }`**，不跟默认值走。
     三条理由见该处注释（省不到翻译 / 花在 09-27 事故现场那个窗口 / 丢在入库端事后不可追）。

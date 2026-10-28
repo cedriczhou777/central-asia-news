@@ -758,6 +758,29 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const hours = typeof body.hours === 'number' ? body.hours : 24;
   const period = body.period;
+  // ★ 2026-10-28：**只推指定的国家**（`{"countries":["kg","tj","az"]}` 或 `?countries=kg,tj,az`）。
+  //
+  // ## 为什么需要它（**这是用户当时的需求**）
+  //
+  // 2026-10-28 上午那一轮崩在第 3 国 ⇒ 草稿箱里只有前两国的稿子 ⇒
+  // ⇒ 用户要「**先把剩下三个国家推了，我��要发出去**」⇒ ⇒ 必须能**只跑剩下三国**，
+  // ⇒ 否则只能等整轮重跑（而整轮要把已出过稿的两国也重跑一遍 ⇒ 草稿箱里会出现**重复草稿**）。
+  //
+  // ⚠️ 它**不是**「补推」的正确姿势（正确姿势是修好整轮），但它是**补救**：
+  // ⇒ 已经出过稿的国家不在这里跑 ⇒ ⇒ **不会产生重复草稿**。
+  const rawCountries = (body.countries ?? (request.nextUrl.searchParams.get('countries') ?? '')) as
+    | string
+    | string[]
+    | undefined;
+  const countries = (Array.isArray(rawCountries) ? rawCountries : String(rawCountries ?? '').split(','))
+    .map((c) => String(c).trim().toLowerCase())
+    .filter((c) => c.length > 0);
+  if (countries.length > 0) {
+    console.log(
+      `[push] ★ 只推指定的国家：${countries.join('、')}` +
+        `（其余国家本轮**不建草稿** ⇒ 不会产生重复草稿）`,
+    );
+  }
 
   // 同一时间只允许跑一轮：并发推送会对同一批文章重复建草稿，
   // 草稿箱里就会出现成对的同名草稿（正是「一天两次窗口重叠」那类问题的观感）。
@@ -781,7 +804,7 @@ export async function POST(request: NextRequest) {
   };
 
   // 立即返回，后台异步处理
-  processPush(hours, period)
+  processPush(hours, period, countries)
     .then((summary) => {
       pushRunState = {
         running: false,
@@ -1159,7 +1182,7 @@ export async function GET(request: NextRequest) {
   });
 }
 
-async function processPush(hours: number, period: unknown): Promise<PushSummary> {
+async function processPush(hours: number, period: unknown, onlyCountries: string[] = []): Promise<PushSummary> {
   try {
     const suffix = periodSuffix(period);
     const today = beijingDate();
@@ -1245,7 +1268,23 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
     //
     // 阶段 ①
     // 按国别分组选题
-    for (const country of countryList) {
+    //
+    // ★ 2026-10-28：`onlyCountries` 非空时**只跑这些国家**（用户当时的需求：
+    // 「先把剩下三个国家推了，我要发出去」⇒ ⇒ 不能因为重跑整轮而在草稿箱里留下重复草稿）。
+    const countriesToRun = onlyCountries.length
+      ? countryList.filter((c) => onlyCountries.includes(c.code))
+      : countryList;
+    if (onlyCountries.length > 0) {
+      const known = new Set<string>(countryList.map((c) => String(c.code)));
+      const unknown = onlyCountries.filter((c) => !known.has(c));
+      if (unknown.length > 0) {
+        console.warn(
+          `[push] ⚠️ 请求了不存在的国家代码：${unknown.join('、')}` +
+            `（可用：${[...known].join('、')}）`,
+        );
+      }
+    }
+    for (const country of countriesToRun) {
       // 获取该国家过去 N 小时的文章。
       // 单国读取失败（DB 抖动）不该拖垮整轮：跳过这一国，其余国家照常出草稿。
       let articles: Awaited<ReturnType<typeof getArticlesByDateRange>>;
@@ -1358,28 +1397,34 @@ async function processPush(hours: number, period: unknown): Promise<PushSummary>
       // ★ 2026-10-28：**判组前**按投资相关性截断候选（防「某天稿件一多就崩」）。
       // ⇒ 背景见 `PUSH_JUDGE_CANDIDATE_CAP` 的注释（这正是「草稿箱只有 2 篇」的根因）。
       // ⇒ `scoredArticles` 已按 `compareByInvestmentRelevance` 排好序 ⇒ 截掉的是**相关性最低的尾部**。
+      // ⇒ ⚠️ 截断**就做在 `eligible` 上**（而不是在调用点另开一个变量）⇒
+      //   ⇒ ① 调用形态 `dedupeStories(eligible)` **保持不变** ⇒ L2 开关口径不受影响；
+      //   ⇒ ② `eligible` 的语义变成「合格候选（已截断到 60 条）」⇒ 已同步写进 AGENTS.md。
+      const eligibleAll = eligible;
       const judgeCandidates =
-        eligible.length > PUSH_JUDGE_CANDIDATE_CAP
-          ? eligible.slice(0, PUSH_JUDGE_CANDIDATE_CAP)
-          : eligible;
-      if (judgeCandidates.length < eligible.length) {
+        eligibleAll.length > PUSH_JUDGE_CANDIDATE_CAP
+          ? eligibleAll.slice(0, PUSH_JUDGE_CANDIDATE_CAP)
+          : eligibleAll;
+      if (judgeCandidates.length < eligibleAll.length) {
         candidatesDroppedByLimit.push({
           country_code: country.code,
-          dropped: eligible.length - judgeCandidates.length,
-          total: eligible.length,
+          dropped: eligibleAll.length - judgeCandidates.length,
+          total: eligibleAll.length,
           limit: PUSH_JUDGE_CANDIDATE_CAP,
           stage: 'before_judge',
         });
         console.warn(
           `[${country.name}] ⚠️ 进判组的候选被截断：` +
-            `合格 ${eligible.length} 条 → 只把前 ${PUSH_JUDGE_CANDIDATE_CAP} 条送进判组` +
-            `（砍掉 ${eligible.length - judgeCandidates.length} 条相关性最低的）` +
+            `合格 ${eligibleAll.length} 条 → 只把前 ${PUSH_JUDGE_CANDIDATE_CAP} 条送进判组` +
+            `（砍掉 ${eligibleAll.length - judgeCandidates.length} 条相关性最低的）` +
             `—— 这是**防崩的硬闸**，不是「没稿子」；被砍的那些不推。`,
         );
       }
 
       // 「同一件事」去重：链接 / 原文指纹（确定性）+ 模型判组（L2，每国 1 次调用）。
       // 判据与入库端**完全同源**（同一个 `dedupeStories`），不另起一套。
+      // ⚠️ 传的是 `judgeCandidates`（已按投资相关性截断到 60 条）⇒
+      //   ⇒ 但**L2 开关仍走默认值（开）**⇒ 口径与 AGENTS.md 记的一致。
       const { kept: dedupedArticles, drops: eventDrops, llm: llmJudge } =
         await dedupeStories(judgeCandidates);
       for (const d of eventDrops) {
