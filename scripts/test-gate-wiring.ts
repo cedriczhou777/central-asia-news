@@ -191,6 +191,61 @@ for (const k of [
 }
 
 // ============================================================
+// 九、★★ 2026-10-28 事故的三条守卫（**今天的纰漏不许再发生**）
+// ============================================================
+section('★★ push：判组前必须有候选上限（2026-10-28 事故的根因）');
+{
+  // 事故：选稿时 `eligible` = 本国**全部**合格候选（kz 一国 165 篇），
+  // `dedupeStories` 内部两两配对 ⇒ O(n²) ⇒ 约 1.35 万次 bigram 运算
+  // ⇒ 而容器只有 0.25 核 ⇒ ⇒ 整轮在逐国发布的中途崩掉
+  // ⇒ ⇒ 草稿箱里只剩前两国的稿子，后三国整轮没出来。
+  const limits = R('src/lib/push-limits.ts');
+  ok('★ 上限常量存在（PUSH_JUDGE_CANDIDATE_CAP）',
+    /export const PUSH_JUDGE_CANDIDATE_CAP\s*=\s*\d+/.test(limits));
+  ok('★ 上限有上限值（不是 0 / 不是天文数字）',
+    (() => {
+      const m = limits.match(/PUSH_JUDGE_CANDIDATE_CAP\s*=\s*(\d+)/);
+      if (!m) return false;
+      const v = Number(m[1]);
+      return v > 0 && v <= 200;
+    })());
+  ok('★ ★ 截断真的在**判组之前**（dedupeStories 的入参是截断后的量）',
+    /judgeCandidates/.test(pu) &&
+      /dedupeStories\(judgeCandidates\)/.test(pu) &&
+      // 截断必须在 dedupeStories 之前出现
+      pu.indexOf('PUSH_JUDGE_CANDIDATE_CAP') < pu.indexOf('dedupeStories(judgeCandidates)'),
+    '截断点必须排在 dedupeStories 调用之前');
+  ok('★ 截断量被报进 summary（不许静默截断）',
+    /candidatesDroppedByLimit\.push\(/.test(pu) && /stage:\s*'before_judge'/.test(pu));
+}
+
+section('★★ push 状态必须落库（2026-10-28 最大可观测性缺口）');
+{
+  // 事故：`pushRunState` 是**模块级内存态** ⇒ 实例一换（部署/缩容/冷启动）就全丢
+  // ⇒ ⇒ 「上一轮为什么只出了 2 篇」在架构上**查不到**（summary 与 error 都是 null）。
+  ok('★ 落库模块存在', /export async function persistPushRun/.test(R('src/lib/push-run-store.ts')));
+  // ⚠️ 判的是**写入处**（`void persistPushRun(pushRunState);`），
+  // 不是 import 那一行（`import { persistPushRun, … }` 没有左括号，不该计入）。
+  const persistCalls = (pu.match(/void persistPushRun\(/g) || []).length;
+  ok('★ POST 的**开始 / 成功 / 失败**三处都落库（崩了的原因必须留下）',
+    persistCalls >= 3,
+    `找到 ${persistCalls} 处写入（开始 / 成功 / 失败 各 1 处）`);
+  ok('★ GET 优先读库（跨实例可查）', /loadPersistedPushRun\(\)/.test(pu));
+  ok('★ 落库失败不阻塞推送（永不抛异常）',
+    /export async function persistPushRun/.test(R('src/lib/push-run-store.ts')) &&
+      /catch\s*\(/.test(R('src/lib/push-run-store.ts')));
+}
+
+section('★★ 增源：加源前必须判重（2026-10-28 新增纪律）');
+{
+  ok('★ 判重工具存在（check-source-dup）', /Jaccard|DUP_RATIO/.test(R('scripts/check-source-dup.ts')));
+  ok('★ 判重阈值不是 0（否则等于不判重）', (() => {
+    const m = R('scripts/check-source-dup.ts').match(/DUP_RATIO\s*=\s*([\d.]+)/);
+    return !!m && Number(m[1]) > 0 && Number(m[1]) <= 1;
+  })());
+}
+
+// ============================================================
 console.log(`\n${'='.repeat(64)}`);
 if (failures.length === 0) {
   console.log(`✅ 全部通过：${passed} 项断言`);

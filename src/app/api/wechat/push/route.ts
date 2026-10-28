@@ -4,6 +4,8 @@ import { getArticlesByDateRange } from '@/lib/db-articles';
 import { findCrossBatchDuplicates, CROSS_BATCH_SIM_FLOOR } from '@/lib/cross-batch-dup';
 import { beijingDate, extractFirstImage, latinCyrillicTokens, stripCyrillicParentheticals } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
+// ★ 2026-10-28：push 状态**落库**（`pushRunState` 是内存态 ⇒ 实例一换就丢 ⇒ 查不到上一轮）。
+import { persistPushRun, loadPersistedPushRun } from '@/lib/push-run-store';
 import {
   dedupeStories,
   isLlmJudgeEnabled,
@@ -802,6 +804,8 @@ export async function POST(request: NextRequest) {
     summary: null,
     error: null,
   };
+  // ★ 落库：这样「实例中途被换掉」也查得到这一轮的开始时间
+  void persistPushRun(pushRunState);
 
   // 立即返回，后台异步处理
   processPush(hours, period, countries)
@@ -814,6 +818,7 @@ export async function POST(request: NextRequest) {
         summary,
         error: null,
       };
+      void persistPushRun(pushRunState);
     })
     .catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -826,6 +831,8 @@ export async function POST(request: NextRequest) {
         summary: null,
         error: message,
       };
+      // ★ 落库：**崩了的原因必须留下**（2026-10-28 上午那轮 error 是 null ⇒ 查不到原因）
+      void persistPushRun(pushRunState);
     });
 
   return NextResponse.json({
@@ -838,6 +845,8 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  // ★ 2026-10-28：读一次落库的 push 状态（跨实例可查）⇒ 读不到就退回内存态。
+  const persistedPushRun = await loadPersistedPushRun();
   /**
    * 可选诊断：`?db=1` 时**读一次库**，报出「最近 12 小时的文章里，有多少条真的带原文」。
    *
@@ -1185,7 +1194,21 @@ export async function GET(request: NextRequest) {
     // ⚠️ 只看 `failures` 会得到错误结论：它只记异常（读库失败 / 建草稿失败），
     // 「窗口内没文章」「全部被判据挡掉」「去重后一条不剩」三类**正常跳过**
     // 在 2026-09-27 之前一个字都不写，于是「五国只推了一国」在响应里表现为成功。
-    lastRun: pushRunState,
+    // ★ 2026-10-28：**优先读库**（内存态会随实例消失 ⇒ 查不到上一轮）。
+    // ⇒ 库里没有（表还没建 / 从没跑过）⇒ 退回内存态。
+    lastRun: (() => {
+      // ⚠️ 只读一次（这个对象在 `NextResponse.json` 里是**立即求值**的）
+      const persisted = persistedPushRun;
+      if (!persisted) return pushRunState;
+      return {
+        running: persisted.running,
+        startedAt: persisted.started_at,
+        finishedAt: persisted.finished_at,
+        durationMs: persisted.duration_ms,
+        error: persisted.error,
+        summary: persisted.summary,
+      };
+    })(),
   }, {
     // 必须禁掉缓存：调度器轮询这个接口等状态变化，被缓存住就会一直看到旧状态，
     // 表现为「干等到超时」。

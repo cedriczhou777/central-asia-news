@@ -535,6 +535,113 @@ export function similarity(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
+/**
+ * ★★ **Jaccard 相似度 + 公共前缀修正**（2026-10-28 加；**刻意不接生产**，先离线量）。
+ *
+ * ## 病根
+ *
+ * 旧口径（`similarity`）用**字符 bigram 的 Jaccard** ⇒ ⇒ 两条标题**共享一大段前缀**时
+ * 交集暴涨 ⇒ ⇒ 相似度虚高 ⇒ ⇒ 候选对变多 ⇒ ⇒ **被错误地连成簇** ⇒ ⇒ 簇超限 ⇒
+ * ⇒ 「整簇丢弃」把簇里的**真重复**也一起丢 ⇒ ⇒ **用户看到重复**。
+ *
+ * 线上实例（2026-10-27 kz 的 6 条簇）：「哈萨克斯坦总统托卡耶夫会见中国五矿董事长」、
+ * 「哈萨克斯坦总统托卡耶夫接见CNMC公司董事长温根」、「哈萨克斯坦总统托卡耶夫主持阿克托盖铜冶炼厂开工仪式」
+ * —— **三件不同的事**，只因都提到「托卡耶夫」而被连在一起。
+ *
+ * ## 修法：**剔除公共前缀的 bigram 贡献**
+ *
+ * ⇒ ⇒ 剩下的 bigram 才是「**差异部分**」的相似度
+ * ⇒ ⇒ 语义：**「共享同一个主语」不算「说的是同一件事」**。
+ *
+ * ## ⭐ 判据（**第一版错了两处，这一版是正解**）
+ *
+ * 要同时算**两个**公共前缀长度：
+ * · `pKeep` = **保留空白**时的公共前缀长度（「词边界」在哪里开始不同）
+ * · `pStrip` = **去空白**时的公共前缀长度
+ *
+ * ⇒ **只有 `pKeep === pStrip` 才剔除前缀**：
+ * · 两者相等 ⇒ 公共部分里**没有空白差异** ⇒ 它真的是「共享同一段主语」⇒ 剔除
+ * · 两者不等 ⇒ 差异恰恰在空白处 ⇒ 那是「**词边界不同**」而不是「同一主语」⇒ **不剔除**
+ *   （否则「只差一个空格」的两条会被判成毫不相干 —— 第一版就栽在这里，sim 从 1 变成 0）
+ *
+ * 另加一条保护：**剔除后交集不得归零**（`inter - removed >= 1`）。
+ *
+ * ## ⚠️ 为什么**先不接生产**
+ *
+ * `similarity()` 被 14 处调用（含总审的 0.15 地板、判组的 0.28 地板）⇒ ⇒
+ * **改了它 ⇒ 所有地板的含义都变** ⇒ ⇒ 必须先把地板量完再接
+ * ⇒ ⇒ 而且 2026-10-28 实测：**L2 判组在同一批输入上跑两次结果不同**
+ * ⇒ ⇒ ⇒ 所以更稳的方向是「**把确定性判据做强、少依赖 L2**」⇒ ⇒ 这条线正是本函数。
+ *
+ * ## 实测（2026-10-27，真实语料 1332 条 + 人工标注 10 对真 / 5 对假）
+ *
+ * | 口径 | 判别力（真最低 − 假最高） | 地板 0.28 上真重复召回 | 假连接过线 | 真实语料候选对 / 超限簇 |
+ * |---|---|---|---|---|
+ * | 旧 | **−0.114**（真假完全分不开） | 10/10 | 3/5 | 210 / **9** |
+ * | 新 | **+0.111**（分得开了） | 10/10 | **0/5** | 95 / **3** |
+ */
+export function similarityFixed(a: string, b: string, minPrefix = 4): number {
+  if (!a || !b) return 0;
+  const na = normalizeText(a);
+  const nb = normalizeText(b);
+  if (na === nb) return 1;
+  const sa = charBigrams(na);
+  const sb = charBigrams(nb);
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let inter = 0;
+  for (const g of sa) if (sb.has(g)) inter++;
+  let union = sa.size + sb.size - inter;
+
+  const x = na.replace(/\s+/g, '');
+  const y = nb.replace(/\s+/g, '');
+  // 两个公共前缀长度（**判据的关键**）
+  const pKeep = commonPrefixLengthKeepSpace(na, nb);
+  const pStrip = commonPrefixLength(x, y);
+  // ★ 只有「保留空白」与「去空白」的公共前缀**一样长**才剔除
+  if (pKeep >= minPrefix && pKeep === pStrip) {
+    let removed = 0;
+    for (let i = 0; i < pKeep - 1; i++) {
+      const g = x.substring(i, i + 2);
+      // 这个 bigram 在两侧都**只**出现在前缀里 ⇒ 它是纯前缀贡献 ⇒ 剔除
+      if (countOccurrences(x, g) <= 1 && countOccurrences(y, g) <= 1) removed++;
+    }
+    // ★ 保护：剔除后不得归零
+    if (removed > 0 && inter - removed >= 1) {
+      inter -= removed;
+      union = Math.max(1, union - removed);
+    }
+  }
+  return union === 0 ? 0 : inter / union;
+}
+
+/** **去空白**时的最长公共前缀字符数。 */
+function commonPrefixLength(a: string, b: string): number {
+  const x = a.replace(/\s+/g, '');
+  const y = b.replace(/\s+/g, '');
+  let i = 0;
+  while (i < x.length && i < y.length && x[i] === y[i]) i++;
+  return i;
+}
+
+/** **保留空白**时的最长公共前缀字符数（`normalizeText` 的输出直接比）。 */
+function commonPrefixLengthKeepSpace(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+/** 某个 bigram 在字符串里出现几次（重叠也算）。 */
+function countOccurrences(s: string, gram: string): number {
+  if (gram.length === 0) return 0;
+  let n = 0;
+  let idx = s.indexOf(gram);
+  while (idx !== -1) {
+    n++;
+    idx = s.indexOf(gram, idx + 1);
+  }
+  return n;
+}
+
 // 两条新闻是否为重复内容（标题+正文综合相似度超过阈值即视为重复）
 //
 // ⚠️ 2026-09-29 删除。保留注释是为了**防止它被重新写回来**（不是忘了删）：
