@@ -1161,6 +1161,17 @@ export async function GET(request: NextRequest) {
        * 读法：`pushMaxPerCountry: 20` = 新版已接管；`15` = 部署还没接管流量。
        */
       pushMaxPerCountry: PUSH_MAX_PER_COUNTRY,
+      /**
+       * ★ 2026-10-28 两个新能力的**活体探针**（一眼判线上版本，避免「发了补推但跑的是旧版」
+       * ⇒ ⇒ 结果草稿箱里出现重复草稿 —— 建草稿不可逆，重复就是观感事故）。
+       *
+       * · `judgeCandidateCap` = 判组前截断候选的上限（`PUSH_JUDGE_CANDIDATE_CAP`）
+       *   ⇒ 有这个字段 ⇒ **判组前的截断已上线** ⇒ 整轮不会再因候选多而崩。
+       * · `countriesFilter` = true ⇒ `?countries=kg,tj,az` 这个补救参数已上线
+       *   ⇒ ⇒ 补推只跑指定国家 ⇒ ⇒ **不会产生重复草稿**。
+       */
+      judgeCandidateCap: PUSH_JUDGE_CANDIDATE_CAP,
+      countriesFilter: true,
       // v3 + v4 + g2 的**六个**活体探针：实现在 `@/lib/editor-review` 的 `runEditorProbes()`，
       // 期望值在 `EDITOR_PROBE_EXPECT`，且**期望值可达**由离线回归第十二节断言。
       // g2 新增的 `editorFixLocateGateProbe` 是**双向**的（一条必须拒、一条必须采纳）——
