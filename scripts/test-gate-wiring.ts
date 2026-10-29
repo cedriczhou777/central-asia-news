@@ -219,6 +219,25 @@ section('★★ push：判组前必须有候选上限（2026-10-28 事故的根�
     /candidatesDroppedByLimit\.push\(/.test(pu) && /stage:\s*'before_judge'/.test(pu));
 }
 
+section('★★ push：一国失败不许带走整轮（2026-10-28 事故的直接防线）');
+{
+  // 事故：整轮崩在**第 3 国** ⇒ 草稿箱里只剩前两国的稿子。
+  // ⇒ 而 `addDraft` **早就有** try/catch（跳过该国）——
+  // ⇒ **漏掉的是它前面那些**：正文外链图上传（每篇一次网络请求）、缩略图上传、HTML 生成
+  // ⇒ ⇒ **它们一崩，整轮就没了**。
+  // ⇒ 所以断言的是：**整个国家块**外面有 try ⇒ ⇒ 某国失败 ⇒ 跳过该国、其余照常。
+  const pubStart = pu.indexOf('for (const { country, articles: selectedArticles } of prepared) {');
+  const pubEnd = pu.indexOf('results.push({', pubStart);
+  const pubBlock = pu.slice(pubStart, pubEnd);
+  ok('★ 逐国发布循环**整块**被 try 包住（图片上传/缩略图/建草稿全在内）',
+    /try\s*\{/.test(pubBlock),
+    '崩溃点若在 try 之外 ⇒ 一国失败就会带走整轮');
+  ok('★ 失败时记进 `failures`（不静默）',
+    /failures\.push\(\{/.test(pu.slice(pubStart, pubStart + 12000)));
+  ok('★ 失败时 `continue`（继续下一个国家，不是整轮中止）',
+    /catch[\s\S]{0,400}?continue;/.test(pu.slice(pubStart, pubStart + 12000)));
+}
+
 section('★★ push 状态必须落库（2026-10-28 最大可观测性缺口）');
 {
   // 事故：`pushRunState` 是**模块级内存态** ⇒ 实例一换（部署/缩容/冷启动）就全丢

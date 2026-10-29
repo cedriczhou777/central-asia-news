@@ -1863,106 +1863,122 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
     // 这里用**总审之后**的 `prepared[i].articles`。建草稿是不可逆的，
     // 所以整段排版/上传都放在总审结论定下来之后 —— 顺序本身就是护栏。
     for (const { country, articles: selectedArticles } of prepared) {
-      // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
-      // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
-      const wechatArticles = [];
-      for (const a of selectedArticles) {
-        // 先清洗再上传图片：清洗会删掉模型自己编的图（占位图 / example.com / picsum 之类），
-        // 放在上传之前能省掉一批注定失败的网络请求，也避免把破图放进草稿。
-        const imgRegex = /<img[^>]*?\ssrc=["']([^"']+)["'][^>]*>/gi;
-        let content = sanitizeArticleContent(a.content);
-        const urls = [...content.matchAll(imgRegex)].map(m => m[1]);
-        if (urls.length > 0) {
-          // 每个 URL 并行上传，替换成微信 CDN url
-          const replacements = await Promise.all(
-            urls.map(async (u) => {
-              const uploaded = await uploadRemoteImage(u);
-              // 正文插图优先用微信 CDN url，退回 media_id，都拿不到就保留原图
-              return { from: u, to: uploaded.url || uploaded.mediaId || u };
-            })
-          );
-          for (const r of replacements) {
-            content = content.split(r.from).join(r.to);
-          }
-        }
-        wechatArticles.push({
-          title: a.title,
-          summary: a.summary,
-          content,
-          category: a.category,
-          source_name: a.source_name,
-          // 封面优先取已替换成微信 CDN 的正文首图，保证微信可访问。
-          // 兜底也从**清洗后**的正文里取 —— 用原始 a.content 会取到刚被删掉的编造图。
-          cover_image: content.match(/<img[^>]*?\ssrc=["']([^"']+)["']/i)?.[1] || extractFirstImage(content) || undefined,
-        });
-      }
-
-      // 生成微信公众号排版 HTML
-      const htmlContent = generateWechatHtml(
-        country.name,
-        country.flag,
-        suffix ? `${today} · ${suffix}` : today,
-        wechatArticles
-      );
-
-      // 上传缩略图。**取「最终顺序里第一条有图的」**，而不是只看第一条（2026-09-29 改）。
+      // ★★ 2026-10-29：**整个国家块包进 try** ⇒ 某国崩了**不许带走整轮**。
       //
-      // 用户原话：「你的封面是以第一个新闻的照片做插图的……没有图的时候，你要不然把第二新闻
-      // 放在第一个位置，或者直接使用第二个新闻的图片做封面。」
-      // 前者（把有图的排前面）由总审提示词的「封面规则」负责；这里负责后者。
-      // 两者的分工与边界都在 `lib/draft-cover.ts` 的注释里。
+      // 事故（2026-10-28）：整轮崩在**第 3 国** ⇒ 草稿箱里只剩前两国的稿子。
+      // ⇒ 而 `addDraft` 本身**早就有** try/catch（跳过该国）——
+      // ⇒ **漏掉的是它前面那些**：正文外链图上传（每篇一次网络请求）、
+      // ⇒ 缩略图上传、HTML 生成 —— 这些都在 try 之外 ⇒ ⇒ **它们一崩，整轮就没了**。
       //
-      // ⚠️ 候选图**只从这份日报自己的稿件里取**，且每个 URL 都先用 `sanitizeArticleContent`
-      // 过一遍 —— 用原始 `a.content` 会把模型自己编造的图片地址（占位图 / picsum 之类）
-      // 当成草稿封面去下载。绝不搜图库、绝不生成图。
-      const coverCandidates = wechatArticles.map((a, i) => {
-        const cleaned = sanitizeArticleContent(selectedArticles[i]?.content || '');
-        return {
-          title: a.title,
-          imageUrl: a.cover_image || extractFirstImage(cleaned) || undefined,
-        };
-      });
-      const draftCover = pickDraftCover(coverCandidates);
-      if (draftCover && draftCover.index > 0) {
-        console.log(
-          `[${country.name}] 草稿封面取自第 ${draftCover.index + 1} 条（第一条没图）：${draftCover.title}`,
-        );
-      }
-      const thumbMediaId = await uploadThumb(draftCover?.url);
-
-      // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
-      // 标题带时段后缀（日报 / 补报）：合并成日报后**同一天仍然可能有两份**草稿
-      // （自动那一轮 + 人工补跑），标题必须能区分，否则草稿箱里会出现两份一模一样的标题。
-      // 历史上 2026-09-19 用户投诉的就是这个观感。
-      // 关键：建草稿失败只跳过这一国。旧实现在这里 throw，首个国家一失败就把
-      // 整轮打成 500，后面四个国家一篇草稿都建不出来（2026-09-18 早报的实际情况）。
-      let mediaId: string;
+      // ⇒ 现在的语义：**一国失败 ⇒ 记进 `failures` ⇒ 跳过该国 ⇒ 其余国家照常出稿**。
+      // ⇒ 建草稿不可逆 ⇒ ⇒ 绝不为了「整轮原子性」而重跑整轮。
       try {
-        mediaId = await addDraft([{
-          title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
-          author: '中亚投资资讯',
-          content: htmlContent,
-          // 摘要不带篇数统计（2026-09-19 用户要求：标题/摘要里不要出现"30条"这类数字）
-          digest: `${country.name}${suffix || '今日'}投资资讯精选`,
-          thumbMediaId: thumbMediaId,
-          needOpenComment: 0,
-          onlyFansCanComment: 0,
-        }]);
+        // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
+        // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
+        const wechatArticles = [];
+        for (const a of selectedArticles) {
+          // 先清洗再上传图片：清洗会删掉模型自己编的图（占位图 / example.com / picsum 之类），
+          // 放在上传之前能省掉一批注定失败的网络请求，也避免把破图放进草稿。
+          const imgRegex = /<img[^>]*?\ssrc=["']([^"']+)["'][^>]*>/gi;
+          let content = sanitizeArticleContent(a.content);
+          const urls = [...content.matchAll(imgRegex)].map(m => m[1]);
+          if (urls.length > 0) {
+            // 每个 URL 并行上传，替换成微信 CDN url
+            const replacements = await Promise.all(
+              urls.map(async (u) => {
+                const uploaded = await uploadRemoteImage(u);
+                // 正文插图优先用微信 CDN url，退回 media_id，都拿不到就保留原图
+                return { from: u, to: uploaded.url || uploaded.mediaId || u };
+              })
+            );
+            for (const r of replacements) {
+              content = content.split(r.from).join(r.to);
+            }
+          }
+          wechatArticles.push({
+            title: a.title,
+            summary: a.summary,
+            content,
+            category: a.category,
+            source_name: a.source_name,
+            // 封面优先取已替换成微信 CDN 的正文首图，保证微信可访问。
+            // 兜底也从**清洗后**的正文里取 —— 用原始 a.content 会取到刚被删掉的编造图。
+            cover_image: content.match(/<img[^>]*?\ssrc=["']([^"']+)["']/i)?.[1] || extractFirstImage(content) || undefined,
+          });
+        }
+
+        // 生成微信公众号排版 HTML
+        const htmlContent = generateWechatHtml(
+          country.name,
+          country.flag,
+          suffix ? `${today} · ${suffix}` : today,
+          wechatArticles
+        );
+
+        // 上传缩略图。**取「最终顺序里第一条有图的」**，而不是只看第一条（2026-09-29 改）。
+        //
+        // 用户原话：「你的封面是以第一个新闻的照片做插图的……没有图的时候，你要不然把第二新闻
+        // 放在第一个位置，或者直接使用第二个新闻的图片做封面。」
+        // 前者（把有图的排前面）由总审提示词的「封面规则」负责；这里负责后者。
+        // 两者的分工与边界都在 `lib/draft-cover.ts` 的注释里。
+        //
+        // ⚠️ 候选图**只从这份日报自己的稿件里取**，且每个 URL 都先用 `sanitizeArticleContent`
+        // 过一遍 —— 用原始 `a.content` 会把模型自己编造的图片地址（占位图 / picsum 之类）
+        // 当成草稿封面去下载。绝不搜图库、绝不生成图。
+        const coverCandidates = wechatArticles.map((a, i) => {
+          const cleaned = sanitizeArticleContent(selectedArticles[i]?.content || '');
+          return {
+            title: a.title,
+            imageUrl: a.cover_image || extractFirstImage(cleaned) || undefined,
+          };
+        });
+        const draftCover = pickDraftCover(coverCandidates);
+        if (draftCover && draftCover.index > 0) {
+          console.log(
+            `[${country.name}] 草稿封面取自第 ${draftCover.index + 1} 条（第一条没图）：${draftCover.title}`,
+          );
+        }
+        const thumbMediaId = await uploadThumb(draftCover?.url);
+
+        // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
+        // 标题带时段后缀（日报 / 补报）：合并成日报后**同一天仍然可能有两份**草稿
+        // （自动那一轮 + 人工补跑），标题必须能区分，否则草稿箱里会出现两份一模一样的标题。
+        // 历史上 2026-09-19 用户投诉的就是这个观感。
+        // 关键：建草稿失败只跳过这一国。旧实现在这里 throw，首个国家一失败就把
+        // 整轮打成 500，后面四个国家一篇草稿都建不出来（2026-09-18 早报的实际情况）。
+        let mediaId: string;
+        try {
+          mediaId = await addDraft([{
+            title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
+            author: '中亚投资资讯',
+            content: htmlContent,
+            // 摘要不带篇数统计（2026-09-19 用户要求：标题/摘要里不要出现"30条"这类数字）
+            digest: `${country.name}${suffix || '今日'}投资资讯精选`,
+            thumbMediaId: thumbMediaId,
+            needOpenComment: 0,
+            onlyFansCanComment: 0,
+          }]);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[${country.name}] 创建草稿失败，跳过该国：`, err);
+          failures.push({ country_code: country.code, country_name: country.name, error: msg });
+          continue;
+        }
+
+        results.push({
+          country_code: country.code,
+          country_name: country.name,
+          media_id: mediaId,
+          article_count: selectedArticles.length,
+          cover_from_index: draftCover ? draftCover.index : null,
+          cover_from_title: draftCover ? draftCover.title : null,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[${country.name}] 创建草稿失败，跳过该国：`, err);
+        console.error(`[${country.name}] ★ 本国发布失败（已跳过该国，其余国家继续）：`, err);
         failures.push({ country_code: country.code, country_name: country.name, error: msg });
         continue;
       }
-
-      results.push({
-        country_code: country.code,
-        country_name: country.name,
-        media_id: mediaId,
-        article_count: selectedArticles.length,
-        cover_from_index: draftCover ? draftCover.index : null,
-        cover_from_title: draftCover ? draftCover.title : null,
-      });
     }
 
     // ⏱ 内存读数（2026-10-13 加）：实现、单位陷阱与自洽断言都在 `src/lib/memory-probe.ts`。
