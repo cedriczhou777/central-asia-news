@@ -47,6 +47,7 @@
     "analyze:country-filter": "tsx scripts/analyze-country-filter.ts",
     "analyze:pair-recall": "tsx scripts/analyze-pair-recall.ts",
     "analyze:floor": "tsx scripts/measure-floor.ts",
+    "measure:dup-precision": "tsx scripts/measure-dup-precision.ts",
     "analyze:source-scan": "tsx scripts/scan-candidate-sources.ts",
     "analyze:source-yield": "tsx scripts/measure-source-yield.ts",
     "analyze:judge-order": "tsx scripts/analyze-judge-order.ts",

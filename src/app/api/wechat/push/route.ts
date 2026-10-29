@@ -1194,21 +1194,23 @@ export async function GET(request: NextRequest) {
     // ⚠️ 只看 `failures` 会得到错误结论：它只记异常（读库失败 / 建草稿失败），
     // 「窗口内没文章」「全部被判据挡掉」「去重后一条不剩」三类**正常跳过**
     // 在 2026-09-27 之前一个字都不写，于是「五国只推了一国」在响应里表现为成功。
-    // ★ 2026-10-28：**优先读库**（内存态会随实例消失 ⇒ 查不到上一轮）。
-    // ⇒ 库里没有（表还没建 / 从没跑过）⇒ 退回内存态。
-    lastRun: (() => {
-      // ⚠️ 只读一次（这个对象在 `NextResponse.json` 里是**立即求值**的）
-      const persisted = persistedPushRun;
-      if (!persisted) return pushRunState;
-      return {
-        running: persisted.running,
-        startedAt: persisted.started_at,
-        finishedAt: persisted.finished_at,
-        durationMs: persisted.duration_ms,
-        error: persisted.error,
-        summary: persisted.summary,
-      };
-    })(),
+    // ⚠️ `lastRun` 是**「进程年龄」指纹**（内存态，容器一重启就清零）
+    // ⇒ ⇒ **它必须仍然由 `pushRunState` 承载**（那是「线上跑的是哪一版」的不依赖新字段的证据）
+    // ⇒ ⇒ 而「跨实例可查的那一轮」放在**另一个键** `lastRunPersisted`（落库态）
+    // ⇒ ⇒ **两个都要**：一个说明「这一轮跑成什么样」，一个说明「上一轮跑成什么样」。
+    lastRun: pushRunState,
+    // ★ 2026-10-29：跨实例的上一轮（落库）⇒ 实例换了也查得到
+    // ⇒ ⚠️ 表没建时为 null（静默降级，不影响推送链路）
+    lastRunPersisted: persistedPushRun
+      ? {
+          running: persistedPushRun.running,
+          startedAt: persistedPushRun.started_at,
+          finishedAt: persistedPushRun.finished_at,
+          durationMs: persistedPushRun.duration_ms,
+          error: persistedPushRun.error,
+          summary: persistedPushRun.summary,
+        }
+      : null,
   }, {
     // 必须禁掉缓存：调度器轮询这个接口等状态变化，被缓存住就会一直看到旧状态，
     // 表现为「干等到超时」。
