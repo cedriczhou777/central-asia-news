@@ -1,0 +1,229 @@
+/**
+ * **草稿审稿审计**（2026-10-30）
+ *
+ * ## 为什么要有它
+ *
+ * 2026-10-30 用户要求「站在审稿人的角度，检查翻译、数据、概括准不准」。
+ * ⇒ ⇒ 人工读 10 篇能看出问题，但**读不完 86 篇** ⇒ ⇒ 而且**每次都读一遍**不现实
+ * ⇒ ⇒ **必须变成自动指标**，每次 push 后跑一遍出报告。
+ *
+ * ## 三个指标（对应用户提的三点）
+ *
+ * ① **数据**：正文里的「百分比 / 金额 / 倍数」是否都能在**原文**里找到
+ *    ⇒ 关键在**数字归一化**（见 {@link normalizeNumbers}）：
+ *    俄语用逗号作小数点（`65,4`）、千位用空格（`28 27 трлн`）、
+ *    中文用「万亿/亿/万」⇒ ⇒ 不归一化就全是假阳性。
+ * ② **翻译**：正文里出现**原文语言里没有的拉丁字母词**（例如俄语原文里冒出英文单词）
+ *    ⇒ 这是「翻译掺了原文没有的东西」的信号。
+ * ③ **概括**：标题里混进了**源站的体裁后缀**（`- 摄影作品` / `- фото`）
+ *    ⇒ 以及「标题与摘要指向不同事实」。
+ *
+ * ## ⚠️ 这个工具的定位：**筛子，不是判决**
+ *
+ * 它报的是「**值得人工看的清单**」⇒ ⇒ **报出来的每一条都要人工判读**
+ * ⇒ ⇒ 报「有差异」**不等于**「有问题」（可能是表达差异）
+ * ⇒ ⇒ **但「没报出来」也不等于「没问题」**（原文太短 ⇒ 核对不了 ⇒ ⚠️ 静默通过）。
+ *
+ * ## 用法
+ *
+ *   npx tsx scripts/audit-drafts.ts                 # 审计最近两日入库的稿子
+ *   npx tsx scripts/audit-drafts.ts 2026-10-29      # 指定某一天
+ */
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+
+const BASE = 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
+
+/** 中文/俄文里「乘以 10^n」的单位 ⇒ 归一到「亿」。 */
+const UNITS: Record<string, number> = {
+  万亿: 1e12, 十亿: 1e9, 亿: 1e8, 千万: 1e7, 百万: 1e6, 十万: 1e5, 万: 1e4, 千: 1e3,
+  трлн: 1e12, млрд: 1e9, млн: 1e6, тыс: 1e3, тыщ: 1e3,
+};
+
+/** 「百分比」不算金额，单独一类（归一到「%」）。 */
+const PCT = '%％';
+
+/**
+ * 抽出一段文本里的「数值 + 单位」并归一。
+ *
+ * @returns 形如 `['43.34%', '282700亿', '60倍']` 的集合（已归一，单位统一）
+ */
+export function normalizeNumbers(text: string): Set<string> {
+  const out = new Set<string>();
+  const clean = (text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  // 数值：支持千位空格（俄语 `28 27`）与逗号小数（俄语 `65,4`）
+  const num = '(?:\\d{1,3}(?:\\s\\d{3})+|\\d+)(?:[.,]\\d+)?';
+  const re = new RegExp(`(${num})\\s*(${Object.keys(UNITS).join('|')}|${PCT}|倍|раз|в раза|раза)`, 'gu');
+  for (const m of clean.matchAll(re)) {
+    let raw = m[1].replace(/\s+/g, '');
+    const comma = raw.includes(',');
+    raw = raw.replace(',', '.');
+    const v = Number(raw);
+    if (!Number.isFinite(v)) continue;
+    const unit = m[2];
+    if (unit === PCT || unit === '％') {
+      out.add(`${v}%`);
+      continue;
+    }
+    if (unit === '倍' || unit === 'раз' || unit === 'в раза' || unit === 'раза') {
+      out.add(`${v}倍`);
+      continue;
+    }
+    const scale = UNITS[unit];
+    if (scale === undefined) continue;
+    // 归一到「亿」：值 / 1e8
+    const yi = v * scale / 1e8;
+    out.add(`${Number(yi.toFixed(4))}亿`);
+  }
+  // 纯百分比（没有单位的 % 已被上面捕获）
+  return out;
+}
+
+/** 俄语原文里不该出现的拉丁词（排除专有名词常见的英文字母缩写不算）。 */
+const LATIN_WORD = /[A-Za-z]{4,}/g;
+
+export interface AuditItem {
+  country: string;
+  title: string;
+  reason: string;
+  detail: string;
+}
+
+/** 一篇稿子的审计。 */
+export function auditArticle(a: {
+  title?: string | null;
+  summary?: string | null;
+  content?: string | null;
+  originalContent?: string | null;
+  country?: string | null;
+}): AuditItem[] {
+  const items: AuditItem[] = [];
+  const oc = a.originalContent || '';
+  const body = (a.content || '').replace(/<[^>]+>/g, ' ');
+  const title = a.title || '';
+
+  // ① 数据：正文里的数字是否都在原文里
+  const bodyNums = normalizeNumbers(body);
+  const origNums = normalizeNumbers(oc);
+  const missing = [...bodyNums].filter((n) => !origNums.has(n));
+  if (missing.length > 0) {
+    items.push({
+      country: a.country || '?',
+      title,
+      reason: '数据',
+      detail: `正文有、原文里找不到：${missing.slice(0, 5).join('、')}`,
+    });
+  }
+
+  // ② 翻译：**只在原文本身就含拉丁字母时**才做「拉丁词比对」。
+  //
+  // ⚠️⚠️ **这一条曾经几乎全是假阳性**（2026-10-30 首版实测 89 篇命中）：
+  // 俄语原文里的**人名/地名在中文正文里是拉丁转写**（Амина Меликова → amina、melikova）
+  // ⇒ ⇒ 「原文里没有这些拉丁词」是**必然**的 ⇒ ⇒ 对俄语源一律不成立。
+  // ⇒ ⇒ 判据收紧成：**原文含拉丁字母**（英语/阿塞拜疆语等）时才查。
+  // ⇒ ⇒ 俄语源只能靠**数字一致 + 专名一致**判断翻译质量（见上）。
+  const origHasLatin = /[A-Za-z]/.test(oc);
+  const origLatin = new Set((oc.match(LATIN_WORD) || []).map((w) => w.toLowerCase()));
+  const bodyLatin = new Set(
+    (body.replace(/https?:\/\/\S+/g, ' ').match(LATIN_WORD) || []).map((w) => w.toLowerCase()),
+  );
+  const extra = origHasLatin ? [...bodyLatin].filter((w) => !origLatin.has(w)) : [];
+  if (extra.length > 0) {
+    items.push({
+      country: a.country || '?',
+      title,
+      reason: '翻译',
+      detail: `正文出现原文里没有的拉丁词：${extra.slice(0, 5).join('、')}`,
+    });
+  }
+
+  // ② 翻译：**中文正文里出现了原文语言里不可能有的结构** ⇒ 例如俄语原文里出现中文标点/汉字
+  // （翻译时把原文的中文稿子又塞回去、或把别的稿子的中文混进来）
+  if (/[\u4e00-\u9fff]/.test(oc)) {
+    const hanInOrig = (oc.match(/[\u4e00-\u9fff]/g) || []).length;
+    if (hanInOrig > 0 && hanInOrig > oc.length * 0.05) {
+      items.push({
+        country: a.country || '?',
+        title,
+        reason: '翻译',
+        detail: `原文里混进了 ${hanInOrig} 个汉字（原文不像中文稿）`,
+      });
+    }
+  }
+
+  // ③ 概括：标题里混进了源站的体裁后缀
+  const suffix = /\s*[-–—|｜]\s*(摄影作品|图片|照片|视频|现场图片|фото|Фото|видео|Видео)\s*$/;
+  if (suffix.test(title)) {
+    items.push({
+      country: a.country || '?',
+      title,
+      reason: '概括',
+      detail: '标题末尾混进了源站的体裁后缀',
+    });
+  }
+
+  // ③ 概括：标题里的数字，摘要里没有（用户看到的「标题与摘要对不上」）
+  const titleNums = normalizeNumbers(title);
+  const sumNums = normalizeNumbers(a.summary || '');
+  const tOnly = [...titleNums].filter((n) => !sumNums.has(n));
+  if (titleNums.size > 0 && tOnly.length === titleNums.size && sumNums.size === 0) {
+    items.push({
+      country: a.country || '?',
+      title,
+      reason: '概括',
+      detail: '标题含数字但摘要里一个都没有 ⇒ 标题与摘要信息不匹配',
+    });
+  }
+
+  return items;
+}
+
+async function fetchDay(date: string): Promise<Array<Record<string, unknown>>> {
+  const res = await fetch(`${BASE}/api/articles?date=${date}&limit=900`);
+  const j = (await res.json()) as { articles?: Array<Record<string, unknown>> };
+  return j.articles || [];
+}
+
+async function main(): Promise<void> {
+  const arg = process.argv[2];
+  const dates = arg ? [arg] : ['2026-10-29', '2026-10-30'];
+  const arts: Array<Record<string, unknown>> = [];
+  for (const d of dates) arts.push(...(await fetchDay(d)));
+  console.log(`审计 ${arts.length} 篇（${dates.join('、')}）\n`);
+
+  const byReason = new Map<string, AuditItem[]>();
+  let clean = 0;
+  let tooShort = 0;
+  for (const a of arts) {
+    const oc = String(a.originalContent || '');
+    if (oc.length < 300) tooShort++;
+    const items = auditArticle(a as never);
+    if (items.length === 0) clean++;
+    for (const it of items) {
+      const k = it.reason;
+      const arr = byReason.get(k) || [];
+      arr.push(it);
+      byReason.set(k, arr);
+    }
+  }
+
+  // ⚠️⚠️ 模板字符串里**不能写 `//`**（它会被当成注释，把后面的 `)}` 一起吃掉 ⇒ 语法错）
+  // ⇒ 2026-10-30 今晚在 `fetch-telegram.ts` 与这里**各栽一次** ⇒ ⇒ 一律先算好再插值。
+  const pct = (x: number): number => Math.round((x * 100) / Math.max(1, arts.length));
+  console.log(`★ 三项指标全过：${clean} 篇（${pct(clean)}%）`);
+  console.log(`★ 原文不足 300 字符（**正文基本无法核对**）：${tooShort} 篇（${pct(tooShort)}%）`);
+
+  for (const [reason, items] of byReason) {
+    console.log(`\n${'='.repeat(70)}\n=== 【${reason}】命中 ${items.length} 篇 ===`);
+    for (const it of items.slice(0, 20)) {
+      console.log(`  [${it.country}] ${it.title.slice(0, 50)}`);
+      console.log(`      ⇒ ${it.detail}`);
+    }
+    if (items.length > 20) console.log(`  … 另 ${items.length - 20} 篇`);
+  }
+  console.log(
+    '\n⚠️ 这些是「**值得人工看**」的清单 ⇒ **报出来不等于有问题**（可能是表达差异）；' +
+      '\n   但「没报出来」**也不等于没问题**（原文太短 ⇒ 核对不了 ⇒ 静默通过）。',
+  );
+}
+void main();

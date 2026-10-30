@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { findCrossBatchDuplicates, CROSS_BATCH_SIM_FLOOR } from '@/lib/cross-batch-dup';
-import { beijingDate, extractFirstImage, latinCyrillicTokens, stripCyrillicParentheticals } from '@/lib/utils';
+import { beijingDate, extractFirstImage, latinCyrillicTokens, stripCyrillicParentheticals, similarity } from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 // ★ 2026-10-28：push 状态**落库**（`pushRunState` 是内存态 ⇒ 实例一换就丢 ⇒ 查不到上一轮）。
 import { persistPushRun, loadPersistedPushRun } from '@/lib/push-run-store';
@@ -46,7 +46,7 @@ import {
   type ReviewItem,
 } from '@/lib/editor-review';
 import { pickDraftCover } from '@/lib/draft-cover';
-import { PUSH_MAX_PER_COUNTRY, PUSH_JUDGE_CANDIDATE_CAP } from '@/lib/push-limits';
+import { PUSH_MAX_PER_COUNTRY, PUSH_JUDGE_CANDIDATE_CAP, CROSS_COUNTRY_DUP_SIM } from '@/lib/push-limits';
 import {
   readMemorySnapshot,
   MEMORY_PROBE_VERSION,
@@ -665,6 +665,30 @@ interface PushSummary {
    * ⇒ 与 `skipped`（整国跳过）**分层**：那个记「这一国一篇都没有」，
    * 这个记「这一国有，但多出来的被上限砍了」。
    */
+  /**
+   * ★★ 跨国去重的记录（2026-10-30）：被去掉的那篇 + 保留在哪一国 + 相似度。
+   *
+   * 判组是**逐国**调的 ⇒ ⇒ 同一件事在两个国家各有一篇时**没人管** ⇒ ⇒ 两份草稿里各出现一次
+   * ⇒ ⇒ 用户看到重复。⇒ ⇒ 这一层是「逐国判组之外」的补网。
+   */
+  crossCountryDrops: Array<{
+    /** 被去掉的那篇所属国 */
+    country_code: string;
+    /** 保留的那篇所属国 */
+    kept_country_code: string;
+    /** 两篇标题的相似度 */
+    sim: number;
+    dropped_title: string;
+    kept_title: string;
+  }>;
+  /**
+   * ★★ 每一份草稿里装了**哪些稿子**（2026-10-30）。
+   *
+   * 之前 summary 只记「每国几篇」⇒ ⇒ **不记是哪几篇** ⇒ ⇒ 草稿在微信后台读不到
+   * ⇒ ⇒ 一旦出现重复/错内容，**没有任何凭据可查**。⇒ ⇒ 这一项是唯一的凭据。
+   */
+  draftTitles: Array<{ country_code: string; titles: string[] }>;
+
   candidatesDroppedByLimit: Array<{
     country_code: string;
     /** 被砍掉的条数 */
@@ -1579,6 +1603,85 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
     }
 
     // ============================================================
+    // ============================================================
+    // ★★ 跨国去重（2026-10-30 新增）—— **用户在草稿箱里看到「重复」的机制**
+    // ============================================================
+    //
+    // 判组（`dedupeStories`）是**逐国**调的 ⇒ ⇒ **同一件事在两个国家各有一篇时，没人管**
+    // ⇒ ⇒ 两份草稿里各出现一次 ⇒ ⇒ 用户看到重复。
+    //
+    // 2026-10-30 实测（两日 469 篇）：
+    // · `kz × uz` sim **0.667**「亚美尼亚议会爆发大规模斗殴」⇒ **同一件事进两份草稿**
+    // · `kg × kz` sim **0.417**「哈萨克斯坦总理别克托诺夫访问吉尔吉斯斯坦」
+    //   ⇒ 那条本该归 **kg**（访问吉尔吉斯斯坦），却出现在 **kz** 的稿子里
+    //
+    // ⇒ 规则：**同一件事只保留一篇，保留「原文更完整」的那篇**
+    //   （信息量大的那篇；长度相同则保留**先出现的** ⇒ 顺序由国家顺序决定 ⇒ 稳定）。
+    // ⇒ ⇒ 顺带治了「归属错国家」（别克托诺夫那条会被留在更合适的那一国）。
+    //
+    // ⚠️ **放在阶段 ② 之前** ⇒ ⇒ 总审看到的就是**已去重**的清单
+    // ⇒ ⇒ 它自己的「跨批次重复」提示也就不会对着已被删掉的稿子发。
+    // ⚠️ **只挡「明显是同一件事」的**（门槛 0.35 高于判组的召回地板 0.28）
+    // ⇒ ⇒ 「话题相近但事件不同」的仍交给总审判。
+    const crossCountryDrops: Array<{
+      country_code: string;
+      kept_country_code: string;
+      sim: number;
+      dropped_title: string;
+      kept_title: string;
+    }> = [];
+    {
+      // 所有候选摊平 ⇒ 带上「国家顺序」用于「长度相同」的稳定裁决
+      const flat: Array<{
+        pc: (typeof prepared)[number];
+        art: (typeof prepared)[number]['articles'][number];
+        order: number;
+      }> = [];
+      prepared.forEach((pc, pi) => {
+        for (const art of pc.articles) flat.push({ pc, art, order: pi });
+      });
+      const drop = new Set<(typeof prepared)[number]['articles'][number]>();
+      for (const x of flat) {
+        if (drop.has(x.art)) continue;
+        for (const y of flat) {
+          if (x === y || drop.has(y.art)) continue;
+          if (x.pc.country.code === y.pc.country.code) continue;
+          const sim = similarity(x.art.title || '', y.art.title || '');
+          if (sim < CROSS_COUNTRY_DUP_SIM) continue;
+          const xLen = (x.art.original_content || '').length;
+          const yLen = (y.art.original_content || '').length;
+          // 保留原文更长的；长度相同 ⇒ 保留国家顺序更前的（稳定）
+          const xWorse = xLen < yLen || (xLen === yLen && x.order > y.order);
+          if (!xWorse) continue;
+          drop.add(x.art);
+          crossCountryDrops.push({
+            country_code: x.pc.country.code,
+            kept_country_code: y.pc.country.code,
+            sim: Number(sim.toFixed(3)),
+            dropped_title: x.art.title || '',
+            kept_title: y.art.title || '',
+          });
+          break;
+        }
+      }
+      if (drop.size > 0) {
+        for (const pc of prepared) {
+          const before = pc.articles.length;
+          pc.articles = pc.articles.filter((a) => !drop.has(a));
+          if (before !== pc.articles.length) {
+            console.log(
+              `[${pc.country.name}] 跨国去重去掉 ${before - pc.articles.length} 篇` +
+                `（同一件事在另一国已有更完整的稿子）`,
+            );
+          }
+        }
+        console.log(
+          `[push] ★ 跨国去重：${drop.size} 篇（同一件事跨国家重复）` +
+            `—— 判组是逐国跑的，跨国的重复原本没人管`,
+        );
+      }
+    }
+
     // 阶段 ②：整体总审（5 国统一一道）—— 2026-09-29 新增
     // ============================================================
     //
@@ -1997,6 +2100,17 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       merges,
       // ★ 被每国篇数上限砍掉的候选数（2026-10-27）—— 与「判据层」的 excludedByReason 分层
       candidatesDroppedByLimit,
+    // ★★ 跨国去重（2026-10-30）：同一件事跨国家重复 ⇒ 逐国判组管不到 ⇒ 这里补
+    crossCountryDrops,
+    // ★★ 草稿里装了哪些稿子（2026-10-30）—— **可审计性**：
+    //   之前 summary 只记「每国几篇」，**不记是哪几篇** ⇒ ⇒ 出了重复/错内容**无从查起**
+    //   （草稿在微信后台，接口读不到）⇒ ⇒ 这一项是「那一轮草稿里到底有什么」的唯一凭据。
+    draftTitles: results.map((r) => ({
+      country_code: r.country_code,
+      titles: (prepared.find((p) => p.country.code === r.country_code)?.articles ?? []).map(
+        (a) => a.title || '',
+      ),
+    })),
     // ★ 跨批次重复的计数（2026-10-25）—— `hits` 是提示数（含误报），`deleted` 才是真删的。
     crossBatch: {
       hits: crossBatchHits,
