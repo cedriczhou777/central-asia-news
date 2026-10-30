@@ -292,6 +292,20 @@ section('★★ 草稿文字清洗必须真的接进成品（2026-10-30 新增�
     /textCleanup:\s*\{/.test(pu) && /titleSuffixStripped/.test(pu) && /duplicateSentences/.test(pu));
 }
 
+section('★★ 推送参数：period / hours 必须同时认 query 与 body（2026-10-30）');
+{
+  // 事故：`POST ?period=daily` 被**静默忽略**（只读 body）⇒ `scheduledWindow(null)` 返回 null
+  // ⇒ ⇒ 窗口从「按时刻表固定」退化成「执行时刻 − hours」⇒ **整体平移 8.8 小时**
+  // ⇒ ⇒ 而响应里 `period` 报 null、`window.source` 报 'hours' ⇒ **不细看发现不了**。
+  ok('★ period 从 query 也能读到', /qp\.get\('period'\)/.test(pu));
+  ok('★ period 的取值是 body 优先、query 兜底', /body\.period\s*\?\?\s*qp\.get\('period'\)/.test(pu));
+  ok('★ hours 从 query 也能读到', /qp\.get\('hours'\)/.test(pu));
+  // 退化必须**当场报警**，否则只有等用户在草稿箱里看出稿子少了/多了才发现。
+  ok('★ 传了不在时刻表里的 period ⇒ 必须告警（不许静默退化）',
+    /period="\$\{period\}".*不在时刻表里/s.test(pu));
+  ok('★ 告警里列出了可用值', /PUBLISH_SCHEDULES\.map/.test(pu));
+}
+
 // ============================================================
 console.log(`\n${'='.repeat(64)}`);
 if (failures.length === 0) {

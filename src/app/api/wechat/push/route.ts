@@ -808,8 +808,15 @@ let pushRunState: PushRunState = {
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-  const hours = typeof body.hours === 'number' ? body.hours : 24;
-  const period = body.period;
+  const qp = request.nextUrl.searchParams;
+  // ⚠️⚠️ 2026-10-30 修：`period` / `hours` 原来**只认 body** ⇒ `POST ?period=daily` 被**静默忽略**
+  // ⇒ ⇒ `scheduledWindow(null)` 返回 null ⇒ 窗口从「按时刻表固定（昨日04:00→今日04:00）」
+  // ⇒ ⇒ **退化成「执行时刻 − 24h」** ⇒ ⇒ 推出来的稿子窗口整体平移了 8.8 小时，
+  // ⇒ ⇒ 而**响应里看不出**（`period` 报 null、`window.source` 报 'hours'，都得细看才发现）。
+  // ⇒ ⇒ 现在 **query 与 body 都认**（body 优先），与 `?countries=` 的口径一致。
+  const hours =
+    typeof body.hours === 'number' ? body.hours : Number(qp.get('hours')) || 24;
+  const period = body.period ?? qp.get('period') ?? undefined;
   // ★ 2026-10-28：**只推指定的国家**（`{"countries":["kg","tj","az"]}` 或 `?countries=kg,tj,az`）。
   //
   // ## 为什么需要它（**这是用户当时的需求**）
@@ -1304,6 +1311,17 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
     const windowSource: 'schedule' | 'hours' = scheduled ? 'schedule' : 'hours';
     const windowHours =
       scheduled ? scheduled.hours : Math.round((now.getTime() - new Date(startDate).getTime()) / 3_600_000);
+
+    // ⚠️ 2026-10-30：**传了 `period` 但时刻表里没有 ⇒ 静默退化成浮动窗口**。
+    // ⇒ ⇒ 退化的后果是「窗口整体平移」（与定时那一轮重叠/漏段）⇒ ⇒ 必须**当场报警**，
+    // ⇒ ⇒ 否则只有等用户在草稿箱里看出稿子少了/多了才发现。
+    if (typeof period === 'string' && !scheduled) {
+      console.warn(
+        `[push] ⚠️ 传了 period="${period}"，但它不在时刻表里（可用：${PUBLISH_SCHEDULES.map(
+          (s) => s.period,
+        ).join('、')}）⇒ ⇒ **窗口退化成「执行时刻 − ${hours} 小时」**（不是按时刻表的固定窗口）`,
+      );
+    }
 
     console.log(
       `微信公众号推送：${today}${suffix ? ' ' + suffix : ''}，汇总 ${startDate} 至 ${endDate}` +
