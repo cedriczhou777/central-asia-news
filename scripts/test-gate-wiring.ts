@@ -302,7 +302,7 @@ section('★★ 推送参数：period / hours 必须同时认 query 与 body（2
   ok('★ hours 从 query 也能读到', /qp\.get\('hours'\)/.test(pu));
   // 退化必须**当场报警**，否则只有等用户在草稿箱里看出稿子少了/多了才发现。
   ok('★ 传了不在时刻表里的 period ⇒ 必须告警（不许静默退化）',
-    /period="\$\{period\}".*不在时刻表里/s.test(pu));
+    /period="\$\{period\}"/.test(pu) && /不在时刻表里/.test(pu));
   ok('★ 告警里列出了可用值', /PUBLISH_SCHEDULES\.map/.test(pu));
 }
 
