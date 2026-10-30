@@ -264,6 +264,34 @@ section('★★ 增源：加源前必须判重（2026-10-28 新增纪律）');
   })());
 }
 
+section('★★ 草稿文字清洗必须真的接进成品（2026-10-30 新增）');
+{
+  // 这层是**直接改写用户成品**的（剥标题后缀 / 删正文重复句 / 删标题回声）
+  // ⇒ ⇒ 如果只是「写了函数、接了 import、但没把输出用回去」，
+  // ⇒ ⇒ 就是一个**装饰品闸** —— 而装饰品闸比没有闸更坏（它让人以为已经修好了）。
+  ok('★ 清洗函数存在（cleanDraftText）', /export function cleanDraftText/.test(R('src/lib/utils.ts')));
+  ok('★ 剥后缀的函数存在（stripSourceSuffix）', /export function stripSourceSuffix/.test(R('src/lib/utils.ts')));
+
+  // ① 被调用（不是只 import）
+  const cleanCalls = (pu.match(/cleanDraftText\(/g) || []).length;
+  ok('★ push 路由真的调用了它', cleanCalls >= 1, `找到 ${cleanCalls} 处调用`);
+  const stripCalls = (pu.match(/stripSourceSuffix\(/g) || []).length;
+  ok('★ 标题后缀在**选稿阶段**就剥了（让去重比的是干净标题）',
+    stripCalls >= 1, `找到 ${stripCalls} 处调用`);
+
+  // ② ★ 输出真的进了成品（关键）
+  ok('★ 清洗后的标题被写回（`a.title = cleaned.title`）',
+    /a\.title\s*=\s*cleaned\.title/.test(pu));
+  ok('★ 清洗后的正文被写回（`a.content = cleaned.content`）',
+    /a\.content\s*=\s*cleaned\.content/.test(pu));
+  ok('★ 写回发生在**上传图片之前**（否则删掉的段落里的图仍会被上传）',
+    pu.indexOf('a.content = cleaned.content') < pu.indexOf('uploadRemoteImage(u)'));
+
+  // ③ 留痕：静默改写成品 ⇒ 必须记账
+  ok('★ summary 里有 textCleanup（静默改写必须留痕）',
+    /textCleanup:\s*\{/.test(pu) && /titleSuffixStripped/.test(pu) && /duplicateSentences/.test(pu));
+}
+
 // ============================================================
 console.log(`\n${'='.repeat(64)}`);
 if (failures.length === 0) {

@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
 import { findCrossBatchDuplicates, CROSS_BATCH_SIM_FLOOR } from '@/lib/cross-batch-dup';
-import { beijingDate, extractFirstImage, latinCyrillicTokens, stripCyrillicParentheticals, similarity } from '@/lib/utils';
+import {
+  beijingDate,
+  cleanDraftText,
+  extractFirstImage,
+  latinCyrillicTokens,
+  stripCyrillicParentheticals,
+  stripSourceSuffix,
+  similarity,
+} from '@/lib/utils';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 // ★ 2026-10-28：push 状态**落库**（`pushRunState` 是内存态 ⇒ 实例一换就丢 ⇒ 查不到上一轮）。
 import { persistPushRun, loadPersistedPushRun } from '@/lib/push-run-store';
@@ -689,6 +697,24 @@ interface PushSummary {
    */
   draftTitles: Array<{ country_code: string; titles: string[] }>;
 
+  /**
+   * ★★ 文字清洗的记账（2026-10-30）。
+   *
+   * 这三件事是**静默改写成品**（剥标题后缀 / 删正文重复句 / 删标题回声）
+   * ⇒ ⇒ **不记就没人知道改过什么** ⇒ ⇒ 万一改出新问题，
+   * ⇒ ⇒ 根本无法回查「这是原文就这样，还是清洗改出来的」。
+   */
+  textCleanup: {
+    /** 剥掉标题体裁后缀的篇数 */
+    titleSuffixStripped: number;
+    /** 被改过正文的篇数 */
+    articles: number;
+    /** 删掉的「正文里重复出现」的句子数 */
+    duplicateSentences: number;
+    /** 删掉的「与标题同一句」的正文句数 */
+    titleEchoSentences: number;
+  };
+
   candidatesDroppedByLimit: Array<{
     country_code: string;
     /** 被砍掉的条数 */
@@ -1205,6 +1231,14 @@ export async function GET(request: NextRequest) {
        */
       judgeCandidateCap: PUSH_JUDGE_CANDIDATE_CAP,
       countriesFilter: true,
+      /**
+       * ★ 2026-10-30：草稿文字清洗已上线？
+       *
+       * 有这个字段（`= 1`）⇒ **剥标题体裁后缀 + 删正文重复句 + 删标题回声**已生效
+       * ⇒ ⇒ 线上跑的是新版 ⇒ ⇒ **重推出来的草稿才是干净的**。
+       * ⚠️ 缺这个字段 ⇒ 部署还没接管流量 ⇒ **这时候重推 = 又多一份重复草稿**。
+       */
+      textCleanupVersion: 1,
       // v3 + v4 + g2 的**六个**活体探针：实现在 `@/lib/editor-review` 的 `runEditorProbes()`，
       // 期望值在 `EDITOR_PROBE_EXPECT`，且**期望值可达**由离线回归第十二节断言。
       // g2 新增的 `editorFixLocateGateProbe` 是**双向**的（一条必须拒、一条必须采纳）——
@@ -1305,6 +1339,13 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
   // ★ 跨批次重复的计数（2026-10-25）：`hits` = 提示给总审的条数，`deleted` = 总审真删的条数。
   const crossBatchHits: Array<{ country_code: string; count: number; sample: string }> = [];
   const crossBatchDeleted: Array<{ country_code: string; count: number }> = [];
+  // ★★ 2026-10-30：文字清洗的记账（剥标题后缀 / 删正文重复句 / 删标题回声）。
+  //   为什么要记账：这三件事是**静默改写成品** ⇒ ⇒ 不记就**没人知道改过什么**
+  //   ⇒ ⇒ 出了新问题就无法回查「这是原文就这样，还是清洗改出来的」。
+  let titleSuffixStripped = 0;
+  let bodyDuplicateRemoved = 0;
+  let bodyEchoRemoved = 0;
+  let cleanedArticles = 0;
     const judgeRuns: Array<PushJudge & { country_code: string }> = [];
     const reviews: PushReview[] = [];
     /** 阶段 ① 的产出：已选题、待总审、待发布的稿件（见 `PreparedCountry`） */
@@ -1382,6 +1423,25 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         console.log(`[${country.name}] 过滤掉 ${articles.length - chineseArticles.length} 篇非中文文章，保留 ${chineseArticles.length} 篇`);
       }
 
+      // ★★ 2026-10-30：**剥掉标题末尾的源站体裁后缀**（`- 摄影作品` / `- фото`）。
+      //
+      // 为什么在这一步（而不是发布前）做：标题会进入**相关性评分**、**判组去重**、
+      // **跨国去重**三处比较 ⇒ ⇒ 带着「- 摄影作品」去比相似度，是拿**带噪声的串**
+      // ⇒ ⇒ 比的是同一件事的概率被稀释。
+      //
+      // 例：源站标题「阿塞拜疆"AzerGold"公司参加第20届国际"MiningMetals"矿业金属展 - 摄影作品」
+      // ⇒ ⇒ 翻译把后缀原样带进中文标题 ⇒ ⇒ 用户在草稿箱里看到标题尾巴上挂着一句
+      // ⇒ ⇒ **与内容无关的话**（这就是「概括莫名其妙」的一个具体来源）。
+      //
+      // ⚠️ 只清**末尾**的体裁标注 ⇒ ⇒ 不会误伤标题正文里正常出现的「摄影」等词。
+      const strippedArticles = chineseArticles.map((a) => {
+        const cleaned = stripSourceSuffix(a.title || '');
+        if (cleaned === (a.title || '')) return a;
+        titleSuffixStripped++;
+        console.log(`[${country.name}] 剥掉标题体裁后缀：「${a.title}」→「${cleaned}」`);
+        return { ...a, title: cleaned };
+      });
+
       // 按投资相关性评分排序，今日精选（上限 maxPerCountry 篇）
       //
       // ⚠️ 这里的文本已经是**中文**（上游已翻译，且上面刚用 `isChineseText` 过滤过），
@@ -1389,7 +1449,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       // 2026-09-21 之前这里用的是一张**纯英文**关键词表，在中文标题上永不命中 ——
       // 实测线上 1000 篇里只有 2.8% 能得分，且命中的是拉丁字母残留，
       // 于是排序实际只剩「分类优先级」，用户要的「越与投资相关越靠前」根本没发生。
-      const scoredArticles = chineseArticles.map(a => ({
+      const scoredArticles = strippedArticles.map(a => ({
         ...a,
         relevanceScore: investmentRelevanceOf(a.title, a.summary),
       }));
@@ -1982,6 +2042,35 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
         const wechatArticles = [];
         for (const a of selectedArticles) {
+          // ★★ 2026-10-30：**发布前的最后一道文字清洗**（确定性，不调模型）。
+          //
+          // 放在**总审之后** ⇒ ⇒ 总审再怎么改写，最终发出去的正文也是干净的
+          // ⇒ ⇒ 这一层是「成品闸」，不是「建议」。
+          //
+          // 治两件事（都是用户在草稿箱里亲眼看到的「重复」）：
+          // ① **正文里同一句出现两次** ⇒ ⇒ 删第二次（零信息损失）；
+          // ② **正文首句把标题整句抄了一遍** ⇒ ⇒ 删掉它
+          //    （标题已经印在正文上方了 ⇒ ⇒ 再抄一遍，读者看到的就是同一句话两遍）。
+          //
+          // ⚠️ 护栏在 `cleanDraftText` 里：**删完正文必须还剩至少一句** ——
+          // 有的稿子正文只有一句、那句就是标题的复述 ⇒ ⇒ 那种**不删**（删了正文就空了）。
+          const cleaned = cleanDraftText(a.title || '', a.content || '');
+          if (cleaned.title !== a.title) {
+            console.log(`[${country.name}][清洗] 标题去后缀：「${a.title}」→「${cleaned.title}」`);
+            titleSuffixStripped++;
+            a.title = cleaned.title;
+          }
+          if (cleaned.echoRemoved > 0 || cleaned.duplicateRemoved > 0) {
+            cleanedArticles++;
+            bodyEchoRemoved += cleaned.echoRemoved;
+            bodyDuplicateRemoved += cleaned.duplicateRemoved;
+            console.log(
+              `[${country.name}][清洗] 「${a.title}」删掉 ${cleaned.duplicateRemoved} 句重复句` +
+                `、${cleaned.echoRemoved} 句标题回声`,
+            );
+          }
+          a.content = cleaned.content;
+
           // 先清洗再上传图片：清洗会删掉模型自己编的图（占位图 / example.com / picsum 之类），
           // 放在上传之前能省掉一批注定失败的网络请求，也避免把破图放进草稿。
           const imgRegex = /<img[^>]*?\ssrc=["']([^"']+)["'][^>]*>/gi;
@@ -2111,6 +2200,13 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         (a) => a.title || '',
       ),
     })),
+    // ★★ 文字清洗的记账（2026-10-30）—— 静默改写成品 ⇒ ⇒ 必须留痕。
+    textCleanup: {
+      titleSuffixStripped,
+      articles: cleanedArticles,
+      duplicateSentences: bodyDuplicateRemoved,
+      titleEchoSentences: bodyEchoRemoved,
+    },
     // ★ 跨批次重复的计数（2026-10-25）—— `hits` 是提示数（含误报），`deleted` 才是真删的。
     crossBatch: {
       hits: crossBatchHits,

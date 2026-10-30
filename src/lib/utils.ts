@@ -536,6 +536,215 @@ export function similarity(a: string, b: string): number {
 }
 
 /**
+ * ★ 剥掉源站标题末尾的**体裁后缀**（2026-10-30）。
+ *
+ * ## 为什么需要它
+ *
+ * 源站的标题常带「`- 摄影作品`」「`- фото`」这类**体裁标注**（那是给编辑看的，不是新闻的一部分）。
+ * 翻译时它被**原样带进中文标题** ⇒ ⇒ 用户在草稿箱里看到
+ * 「阿塞拜疆"AzerGold"公司参加第20届国际"MiningMetals"矿业金属展 **- 摄影作品**」
+ * ⇒ ⇒ **这是「概括莫名其妙」的一个具体来源**（标题尾巴上挂着一句与内容无关的话）。
+ *
+ * 2026-10-30 实测：两日 469 篇里命中 **1 篇**（源站标题后缀的种类有限，
+ * 但每一种都会**原文出现**在读者的标题栏里 ⇒ 值得清）。
+ *
+ * ⚠️ 只清**末尾**的体裁标注 ⇒ ⇒ 不会误伤标题正文里正常出现的「摄影」等词。
+ */
+export function stripSourceSuffix(title: string): string {
+  return (title || '')
+    .replace(
+      /\s*[-–—|｜]\s*(摄影作品|图片|照片|视频|现场图片|图集|фото|Фото|видео|Видео)\s*$/u,
+      '',
+    )
+    .trim();
+}
+
+/**
+ * ★★ 去掉正文里的**重复句**与**标题回声**（2026-10-30 重写）。
+ *
+ * ## 为什么需要它
+ *
+ * 实测（两日 469 篇）：模型写正文时会把**标题整句写进开头当导语**，
+ * 而正文里**后面又出现一次同样的句子** ⇒ ⇒ 读者看到同一句话连着出现两遍
+ * ⇒ ⇒ **这是用户在草稿里看到的「重复」的第二个机制**
+ * （第一个是「跨国重复」，已由 `CROSS_COUNTRY_DUP_SIM` 那层挡住）。
+ *
+ * 典型样本：
+ * · 「吉尔吉斯斯坦国家电网呼叫中心年度咨询量激增 64%」×2
+ * · 「乌兹别克斯坦拟免除火车站与机场税费，并允许在公交站建设商业设施」×2
+ * · 「哈萨克斯坦总统托卡耶夫于10月29日抵达土耳其安卡拉的宫殿综合体"库利耶"…」×2
+ *
+ * ## ⚠️⚠️ 第一版按「空行切段」写，**实测抓不到**（2026-10-30 当天改掉）
+ *
+ * 线上正文的真实形态是 **「一段到底」的 HTML**（`<img/>` + `\n\n` + 一整段，
+ * **没有 `<p>`、没有段内换行**）⇒ ⇒ 按 `\n\n` 切只切得出 3 段，
+ * 那个「一整段」是一整句吗？不是 —— 它含十几句 ⇒ ⇒ 段级判据**必然漏**。
+ * ⇒ ⇒ 改成**句级**判据（下面这套）。
+ *
+ * ## 两条规则
+ *
+ * ① **重复句**：同一句话在正文里出现第二次 ⇒ ⇒ **删第二次**（第一次是导语，保留）。
+ *    判据 = 去掉 HTML 标签与空白后**逐字相同** ⇒ ⇒ 零信息损失。
+ * ② **标题回声**：正文里有一句与**标题**几乎同一句 ⇒ ⇒ **删掉它**
+ *    （标题已经印在正文上方了，再抄一遍就是读者眼里的重复）。
+ *    ⚠️ 护栏：**删完正文必须还剩至少一句** —— 有的稿子正文只有一句，
+ *    那句就是标题的复述，删了正文就空了 ⇒ ⇒ 那种**不删**。
+ *
+ * ⚠️ **删的是「位置」，不是「重写」** ⇒ ⇒ 正文里的 HTML（首图等）原样保留
+ * ⇒ ⇒ 被删的那一句如果和 `<img/>` 落在同一个句界里，**图不会被删**（见 `LEAD_TRIM`）。
+ */
+export interface DraftCleanup {
+  /** 洗过的标题（去掉了源站体裁后缀） */
+  title: string;
+  /** 洗过的正文 */
+  content: string;
+  /** 标题是否被剥掉了体裁后缀 */
+  titleSuffixStripped: boolean;
+  /** 删掉了几句「与标题同一句」的回声 */
+  echoRemoved: number;
+  /** 删掉了几句「正文里重复出现」的句子 */
+  duplicateRemoved: number;
+}
+
+/** 句边界：中英文句末标点。⚠️ **不含分号**（分号多用于并列成分，切了会碎句）。 */
+const SENTENCE_SPAN = /[^。！？]*[。！？]/g;
+
+/**
+ * 句子「归一化」：去掉 HTML 标签、去掉**所有**空白、转小写。
+ * ⇒ ⇒ 只剩文字本身 ⇒ ⇒ 判「两句是不是同一句」不会被排版差异干扰。
+ */
+export function sentenceKey(text: string): string {
+  return (text || '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+/**
+ * 句首可能挂着 HTML（线上正文的开头就是 `<img .../>`）⇒ ⇒ 删句时要**跳过它**，
+ * 否则会把图一起删掉。返回「该句里第一处真正文字」的下标偏移。
+ */
+const LEAD_TRIM = /^[\s]*(?:<[^>]*>[\s]*)*/;
+
+/** 短于这个长度的句子不参与判重（太短的句子重复往往是巧合，如「据悉。」）。 */
+const DUP_MIN_KEY_LEN = 10;
+
+/**
+ * 清洗一篇稿件的标题与正文（**确定性**，不调模型）。
+ *
+ * @param title  中文标题
+ * @param content 正文（HTML 形态）
+ * @param opts.echoSimThreshold 「与标题同一句」的相似度门槛
+ *   （默认 0.9；**高于**判组的召回地板 0.28 ⇒ ⇒ 不会误伤「话题相近但事件不同」）
+ */
+export function cleanDraftText(
+  title: string,
+  content: string,
+  opts: { echoSimThreshold?: number; minKeyLen?: number } = {},
+): DraftCleanup {
+  const echoSim = opts.echoSimThreshold ?? 0.9;
+  const minKeyLen = opts.minKeyLen ?? DUP_MIN_KEY_LEN;
+
+  const rawTitle = title || '';
+  const strippedTitle = stripSourceSuffix(rawTitle);
+  const out: DraftCleanup = {
+    title: strippedTitle,
+    content: content || '',
+    titleSuffixStripped: strippedTitle !== rawTitle.trim(),
+    echoRemoved: 0,
+    duplicateRemoved: 0,
+  };
+
+  const text = out.content;
+  if (!text) return out;
+
+  // ---- 切句（带位置，便于按位置删除）----
+  const spans: Array<{ start: number; end: number; raw: string; key: string }> = [];
+  const re = new RegExp(SENTENCE_SPAN.source, 'g');
+  let m: RegExpExecArray | null;
+  let last = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m[0].length === 0) {
+      re.lastIndex++;
+      continue;
+    }
+    spans.push({
+      start: m.index,
+      end: m.index + m[0].length,
+      raw: m[0],
+      key: sentenceKey(m[0]),
+    });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) {
+    const raw = text.slice(last);
+    spans.push({ start: last, end: text.length, raw, key: sentenceKey(raw) });
+  }
+  if (spans.length === 0) return out;
+
+  // ---- ① 重复句：同一句第二次及以后 ⇒ 删第二次 ----
+  const seen = new Set<string>();
+  const dupIdx = new Set<number>();
+  for (let i = 0; i < spans.length; i++) {
+    const k = spans[i].key;
+    if (k.length < minKeyLen) continue;
+    if (seen.has(k)) dupIdx.add(i);
+    else seen.add(k);
+  }
+
+  // ---- ② 标题回声：正文里有一句与标题几乎同一句 ----
+  const titleKey = sentenceKey(strippedTitle);
+  const echoIdx = new Set<number>();
+  for (let i = 0; i < spans.length; i++) {
+    const k = spans[i].key;
+    if (k.length < minKeyLen) continue;
+    if (titleKey && k === titleKey) {
+      echoIdx.add(i);
+      continue;
+    }
+    if (titleKey && similarity(spans[i].raw, strippedTitle) >= echoSim) echoIdx.add(i);
+  }
+
+  // ---- ③ 决定删哪些 ----
+  // 回声句若**同时**是重复句（标题整句出现两次），两句都删 ——
+  // 留着第一句等于「标题 + 正文首句」仍然重复，读者看到的还是同一句话两遍。
+  const toDelete = new Set<number>([...dupIdx, ...echoIdx]);
+
+  // 护栏：删完正文必须还剩至少一句（有的稿子正文只有一句，那句就是标题的复述 ⇒ 不删）。
+  const remaining = spans.length - toDelete.size;
+  if (remaining < 1) {
+    toDelete.clear();
+    out.echoRemoved = 0;
+    out.duplicateRemoved = 0;
+    return out;
+  }
+
+  for (const i of toDelete) {
+    if (dupIdx.has(i)) out.duplicateRemoved++;
+    else out.echoRemoved++;
+  }
+
+  // ---- ④ 按位置删除（从后往前，避免下标错位）----
+  const ordered = [...toDelete].sort((a, b) => b - a);
+  let result = text;
+  for (const i of ordered) {
+    const s = spans[i];
+    // 句首若挂着 HTML（`<img/>`），从「第一处真正文字」开始删 ⇒ 图保留。
+    const lead = s.raw.match(LEAD_TRIM);
+    const skip = lead ? lead[0].length : 0;
+    const start = s.start + skip;
+    const end = s.end;
+    if (start >= end) continue;
+    result = result.slice(0, start) + result.slice(end);
+  }
+
+  // 删完留下的空行/空白收拾一下（最多两个换行 ⇒ 段落感还在，不会留一串空行）。
+  result = result.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  out.content = result;
+  return out;
+}
+
+/**
  * ★★ **Jaccard 相似度 + 公共前缀修正**（2026-10-28 加；**刻意不接生产**，先离线量）。
  *
  * ## 病根
