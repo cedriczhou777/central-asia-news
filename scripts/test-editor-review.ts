@@ -164,8 +164,8 @@ ok(
 // 但换了判据 ⇒ 两轮数据的采纳数不可比。不多记一版，「两次结论不同」就分不清是
 // 换了提示词、换了模型、还是换了闸 —— 那正是 `promptVersion` 这个字段存在的唯一理由。
 ok(
-  '闸版本号与 g3 对齐（改了判据必须先改版本号）',
-  EDITOR_GATE_VERSION === 'g3',
+  '闸版本号与 g4 对齐（改了判据必须先改版本号）',
+  EDITOR_GATE_VERSION === 'g4',
   `现在是 ${EDITOR_GATE_VERSION} —— 若你刚改了定位判据或标题标记剥离，请把 EDITOR_GATE_VERSION +1 并同步这条断言`,
 );
 
@@ -515,14 +515,20 @@ section('三之二、护栏 · drops 的三重上限');
     );
   }
 
-  // ---- sameAs 成环（2026-10-11 新增的闸）----
+  // ---- sameAs 成环：g4 改成「每环保留一条」（2026-10-30）----
   //
-  // 逐条闸只校验「下标合法 + 相似度达标」，`#1→#2` 与 `#2→#1` 互指能整组通过。
-  // 后果不是「少删一条」而是**一个事件被删空**，且 `drops` 里每条「和谁重复」
-  // 指向的都是另一个同样被删掉的条目 —— 报告自相矛盾，而没有任何字段能看出来。
+  // ⚠️⚠️ **这一节的断言在 2026-10-30 整个反过来了。**
+  //
+  // 旧判据（g3）：`#1→#2` 与 `#2→#1` 互指 ⇒ 判「这一组会被删空」⇒ **两条都拒**。
+  // 新判据（g4）：**互指是重复的最正常表达**，意思就是「删一条就够」
+  // ⇒ ⇒ 保留一条（信息最全者）、删另一条。
+  //
+  // 为什么必须改（线上实测 uz 2026-10-30）：模型提出 8 条重复、`appliedDrops: 0`
+  // —— 6 条死于「成环 ⇒ 整组拒」。⇒ **模型判对了，代码一条都没执行**，
+  // 而这正是用户看到的「重复」。
   {
     const t = '吉尔吉斯斯坦总统出席楚河州成立100周年庆典';
-    // 8 条：删 2 条后剩 6 ≥ MIN_KEEP(5)，这样测到的才是「成环」而不是「保留下限」。
+    // 8 条：删 1 条后剩 7 ≥ MIN_KEEP(5)，这样测到的才是「成环」而不是「保留下限」。
     const cyc = mkItems(8, Array.from({ length: 8 }, () => t));
     const r = applyVerdict(cyc, {
       drops: [
@@ -530,12 +536,22 @@ section('三之二、护栏 · drops 的三重上限');
         { index: 2, kind: 'duplicate', sameAs: 1, reason: dupReason(1, '吉尔吉斯斯坦总统出席') },
       ],
     });
-    ok('sameAs 互指成环 ⇒ 两条都拒（否则这一组会被删空）', r.audit.appliedDrops === 0, JSON.stringify(r.audit));
+    ok('★ 互指成环 ⇒ **删一条**（不再整组拒）', r.audit.appliedDrops === 1, JSON.stringify(r.audit));
     ok(
-      '成环的理由把链**打印出来**（静默拒会让人以为模型没提）',
+      '★ 成环的理由把环**打印出来**（静默会让人以为模型没提）',
       r.audit.rejections.some((x) => x.includes('成环') && /→/.test(x)),
       JSON.stringify(r.audit.rejections),
     );
+    ok(
+      '★ 保留者的下标写进了 rejections（可核对到底留了哪条）',
+      r.audit.rejections.some((x) => /保留第 \d+ 条/.test(x)),
+      JSON.stringify(r.audit.rejections),
+    );
+    // ★ 保留者必须**活着**：这是旧闸真正要防的东西（「一个事件被删空」）。
+    const droppedIdx = r.decision.drops.map((d) => d.index);
+    const keptCount = 8 - droppedIdx.length;
+    ok('★ 这一组仍留了一条（没被删空）', keptCount === 7, `剩 ${keptCount} 条，被删 ${JSON.stringify(droppedIdx)}`);
+
     // 反向：正常链（1→2→3，3 不被删）必须照常采纳 —— 不能把「多跳」当成环
     const r2 = applyVerdict(cyc, {
       drops: [

@@ -482,8 +482,17 @@ export const FIX_LOCATE_FLOOR = 0.15;
  * - `g3`（2026-10-18）：**标题**里剥掉「（有图）/（无图）」这类括号标记（`stripTitleMarkers`），
  *   并在 `audit.titleMarkersStripped` 留痕。⚠️ 它**只动标题**、**不拒绝整条 fix** ——
  *   拒绝会把模型整段重写一起丢掉，那是更大的副作用。
+ * - `g4`（2026-10-30）：**成环的 `sameAs` 从「整组拒绝」改成「每环保留一条」**。
+ *   线上实测（uz 2026-10-30）：模型提出 8 条重复、`appliedDrops: 0` ——
+ *   6 条死于「成环 ⇒ 整组拒」这个闸，2 条死于相似度 0.15（那一条拒得对）。
+ *   ⇒ **模型判对了 8 条、代码执行了 0 条**。
+ *   ⚠️ 「A 说与 B 重复 + B 说与 A 重复」是重复的**最正常**表达，意思是「删一条就够」，
+ *   而旧闸把它当成循环依赖 ⇒ 整组放弃 ⇒ **一条重复都没消掉**。
+ *   ⇒ 新闸选保留者（环的「根」，无唯一根则取信息最全者）、删其余，
+ *   且删前必须与保留者相似度 ≥ `DUP_SIM_FLOOR`（2 元互指环天然达标）。
+ *   ⚠️ 它**只动删除闸**，提示词一个字没改 ⇒ 所以记 `g4` 而不是 `v7`。
  */
-export const EDITOR_GATE_VERSION = 'g3';
+export const EDITOR_GATE_VERSION = 'g4';
 
 /**
  * 提示词 JSON 示例里的**占位符**。
@@ -1360,43 +1369,118 @@ export function applyVerdict(
     dropSet.add(idx);
     dropRecords.push({ index: idx, kind, reason: reason.slice(0, 160), ...(sameAs !== undefined ? { sameAs } : {}) });
   }
-  // ---- duplicate 的 sameAs 不许成环（2026-10-11 新增）----
+  // ---- duplicate 的 sameAs 成环：改成「每环保留一条」（2026-10-30 改）----
   //
-  // 逐条闸只校验「下标合法 + 相似度达标」，所以 `#3→#5` 与 `#5→#3` 这种**互指**
-  // （以及更长的环）能整组通过。后果不是「少删一条」，是**一个事件被删空**：
-  // 环里所有条目一起进 drops，没有任何一条幸存，而 `dropRecords` 里每条
-  // 「和谁重复」指向的又是另一个同样被删掉的条目 —— 总审报告会自相矛盾
-  // （`drops` 说 A 与 B 重复 ⇒ 两条都没了），而**没有任何字段能看出这件事**。
+  // ## 为什么原来那版是错的（线上实测：uz 2026-10-30 那一轮）
   //
-  // 判据：顺着 sameAs 走，走不出去（回到走过的点）就是环。只拒环上的那些条目
-  // （以及挂在环上的），其余照旧 —— 并且**把链打印出来**，静默拒会让下一个人
-  // 以为模型没提这条。
+  // 原判据：「`#3→#5` 与 `#5→#3` 这种**互指**能整组通过 ⇒ 后果是一个事件被删空
+  // ⇒ ⇒ 于是把**环上的条目整组拒掉**」。
+  //
+  // ⚠️⚠️ **但「A 说与 B 重复 + B 说与 A 重复」是重复的最正常表达** ——
+  // 它的意思就是「这两条互为重复，**删一条就够**」⇒ 而原判据把它当成
+  // 「循环依赖 ⇒ 危险 ⇒ 整组放弃」⇒ ⇒ **一条重复都没消掉**。
+  //
+  // 线上实测（2026-10-30 uz，`proposedDrops: 8` ⇒ `appliedDrops: 0`）：
+  // · 6 条死于本闸（三组互指：2↔3、5↔14、15↔19）⇒ 全部拒 ⇒ 重复原样进草稿
+  // · 2 条死于 `DUP_SIM_FLOOR`（相似度 0.1042）⇒ 那一条**拒得对**（见 DUP_SIM_FLOOR 的锚点表）
+  // ⇒ 即**模型判对了 8 条，代码只执行了 0 条** —— 与 10-11 kg「楚河州 100 周年 9 条」
+  // 是**同一个病根的另一副面孔**：「模型看出来了，代码不让它生效」。
+  //
+  // ## 新判据：环不是「危险」，是「要选一个代表」
+  //
+  // 对每个环：
+  // ① 选**保留者** = 环里没有被其它环成员指为 `sameAs` 的那个（环的「根」）；
+  //    没有唯一根（2 元互指 / 3 元环）⇒ 取**信息最全**的那条
+  //    （标题+摘要更长者 ⇒ 与提示词「只保留信息最完整的那一条」一致；并列取下标小的，稳定）。
+  // ② 环里**其余每一条**：
+  //    · 与保留者的标题相似度 **≥ `DUP_SIM_FLOOR`** ⇒ **删掉它**，并把 `sameAs` 改指保留者
+  //      （⇒ 审计自洽：`drops[i]` 说「与 keep 重复」，而 keep 活着）；
+  //    · 相似度**不达标** ⇒ **不删**（模型说它与别人重复，但与保留者不像 ⇒ 保守留下）。
+  // ③ 挂在环上的链（不在环里、`sameAs` 指向环内）⇒ 照旧删（它们自称多余）。
+  //
+  // ⚠️ **2 元互指环必然能删掉一条**：它的两个成员**互相**通过了闸 A
+  // （闸 A 量的是「它自己指的那条」）⇒ ⇒ 相似度已验证过 ≥ `DUP_SIM_FLOOR`。
   const dupSameAs = new Map<number, number>();
   for (const d of dropRecords) {
     if (d.kind === 'duplicate' && d.sameAs !== undefined) dupSameAs.set(d.index, d.sameAs);
   }
   if (dupSameAs.size > 0) {
-    const chainOf = (start: number): { text: string; cyclic: boolean } => {
-      const seen: number[] = [];
+    // 找环：从每个节点顺着 sameAs 走，回到已访问节点 ⇒ 那段路径就是环。
+    // ⚠️ 要拿到的是**环成员集合**，不是「从哪条出发」—— 同一个环会被多条起点命中，
+    // 所以按集合去重。
+    const ringOf = new Map<number, number[]>(); // 代表节点 → 环成员
+    const seenNodes = new Set<number>();
+    for (const start of dupSameAs.keys()) {
+      if (seenNodes.has(start)) continue;
+      const path: number[] = [];
+      const at = new Map<number, number>();
       let cur = start;
       for (;;) {
-        if (seen.includes(cur)) return { text: [...seen, cur].join('→'), cyclic: true };
-        seen.push(cur);
+        if (at.has(cur)) {
+          const ring = path.slice(at.get(cur)!);
+          if (ring.length >= 2) {
+            const key = [...ring].sort((a, b) => a - b).join(',');
+            if (![...ringOf.values()].some((r) => [...r].sort((a, b) => a - b).join(',') === key)) {
+              ringOf.set(ring[0], ring);
+            }
+          }
+          break;
+        }
+        at.set(cur, path.length);
+        path.push(cur);
+        seenNodes.add(cur);
         const next = dupSameAs.get(cur);
-        if (next === undefined) return { text: seen.join('→'), cyclic: false };
+        if (next === undefined) break;
         cur = next;
       }
-    };
-    const cyclic = dropRecords.filter((d) => d.kind === 'duplicate' && chainOf(d.index).cyclic);
-    for (const c of cyclic) {
-      rejections.push(
-        `drops[${c.index}] 的 sameAs 链成环（${chainOf(c.index).text}）⇒ 拒绝：这一组会被整组删空，没有任何一条留下`,
-      );
-      dropSet.delete(c.index);
     }
-    for (const c of cyclic) {
-      const k = dropRecords.indexOf(c);
-      if (k >= 0) dropRecords.splice(k, 1);
+
+    const infoLen = (i: number): number =>
+      (items[i]?.title || '').length + (items[i]?.summary || '').length;
+
+    for (const ring of ringOf.values()) {
+      // ① 选保留者：环里「没被其它环成员指为 sameAs」的那个（根）；没有唯一根 ⇒ 信息最全者。
+      const pointed = new Set<number>();
+      for (const m of ring) {
+        const t = dupSameAs.get(m);
+        if (t !== undefined && ring.includes(t)) pointed.add(t);
+      }
+      const roots = ring.filter((m) => !pointed.has(m));
+      const keep =
+        roots.length === 1
+          ? roots[0]
+          : ring
+              .slice()
+              .sort((a, b) => infoLen(b) - infoLen(a) || a - b)[0];
+
+      // ② 环里其余每一条：与保留者像 ⇒ 删（并把 sameAs 改指保留者）；不像 ⇒ 留下。
+      for (const m of ring) {
+        if (m === keep) {
+          // 保留者自己：它不该留在 drops 里（它就是那个「留下来的」）。
+          dropSet.delete(m);
+          const kr = dropRecords.findIndex((d) => d.index === m);
+          if (kr >= 0) dropRecords.splice(kr, 1);
+          continue;
+        }
+        const simKeep = similarity(items[m]?.title || '', items[keep]?.title || '');
+        if (simKeep < DUP_SIM_FLOOR) {
+          rejections.push(
+            `drops[${m}] 所在的 sameAs 环（${ring.join('→')}）改判：保留者定为第 ${keep} 条，` +
+              `但两者标题相似度只有 ${simKeep.toFixed(4)} < ${DUP_SIM_FLOOR} ⇒ **不删**（保守留下）`,
+          );
+          dropSet.delete(m);
+          const r = dropRecords.findIndex((d) => d.index === m);
+          if (r >= 0) dropRecords.splice(r, 1);
+          continue;
+        }
+        // 删掉它，并把 sameAs 改指保留者 ⇒ 审计自洽（`drops[i]` 说「与 keep 重复」，keep 活着）。
+        const rec = dropRecords.find((d) => d.index === m);
+        if (rec) rec.sameAs = keep;
+        rejections.push(
+          `drops[${m}] 的 sameAs 链成环（${ring.join('→')}）⇒ **不再整组拒绝**：保留第 ${keep} 条，` +
+            `删掉第 ${m} 条（与保留者相似度 ${simKeep.toFixed(4)} ≥ ${DUP_SIM_FLOOR}）`,
+        );
+      }
     }
   }
 

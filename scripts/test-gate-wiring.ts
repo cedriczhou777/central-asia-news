@@ -292,6 +292,23 @@ section('★★ 草稿文字清洗必须真的接进成品（2026-10-30 新增�
     /textCleanup:\s*\{/.test(pu) && /titleSuffixStripped/.test(pu) && /duplicateSentences/.test(pu));
 }
 
+section('★★ 总审成环闸：g4 起「每环保留一条」，不许退回整组拒绝（2026-10-30）');
+{
+  // 线上实测（uz 2026-10-30）：模型提出 8 条重复、`appliedDrops: 0`
+  // ⇒ 6 条死于「成环 ⇒ 整组拒」这个闸 ⇒ **模型判对了，代码一条都没执行**。
+  // ⇒ 「A 说与 B 重复 + B 说与 A 重复」是重复的**最正常**表达（意思是「删一条就够」）。
+  const er = R('src/lib/editor-review.ts');
+  ok('★ 闸版本号是 g4', /EDITOR_GATE_VERSION = 'g4'/.test(er));
+  ok('★ 成环不再整组拒绝（代码里不许再有「整组拒绝」那套文案）',
+    !/这一组会被整组删空/.test(er));
+  ok('★ 成环时选保留者（环的根 / 信息最全者）',
+    /roots\.length === 1/.test(er) && /infoLen\(b\) - infoLen\(a\)/.test(er));
+  ok('★ 删之前必须与保留者相似度达标（保守闸不许被省掉）',
+    /simKeep < DUP_SIM_FLOOR/.test(er));
+  ok('★ 保留者必须活着（不许「删空」—— 那是旧闸真正要防的东西）',
+    /dropSet\.delete\(m\)/.test(er));
+}
+
 section('★★ 推送参数：period / hours 必须同时认 query 与 body（2026-10-30）');
 {
   // 事故：`POST ?period=daily` 被**静默忽略**（只读 body）⇒ `scheduledWindow(null)` 返回 null
