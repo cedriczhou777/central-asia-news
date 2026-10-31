@@ -337,6 +337,17 @@ section('★★ 总审删除闸：g5 逐类作废 + g6 占位符只挡软证据�
     /唯一的证据就是引文/.test(er));
   ok('★ 放行了要留痕（placeholderReasonDrops）',
     /placeholderReasonDrops\?: number/.test(er) && /audit\.placeholderReasonDrops = placeholderReasonDrops/.test(er));
+
+  // ★★ 2026-10-31：西里尔残留 / 重复国名，**翻译层 + 推送层都要接**
+  //（翻译层只治「以后入库」的稿子 ⇒ **存量稿只能靠推送层清** ⇒ 少一处就等于没修）
+  const af = R('src/lib/article-format.ts');
+  ok('★ 推送层清洗链里剥了西里尔残留（存量稿靠这个）',
+    /stripCyrillicRuns\(text\)\.text/.test(af));
+  ok('★ 推送层发布前清洗里去了标题的重复国名',
+    /dedupeRepeatedCountry\(a\.title \|\| ''\)/.test(pu));
+  ok('★ 翻译层也接了（治本：新入库的稿子干净）',
+    /stripCyrillicRuns\(contentZh\)/.test(R('src/lib/translate.ts')) &&
+    /dedupeRepeatedCountry\(photoStripped\.text\)/.test(R('src/lib/translate.ts')));
 }
 
 section('★★ 推送参数：period / hours 必须同时认 query 与 body（2026-10-30）');

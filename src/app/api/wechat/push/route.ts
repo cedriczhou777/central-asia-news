@@ -5,6 +5,7 @@ import { findCrossBatchDuplicates, CROSS_BATCH_SIM_FLOOR } from '@/lib/cross-bat
 import {
   beijingDate,
   cleanDraftText,
+  dedupeRepeatedCountry,
   extractFirstImage,
   latinCyrillicTokens,
   stripCyrillicParentheticals,
@@ -2077,6 +2078,16 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
             console.log(`[${country.name}][清洗] 标题去后缀：「${a.title}」→「${cleaned.title}」`);
             titleSuffixStripped++;
             a.title = cleaned.title;
+          }
+          // ★★ 2026-10-31：标题里**紧邻重复的国名**（「阿塞拜疆阿塞拜疆糖业生产联合体…」）。
+          // ⚠️ **这里必须再做一遍**（翻译层也做了）：翻译层只对**以后入库**的稿子有效，
+          // 而**库里已存量**的稿子永远不会再过翻译层 ⇒ ⇒ 存量稿只能靠推送层清。
+          // 真实样本：用户 2026-10-31 让 ChatGPT 审阿塞拜疆那批时报出来的。
+          const countryDeduped = dedupeRepeatedCountry(a.title || '');
+          if (countryDeduped.changed) {
+            console.log(`[${country.name}][清洗] 标题去重复国名：「${a.title}」→「${countryDeduped.title}」`);
+            titleSuffixStripped++;
+            a.title = countryDeduped.title;
           }
           if (cleaned.echoRemoved > 0 || cleaned.duplicateRemoved > 0) {
             cleanedArticles++;

@@ -6,7 +6,7 @@
  * 一堆正则、看不到它为什么存在，很容易在「清理代码」时删掉。
  */
 
-import { isChineseText, MIN_HAN_TITLE, MIN_HAN_CONTENT } from './utils';
+import { isChineseText, MIN_HAN_TITLE, MIN_HAN_CONTENT, stripCyrillicRuns } from './utils';
 import { isCountryRelevant as isCountryRelevantImpl } from './country-relevance';
 
 // ---------------------------------------------------------------------------
@@ -395,6 +395,17 @@ export function sanitizeArticleContent(raw: string): string {
 
   text = text.replace(LEAKED_IMAGE_HEADER, '');
   text = stripPlaceholderImages(text);
+  // ★★ 2026-10-31：剥掉**句中残留的西里尔文**（模型把俄语原句贴进中文正文）。
+  //
+  // ⚠️ **为什么推送层也要做一遍**（翻译层已经做了）：
+  // · 翻译层的清理只对**以后入库**的稿子有效；
+  // · 而**库里已存量**的稿子（当前 933 篇）永远不会被翻译层再碰一次
+  // ⇒ ⇒ 用户今天看到的俄语残留/重复国名，**只靠翻译层修不掉**。
+  // ⇒ ⇒ 推送层是**唯一**能让存量稿变干净的地方。
+  //
+  // 真实样本（用户 2026-10-31 让 ChatGPT 审出来的）：「… и эксплуатации крупных ГЭС 的经验 …」
+  // ⚠️ 单个西里尔**缩写**（`ГЭС`）**留着**（它是有信息的）⇒ 判据见 `stripCyrillicRuns`。
+  text = stripCyrillicRuns(text).text;
   // 图片类元描述句（「原文未提供图片URL」）要在删评论句**之前**摘掉：
   // 它一旦落在末句，就会让 stripTrailingCommentary 的末句判据失效、直接 break。
   text = stripImageMetaSentences(text);
