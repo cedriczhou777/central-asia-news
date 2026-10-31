@@ -22,6 +22,8 @@
 import {
   cyrillicParentheticalNotes,
   stripCyrillicParentheticals,
+  stripCyrillicRuns,
+  dedupeRepeatedCountry,
   mixedScriptTokens,
   mixedScriptTokensLatin,
   latinCyrillicTokens,
@@ -407,6 +409,43 @@ ok(
   '★ `cyrillicParentheticalNotes` 用的是那份共用正则，不是自写的',
   /matchAll\(CYRILLIC_NOTE_RE\)/.test(vsrc),
 );
+
+// ============================================================
+// 2026-10-31：句中残留的西里尔文 + 标题里紧邻重复的国名
+// ============================================================
+//
+// 起因：用户 2026-10-31 让 ChatGPT 审阿塞拜疆那批新闻，报了两条：
+// ① 「抽水蓄能专家采访」那条的**正文残留俄语**（模型把俄语原句贴进中文正文）
+// ② 「阿塞拜疆**阿塞拜疆**糖业生产联合体…」**标题重复了国名**
+{
+  const RAW =
+    '乌克兰工程师专长在其中的作用 и эксплуатации крупных ГЭС 的经验，太阳能和风能产业蓬勃发展。' +
+    ' востребованы и послужат успешной реализации первого азербайджанского про екта ГАЭС. 在全球范围内，储能系统正迅速发展。';
+  const r = stripCyrillicRuns(RAW);
+  ok('★★ 句中的西里尔残留被剥掉', r.removed.length >= 2, JSON.stringify(r.removed));
+  ok('★★ 剥完之后正文里不剩 ≥4 字母的西里尔词',
+    !/[Ѐ-ӿ]{4,}/.test(r.text), r.text);
+  ok('★★ 中文内容一个字都不能少',
+    r.text.includes('乌克兰工程师专长在其中的作用') && r.text.includes('在全球范围内，储能系统正迅速发展'),
+    r.text);
+  ok('★★ 剥掉后不留多余空格', !/\s{2,}/.test(r.text) && !/作用 的/.test(r.text), r.text);
+
+  // ★ MUST_KEEP：单个西里尔**缩写**（ГЭС = 水电站）是有信息的 ⇒ 不许删
+  const k = stripCyrillicRuns('该电站属于 ГЭС 类别，是大型水电站。');
+  ok('★★★ 单个西里尔缩写（ГЭС）**不许删**', k.removed.length === 0 && k.text.includes('ГЭС'),
+    JSON.stringify(k.removed));
+
+  // 标题重复国名
+  ok('★★ 标题里紧邻重复的国名被去掉',
+    dedupeRepeatedCountry('阿塞拜疆阿塞拜疆糖业生产联合体成为非石油部门第二大出口商').title
+      === '阿塞拜疆糖业生产联合体成为非石油部门第二大出口商');
+  ok('★★ 8 个字的国名也能去重（上限不能取 6）',
+    dedupeRepeatedCountry('吉尔吉斯斯坦吉尔吉斯斯坦启动新项目').title === '吉尔吉斯斯坦启动新项目');
+  ok('★★ 不是重复的一律不动',
+    dedupeRepeatedCountry('乌兹别克斯坦与土耳其签署协议').title === '乌兹别克斯坦与土耳其签署协议');
+  ok('★★ 正常的「A 国…B 国」不动',
+    dedupeRepeatedCountry('阿塞拜疆总统会见格鲁吉亚总理').title === '阿塞拜疆总统会见格鲁吉亚总理');
+}
 
 // ============================================================
 // 汇总

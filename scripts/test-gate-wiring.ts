@@ -79,7 +79,16 @@ ok('西式量级词改写被调用（摘要/正文各一次）',
 ok('★ 返回的 summary 是改写后的', ret.includes('summaryZh: ok ? westernSummary.text'));
 ok('★ 返回的 content 是改写后的', ret.includes('contentZh: ok ? westernContent.text'));
 ok('元评语剥离被调用（摘要 + 正文）',
-  nrm.includes('stripMetaComments(summaryZh)') && nrm.includes('stripMetaComments(contentZh)'));
+  // ⚠️ 2026-10-31：入参变了 —— 西里尔残留剥离**接在前面**
+  // （`stripCyrillicRuns` → `stripMetaComments`）⇒ 元评语剥离吃的是剥过西里尔的文本
+  nrm.includes('stripMetaComments(cyrillicSummary.text)') &&
+  nrm.includes('stripMetaComments(cyrillicStripped.text)'));
+ok('★ 西里尔残留剥离接在**元评语剥离之前**（两层都要作用在最终文本上）',
+  nrm.indexOf('stripCyrillicRuns(contentZh)') < nrm.indexOf('stripMetaComments(cyrillicStripped.text)') &&
+  nrm.indexOf('stripCyrillicRuns(summaryZh)') < nrm.indexOf('stripMetaComments(cyrillicSummary.text)'));
+ok('★ 标题去掉重复国名接在**FOTO 标记之后**',
+  nrm.includes('dedupeRepeatedCountry(photoStripped.text)') &&
+  nrm.includes('westernScaleToChinese(countryDeduped.title)'));
 ok('★ 两条清理**串成一条链**（westernScale 作用在剥离后的文本上）',
   nrm.includes('westernScaleToChinese(metaStrippedSummary.text)') &&
     nrm.includes('westernScaleToChinese(metaStrippedContent.text)'),

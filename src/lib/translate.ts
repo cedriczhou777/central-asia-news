@@ -5,6 +5,8 @@ import {
   latinCyrillicTokens,
   descendingMultiplePhrases,
   stripCyrillicParentheticals,
+  stripCyrillicRuns,
+  dedupeRepeatedCountry,
   MIN_HAN_TITLE,
   MIN_HAN_CONTENT,
   stripTrailingPhotoLabel,
@@ -308,6 +310,10 @@ interface TranslationStats {
     westernScaleRewritten?: number;
     /** 标题结尾的「照片」标记被剥掉的次数（2026-10-24 加）。 */
     photoLabelStripped?: number;
+    /** 标题里**紧邻重复的国名**被去掉的次数（2026-10-31 加）。 */
+    repeatedCountryStripped?: number;
+    /** 正文/摘要里**残留的西里尔文片段**被剥掉的次数（2026-10-31 加）。 */
+    cyrillicRunsStripped?: number;
     /** 软闸触发重试的次数（2026-10-23 加）。 */
     softRetry?: number;
     /** 软闸重试后仍命中、**放行**的次数（2026-10-23 加）—— 这个数上涨说明闸太紧。 */
@@ -1143,10 +1149,21 @@ function normalizeResult(
   // ⚠️ 必须在**翻译层**剥（不只是总审侧）：**库里存的是总审改写之前的文本** ⇒
   //    不在入库前剥掉，它就永远留在库里。
   const photoStripped = stripTrailingPhotoLabel(titleZh);
+  // ★★ 2026-10-31：标题里**紧邻重复的国名**（「阿塞拜疆阿塞拜疆糖业生产联合体…」）
+  //    ⇒ 读者第一眼看到的就是重复国名 ⇒ 很像机器拼出来的。
+  //    ⚠️ 必须在**翻译层**剥（同上：库里存的是总审改写之前的文本 ⇒ 不在入库前剥就永远留在库里）。
+  const countryDeduped = dedupeRepeatedCountry(photoStripped.text);
   const summaryZh = stripNote(
     typeof parsed.summary === 'string' ? parsed.summary : originalContent.substring(0, 100),
   );
   const contentZh = stripNote(typeof parsed.content === 'string' ? parsed.content : originalContent);
+
+  // ★★ 2026-10-31：**正文里残留的西里尔文**（模型把俄语原句贴进中文正文）。
+  //    真实样本：「…в востребованы и послужат…екта ГАЭС.」⇒ 读者看到的是「中文里夹着俄语」。
+  //    ⚠️ `stripCyrillicParentheticals` 只删**括注**里的 ⇒ 句中的残留不在它射程内。
+  //    ⚠️ 单个西里尔**缩写**（`ГЭС`）**留着**（它是有信息的）⇒ 见 `stripCyrillicRuns` 的注释。
+  const cyrillicStripped = stripCyrillicRuns(contentZh);
+  const cyrillicSummary = stripCyrillicRuns(summaryZh);
 
   // ---- 元评语**机械剥离**（2026-10-23）----
   //
@@ -1155,8 +1172,8 @@ function normalizeResult(
   // · **拦截**路线（产生 reject）有个致命问题：闸命中 ⇒ `ok=false` ⇒ 三次不过 ⇒ **不入库** ⇒ 静默丢稿。
   // · **清理**路线（直接删掉那一句）⇒ 零重试、零丢稿、零误删风险。
   // ⇒ 而且它**绕开了整个 reject 接线问题**（那正是 10-20 那两道新闸失效的原因）。
-  const metaStrippedSummary = stripMetaComments(summaryZh);
-  const metaStrippedContent = stripMetaComments(contentZh);
+  const metaStrippedSummary = stripMetaComments(cyrillicSummary.text);
+  const metaStrippedContent = stripMetaComments(cyrillicStripped.text);
   const metaRemoved = [...metaStrippedSummary.removed, ...metaStrippedContent.removed];
   if (metaRemoved.length > 0) {
     translationStats.termGate.metaStripped = (translationStats.termGate.metaStripped ?? 0) + metaRemoved.length;
@@ -1177,7 +1194,7 @@ function normalizeResult(
   // ⇒ 一篇稿子**同时**有两种问题时，元评语会漏掉（两条清理各算各的）。
   const westernSummary = westernScaleToChinese(metaStrippedSummary.text);
   const westernContent = westernScaleToChinese(metaStrippedContent.text);
-  const westernTitle = westernScaleToChinese(photoStripped.text);
+  const westernTitle = westernScaleToChinese(countryDeduped.title);
 
   // 语言闸：汉字个数够（见 utils.isChineseText 的说明，**不是**占比）
   const zhOk = isChineseText(titleZh, MIN_HAN_TITLE) && isChineseText(contentZh, MIN_HAN_CONTENT);
@@ -1409,6 +1426,18 @@ function normalizeResult(
     translationStats.termGate.westernScaleRewritten =
       (translationStats.termGate.westernScaleRewritten ?? 0) + westernRewrites.length;
     console.log(`[translate] 西式量级词改写成中文：${westernRewrites.join('；')}`);
+  }
+  // ★ 2026-10-31：静默改写必须留痕（标题去重复国名 / 正文剥西里尔残留）
+  if (countryDeduped.changed) {
+    translationStats.termGate.repeatedCountryStripped =
+      (translationStats.termGate.repeatedCountryStripped ?? 0) + 1;
+    console.log(`[translate] 标题去掉重复的国名：「${photoStripped.text}」→「${countryDeduped.title}」`);
+  }
+  const cyrillicRunsRemoved = cyrillicStripped.removed.length + cyrillicSummary.removed.length;
+  if (cyrillicRunsRemoved > 0) {
+    translationStats.termGate.cyrillicRunsStripped =
+      (translationStats.termGate.cyrillicRunsStripped ?? 0) + cyrillicRunsRemoved;
+    console.log(`[translate] 剥掉正文里残留的西里尔文 ${cyrillicRunsRemoved} 处`);
   }
   if (photoStripped.stripped.length > 0) {
     translationStats.termGate.photoLabelStripped =
