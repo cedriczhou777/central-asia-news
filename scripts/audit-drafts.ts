@@ -375,6 +375,58 @@ async function main(): Promise<void> {
       '\n   但「没报出来」**也不等于没问题**（原文太短 ⇒ 核对不了 ⇒ 静默通过）。',
   );
 
+  // ---- ★★ 总审「看不见的那部分」：正文 200 字之后的违规数字（2026-10-31）----
+  //
+  // ## 为什么这个指标是关键
+  //
+  // 总审的「与原文核对」（第七件事）只看**正文前 200 字**（`toReviewItem` 的 `contentPeek`）
+  // ⇒ ⇒ **正文 200 字之后的幻觉它根本看不见**。
+  // 真实样本（塔吉克斯坦「杜尚别 30 日交通临时管制」那条）：
+  // 前 200 字是真的（交通管制 + 山体滑坡），
+  // 后面凭空接了 **9 段「塔吉克宏观经济综述」**（汇率 87.42 / GDP 5.2% / 预算 /
+  // 外资 5 亿美元 / 通胀 5.1% / 失业率 4.3% / 人均 GDP 1,200 美元 …）
+  // ⇒ **那些数字原文里一个都没有** ⇒ 而总审**没机会**发现它们。
+  //
+  // ⇒ 所以要分开量：「全文违规」 vs 「200 字之后违规」
+  // ⇒ **后者 = 总审的结构性缺口有多大**（这是决定「要不要加长 contentPeek」的依据）。
+  {
+    const PEER_LIMIT = 200;
+    let fullHit = 0;
+    let tailHit = 0;
+    let tailOnly = 0;
+    const samples: string[] = [];
+    for (const a of arts) {
+      const oc = String(a.originalContent || '');
+      const body = String(a.content || '').replace(/<[^>]+>/g, ' ');
+      if (body.length <= PEER_LIMIT) continue;
+      const bodyNums = normalizeNumbers(body);
+      const origNums = normalizeNumbers(oc);
+      const missing = [...bodyNums].filter((n) => !origNums.has(n));
+      if (missing.length === 0) continue;
+      fullHit++;
+      // 只看 200 字之后那部分有没有违规数字
+      const tailNums = normalizeNumbers(body.slice(PEER_LIMIT));
+      const tailMissing = [...tailNums].filter((n) => !origNums.has(n));
+      // 「前 200 字干净、后段才有违规」= 总审**完全没机会**发现的那一类
+      const headNums = normalizeNumbers(body.slice(0, PEER_LIMIT));
+      const headMissing = [...headNums].filter((n) => !origNums.has(n));
+      if (headMissing.length === 0) tailOnly++;
+      if (tailMissing.length > 0) {
+        tailHit++;
+        if (samples.length < 6) {
+          samples.push(`  [${a.country}] ${String(a.title).slice(0, 42)} ⇒ 后段违规 ${tailMissing.slice(0, 4).join('、')}`);
+        }
+      }
+    }
+    console.log(`\n${'='.repeat(70)}\n=== ★★ 总审看不见的那部分（正文 > ${PEER_LIMIT} 字的 ${arts.filter((a) => String(a.content || '').replace(/<[^>]+>/g, ' ').length > PEER_LIMIT).length} 篇）===`);
+    console.log(`全文含「原文里查不到的数字」：${fullHit} 篇`);
+    console.log(`★ 其中**违规数字落在 200 字之后**（= 总审看不见）：${tailHit} 篇`);
+    console.log(`★★ 只在后段违规（前 200 字干净 ⇒ 总审完全没机会）：${tailOnly} 篇`);
+    console.log(`   （前 200 字里也有违规 ⇒ 总审**有机会**发现但没删 ⇒ 那是闸/提示词的问题，不是盲区）`);
+    console.log('样本：');
+    for (const x of samples) console.log(x);
+  }
+
   // ---- ★ 要素 + 可读性基线（2026-10-31）----
   const qByReason = new Map<string, AuditItem[]>();
   let qClean = 0;
