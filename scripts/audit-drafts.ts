@@ -31,6 +31,7 @@
  */
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import { SELF_KEYWORDS } from '../src/lib/country-relevance';
 
 const BASE = 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
 
@@ -184,6 +185,154 @@ async function fetchDay(date: string): Promise<Array<Record<string, unknown>>> {
   return j.articles || [];
 }
 
+// ---------------------------------------------------------------------------
+// 四、★ 2026-10-31：把「标准新闻稿件要素 + 可读性」落成**可量化的检查项**
+// ---------------------------------------------------------------------------
+//
+// ## 为什么要有它
+//
+// 用户问：「能不能做一个独立 AI 调用审核翻译准确性、概括改写、数据核实、
+// 内容合理性、相关性、可读性，达到标准新闻稿件的要素要求，改到完美？」
+//
+// ⇒ 现有总审的「七件事」已经覆盖了其中 5 个维度（见 `editor-review.ts` 的
+// `EDITOR_PROMPT` 第一节）⇒ **真正缺的是「可读性」与「标准要素」的可量化判据**。
+// 而「完美」要能收敛，**前提是它得先是个数** —— 这一节就是把形容词变成指标。
+//
+// ## ⚠️ 这一节的定位：**筛子，不是判决**
+//
+// 与上面三项指标同一性质：报出来 = **值得人工看**，没报出来 ≠ 没问题。
+// ⇒ 全部判据都必须是**确定性**的（可回归、零成本、不调模型）。
+//
+// ## 为什么只量「能确定性判」的子项
+//
+// 六要素（谁/何时/何地/何事/为何/结果）里，「何事」「为何」「结果」
+// **没法用规则判**（需要语义）⇒ 那正是现有总审（对着原文逐项核对）在做的事。
+// ⇒ 这里只量**四个能用规则判**的，**不假装能全判**。
+
+/** 时间表达（要素「何时」）。 */
+const TIME_WORDS = [
+  '今日', '昨日', '昨天', '明天', '本周', '上周', '本月', '上月', '今年', '去年', '明年',
+  '近期', '日前', '近日', '当天', '本周', '季度', '上半年', '下半年', '月初', '月末',
+  '星期', '周一', '周二', '周三', '周四', '周五', '周六', '周日',
+];
+
+/** 机构 / 职务类词（要素「谁」）。 */
+const ORG_WORDS = [
+  '政府', '部', '央行', '银行', '公司', '集团', '企业', '工厂', '项目', '委员会', '协会',
+  '基金会', '交易所', '统计局', '议会', '总统', '总理', '部长', '主席', '总理府',
+  '监管', '局', '署', '办公室', '部门', '商行', '运营商', '投资人', '投资者',
+  // ⚠️ v2 校准补的**职务词**（2026-10-31 抽验发现漏了）：
+  // 「吉尔吉斯斯坦**议员**提议将学校课程…」被判「无主体」⇒ 词表不全造成的**假阳性**。
+  '议员', '代表', '市长', '州长', '区长', '区长', '专家', '学者', '发言人', '秘书长',
+  '署长', '行长', '总理府', '内阁', '议会', '法院', '检察院', '统计局', '海关', '税务局',
+  // 政区名当主体（「比什凯克市所有四个行政区…」—— 主体就是那个市）
+  '市', '州', '区',
+];
+
+/** 评论腔连接词（可读性：标题不该是摘要）。 */
+const COMMENT_WORDS = ['尽管', '虽然', '同时', '此外', '另一方面', '不仅', '但是', '然而', '值得注意的是'];
+
+/** 拉丁缩写（可读性：术语未解释）。 */
+const ABBR_RE = /\b[A-Z]{2,6}\b/g;
+
+/** 去掉正文里的 HTML。 */
+function plain(html: string): string {
+  return (html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 一篇稿子的「要素 + 可读性」体检。
+ *
+ * @param countryCode 该稿所属国家（用于判「何地」）
+ * @param countryNames 该国的中文名/别名（用于判「何地」）
+ */
+export function auditQuality(a: {
+  title?: string | null;
+  summary?: string | null;
+  content?: string | null;
+  originalContent?: string | null;
+  country?: string | null;
+}, countryNames: string[] = []): AuditItem[] {
+  const items: AuditItem[] = [];
+  const title = (a.title || '').trim();
+  const summary = (a.summary || '').trim();
+  const head = title + ' ' + summary;
+  const body = plain(a.content || '');
+
+  const push = (reason: string, detail: string) =>
+    items.push({ country: a.country || '?', title, reason, detail });
+
+  // ---- 要素「何时」----
+  const hasTime =
+    TIME_WORDS.some((w) => head.includes(w)) ||
+    /\d{4}\s*年/.test(head) ||
+    /\d{1,2}\s*月\s*\d{1,2}\s*日/.test(head) ||
+    /\d{1,2}\s*月/.test(head);
+  if (!hasTime) {
+    push('要素·时间锚点', '稿面没有任何日期锚点（**日报场景下版式已给日期 ⇒ 这是软指标**）');
+  }
+
+  // ---- 要素「何事/数据」----
+  // 排除纯日期型数字（2026 年、10 月 29 日）⇒ 只看「非日期数字」。
+  // ⚠️ **v2 校准**：只看「标题+摘要」会假阳性 —— 正文常常在第二句就补出金额
+  // ⇒ 判据放宽到「标题 + 摘要 + 正文前 150 字」。
+  const numScope = head + ' ' + body.slice(0, 150);
+  const nonDateNums = (numScope.replace(/\d{4}\s*年/g, '')
+    .replace(/\d{1,2}\s*月\s*\d{1,2}\s*日/g, '')
+    .replace(/\d{1,2}\s*月/g, '')
+    .match(/\d/g) || []).length;
+  if (nonDateNums === 0) {
+    push('要素·数据', '标题与摘要里没有任何金额/比例/规模 ⇒ 对投资日报来说这是硬伤（读者无法判断重要性）');
+  }
+
+  // ---- 要素「谁」----
+  // ⚠️ **v2 校准**：第一版只认中文机构词 ⇒ **「专名」被误判成「没有主体」** ——
+  // 「Wildberries 为吉尔吉斯斯坦所有用户提供 Click&Collect 线下提货服务」
+  // 的主体就是 Wildberries（一个品牌专名）⇒ 第一版报「没有主体」是错的。
+  // ⇒ 现在**中文机构词 或 拉丁专名**任一命中就算有主体。
+  const hasOrg =
+    ORG_WORDS.some((w) => head.includes(w)) ||
+    /\b[A-Z][A-Za-z]{2,}/.test(head);
+  if (!hasOrg) {
+    push('要素·主体', '标题与摘要里看不到任何机构、职务或专名主体 ⇒ 读起来像「有件事发生了」但不知道是谁');
+  }
+
+  // ---- 要素「何地」----
+  // ⚠️ **v2（2026-10-31 校准）**：第一版只看「国名」⇒ **大量假阳性** ——
+  // 「Tazalyk 因车辆尾气排放超标被罚款」那条的摘要里写的是「**比什凯克**市政企业」，
+  // 地点其实是有的 ⇒ 报「没有地点」是错的。
+  // ⇒ 改成判「国名 **或** 本国城市/州名」（复用 `SELF_KEYWORDS`，**不新增维护点**：
+  // 那张表本来就是判国别相关性的权威清单）。
+  if (countryNames.length > 0 && !countryNames.some((n) => head.includes(n))) {
+    push('要素·地点', `标题与摘要里既没有本国名、也没有本国城市/州名（${countryNames.slice(0, 3).join('、')}…）⇒ 读者不知道这条具体发生在哪`);
+  }
+
+  // ---- 可读性 ----
+  if (title.length > 42) {
+    push('可读性·标题过长', `标题 ${title.length} 字（> 42）⇒ 微信后台一行放不下，会被截断`);
+  }
+  if (COMMENT_WORDS.some((w) => title.startsWith(w))) {
+    push('可读性·标题是摘要', '标题以评论连接词开头 ⇒ 读者要的是「发生了什么」，不是「尽管…且…」');
+  }
+  const sentences = body.split(/(?<=[。！？])/).map((x) => x.trim()).filter(Boolean);
+  if (sentences.length > 0) {
+    const avg = body.length / sentences.length;
+    const longest = Math.max(...sentences.map((x) => x.length));
+    if (avg > 65) {
+      push('可读性·句子过长', `平均句长 ${avg.toFixed(0)} 字（> 65）⇒ 中文新闻的可读上限约 40–45 字`);
+    }
+    if (longest > 120) {
+      push('可读性·长句', `最长一句 ${longest} 字（> 120）⇒ 读者会跳读`);
+    }
+  }
+  const abbrs = [...new Set((body.match(ABBR_RE) || []))];
+  if (abbrs.length >= 3 && !abbrs.some((x) => summary.includes(x))) {
+    push('可读性·术语未解释', `正文出现 ${abbrs.length} 个未在摘要解释的缩写：${abbrs.slice(0, 6).join('、')}`);
+  }
+
+  return items;
+}
+
 async function main(): Promise<void> {
   const arg = process.argv[2];
   const dates = arg ? [arg] : ['2026-10-29', '2026-10-30'];
@@ -225,5 +374,40 @@ async function main(): Promise<void> {
     '\n⚠️ 这些是「**值得人工看**」的清单 ⇒ **报出来不等于有问题**（可能是表达差异）；' +
       '\n   但「没报出来」**也不等于没问题**（原文太短 ⇒ 核对不了 ⇒ 静默通过）。',
   );
+
+  // ---- ★ 要素 + 可读性基线（2026-10-31）----
+  const qByReason = new Map<string, AuditItem[]>();
+  let qClean = 0;
+  const perCountry = new Map<string, { total: number; hit: number }>();
+  for (const a of arts) {
+    const cc = String(a.country || '?');
+    // 本国词表里只取**中文**部分（拉丁词在中文稿面里不会出现）
+    const names = (SELF_KEYWORDS[cc as keyof typeof SELF_KEYWORDS] || []).filter((w) => /[\u4e00-\u9fff]/.test(w));
+    const q = auditQuality(a as never, names);
+    const bucket = perCountry.get(cc) || { total: 0, hit: 0 };
+    bucket.total++;
+    if (q.length === 0) qClean++;
+    else bucket.hit++;
+    perCountry.set(cc, bucket);
+    for (const it of q) {
+      const arr = qByReason.get(it.reason) || [];
+      arr.push(it);
+      qByReason.set(it.reason, arr);
+    }
+  }
+  console.log(`\n${'='.repeat(70)}\n=== ★ 要素 + 可读性基线（${arts.length} 篇）===`);
+  console.log(`★ 四项全过：${qClean} 篇（${pct(qClean)}%）`);
+  console.log('★ 按国家（命中篇数 / 总篇数）：');
+  for (const [cc, b] of [...perCountry.entries()].sort()) {
+    console.log(`    ${cc}  ${b.hit} / ${b.total}`);
+  }
+  for (const [reason, list] of [...qByReason.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    console.log(`\n--- 【${reason}】命中 ${list.length} 篇（${pct(list.length)}%）---`);
+    for (const it of list.slice(0, 8)) {
+      console.log(`  [${it.country}] ${it.title.slice(0, 48)}`);
+      console.log(`      ⇒ ${it.detail}`);
+    }
+    if (list.length > 8) console.log(`  … 另 ${list.length - 8} 篇`);
+  }
 }
 void main();
