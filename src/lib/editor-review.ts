@@ -491,8 +491,28 @@ export const FIX_LOCATE_FLOOR = 0.15;
  *   ⇒ 新闸选保留者（环的「根」，无唯一根则取信息最全者）、删其余，
  *   且删前必须与保留者相似度 ≥ `DUP_SIM_FLOOR`（2 元互指环天然达标）。
  *   ⚠️ 它**只动删除闸**，提示词一个字没改 ⇒ 所以记 `g4` 而不是 `v7`。
+ * - `g5`（2026-10-31）：**删稿上限从「整组作废」改成「逐类作废」**。
+ *   线上实测（kz 2026-10-30）：18 条拟删 → **实删 0** ——
+ *   15 条被判成 `not_news`/`unreliable`（非重复类预算只有 4 条）⇒ 超额
+ *   ⇒ **整组作废** ⇒ 把那 1 条**合法的 `duplicate` 也连坐了**。
+ *   ⇒ 两本账的**证据强度本来就不同**（`duplicate` 有 `sameAs` 可当场核对，
+ *   其余两类只能靠引文）⇒ 让证据软的一类否决证据硬的一类是**分账的反义**。
+ *   ⇒ 现在**只作废撞上限的那一类**，另一类照常生效；
+ *   `MIN_KEEP` 仍是全批的 ⇒ 不满足时两类都作废。
+ *   ⇒ 新增 `audit.vetoedDrops` ⇒ 让「拟删 vs 实删」的差额**可归因**。
+ *   ⚠️ 它同样**只动删除闸**，提示词一个字没改 ⇒ 记 `g5`。
+ * - `g6`（2026-10-31）：**「理由照抄占位符」不再无条件拒。**
+ *   线上实测（tj 2026-10-30）：6 条拟删**全部**死于这一条 ——
+ *   模型把「（≥6 字的原文片段）（为什么）」原样抄进 reason ⇒ 6 条全被拒
+ *   ⇒ 那一轮 tj **一条重复都没消掉**（用户眼里的「罗贡水电站 ×2」就在里面）。
+ *   ⇒ `duplicate` 的证据是 `sameAs`（代码当场量相似度），**不是 reason** ⇒
+ *   理由写得难看 ≠ 没有证据 ⇒ 放行（仍必须过闸 A），并在
+ *   `audit.placeholderReasonDrops` 留痕；
+ *   `not_news` / `unreliable` 唯一的证据就是引文 ⇒ **照旧拒**。
+ *   ⇒ 这是把 v4 已确立的原则（「一种判断只需要一份机器能核对的证据」）**贯彻到底**，
+ *   提示词一个字没改 ⇒ 记 `g6`。
  */
-export const EDITOR_GATE_VERSION = 'g4';
+export const EDITOR_GATE_VERSION = 'g6';
 
 /**
  * 提示词 JSON 示例里的**占位符**。
@@ -647,6 +667,25 @@ export interface ReviewAudit {
   /** 本次**实际生效**的两个上限（`MAX_DROPS_DUPLICATE` / `min(MAX_DROPS, ⌊n/3⌋)`）。 */
   dupBudget?: number;
   otherBudget?: number;
+  /**
+   * g5 新增：**因撞上限而被作废**的删除（按类分列）。
+   *
+   * 为什么要有它：g4 之前是「一次把两本账都作废」⇒ 「拟删 18 / 实删 0」时
+   * **看不出是哪一类撞了上限**、也看不出**另一类本来是合法的**。
+   * ⇒ 这一项让「拟删 vs 实删」的差额**可归因**。
+   *
+   * ⚠️ `kind: 'other'` = `not_news` / `unreliable`（证据软：只能靠引文）。
+   */
+  vetoedDrops?: Array<{ kind: 'duplicate' | 'other'; count: number; reason: string }>;
+  /**
+   * g6 新增：因「理由照抄了提示词示例的占位符」而**被放行**的 `duplicate` 条数。
+   *
+   * 为什么要有它：`duplicate` 的证据是 `sameAs`（代码当场量相似度），
+   * 理由写得难看（照抄占位符）**不等于没有证据** ⇒ 放行。
+   * ⚠️ 但这属于「本该写好却没写好」⇒ 必须留一个数，否则报告里会出现
+   * 一条「理由是占位符」的删除而没人知道它是怎么通过的。
+   */
+  placeholderReasonDrops?: number;
   /** 模型提议改几处 / 实际改几处 */
   proposedFixes?: number;
   appliedFixes?: number;
@@ -1298,6 +1337,8 @@ export function applyVerdict(
   const dropSet = new Set<number>();
   const dropRecords: Array<{ index: number; kind: string; reason: string; sameAs?: number }> = [];
   const dropCap = Math.min(MAX_DROPS, Math.floor(n * MAX_DROP_RATIO));
+  // g6：因「理由照抄了占位符」而被**放行**（duplicate 靠 sameAs 取证）的条数。
+  let placeholderReasonDrops = 0;
   for (const d of rawDrops) {
     const o = (d ?? {}) as Record<string, unknown>;
     const idx = typeof o.index === 'number' ? o.index : NaN;
@@ -1319,10 +1360,34 @@ export function applyVerdict(
     //
     // ① 照抄示例里的占位符。这一条正是 09-29 事故的形态：模型不肯自己想，
     //    直接把提示词示例当答案交上来。占位符**照着抄就没有信息**，所以直接拒。
+    //
+    // ⚠️★ **g6（2026-10-31）：只对「证据只能靠引文」的那两类直接拒。**
+    //
+    // 线上实测（tj 2026-10-30）：6 条拟删**全部**死于这一条 —— 模型把
+    // 「（≥6 字的原文片段）（为什么）」原样抄进了 reason ⇒ 6 条全被拒 ⇒
+    // 那一轮 tj **一条重复都没消掉**（用户眼里的「罗贡水电站 ×2」就在里面）。
+    //
+    // 为什么 duplicate 不该在这里被拒：**它的证据不是 reason，是 `sameAs`** ——
+    // 代码会当场量那两条标题的相似度（闸 A）。⇒ reason 写得难看（照抄占位符）
+    // 只是**理由写得潦草**，不是**没有证据**。
+    // 这正是 v4 已经在注释里确立的原则：「**一种判断只需要一份「机器能核对」的证据，
+    // 不必凑两份**」—— 而这一条闸当时漏改了。
+    //
+    // ⇒ duplicate：占位符**不拒**，继续走闸 A；通过了就采纳，
+    //   并在 `audit.placeholderReasonDrops` 留一个数（可查）。
+    // ⇒ not_news / unreliable：它们**唯一**的证据就是引文 ⇒ 占位符 = 没有证据 ⇒ 照旧拒。
     const echoed = PLACEHOLDER_TOKENS.find((t) => reason.includes(t));
     if (echoed) {
-      rejections.push(`drops[${idx}] 的理由照抄了提示词示例的占位符（${echoed}）⇒ 拒绝`);
-      continue;
+      if (kind === 'duplicate') {
+        // 不拒 ⇒ 但**必须**在下面通过闸 A（sameAs 合法 + 相似度 ≥ DUP_SIM_FLOOR）才能采纳。
+        placeholderReasonDrops++;
+      } else {
+        rejections.push(
+          `drops[${idx}] 的理由照抄了提示词示例的占位符（${echoed}）⇒ 拒绝` +
+            `（${kind} 唯一的证据就是引文，占位符等于没有证据）`,
+        );
+        continue;
+      }
     }
     //
     // ② + ③ **证据分型**（v4 改：原来是「引文 AND sameAs」，现在按 kind 各要一份）。
@@ -1502,23 +1567,65 @@ export function applyVerdict(
   audit.dupBudget = MAX_DROPS_DUPLICATE;
   audit.otherBudget = dropCap;
   // 两本账各自不超限 + 全批保留下限，**三个条件同时**满足才允许删。
-  // ⚠️ 仍然保留「一次把两本账都作废」而不是「只作废超限的那一类」：行为最好推理
-  //    （与 order 的处置一致）。代价是「一条越界的 not_news 会连累正确的重复删除」——
-  //    记在这里，真出现了再改成逐类作废（那时要一并想清楚「部分生效」怎么写进 audit）。
+  //
+  // ★★ 2026-10-31：**改成逐类作废**（g5）。原来是一次把两本账都作废，
+  // 而那句「真出现了再改」的注释里预告的正是今天发生的事：
+  // **kz 2026-10-30 那一轮：18 条拟删 → 实删 0** ——
+  // · 2 条死于 `DUP_SIM_FLOOR`（模型指错，拒得对）
+  // · 1 条死于相似度 0.1154（同上）
+  // · **15 条被判成 `not_news`/`unreliable` ⇒ 非重复类预算只有 4 条 ⇒ 超额**
+  //   ⇒ **整组作废 ⇒ 把那 1 条合法的 `duplicate` 也一起连坐了**
+  // ⇒ ⇒ **一条重复都没消掉**，而模型明明已经看出来了。
+  //
+  // 为什么必须逐类：两本账的**证据强度本来就不同** ——
+  // `duplicate` 有 `sameAs` 可当场核对（证据硬），`not_news`/`unreliable` 只能靠引文（证据软）。
+  // ⇒ 让「证据软的那一类超预算」去**否决证据硬的那一类**，是分账设计的反义。
+  //
+  // ⚠️ `MIN_KEEP` 是**全批**的 ⇒ 不满足时**两类都要作废**（否则会突破保留下限）。
   const dupOk = dupDrops.length <= MAX_DROPS_DUPLICATE;
   const otherOk = otherDrops.length <= dropCap;
-  const dropOk = dupOk && otherOk && n - dropSet.size >= MIN_KEEP;
-  if (dropSet.size > 0 && !dropOk) {
-    const why = !dupOk
-      ? `duplicate 想删 ${dupDrops.length} 条 > 上限 ${MAX_DROPS_DUPLICATE} 条`
-      : !otherOk
-        ? `${otherDrops.length} 条非重复类删除 > 上限 ${dropCap} 条（${MAX_DROPS} 条 且 ≤${Math.round(MAX_DROP_RATIO * 100)}%）`
-        : `删完只剩 ${n - dropSet.size} 条 < 保留下限 ${MIN_KEEP} 条`;
-    rejections.push(`drops 整组作废：${why}`);
-    dropSet.clear();
-    dropRecords.length = 0;
+  const keepOk = n - dropSet.size >= MIN_KEEP;
+  if (dropSet.size > 0 && !(dupOk && otherOk && keepOk)) {
+    if (!keepOk) {
+      // 保留下限是全批的 ⇒ 这一条一票否决两类。
+      rejections.push(`drops 整组作废：删完只剩 ${n - dropSet.size} 条 < 保留下限 ${MIN_KEEP} 条`);
+      dropSet.clear();
+      dropRecords.length = 0;
+    } else {
+      // ★ 逐类作废：只作废**撞上限的那一类**，另一类照常生效。
+      const vetoed: Array<{ kind: 'duplicate' | 'other'; count: number; reason: string }> = [];
+      if (!dupOk) {
+        for (const d of dupDrops) dropSet.delete(d.index);
+        vetoed.push({
+          kind: 'duplicate',
+          count: dupDrops.length,
+          reason: `duplicate 想删 ${dupDrops.length} 条 > 上限 ${MAX_DROPS_DUPLICATE} 条`,
+        });
+      }
+      if (!otherOk) {
+        for (const d of otherDrops) dropSet.delete(d.index);
+        vetoed.push({
+          kind: 'other',
+          count: otherDrops.length,
+          reason: `${otherDrops.length} 条非重复类删除 > 上限 ${dropCap} 条（${MAX_DROPS} 条 且 ≤${Math.round(MAX_DROP_RATIO * 100)}%）`,
+        });
+      }
+      // 被作废的那一类也要从 `dropRecords` 里拿掉 ⇒ 报告里「实际删了什么」才不含它们。
+      for (let i = dropRecords.length - 1; i >= 0; i--) {
+        const k = dropRecords[i].kind === 'duplicate' ? 'duplicate' : 'other';
+        if (vetoed.some((v) => v.kind === k)) dropRecords.splice(i, 1);
+      }
+      audit.vetoedDrops = vetoed;
+      rejections.push(
+        `drops 逐类作废：${vetoed.map((v) => v.reason).join('；')}` +
+          ` ⇒ **只作废撞上限的那一类，不连坐另一类**（${vetoed
+            .map((v) => v.kind)
+            .join('/')} 被否决，另一类照常生效）`,
+      );
+    }
   }
   audit.appliedDrops = dropSet.size;
+  if (placeholderReasonDrops > 0) audit.placeholderReasonDrops = placeholderReasonDrops;
 
   // ---- 存活的索引 ----
   const survivors: number[] = [];

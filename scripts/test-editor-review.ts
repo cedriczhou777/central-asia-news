@@ -164,8 +164,8 @@ ok(
 // 但换了判据 ⇒ 两轮数据的采纳数不可比。不多记一版，「两次结论不同」就分不清是
 // 换了提示词、换了模型、还是换了闸 —— 那正是 `promptVersion` 这个字段存在的唯一理由。
 ok(
-  '闸版本号与 g4 对齐（改了判据必须先改版本号）',
-  EDITOR_GATE_VERSION === 'g4',
+  '闸版本号与 g6 对齐（改了判据必须先改版本号）',
+  EDITOR_GATE_VERSION === 'g6',
   `现在是 ${EDITOR_GATE_VERSION} —— 若你刚改了定位判据或标题标记剥离，请把 EDITOR_GATE_VERSION +1 并同步这条断言`,
 );
 
@@ -393,9 +393,34 @@ section('三之二、护栏 · drops 的三重上限');
   });
   const r2b = applyVerdict(items8, { drops: [news3(5), news3(6), news3(7)] });
   ok('v6 反向：not_news 类超比例上限（3 > min(4,⌊8/3⌋)=2）仍然**整组作废**', r2b.audit.appliedDrops === 0, JSON.stringify(r2b.audit));
-  ok('v6 反向：整组作废的理由写清了是哪一本账超限',
-    r2b.audit.rejections.some((x) => x.includes('整组作废') && x.includes('非重复类删除')),
+  ok('g5：作废的理由写清了是哪一本账超限（措辞改成「逐类作废」）',
+    r2b.audit.rejections.some((x) => x.includes('逐类作废') && x.includes('非重复类删除')),
     JSON.stringify(r2b.audit.rejections));
+  // ★★ g5 的核心：**不连坐** —— 证据软的那一类超预算，不该否决证据硬的那一类。
+  // 线上实测（kz 2026-10-30）：18 条拟删 → 实删 0，就是被连坐的。
+  {
+    // 15 条：otherBudget = min(MAX_DROPS=4, ⌊15/3⌋=5) = 4 ⇒ 5 条 not_news 就超限；
+    // 而 duplicate 1 条在预算内 ⇒ 删 6 条后剩 9 ≥ MIN_KEEP(5) ⇒ **不会**撞保留下限。
+    const items15 = mkItems(15);
+    const news15 = (i: number) => ({
+      index: i,
+      kind: 'not_news' as const,
+      reason: `「${items15[i].title.slice(0, 8)}」是体育赛事，不是投资新闻`,
+    });
+    const dup1 = { index: 1, kind: 'duplicate' as const, sameAs: 0, reason: dupReason(0, '阿塞拜疆与亚洲基础设施投资银行') };
+    const r2c = applyVerdict(items15, { drops: [news15(10), news15(11), news15(12), news15(13), news15(14), dup1] });
+    ok('g5：★ not_news 类超限 ⇒ **只作废 not_news 那类**，合法的 duplicate 照常生效',
+      r2c.audit.appliedDrops === 1, JSON.stringify(r2c.audit));
+    ok('g5：★ 被作废的那类在 audit.vetoedDrops 里可归因',
+      Array.isArray(r2c.audit.vetoedDrops) && r2c.audit.vetoedDrops.some((v) => v.kind === 'other' && v.count === 5),
+      JSON.stringify(r2c.audit.vetoedDrops));
+    ok('g5：★ 作废理由写明「不连坐另一类」',
+      r2c.audit.rejections.some((x) => x.includes('不连坐另一类')),
+      JSON.stringify(r2c.audit.rejections));
+    ok('g5：★ 被作废的那 5 条不在实际删除里（审计自洽）',
+      r2c.decision.drops.length === 1 && r2c.decision.drops[0].index === 1,
+      JSON.stringify(r2c.decision.drops));
+  }
 
   // ★ v6 的核心：**一件事被 N 家报道**时必须能删干净
   //
@@ -577,7 +602,10 @@ section('三之三、护栏 · drops 的逐条合规');
     // 抄示例占位符、以及「指不出与第几条重复」这两格。
     // ⚠️ v4 起第二格（缺 sameAs）从「附加理由」升级成了**该 kind 唯一的证据要求** ——
     //    见第十之二节：duplicate 这件事只认 sameAs，不再额外要引文。
-    { name: '理由照抄了示例占位符', raw: { index: 1, kind: 'duplicate', sameAs: 0, reason: `与第 0 条同为「${PLACEHOLDER_TOKENS[0]}」` }, needle: '占位符' },
+    // ⚠️ g6：占位符闸**只对「证据只能靠引文」的那两类**拒（not_news / unreliable）。
+    // duplicate 的证据是 sameAs（代码当场量相似度）⇒ 理由照抄占位符只是「写得难看」，
+    // 不是「没有证据」⇒ 见下面 g6 专节。
+    { name: '理由照抄了示例占位符（not_news，证据只有引文 ⇒ 照旧拒）', raw: { index: 1, kind: 'not_news', reason: `「${PLACEHOLDER_TOKENS[0]}」` }, needle: '占位符' },
     { name: 'duplicate 却指不出与第几条重复（没有 sameAs）', raw: { index: 1, kind: 'duplicate', reason: dupReason(0, '阿塞拜疆与亚洲基础设施投资银行') }, needle: 'sameAs' },
   ];
   for (const c of cases) {
@@ -587,6 +615,22 @@ section('三之三、护栏 · drops 的逐条合规');
   const dupOnce = { index: 1, kind: 'duplicate', sameAs: 0, reason: dupReason(0, '阿塞拜疆与亚洲基础设施投资银行') };
   const r = applyVerdict(items, { drops: [dupOnce, { ...dupOnce }] });
   ok('同一条被提了两次 ⇒ 只算一次', r.audit.appliedDrops === 1, JSON.stringify(r.audit));
+
+  // ---- g6：duplicate 的理由照抄占位符 ⇒ 放行（证据是 sameAs），但要留痕 ----
+  // 线上实测（tj 2026-10-30）：6 条拟删**全部**死于占位符闸 ⇒ 那一轮 tj 一条重复都没消掉。
+  {
+    const ph = { index: 1, kind: 'duplicate' as const, sameAs: 0, reason: `与第 0 条同为「${PLACEHOLDER_TOKENS[0]}」` };
+    const rp = applyVerdict(items, { drops: [ph] });
+    ok('g6：★ duplicate + 占位符理由 ⇒ **放行**（证据是 sameAs，不是 reason）',
+      rp.audit.appliedDrops === 1, JSON.stringify(rp.audit));
+    ok('g6：★ 放行了要留痕（placeholderReasonDrops）',
+      rp.audit.placeholderReasonDrops === 1, JSON.stringify(rp.audit));
+    // ⚠️ 但 sameAs 不合法时**照样拒** ⇒ 占位符闸不是被拆了，只是挪了位置。
+    const bad = { index: 1, kind: 'duplicate' as const, sameAs: 99, reason: `与第 99 条同为「${PLACEHOLDER_TOKENS[0]}」` };
+    const rbad = applyVerdict(items, { drops: [bad] });
+    ok('g6：★ sameAs 越界时照样拒（占位符闸只是挪了位置，不是被拆了）',
+      rbad.audit.appliedDrops === 0, JSON.stringify(rbad.audit));
+  }
 }
 
 section('三之四、护栏 · fixes 的 before 按「定位」判定（g2；防改错条目 + 不再丢掉判对的）');

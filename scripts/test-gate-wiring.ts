@@ -298,7 +298,7 @@ section('★★ 总审成环闸：g4 起「每环保留一条」，不许退回�
   // ⇒ 6 条死于「成环 ⇒ 整组拒」这个闸 ⇒ **模型判对了，代码一条都没执行**。
   // ⇒ 「A 说与 B 重复 + B 说与 A 重复」是重复的**最正常**表达（意思是「删一条就够」）。
   const er = R('src/lib/editor-review.ts');
-  ok('★ 闸版本号是 g4', /EDITOR_GATE_VERSION = 'g4'/.test(er));
+  ok('★ 闸版本号至少是 g4（成环闸那版）', /EDITOR_GATE_VERSION = 'g[4-9]'/.test(er));
   ok('★ 成环不再整组拒绝（代码里不许再有「整组拒绝」那套文案）',
     !/这一组会被整组删空/.test(er));
   ok('★ 成环时选保留者（环的根 / 信息最全者）',
@@ -307,6 +307,27 @@ section('★★ 总审成环闸：g4 起「每环保留一条」，不许退回�
     /simKeep < DUP_SIM_FLOOR/.test(er));
   ok('★ 保留者必须活着（不许「删空」—— 那是旧闸真正要防的东西）',
     /dropSet\.delete\(m\)/.test(er));
+}
+
+section('★★ 总审删除闸：g5 逐类作废 + g6 占位符只挡软证据那两类（2026-10-31）');
+{
+  const er = R('src/lib/editor-review.ts');
+  ok('★ 闸版本号是 g6', /EDITOR_GATE_VERSION = 'g6'/.test(er));
+  // g5：超限只作废撞上限的那一类，**不许连坐**另一类。
+  ok('★ 逐类作废（不许退回「一次把两本账都作废」）',
+    /drops 逐类作废/.test(er) && !/const dropOk = dupOk && otherOk/.test(er));
+  ok('★ 作废的可归因（audit.vetoedDrops）', /vetoedDrops\?: Array<\{ kind: 'duplicate' \| 'other'/.test(er));
+  ok('★ 被作废的那类要从 dropRecords 里拿掉（审计自洽）',
+    /dropRecords\.splice\(i, 1\)/.test(er));
+  ok('★ MIN_KEEP 仍然一票否决两类（不许借「逐类」突破保留下限）',
+    /删完只剩 .* < 保留下限/.test(er));
+  // g6：占位符闸只对「证据只能靠引文」的那两类拒。
+  ok('★ duplicate 的占位符理由不再直接拒',
+    /kind === 'duplicate'/.test(er) && /placeholderReasonDrops\+\+/.test(er));
+  ok('★ not_news / unreliable 照旧拒（引文是它们唯一的证据）',
+    /唯一的证据就是引文/.test(er));
+  ok('★ 放行了要留痕（placeholderReasonDrops）',
+    /placeholderReasonDrops\?: number/.test(er) && /audit\.placeholderReasonDrops = placeholderReasonDrops/.test(er));
 }
 
 section('★★ 推送参数：period / hours 必须同时认 query 与 body（2026-10-30）');
