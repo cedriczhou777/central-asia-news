@@ -34,7 +34,40 @@ export type ContentIssueKind =
   | 'ambiguous-quantifier'
   | 'kin-unclear'
   | 'meta-comment'
-  | 'mixed-script-name';
+  | 'mixed-script-name'
+  // ★★ 2026-10-31 加（来源：用户让 ChatGPT 审 kg/uz 两批新闻的逐条意见）
+  | 'numbers-out-of-order'
+  | 'advertisement';
+
+/**
+ * ★★ 「N 个…中的 M 个」且 **M > N** ⇒ 必错（2026-10-31）。
+ *
+ * 真实样本（吉尔吉斯斯坦第 3 条，ChatGPT 核验后指出的）：
+ * 标题「中吉乌道路工程电力线路迁移完成 **23 个路段中的 62 个**」
+ * ⇒ 原文是「项目涉及 **62 处**电力线路，其中 **23 处**已完成迁移」⇒ **总数与完成数写颠倒了**。
+ *
+ * ⚠️ 判据为什么这么窄（只收这一种句型）：
+ * · 必须出现「中的」这个结构 ⇒ 一般的「62 处线路、23 处已完成」**不匹配**（不误报）；
+ * · 只在 **M > N** 时报 ⇒ 「10 个国家中的 3 个」这种**正确**的写法放过；
+ * · 单位词表（个/处/座/条/项/家/户/人/台/辆/枚/所/间/名）⇒ 避免匹配年份或金额。
+ */
+const NUM_ORDER =
+  /(\d[\d,，.]*)\s*(?:个|处|座|条|项|家|户|人|台|辆|枚|所|间|名)\s*[^。！？]{0,10}?中的\s*(\d[\d,，.]*)\s*(?:个|处|座|条|项|家|户|人|台|辆|枚|所|间|名)/g;
+
+/**
+ * ★★ **广告痕迹**（2026-10-31）。
+ *
+ * 真实样本（乌兹别克斯坦第 1 条「卡普塔尔银行提供 21% 年利率的再融资抵押贷款」）：
+ * ChatGPT 核验后指出「UzNews **将其标为广告**」，且正文里有**客服电话、申请提示**等广告内容。
+ *
+ * ⚠️ 为什么收这几个词、且**不收**「致电」：
+ * · 「致电」在正常新闻里会出现（总统致电祝贺）⇒ 收它就是误伤；
+ * · 而「客服电话 / 咨询热线 / 扫码咨询 / 立即申请 / 详情请咨询」是**广告体**的强特征
+ *   ⇒ 正常新闻里几乎不会出现 ⇒ 零误判风险。
+ */
+const AD_MARK =
+  /(客服电话|客服热线|服务热线|咨询热线|客户热线|请拨打|拨打客服|扫码咨询|扫码申请|加微信|点击链接|详情请咨询|申请热线|在线申请|立即申请)/;
+
 
 export interface ContentIssue {
   kind: ContentIssueKind;
@@ -178,6 +211,41 @@ export function findContentIssues(headText: string, fullText?: string): ContentI
   }
   META_COMMENT.lastIndex = 0;
 
+  // ---- ★★ ⑤ 数字顺序颠倒（2026-10-31）----
+  // 「23 个路段中的 62 个」⇒ 完成数 > 总数 ⇒ 必错。
+  // ⚠️ 只报**确定的**颠倒（M > N）；「10 个国家中的 3 个」这种正确写法放过。
+  NUM_ORDER.lastIndex = 0;
+  let mo: RegExpExecArray | null;
+  while ((mo = NUM_ORDER.exec(text)) !== null) {
+    const total = Number(String(mo[1]).replace(/[,，.]/g, ''));
+    const part = Number(String(mo[2]).replace(/[,，.]/g, ''));
+    if (!Number.isFinite(total) || !Number.isFinite(part)) continue;
+    if (part > total) {
+      out.push({
+        kind: 'numbers-out-of-order',
+        sample: mo[0].trim(),
+        detail:
+          `「${mo[0].trim()}」的数字顺序颠倒了：稿子里写的是「${total} 个中的 ${part} 个」，` +
+          `而**部分数（${part}）比总数（${total}）还大** ⇒ 必错` +
+          `⇒ 请核对原文，把两个数**对调**（正确写法是「${part} 个中的 ${total} 个」）。`,
+      });
+      break; // 一条稿子报一次就够
+    }
+  }
+  NUM_ORDER.lastIndex = 0;
+
+  // ---- ★★ ⑥ 广告痕迹（2026-10-31）----
+  const ad = AD_MARK.exec(text);
+  if (ad) {
+    out.push({
+      kind: 'advertisement',
+      sample: ad[0],
+      detail:
+        `正文里出现了「${ad[0]}」—— 这是**广告体**的特征，不是新闻事实` +
+        `⇒ 若是银行/券商的产品推介稿，请整条放弃；若是新闻里的正常内容，请去掉这类招揽文字。`,
+    });
+  }
+
   return out;
 }
 
@@ -315,6 +383,32 @@ export function buildContentIssueHint(issues: ContentIssue[]): string {
     const s = byKind.get('ambiguous-quantifier')!.map((i) => `  · ${i.sample}`).join('\n');
     blocks.push(
       ['⚠️ 你上一次的输出**没有通过质检**：量词有歧义。', '具体是：', s, ...QUANTIFIER_FIX].join('\n'),
+    );
+  }
+  if (byKind.has('numbers-out-of-order')) {
+    const s = byKind.get('numbers-out-of-order')!.map((i) => `  · ${i.sample}`).join('\n');
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**没有通过质检**：数字的**总数与部分数写颠倒了**。',
+        '具体是：',
+        s,
+        '正确写法是「**N 个中的 M 个**」，且 **M 必须小于 N**。',
+        '例如原文说「项目涉及 62 处线路，其中 23 处已完成」，就应写成「62 处中的 23 处」，不能写成「23 个路段中的 62 个」。',
+        '请**回到原文核对**这两个数字，然后改写。',
+      ].join('\n'),
+    );
+  }
+  if (byKind.has('advertisement')) {
+    const s = byKind.get('advertisement')!.map((i) => `  · ${i.sample}`).join('\n');
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**没有通过质检**：正文里混进了**广告体**的文字。',
+        '具体是：',
+        s,
+        '日报只登**新闻事实**，不登招揽文字。',
+        '若是银行、券商、交易所的产品推介稿（介绍利率、额度、申请方式并留客服电话），**整条不要写**；',
+        '若它确实是新闻，请把这类招揽文字**全部删掉**，只留事实（主体、金额、条件、时间）。',
+      ].join('\n'),
     );
   }
   if (byKind.has('kin-unclear')) {
