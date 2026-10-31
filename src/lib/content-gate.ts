@@ -37,7 +37,51 @@ export type ContentIssueKind =
   | 'mixed-script-name'
   // ★★ 2026-10-31 加（来源：用户让 ChatGPT 审 kg/uz 两批新闻的逐条意见）
   | 'numbers-out-of-order'
-  | 'advertisement';
+  | 'advertisement'
+  // ★★ 2026-10-31 加（来源：用户让 ChatGPT 审 kz/uz/kg 三批新闻的逐条意见）
+  | 'currency-converted'
+  | 'period-mismatch'
+  | 'title-place-conflict';
+
+/**
+ * ★★ **币种换算错**（2026-10-31）。
+ *
+ * 真实样本（哈萨克斯坦第 1 条，ChatGPT 核验后指出）：
+ * 「1120 亿**坚戈**」被误换算成「112 亿**美元**」⇒ **单位换算错**（差 10 倍）。
+ *
+ * 判据：**同一句里出现两种币种，且数值正好差 10 倍** ⇒ 几乎必然是换算时错了一位。
+ * ⚠️ 只在「差 10 倍」时报 —— 别的倍率（2 倍、100 倍）可能是真实的两笔金额。
+ */
+const CURRENCY_PAIR =
+  /([\d.,，]+)\s*(亿|万)?\s*(坚戈|腾格|美元|欧元|卢布|苏姆|索姆|里拉|迪拉姆|卢比|won|won\u3000)?/g;
+
+/** 本币与外币的等价词（成对出现才报）。 */
+const LOCAL_CURRENCY = ['坚戈', '腾格'];
+const FOREIGN_CURRENCY = ['美元', '欧元'];
+
+/**
+ * ★★ **期间口径错**（2026-10-31）。
+ *
+ * 真实样本（哈萨克斯坦第 2 条）：
+ * 标题「**第三季度**收入增长 83%」，正文却是「**前九个月**…增长 83%；**第三季度**营收 6.02 亿美元，同比增长 12%」
+ * ⇒ ⇒ 标题把**前九个月累计**的 83% 说成了**单季** ⇒ 口径错。
+ *
+ * 判据：标题里的**期间词**与正文里**紧邻同一个数字**的期间词**不一致**。
+ * ⚠️ 只在「标题与正文都有期间词、且不是同一个词」时报 ⇒ 不碰没有期间词的稿子。
+ */
+// ⚠️ 「第」**可选**：真实标题写的是「三季度收入增长 83%」（没有「第」）⇒ 必须都能匹配到。
+const PERIOD_WORD =
+  /(前三季度|前九个月|前六个月|上半年|下半年|(?:第)?[一二三四]季度|本季度|年内累计|全年)/g;
+
+/**
+ * ★★ **标题与正文的地名冲突**（2026-10-31）。
+ *
+ * 真实样本（哈萨克斯坦第 4 条）：
+ * 标题「杰特**苏州**」而正文写「**图尔克斯坦州**」⇒ **同一篇里两个地名冲突** ⇒ 无法判断该用哪个。
+ *
+ * 判据：标题里出现了**本国地名表**里的某个地名，而**正文里完全没有这个词** ⇒ 报。
+ * ⚠️ 「正文完全没有」是很强的条件 ⇒ 零误判风险（同名不同地才会命中，而那本来也可疑）。
+ */
 
 /**
  * ★★ 「N 个…中的 M 个」且 **M > N** ⇒ 必错（2026-10-31）。
@@ -154,10 +198,17 @@ function escapeRe(s: string): string {
  * 那些稿子的数字都在正文里（例：「国家银行发布宏观经济预测：美元汇率、通货膨胀和石油价格」，
  * 摘要里只有指标名，数值在正文）⇒ **判据放宽等于这个投诉根本没被覆盖。**
  */
-export function findContentIssues(headText: string, fullText?: string): ContentIssue[] {
+export function findContentIssues(
+  headText: string,
+  fullText?: string,
+  opts?: { ownPlaces?: string[] },
+): ContentIssue[] {
   const out: ContentIssue[] = [];
   const head = headText || '';
   const text = fullText ?? head;
+  // ★ 标题 = headText 的第一行（调用处传的是「标题 + 摘要」）；正文 = fullText 去掉 headText
+  const title = head.split('\n')[0] || '';
+  const body = text.startsWith(head) ? text.slice(head.length) : text;
 
   // ⚠️⚠️ **「指标类必须写出具体数值」这一条**（用户 2026-10-18 投诉 2）
   // **曾经做成确定性闸，实测误报 60%+ ⇒ 已撤掉**（2026-10-20）。
@@ -244,6 +295,98 @@ export function findContentIssues(headText: string, fullText?: string): ContentI
         `正文里出现了「${ad[0]}」—— 这是**广告体**的特征，不是新闻事实` +
         `⇒ 若是银行/券商的产品推介稿，请整条放弃；若是新闻里的正常内容，请去掉这类招揽文字。`,
     });
+  }
+
+  // ---- ★★ ⑦ 币种换算错（2026-10-31）----
+  // 「1120 亿坚戈」被写成「112 亿美元」⇒ 同一句里两种币种 + 数值差 10 倍。
+  for (const s of text.split(/(?<=[。！？!?\n])/)) {
+    const hasLocal = LOCAL_CURRENCY.some((c) => s.includes(c));
+    const hasForeign = FOREIGN_CURRENCY.some((c) => s.includes(c));
+    if (!hasLocal || !hasForeign) continue;
+    const nums = (s.match(/\d[\d.,，]*/g) || []).map((x) => Number(String(x).replace(/[,，.]/g, ''))).filter((n) => Number.isFinite(n) && n > 0);
+    if (nums.length < 2) continue;
+    const a = Math.max(...nums);
+    const b = Math.min(...nums);
+    if (a / b >= 9.5 && a / b <= 10.5) {
+      out.push({
+        kind: 'currency-converted',
+        sample: s.trim().slice(0, 80),
+        detail:
+          `这一句里同时出现了本币与外币，数值又正好差 10 倍（${b} → ${a}）` +
+          `⇒ 极可能是**币种换算错了一位**。请核对原文的**币种与单位**（坚戈与美元不是 10 倍关系）。`,
+      });
+      break;
+    }
+  }
+
+  // ---- ★★ ⑧ 期间口径错（2026-10-31）----
+  // 标题说「第三季度…增长 83%」，正文说「前九个月…增长 83%；第三季度…12%」⇒ 累计被说成了单季。
+  //
+  // ⚠️ 判据要**看数字旁边的期间词**，不是「标题的词在不在正文里」——
+  // 真实样本的正文里**同时**有「前三季度」和「第三季度」，只判「词在不在」会漏掉。
+  // ⇒ 现在：取标题里的**期间词 W** 和**数字 N** ⇒ 在正文里找 N 的每个位置 ⇒
+  //    若**每一处** N 的前面 25 字内都**没有** W ⇒ 报（说明这个数字在正文里属于别的期间）。
+  {
+    const tPeriod = (title.match(PERIOD_WORD) || [])[0];
+    const tNum = (title.match(/\d[\d.,，]*%?/) || [])[0];
+    // ⚠️⚠️ **必须取最长匹配**：「三季度」是「前三季度」的**子串** ⇒
+    // 直接 `includes` 判会恒真（正文写「前三季度」也含「三季度」）⇒ 判据永远失效。
+    // ⇒ 找最长期间词，长的优先（前三季度 > 三季度）。
+    const periodAt = (s: string): string | undefined => {
+      let best: string | undefined;
+      for (const m of s.match(PERIOD_WORD) || []) if (!best || m.length > best.length) best = m;
+      return best;
+    };
+    if (tPeriod && tNum) {
+      // ⚠️ 初始必须是 **true**（＝「所有位置都不一致」这个待验证的假设），
+      // 只有发现某一处期间**相同**时才置 false —— 写反了就永远不报。
+      let allDifferent = true;
+      let found = false;
+      let idx = body.indexOf(tNum);
+      while (idx !== -1) {
+        found = true;
+        const before = body.slice(Math.max(0, idx - 25), idx);
+        if (periodAt(before) === tPeriod) {
+          allDifferent = false;
+          break;
+        }
+        idx = body.indexOf(tNum, idx + tNum.length);
+      }
+      if (found && allDifferent) {
+        out.push({
+          kind: 'period-mismatch',
+          sample: `${tPeriod} … ${tNum}`,
+          detail:
+            `标题说这个数字（${tNum}）属于「${tPeriod}」，但正文里它挂的是别的期间` +
+            `⇒ **口径不一致**：累计数据不能写成单季。请核对原文，确定这个数字到底属于哪个期间。`,
+        });
+      }
+    }
+    PERIOD_WORD.lastIndex = 0;
+  }
+
+  // ---- ★★ ⑨ 标题与正文的地名冲突（2026-10-31）----
+  //
+  // ⚠️ **不依赖地名表**：真实样本「杰特**苏州**」（指 Jetpog，译名不规范）
+  // **根本不在 `SELF_KEYWORDS` 里** ⇒ 用表会**漏掉真案例** ⇒ 改用**形态判据**：
+  // 标题里出现「以行政地名后缀结尾、长度 ≥ 3」的词，而**正文里完全没有这个词** ⇒ 报。
+  //
+  // ⚠️ 为什么零误报：只在「标题有、正文完全没有」时报 ⇒ 同一篇里两个地名打架
+  // 才会命中（那本来就可疑）；而「哈萨克斯坦」的「斯坦」不是行政后缀 ⇒ 不匹配。
+  {
+    const m = title.match(/[\u4e00-\u9fff]{2,6}(?:州|市|区|县)/g);
+    if (m) {
+      const hit = m.find((p) => p.length >= 3 && !body.includes(p));
+      if (hit) {
+        out.push({
+          kind: 'title-place-conflict',
+          sample: hit,
+          detail:
+            `标题里的地名「${hit}」在**正文里完全没有出现** ⇒ 标题与正文可能指的是两个地方` +
+            `⇒ 请核对原文，确认这个地名到底该写哪个（不要凭产业所在地推断）。`,
+        });
+      }
+    }
   }
 
   return out;
@@ -408,6 +551,42 @@ export function buildContentIssueHint(issues: ContentIssue[]): string {
         '日报只登**新闻事实**，不登招揽文字。',
         '若是银行、券商、交易所的产品推介稿（介绍利率、额度、申请方式并留客服电话），**整条不要写**；',
         '若它确实是新闻，请把这类招揽文字**全部删掉**，只留事实（主体、金额、条件、时间）。',
+      ].join('\n'),
+    );
+  }
+  if (byKind.has('currency-converted')) {
+    const s = byKind.get('currency-converted')!.map((i) => `  · ${i.sample}`).join('\n');
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**没有通过质检**：**币种/单位换算错了**。',
+        '具体是：',
+        s,
+        '坚戈（ teng）与美元之间**不是 10 倍关系**，任何换算都必须查当天汇率；',
+        '若原文没有给出折算后的外币金额，**就只写原文的本币金额**（例如「1120 亿坚戈」），不要自己折算。',
+      ].join('\n'),
+    );
+  }
+  if (byKind.has('period-mismatch')) {
+    const s = byKind.get('period-mismatch')!.map((i) => `  · ${i.sample}`).join('\n');
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**没有通过质检**：**期间口径不一致**。',
+        '具体是：',
+        s,
+        '「前九个月」是**累计**，「第三季度」是**单季** —— 两者数字不一样，绝不能互换。',
+        '请回到原文，确认这个数字属于哪个期间，标题与正文要用**同一个**期间词。',
+      ].join('\n'),
+    );
+  }
+  if (byKind.has('title-place-conflict')) {
+    const s = byKind.get('title-place-conflict')!.map((i) => `  · ${i.sample}`).join('\n');
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**没有通过质检**：**标题里的地名与正文对不上**。',
+        '具体是：',
+        s,
+        '标题与正文指的是同一个地方，就必须用**同一个中文地名**。',
+        '请核对原文，确认这个地名到底该写哪个（不要凭产业所在地推断）。',
       ].join('\n'),
     );
   }

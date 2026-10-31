@@ -1016,6 +1016,8 @@ section('内容层闸：元评语 / 量词歧义 / 亲属词开头');
 {
   const hit = (t: string) => findContentIssues(t, t);
   const kinds = (t: string) => hit(t).map((i) => i.kind);
+  // ★ 标题/正文分开传的版本（2026-10-31 新判据用）
+  const kinds2 = (t: string, f: string) => findContentIssues(t, f).map((i) => i.kind);
 
   // ---- ★★ 2026-10-31：数字顺序颠倒（来源：用户让 ChatGPT 审 kg 那批新闻的逐条意见）----
   //
@@ -1039,6 +1041,42 @@ section('内容层闸：元评语 / 量词歧义 / 亲属词开头');
     !kinds('总统致电祝贺该国代表团夺得冠军。').includes('advertisement'));
   ok('★★ 正常新闻里的「申请」不该抓（申请牌照是新闻）',
     !kinds('该公司已向央行提交申请牌照。').includes('advertisement'));
+
+  // ---- ★★ 2026-10-31：哈萨克那批的三条新判据 ----
+  //
+  // ① 币种换算错：「1120 亿**坚戈**」被写成「112 亿**美元**」（ChatGPT 核验后指出）
+  ok('★★ 币种换算错（一句里两种币种 + 数值差 10 倍）必须被抓',
+    kinds('Freedom Holding 计划投资超过1120亿坚戈，折合约112亿美元，用于建设智能公路监管系统。')
+      .includes('currency-converted'));
+  ok('★★ 只用本币不该抓',
+    !kinds('公司投资超过1120亿坚戈用于建设。').includes('currency-converted'));
+  ok('★★ 两个币种但**不是 10 倍**不该抓（可能是两笔真实金额）',
+    !kinds('公司投资1120亿坚戈，同时获得5亿美元贷款。').includes('currency-converted'));
+
+  // ② 期间口径错：标题「三季度收入增长 83%」，正文「前九个月…83%；第三季度…12%」
+  ok('★★ 期间口径错（标题说单季、正文说累计）必须被抓',
+    kinds2('Solidcore Resources 三季度收入增长 83% 至 16 亿美元',
+      '前三季度营收约15.75亿美元，同比增长83%；第三季度营收为6.02亿美元，同比增长12%。')
+      .includes('period-mismatch'));
+  ok('★★ 期间一致（前三季度）不该抓',
+    !kinds2('公司前三季度营收增长83%', '前三季度营收约15.75亿美元，同比增长83%。')
+      .includes('period-mismatch'));
+  ok('★★ 期间一致（第三季度）不该抓',
+    !kinds2('公司第三季度营收增长12%', '第三季度营收为6.02亿美元，同比增长12%。')
+      .includes('period-mismatch'));
+  ok('★★ 没有期间词不该抓',
+    !kinds2('公司营收增长83%', '营收约15.75亿美元，同比增长83%。').includes('period-mismatch'));
+
+  // ③ 标题与正文的地名冲突：「杰特苏州」vs「图尔克斯坦州」
+  ok('★★ 标题里的行政地名在正文里没出现 ⇒ 必须被抓',
+    kinds2('杰特苏州建成年产5万吨棉花加工现代化工厂', '该项目位于图尔克斯坦州，由本地企业投资建设。')
+      .includes('title-place-conflict'));
+  ok('★★ 地名一致不该抓',
+    !kinds2('图尔克斯坦州建成现代化棉花加工厂', '该项目位于图尔克斯坦州，由本地企业投资建设。')
+      .includes('title-place-conflict'));
+  ok('★★ 非行政地名（如「哈萨克斯坦」）不该抓',
+    !kinds2('哈萨克斯坦与吉尔吉斯斯坦签署贸易协议', '两国签署9500万美元贸易协议。')
+      .includes('title-place-conflict'));
 
   // ---- 元评语（用户投诉 4）----
   ok('★「最后一句是……」必须被抓（对文章本身的评述）',
