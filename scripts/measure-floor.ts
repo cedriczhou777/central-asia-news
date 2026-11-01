@@ -71,22 +71,23 @@ function clusterPairs(n: number, pairs: Array<[number, number]>): number[][] {
   return [...buckets.values()].map((g) => g.sort((x, y) => x - y)).sort((x, y) => x[0] - y[0]);
 }
 
-function main(): void {
-  // 读各批次的中文标题（真实语料）
-  const files = [
-    '/tmp/v1025.json',
-    '/tmp/w-2026-10-25.json',
-    '/tmp/v-2026-10-21.json',
-    '/tmp/v-2026-10-22.json',
-    '/tmp/p-2026-10-20.json',
-    '/tmp/p-2026-10-21.json',
-    '/tmp/p-2026-10-22.json',
-  ];
+async function main(): Promise<void> {
+  // ★★ 2026-11-01：**改成从线上 API 取语料**（原来读 `/tmp/*.json` 旧快照
+  // ⇒ 那些文件早被清掉 ⇒ 每次跑都是「批次 0 个」⇒ 脚本等于废的）。
+  // ⇒ 现在按日期从 `/api/articles` 拉 ⇒ **不依赖任何临时文件** ⇒ 随时能跑。
+  //
+  // ⚠️ 跑的时候必须**去掉代理**：`env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy`
+  //    （这个环境的代理会把自己部署的服务也拦掉）。
+  const DATES = ['2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31', '2026-11-01'];
+  const BASE = 'https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com';
   const byBatch = new Map<string, string[]>();
-  for (const f of files) {
+  for (const d of DATES) {
     try {
-      const arts = (JSON.parse(readFileSync(f, 'utf8')) as { articles?: Array<{ title?: string; createdAt?: string }> })
-        .articles ?? [];
+      const res = await fetch(`${BASE}/api/articles?date=${d}&limit=900`, {
+        signal: AbortSignal.timeout(90000),
+      });
+      if (!res.ok) continue;
+      const arts = (await res.json()).articles ?? [];
       const bucket = new Map<string, string[]>();
       for (const a of arts) {
         if (!a.createdAt || !a.title) continue;
@@ -96,7 +97,9 @@ function main(): void {
         bucket.set(k, arr);
       }
       for (const [k, v] of bucket) byBatch.set(k, v);
-    } catch {}
+    } catch (e) {
+      console.error(`  （取 ${d} 失败：${e instanceof Error ? e.message : String(e)}）`);
+    }
   }
   const batches = [...byBatch.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   console.log(`批次 ${batches.length} 个，标题合计 ${batches.reduce((s, [, v]) => s + v.length, 0)} 条\n`);
