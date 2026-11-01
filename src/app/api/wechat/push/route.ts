@@ -12,6 +12,7 @@ import {
   stripSourceSuffix,
   similarity,
 } from '@/lib/utils';
+import { applyEditorialOverrides } from '@/lib/editorial-overrides';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 // ★ 2026-10-28：push 状态**落库**（`pushRunState` 是内存态 ⇒ 实例一换就丢 ⇒ 查不到上一轮）。
 import { persistPushRun, loadPersistedPushRun } from '@/lib/push-run-store';
@@ -623,6 +624,13 @@ function toReviewItem(a: {
 }
 
 interface PushSummary {
+  /** ★★ 2026-11-01：编辑覆盖层的处置统计（外部审稿意见的落地）。 */
+  editorialOverrides?: {
+    applied: number;
+    dropped: number;
+    unmatched: number;
+    unmatchedSamples?: string[];
+  };
   hours: number;
   period: string | null;
   today: string;
@@ -1404,6 +1412,10 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         );
       }
     }
+    // ★★ 2026-11-01：编辑覆盖层的统计（静默改写成品 ⇒ 必须留痕）。
+    let editorialApplied = 0;
+    let editorialDropped = 0;
+    const editorialUnmatched: string[] = [];
     for (const country of countriesToRun) {
       // 获取该国家过去 N 小时的文章。
       // 单国读取失败（DB 抖动）不该拖垮整轮：跳过这一国，其余国家照常出草稿。
@@ -1626,7 +1638,32 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       }
 
       // 今日精选：取完去重后的前 N 篇（宽松上限，只防文章过长，不写死篇数）
-      const selectedArticles = dedupedArticles.slice(0, maxPerCountry);
+      let selectedArticles = dedupedArticles.slice(0, maxPerCountry);
+
+      // ★★ 2026-11-01：应用**编辑覆盖清单**（外部审稿意见的落地层）。
+      //
+      // 审稿人（人或模型）逐条说「这条要改 / 这条要删」⇒ 过去每轮都得改代码或手改库
+      // ⇒ 意见只能停在建议 ⇒ ⇒ 这一层把「逐条改稿」变成**一份数据清单**：
+      // 清单由 `scripts/build-editorial-overrides.ts` 从审稿 md 自动提取，
+      // 按**标题**匹配 ⇒ 命中就覆盖标题/摘要、命中「删除」就跳过该条。
+      //
+      // ⚠️ 放在**选稿之后、总审之后**（这里已经是总审改写后的标题 ⇒ 与审稿人看到的
+      // 草稿标题一致 ⇒ 对得上），且在**成品清洗之前** ⇒ 被替换的标题也会再过一次清洗。
+      // ⚠️ **不动数据库** ⇒ 可随时改清单再重推、可回滚、原始稿件不丢。
+      const overrideResult = applyEditorialOverrides(country.code, selectedArticles);
+      selectedArticles = overrideResult.kept;
+      editorialApplied += overrideResult.outcome.applied;
+      editorialDropped += overrideResult.outcome.dropped;
+      editorialUnmatched.push(...overrideResult.outcome.unmatched);
+      if (overrideResult.outcome.applied || overrideResult.outcome.dropped) {
+        console.log(
+          `[${country.name}][编辑覆盖] 覆盖 ${overrideResult.outcome.applied} 条、` +
+            `删除 ${overrideResult.outcome.dropped} 条` +
+            (overrideResult.outcome.unmatched.length
+              ? `；未匹配 ${overrideResult.outcome.unmatched.length} 条`
+              : ''),
+        );
+      }
 
       // ★ 2026-10-27：**被「每国篇数上限」砍掉多少**（原来完全没记账）。
       //
@@ -2046,6 +2083,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
     //
     // 这里用**总审之后**的 `prepared[i].articles`。建草稿是不可逆的，
     // 所以整段排版/上传都放在总审结论定下来之后 —— 顺序本身就是护栏。
+
     for (const { country, articles: selectedArticles } of prepared) {
       // ★★ 2026-10-29：**整个国家块包进 try** ⇒ 某国崩了**不许带走整轮**。
       //
@@ -2230,6 +2268,12 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       ),
     })),
     // ★★ 文字清洗的记账（2026-10-30）—— 静默改写成品 ⇒ ⇒ 必须留痕。
+    editorialOverrides: {
+      applied: editorialApplied,
+      dropped: editorialDropped,
+      unmatched: editorialUnmatched.length,
+      unmatchedSamples: editorialUnmatched.slice(0, 8),
+    },
     textCleanup: {
       titleSuffixStripped,
       articles: cleanedArticles,
