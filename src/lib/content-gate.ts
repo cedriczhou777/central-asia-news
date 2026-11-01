@@ -30,6 +30,8 @@
  * · 三条都**只查译文侧**（原文侧没有这些问题的对应形态）。
  */
 
+import { ORG_ABBREV, ORG_ABBREV_CYRILLIC, ORG_COMMON_MISTAKES } from '@/lib/knowledge/org-names';
+
 export type ContentIssueKind =
   | 'ambiguous-quantifier'
   | 'kin-unclear'
@@ -41,7 +43,9 @@ export type ContentIssueKind =
   // ★★ 2026-10-31 加（来源：用户让 ChatGPT 审 kz/uz/kg 三批新闻的逐条意见）
   | 'currency-converted'
   | 'period-mismatch'
-  | 'title-place-conflict';
+  | 'title-place-conflict'
+  // ★★ 2026-11-01 加：机构名张冠李戴（原文缩写 vs 译文译名**矛盾**）
+  | 'org-name-mismatch';
 
 /**
  * ★★ **币种换算错**（2026-10-31）。
@@ -201,7 +205,7 @@ function escapeRe(s: string): string {
 export function findContentIssues(
   headText: string,
   fullText?: string,
-  opts?: { ownPlaces?: string[] },
+  opts?: { ownPlaces?: string[]; originalText?: string },
 ): ContentIssue[] {
   const out: ContentIssue[] = [];
   const head = headText || '';
@@ -389,7 +393,69 @@ export function findContentIssues(
     }
   }
 
-  return out;
+  // ---- ★★ ⑩ 机构名张冠李戴（2026-11-01）----
+  //
+  // 真实样本（审稿实锤两次）：
+  // · 原文 **EDB**（欧亚开发银行）⇒ 译文写成「欧洲复兴开发银行」（那是 EBRD）
+  // · 原文 **MEPhI / МИФИ**（俄罗斯国立核研究大学）⇒ 译文写成「MIPT」（莫斯科物理技术学院）
+  //
+  // ⚠️ **纯译文侧判不出来**（译文本身通顺）⇒ ⇒ 必须拿**原文的缩写**当锚点：
+  // 原文里出现缩写 A ⇒ 译文里就该出现 A 的标准译名；
+  // 若译文出现的是**另一家机构**的译名、而 A 的译名不在译文里 ⇒ **矛盾** ⇒ 报。
+  //
+  // ⚠️ 误报护栏：原文里同时提到两家 ⇒ 译文里两家都在 ⇒ 「A 的译名不在译文里」不成立 ⇒ 不报。
+  // ---- ★★ ⑩之一 **常见错译**（纯译文侧，不需要原文）----
+  //
+  // 例：译文写「欧亚经济共同体」「奥古兹国家元首理事会」⇒ 这些是**已知的错译形态**
+  // ⇒ 译文里出现、且**正确译名不在场** ⇒ 报。
+  // ⚠️ 零误判：错译与正确译名几乎不会同时出现（同段并列的情况会被正确译名在场挡住）。
+  for (const m of ORG_COMMON_MISTAKES) {
+    if (!text.includes(m.wrong)) continue;
+    if (text.includes(m.right)) continue;
+    out.push({
+      kind: 'org-name-mismatch',
+      sample: m.wrong,
+      detail: `「${m.wrong}」是**常见错译** ⇒ 正确译名是「${m.right}」。${m.note}`,
+    });
+    break;
+  }
+
+  if (opts?.originalText) {
+    const orig = opts.originalText;
+    for (const [abbr, correct] of Object.entries(ORG_ABBREV)) {
+      // ⚠️ 原文多为俄语 ⇒ 机构在原文里是**西里尔缩写** ⇒ 只认拉丁缩写会让整条判据失效
+      const inOriginal =
+        orig.includes(abbr) ||
+        Object.entries(ORG_ABBREV_CYRILLIC).some(([cyr, std]) => std === abbr && orig.includes(cyr));
+      if (!inOriginal) continue;
+      if (text.includes(correct)) continue; // 正确译名在场 ⇒ 没矛盾
+      // 找译文里出现的「另一家机构」的译名
+      for (const [abbr2, name2] of Object.entries(ORG_ABBREV)) {
+        if (abbr2 === abbr) continue;
+        if (abbr2.endsWith('_' + abbr) || abbr2.startsWith(abbr + '_')) continue;
+        if (!text.includes(name2)) continue;
+        out.push({
+          kind: 'org-name-mismatch',
+          sample: name2,
+          detail:
+            `原文出现的是 **${abbr}**（${correct}），但译文写成了「${name2}」—— 这是**另一家机构**` +
+            `⇒ 请核对原文，把机构名改成「${correct}」。`,
+        });
+        break;
+      }
+      if (out.some((x) => x.kind === 'org-name-mismatch')) break;
+    }
+  }
+
+  // ---- 去重：同一条稿件可能同时命中「常见错译」与「原文矛盾」⇒ 同一个 sample 只报一次 ----
+  const seen = new Set<string>();
+  const deduped = out.filter((x) => {
+    const key = `${x.kind}:${x.sample}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return deduped;
 }
 
 /**
@@ -587,6 +653,20 @@ export function buildContentIssueHint(issues: ContentIssue[]): string {
         s,
         '标题与正文指的是同一个地方，就必须用**同一个中文地名**。',
         '请核对原文，确认这个地名到底该写哪个（不要凭产业所在地推断）。',
+      ].join('\n'),
+    );
+  }
+  if (byKind.has('org-name-mismatch')) {
+    const s = byKind.get('org-name-mismatch')!.map((i) => `  · ${i.sample}`).join('\n');
+    blocks.push(
+      [
+        '⚠️ 你上一次的输出**没有通过质检**：**机构名张冠李戴**。',
+        '具体是：',
+        s,
+        '原文里出现的是某个机构的缩写，而译文写成了**另一家机构**的中文名（两家不是同一家）。',
+        '请**回到原文**确认那个缩写指的是哪家机构，然后把中文名改成对应的那个。',
+        '常见易混：EDB＝欧亚开发银行（不是欧洲复兴开发银行，那是 EBRD）；',
+        'MEPhI＝俄罗斯国立核研究大学（不是莫斯科物理技术学院，那是 MIPT）。',
       ].join('\n'),
     );
   }

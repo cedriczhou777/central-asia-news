@@ -1448,6 +1448,9 @@ function normalizeResult(
   const contentIssues = findContentIssues(
     `${westernTitle.text}\n${westernSummary.text}`,
     `${westernTitle.text}\n${westernSummary.text}\n${westernContent.text}`,
+    // ★★ 2026-11-01：**原文**当锚点 ⇒ 「机构名张冠李戴」这类错纯靠译文判不出来
+    // （译文本身通顺），必须拿原文里的缩写来对照（审稿实锤：EDB↔EBRD、MEPhI↔MIPT）。
+    { originalText: originalContent },
   );
   if (contentIssues.length > 0) {
     translationStats.termGate.contentIssue = (translationStats.termGate.contentIssue ?? 0) + 1;

@@ -1078,6 +1078,32 @@ section('内容层闸：元评语 / 量词歧义 / 亲属词开头');
     !kinds2('哈萨克斯坦与吉尔吉斯斯坦签署贸易协议', '两国签署9500万美元贸易协议。')
       .includes('title-place-conflict'));
 
+  // ---- ★★ 2026-11-01：机构名张冠李戴（知识表）----
+  {
+    const orgKinds = (t: string, orig?: string) =>
+      findContentIssues(t, t, orig ? { originalText: orig } : undefined).map((i) => i.kind);
+    const orgSamples = (t: string, orig?: string) =>
+      findContentIssues(t, t, orig ? { originalText: orig } : undefined).map((i) => i.sample);
+
+    ok('★★★ 原文 EDB、译文写「欧洲复兴开发银行」必须被抓',
+      orgKinds('欧洲复兴开发银行建议吉尔吉斯斯坦从水电项目获取新收入', 'EDB 指出')
+        .includes('org-name-mismatch'));
+    ok('★★★ 西里尔原文 МИФИ、译文写「莫斯科物理技术学院」必须被抓',
+      orgKinds('莫斯科物理技术学院将在塔什干开设核能专项班', 'НИЯУ МИФИ')
+        .includes('org-name-mismatch'));
+    ok('★★★ 常见错译「欧亚经济共同体」必须被抓（纯译文侧）',
+      orgKinds('欧亚经济共同体与成员国签署协议').includes('org-name-mismatch'));
+    ok('★★★ 常见错译「奥古兹国家元首理事会」必须被抓',
+      orgKinds('总统出席第13届奥古兹国家元首理事会峰会').includes('org-name-mismatch'));
+    ok('★★★ 正确译名不该抓',
+      !orgKinds('欧亚经济联盟与成员国签署协议', 'EAEU 指出').includes('org-name-mismatch'));
+    ok('★★★ 正确译名不该抓（俄文原文）',
+      !orgKinds('俄罗斯国立核研究大学将在塔什干开设班级', 'НИЯУ МИФИ').includes('org-name-mismatch'));
+    ok('★★★ 同一条命中两条判据时**只报一次**',
+      orgSamples('欧洲复兴开发银行建议吉尔吉斯斯坦', 'EDB 指出')
+        .filter((x) => x === '欧洲复兴开发银行').length === 1);
+  }
+
   // ---- 元评语（用户投诉 4）----
   ok('★「最后一句是……」必须被抓（对文章本身的评述）',
     kinds('阿塞拜疆央行公布了数据。最后一句是具体事实。').includes('meta-comment'));
