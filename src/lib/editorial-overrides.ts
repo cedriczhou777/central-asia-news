@@ -64,6 +64,24 @@ export function sameTitle(a: string, b: string): boolean {
 }
 
 /**
+ * 两个标题是否**有足够的共同字**（用于序号匹配的护栏）。
+ *
+ * ⚠️ 为什么不能用「包含」：清单里的是**简写**（「三市货币兑换点汇率公布」），
+ * 与草稿原标题只有部分字重合 ⇒ ⇒ 只看「前/后 6 字是否出现在对方里」。
+ */
+export function sharesEnough(a: string, b: string): boolean {
+  const x = normTitle(a);
+  const y = normTitle(b);
+  if (!x || !y) return false;
+  if (sameTitle(a, b)) return true;
+  for (const n of [8, 6, 4]) {
+    if (x.length >= n && (y.includes(x.slice(0, n)) || y.includes(x.slice(-n)))) return true;
+    if (y.length >= n && (x.includes(y.slice(0, n)) || x.includes(y.slice(-n)))) return true;
+  }
+  return false;
+}
+
+/**
  * 对一国的稿件应用编辑覆盖。
  *
  * @param countryCode 国家代码（kz / uz / kg / tj / az）
@@ -80,7 +98,26 @@ export function applyEditorialOverrides<T extends EditorialOverrideArticle>(
 
   const used = new Set<number>();
 
-  const findIndex = (target: string): number => {
+  /**
+   * ★★ 找一条稿件对应的下标。
+   *
+   * ⚠️⚠️ **2026-11-01 线上实测：光靠标题匹配，70 条清单只落地 21 条**（unmatched 49）。
+   * 根因：**审稿人写的「原文第N条｜标题」是他自己简写的**，不是草稿里的原标题 ——
+   *   清单「三市货币兑换点汇率公布」↔ 草稿「哈萨克斯坦三大城市货币兑换点公布今日美元、欧元和卢布汇率」
+   *   清单「农业贷款6457亿坚戈，其中外币贷款占比约98%」↔ 草稿「哈萨克斯坦农业贷款增至6457亿坚戈，外币贷款同比年初翻倍」
+   * ⇒ ⇒ 字面匹配必然对不上。
+   *
+   * ⇒ **正解：按序号匹配**（它审的就是草稿 ⇒「原文第N条」= 草稿第 N 条 ⇒ 序号可靠）
+   * ⇒ ⇒ 但要有护栏：序号位上的标题若与清单标题**毫无共同字** ⇒ 判「序号不可信」⇒ 退回标题匹配。
+   */
+  const findIndex = (target: string, no: number): number => {
+    // ① 序号优先（带护栏）
+    if (Number.isInteger(no) && no >= 1 && no <= articles.length) {
+      const i = no - 1;
+      const at = articles[i].title || '';
+      if (!used.has(i) && (sameTitle(at, target) || sharesEnough(at, target))) return i;
+    }
+    // ② 退回标题匹配
     for (let i = 0; i < articles.length; i++) {
       if (used.has(i)) continue;
       if (sameTitle(articles[i].title || '', target)) return i;
@@ -91,7 +128,7 @@ export function applyEditorialOverrides<T extends EditorialOverrideArticle>(
   // ---- 先处理「删除」----
   const droppedIdx = new Set<number>();
   for (const d of bucket.drop) {
-    const i = findIndex(d.matchTitle);
+    const i = findIndex(d.matchTitle, d.no);
     if (i < 0) {
       outcome.unmatched.push(`[删除] ${d.matchTitle}`);
       continue;
@@ -106,7 +143,7 @@ export function applyEditorialOverrides<T extends EditorialOverrideArticle>(
   for (const r of bucket.replace) {
     // ⚠️ **用 `matchTitle`（审稿人看到的原标题）匹配**，不是替换稿的标题
     // —— 替换稿的标题是**重写过的**，与稿件原标题字面完全不同 ⇒ 拿它匹配必然匹配不上。
-    const i = findIndex(r.matchTitle);
+    const i = findIndex(r.matchTitle, r.no);
     if (i < 0) {
       outcome.unmatched.push(`[覆盖] ${r.matchTitle}`);
       continue;

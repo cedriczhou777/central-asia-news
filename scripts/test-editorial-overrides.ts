@@ -46,6 +46,35 @@ console.log('\n=== 二、覆盖 / 删除 / 未匹配 ===');
     `applied=${outcome.applied} dropped=${outcome.dropped}`);
 }
 
+console.log('\n=== 二之二、★★ 序号优先匹配（审稿人的标题是简写 ⇒ 字面匹配对不上）===');
+{
+  // 用**清单里的真实条目**构造：把每条的 matchTitle 放到它在草稿里的**序号位置**，
+  // 并在标题尾部加几个字（模拟「审稿人写的是简写」）。
+  const mod = require('../src/data/editorial-overrides') as {
+    EDITORIAL_OVERRIDES: { countries: Record<string, { replace: { no: number; matchTitle: string }[]; drop: { no: number; matchTitle: string }[] }> };
+  };
+  const bucket = mod.EDITORIAL_OVERRIDES.countries.kz;
+  const all = [...bucket.replace, ...bucket.drop];
+  const maxNo = Math.max(...all.map((x) => x.no));
+  const arts: Array<{ title: string; summary: string }> = [];
+  for (let i = 1; i <= maxNo; i++) {
+    const item = all.find((x) => x.no === i);
+    arts.push({ title: item ? item.matchTitle + '（完整标题的其余部分）' : '第 ' + i + ' 条无关稿件', summary: 's' + i });
+  }
+  const { outcome } = applyEditorialOverrides('kz', arts);
+  ok('★ 简写标题按序号全部对得上（unmatched 应为 0）',
+    outcome.unmatched.length === 0, JSON.stringify(outcome.unmatched.slice(0, 4)));
+  ok('★ 覆盖 + 删除的总数应等于清单条目数',
+    outcome.applied + outcome.dropped === all.length,
+    `applied=${outcome.applied} dropped=${outcome.dropped} 清单=${all.length}`);
+  ok('★ 护栏生效：序号位上的标题完全无关时不按序号认（宁可漏不错）', (() => {
+    const wrong: Array<{ title: string; summary: string }> = [];
+    for (let i = 1; i <= maxNo; i++) wrong.push({ title: '完全无关的标题 ' + i, summary: 's' });
+    const r2 = applyEditorialOverrides('kz', wrong);
+    return r2.outcome.unmatched.length === all.length;
+  })());
+}
+
 console.log('\n=== 三、没有清单的国家 ⇒ 原样返回 ===');
 {
   const articles = [{ title: '随便一条', summary: 's' }];
