@@ -1,3 +1,6 @@
+import { escapeHtml } from './review-text';
+import { decodeEntities } from './article-body';
+
 /**
  * 微信公众号草稿的排版模板。
  *
@@ -48,7 +51,7 @@ export function normalizeImages(html: string): string {
     if (!src) return '';
     // 源站的图有防盗链，referrerpolicy 是必要的；已换成微信 CDN 的图带上它也无害。
     const referrerPolicy = /referrerpolicy\s*=/i.test(tag) ? ' referrerpolicy="no-referrer"' : '';
-    return `<img src="${src}"${referrerPolicy} style="width:100%;border-radius:8px;margin:15px 0;" />`;
+    return `<img src="${escapeHtml(decodeEntities(src))}"${referrerPolicy} style="width:100%;border-radius:8px;margin:15px 0;" />`;
   });
 }
 
@@ -127,11 +130,11 @@ export function generateWechatHtml(
     // 编号已去掉：渲染时不再需要 index，圆点不承担计数功能。
     return `
       <section style="margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid #E8E8E8;">
-        <p style="margin:0 0 6px 0;font-size:12px;line-height:1.6;color:#C8A45C;">${GOLD_DOT}${categoryLabel}</p>
-        <p style="margin:0 0 14px 0;font-size:18px;line-height:1.5;color:#0F1B2D;font-weight:bold;">${article.title}</p>
+        <p style="margin:0 0 6px 0;font-size:12px;line-height:1.6;color:#C8A45C;">${GOLD_DOT}${escapeHtml(categoryLabel)}</p>
+        <p style="margin:0 0 14px 0;font-size:18px;line-height:1.5;color:#0F1B2D;font-weight:bold;">${escapeHtml(article.title)}</p>
         ${coverBlock}
         <section style="font-size:16px;line-height:2;color:#333333;">${bodyHtml}</section>
-        <p style="margin:14px 0 0 0;padding-top:10px;border-top:1px dashed #E8E8E8;font-size:12px;line-height:1.6;color:#999999;">来源：${article.source_name}</p>
+        <p style="margin:14px 0 0 0;padding-top:10px;border-top:1px dashed #E8E8E8;font-size:12px;line-height:1.6;color:#999999;">来源：${escapeHtml(article.source_name)}</p>
       </section>
     `;
   }).join('');

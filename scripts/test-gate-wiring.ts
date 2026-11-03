@@ -252,9 +252,9 @@ section('★★ push 状态必须落库（2026-10-28 最大可观测性缺口）
   // 事故：`pushRunState` 是**模块级内存态** ⇒ 实例一换（部署/缩容/冷启动）就全丢
   // ⇒ ⇒ 「上一轮为什么只出了 2 篇」在架构上**查不到**（summary 与 error 都是 null）。
   ok('★ 落库模块存在', /export async function persistPushRun/.test(R('src/lib/push-run-store.ts')));
-  // ⚠️ 判的是**写入处**（`void persistPushRun(pushRunState);`），
+  // ⚠️ 判的是**写入处**（await/void persistPushRun），
   // 不是 import 那一行（`import { persistPushRun, … }` 没有左括号，不该计入）。
-  const persistCalls = (pu.match(/void persistPushRun\(/g) || []).length;
+  const persistCalls = (pu.match(/(?:void|await) persistPushRun\(/g) || []).length;
   ok('★ POST 的**开始 / 成功 / 失败**三处都落库（崩了的原因必须留下）',
     persistCalls >= 3,
     `找到 ${persistCalls} 处写入（开始 / 成功 / 失败 各 1 处）`);
@@ -293,8 +293,9 @@ section('★★ 草稿文字清洗必须真的接进成品（2026-10-30 新增�
     /a\.title\s*=\s*cleaned\.title/.test(pu));
   ok('★ 清洗后的正文被写回（`a.content = cleaned.content`）',
     /a\.content\s*=\s*cleaned\.content/.test(pu));
+  const uploadCall = /await uploadRemoteImage\((?:u|url)\)/.exec(pu);
   ok('★ 写回发生在**上传图片之前**（否则删掉的段落里的图仍会被上传）',
-    pu.indexOf('a.content = cleaned.content') < pu.indexOf('uploadRemoteImage(u)'));
+    !!uploadCall && pu.indexOf('a.content = cleaned.content') < uploadCall.index);
 
   // ③ 留痕：静默改写成品 ⇒ 必须记账
   ok('★ summary 里有 textCleanup（静默改写必须留痕）',

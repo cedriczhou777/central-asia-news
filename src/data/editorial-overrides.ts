@@ -1,19 +1,9 @@
-/* eslint-disable */
-// ★ 自动生成，**不要手改**（改法：改 md 源文件后重跑 scripts/build-editorial-overrides.ts）。
-//
-// 来源：20261101_五国日报最终审稿意见.md
-// 生成时间：2026-11-01T08:06:31.891Z
-
-export type EditorialReplace = { no: number; matchTitle: string; title: string; summary: string; source: string };
-export type EditorialDrop = { no: number; matchTitle: string };
-export type EditorialCountry = { replace: EditorialReplace[]; drop: EditorialDrop[] };
-
-export const EDITORIAL_OVERRIDES: {
-  generatedAt: string;
-  source: string;
-  countries: Record<string, EditorialCountry>;
-} = {
-  "generatedAt": "2026-11-01T08:06:31.891Z",
+// 自动生成。保留完整正文；只允许在对应日期与文章身份上应用。
+import type { EditorialReviewSet } from '../lib/editorial-review-parser';
+export const EDITORIAL_OVERRIDES: EditorialReviewSet = {
+  "schemaVersion": 2,
+  "reviewDate": "2026-11-01",
+  "generatedAt": "2026-11-03T17:16:37.313Z",
   "source": "20261101_五国日报最终审稿意见.md",
   "countries": {
     "kz": {
@@ -23,69 +13,109 @@ export const EDITORIAL_OVERRIDES: {
           "matchTitle": "总统下令对中小企业实施三年税收检查禁令并扩大信贷",
           "title": "哈萨克斯坦研究对微型和小型企业暂停检查三年",
           "summary": "哈萨克斯坦政府正与议会研究，自2027年1月1日起，对微型和小型企业暂停检查及预防性监督三年，并通过长期融资、技术升级和降低行政负担支持企业发展。相关措施仍在研究落实，不能视为已经生效的普遍税务检查豁免。",
-          "source": "哈萨克斯坦总理官网"
+          "content": "哈萨克斯坦政府正与议会研究，自2027年1月1日起，对微型和小型企业暂停检查及预防性监督三年，并通过长期融资、技术升级和降低行政负担支持企业发展。相关措施仍在研究落实，不能视为已经生效的普遍税务检查豁免。",
+          "source": "哈萨克斯坦总理官网",
+          "evidenceUrls": [
+            "https://primeminister.kz/news/etzh-ny-110-myn-tengege-deyin-arttyru-zhane-shob-ty-tekseruge-ush-zhyldyk-moratoriy-ulttyk-ekonomika-ministrliginin-2027-zhylga-arnalgan-zhospary-32047"
+          ]
         },
         {
           "no": 2,
           "matchTitle": "农业贷款6457亿坚戈，其中外币贷款占比约98%",
           "title": "哈萨克斯坦农业贷款增至6457亿坚戈，外币贷款同比年初翻倍",
           "summary": "据哈萨克斯坦国家银行数据，截至2026年10月1日，农业领域银行贷款余额为6457亿坚戈，较年初增长7.4%。其中，坚戈贷款6323亿坚戈，增长6.3%；外币贷款折合134亿坚戈，增至年初的2.1倍，占总额约2.1%。",
-          "source": "LS，援引哈萨克斯坦国家银行数据"
+          "content": "据哈萨克斯坦国家银行数据，截至2026年10月1日，农业领域银行贷款余额为6457亿坚戈，较年初增长7.4%。其中，坚戈贷款6323亿坚戈，增长6.3%；外币贷款折合134亿坚戈，增至年初的2.1倍，占总额约2.1%。",
+          "source": "LS，援引哈萨克斯坦国家银行数据",
+          "evidenceUrls": [
+            "https://lsm.kz/agrarii-stali-aktivnee-brat-kredity-v-invaliute"
+          ]
         },
         {
           "no": 5,
           "matchTitle": "粮食产量2430万吨，为15年来最高",
           "title": "哈萨克斯坦粮食收获量达2430万吨，处于近15年来较高水平",
           "summary": "哈萨克斯坦农业部表示，2026年粮食收获量达2430万吨，是近15年来最高水平之一。初步数据显示，运入粮仓的软小麦约72%达到三级标准，48%的受检样品面筋含量超过28%；阿克莫拉州三级小麦占比达90%，Hi-Pro小麦占比约70%。",
-          "source": "Kursiv，援引哈萨克斯坦农业部"
+          "content": "哈萨克斯坦农业部表示，2026年粮食收获量达2430万吨，是近15年来最高水平之一。初步数据显示，运入粮仓的软小麦约72%达到三级标准，48%的受检样品面筋含量超过28%；阿克莫拉州三级小麦占比达90%，Hi-Pro小麦占比约70%。",
+          "source": "Kursiv，援引哈萨克斯坦农业部",
+          "evidenceUrls": [
+            "https://kz.kursiv.media/2026-10-31/nvbr-urozhaj-v-kazahstane-dostig-243-mln-tonn-zerna-odin-iz-luchshih-rezultatov-za-15-let/"
+          ]
         },
         {
           "no": 6,
           "matchTitle": "三市交易所更新美元、欧元和卢布汇率",
           "title": "哈萨克斯坦10月31日官方美元汇率为453.87坚戈",
           "summary": "10月31日，哈萨克斯坦官方汇率为每美元453.87坚戈、每欧元508.33坚戈、每俄罗斯卢布5.65坚戈。据Kurs.kz当日报价，阿斯塔纳、阿拉木图和奇姆肯特货币兑换点的美元卖出均价分别为456.99、454.22和455坚戈。现金兑换报价随时变动，以交易时为准。",
-          "source": "Inbusiness.kz、Kurs.kz"
+          "content": "10月31日，哈萨克斯坦官方汇率为每美元453.87坚戈、每欧元508.33坚戈、每俄罗斯卢布5.65坚戈。据Kurs.kz当日报价，阿斯塔纳、阿拉木图和奇姆肯特货币兑换点的美元卖出均价分别为456.99、454.22和455坚戈。现金兑换报价随时变动，以交易时为准。",
+          "source": "Inbusiness.kz、Kurs.kz",
+          "evidenceUrls": [
+            "https://www.inbusiness.kz/ru/last/dollar-nabiraet-vysotu-po-kakim-kursam-prodayut-valyutu-v-kazahstane"
+          ]
         },
         {
           "no": 9,
           "matchTitle": "国防部计划2027—2028年举办餐饮服务招标",
           "title": "哈萨克斯坦国防部拟采购2027—2028年度军人餐饮服务",
           "summary": "哈萨克斯坦国防部计划就2027—2028年度武装部队人员餐饮服务开展政府采购，由国防部国家采购中心组织，并按政府采购法律规定的特殊程序实施。具体采购信息将通过政府采购门户公布。",
-          "source": "哈萨克斯坦国防部"
+          "content": "哈萨克斯坦国防部计划就2027—2028年度武装部队人员餐饮服务开展政府采购，由国防部国家采购中心组织，并按政府采购法律规定的特殊程序实施。具体采购信息将通过政府采购门户公布。",
+          "source": "哈萨克斯坦国防部",
+          "evidenceUrls": [
+            "https://www.gov.kz/org/mod/documents/details/1094094?lang=ru"
+          ]
         },
         {
           "no": 10,
           "matchTitle": "允许无抵押贷款及关联保险自愿取消",
           "title": "哈萨克斯坦对部分无抵押消费贷款实行14天退出安排",
           "summary": "据哈萨克斯坦金融市场监管和发展署说明，2026年10月12日起，符合条件的个人非经营性无抵押贷款及其关联自愿保险，可在签约后14个日历日内申请退出，免收违约金和罚款。借款人仍须归还本金，并可能支付实际用款期间利息或直接相关费用；保险费也不一定全额退还。",
-          "source": "Inbusiness.kz，援引金融市场监管和发展署答复"
+          "content": "据哈萨克斯坦金融市场监管和发展署说明，2026年10月12日起，符合条件的个人非经营性无抵押贷款及其关联自愿保险，可在签约后14个日历日内申请退出，免收违约金和罚款。借款人仍须归还本金，并可能支付实际用款期间利息或直接相关费用；保险费也不一定全额退还。",
+          "source": "Inbusiness.kz，援引金融市场监管和发展署答复",
+          "evidenceUrls": [
+            "https://www.inbusiness.kz/ru/news/kazahstancam-razreshili-otkazatsya-ot-kredita-bez-shtrafa"
+          ]
         },
         {
           "no": 12,
           "matchTitle": "托卡耶夫提议成立委员会监督人民建设项目开支",
           "title": "哈萨克斯坦拟设国家委员会监督“人民建设”计划资金",
           "summary": "哈萨克斯坦总统托卡耶夫10月31日在X平台提出，成立国家委员会监督“人民建设”（Халықтық құрылыс）计划预算资金的使用，成员拟包括政府部门、议会及地方代表机构代表和社会人士。据此前披露，至2029年底，国家基金拟为相关建设安排6.5万亿坚戈。",
-          "source": "LS，援引总统声明"
+          "content": "哈萨克斯坦总统托卡耶夫10月31日在X平台提出，成立国家委员会监督“人民建设”（Халықтық құрылыс）计划预算资金的使用，成员拟包括政府部门、议会及地方代表机构代表和社会人士。据此前披露，至2029年底，国家基金拟为相关建设安排6.5万亿坚戈。",
+          "source": "LS，援引总统声明",
+          "evidenceUrls": [
+            "https://lsm.kz/v-kazakhstane-poiavitsia-spetskomissiia-po-kontroliu-za-dengami-narodnoi-stroiki"
+          ]
         },
         {
           "no": 20,
           "matchTitle": "哈萨克斯坦面临对俄罗斯依赖加剧风险",
           "title": "专家警示哈萨克斯坦天然气进口依赖可能上升",
           "summary": "在Energy Trends: Gas & Petrochemicals 2026会议上，QazaqGaz前高管阿努阿尔·比塔诺夫表示，天然气开采和加工项目延期，可能使哈萨克斯坦未来数年增加进口。他认为，高税负、受管制的收购价格，以及加工和管道准入限制，削弱了私人资本参与勘探开发的积极性，建议调整相关机制。",
-          "source": "Inbusiness.kz"
+          "content": "在Energy Trends: Gas & Petrochemicals 2026会议上，QazaqGaz前高管阿努阿尔·比塔诺夫表示，天然气开采和加工项目延期，可能使哈萨克斯坦未来数年增加进口。他认为，高税负、受管制的收购价格，以及加工和管道准入限制，削弱了私人资本参与勘探开发的积极性，建议调整相关机制。",
+          "source": "Inbusiness.kz",
+          "evidenceUrls": [
+            "https://inbusiness.kz/ru/news/kazahstanu-grozit-usilenie-zavisimosti-ot-rossii"
+          ]
         },
         {
           "no": 13,
           "matchTitle": "哈萨克斯坦与新加坡加强民用航空技术合作",
           "title": "哈萨克斯坦与新加坡扩大民用航空技术合作",
           "summary": "哈萨克斯坦航空管理机构与新加坡民航局签署意向声明，拟将2024年启动的人员培训合作，扩大至航空安全监管、可持续发展、创新技术和人才培养等领域。双方计划于2027年上半年签署新的合作谅解备忘录。",
-          "source": "哈萨克斯坦航空管理机构"
+          "content": "哈萨克斯坦航空管理机构与新加坡民航局签署意向声明，拟将2024年启动的人员培训合作，扩大至航空安全监管、可持续发展、创新技术和人才培养等领域。双方计划于2027年上半年签署新的合作谅解备忘录。",
+          "source": "哈萨克斯坦航空管理机构",
+          "evidenceUrls": [
+            "https://caa.gov.kz/ru/blog/post/kazahstan-i-cingapur-uglublyayut-tehnicheskoe-sotrudnichestvo-v-sfere-grazhdanskoj-aviacii"
+          ]
         }
       ],
       "drop": [
         {
           "no": 7,
           "matchTitle": "三市货币兑换点汇率公布"
+        },
+        {
+          "no": 8,
+          "matchTitle": "国防部长宣布2027—2028年伙食供应招标"
         },
         {
           "no": 11,
@@ -116,56 +146,89 @@ export const EDITORIAL_OVERRIDES: {
           "matchTitle": "九个月天然气、汽车、汽油和粮食进口增加",
           "title": "乌兹别克斯坦前三季度进口增长15.7%，贸易逆差扩大",
           "summary": "据乌兹别克斯坦国家统计委员会数据，2026年前三季度外贸总额为654亿美元，同比增长6.3%；出口约258.4亿美元，下降5.5%，进口约395.6亿美元，增长15.7%。贸易逆差扩大至约137.1亿美元。天然气、汽车、汽油和粮食等进口增加，部分工业制成品出口增长。",
-          "source": "Spot，援引乌兹别克斯坦国家统计委员会"
+          "content": "据乌兹别克斯坦国家统计委员会数据，2026年前三季度外贸总额为654亿美元，同比增长6.3%；出口约258.4亿美元，下降5.5%，进口约395.6亿美元，增长15.7%。贸易逆差扩大至约137.1亿美元。天然气、汽车、汽油和粮食等进口增加，部分工业制成品出口增长。",
+          "source": "Spot，援引乌兹别克斯坦国家统计委员会",
+          "evidenceUrls": [
+            "https://www.spot.uz/ru/2026/10/31/impex-sep26/"
+          ]
         },
         {
           "no": 2,
           "matchTitle": "EY研究五名机场加油设施投资者是否符合制裁标准",
           "title": "五家投资者有意收购塔什干机场加油综合体",
           "summary": "乌兹别克斯坦国有资产管理机构表示，截至10月23日，塔什干机场加油综合体私有化出售项目收到五家投资者的意向申请。顾问EY将审查其财务能力、反洗钱合规及是否受到美国、欧盟和国际金融机构制裁。符合条件者将进入约束性报价阶段，目前尚未确定买方。",
-          "source": "Spot，援引乌兹别克斯坦国有资产管理机构"
+          "content": "乌兹别克斯坦国有资产管理机构表示，截至10月23日，塔什干机场加油综合体私有化出售项目收到五家投资者的意向申请。顾问EY将审查其财务能力、反洗钱合规及是否受到美国、欧盟和国际金融机构制裁。符合条件者将进入约束性报价阶段，目前尚未确定买方。",
+          "source": "Spot，援引乌兹别克斯坦国有资产管理机构",
+          "evidenceUrls": [
+            "https://www.spot.uz/ru/2026/10/31/plane-fuel-investors/"
+          ]
         },
         {
           "no": 4,
           "matchTitle": "Delever获AloqaVentures与Nexus Club共38万美元投资",
           "title": "Delever获38万美元追加投资，用于产品开发和市场拓展",
           "summary": "餐饮及零售订单、配送管理平台Delever获得38万美元投资，其中AloqaVentures出资30万美元，Nexus Club出资8万美元。平台已服务七个国家的逾1400家餐厅和商店，本轮资金将用于产品升级和进一步拓展市场。",
-          "source": "UzDaily"
+          "content": "餐饮及零售订单、配送管理平台Delever获得38万美元投资，其中AloqaVentures出资30万美元，Nexus Club出资8万美元。平台已服务七个国家的逾1400家餐厅和商店，本轮资金将用于产品升级和进一步拓展市场。",
+          "source": "UzDaily",
+          "evidenceUrls": [
+            "https://www.uzdaily.uz/ru/uzbekskii-startap-delever-privliok-380-000-investitsii/"
+          ]
         },
         {
           "no": 6,
           "matchTitle": "冬季燃气消耗配额提高至每月500立方米",
           "title": "乌兹别克斯坦进入居民天然气冬季计费期",
           "summary": "自2026年11月起，乌兹别克斯坦居民天然气最低档价格的月度适用量为500立方米，一般适用于11月至次年2月；卡拉卡尔帕克斯坦和花拉子模州自10月起适用。其余月份为100立方米。这是居民阶梯气价的计费档位，不代表免费供气或企业用气配额。",
-          "source": "UzDaily，援引Hududgazta’minot"
+          "content": "自2026年11月起，乌兹别克斯坦居民天然气最低档价格的月度适用量为500立方米，一般适用于11月至次年2月；卡拉卡尔帕克斯坦和花拉子模州自10月起适用。其余月份为100立方米。这是居民阶梯气价的计费档位，不代表免费供气或企业用气配额。",
+          "source": "UzDaily，援引Hududgazta’minot",
+          "evidenceUrls": [
+            "https://www.uzdaily.uz/ru/bazovaia-norma-gaza-v-500-kubometrov-vstupaet-v-silu/"
+          ]
         },
         {
           "no": 8,
           "matchTitle": "央行与INCEIF深化伊斯兰金融合作",
           "title": "乌兹别克斯坦央行与INCEIF讨论落实伊斯兰金融合作",
           "summary": "在撒马尔罕伊斯兰金融论坛期间，乌兹别克斯坦央行与马来西亚INCEIF大学回顾了2025年9月签署的合作谅解备忘录落实情况，讨论研究咨询、伊斯兰银行审慎监管及流动性规范、人员培训等后续工作。",
-          "source": "UzDaily，援引乌兹别克斯坦央行"
+          "content": "在撒马尔罕伊斯兰金融论坛期间，乌兹别克斯坦央行与马来西亚INCEIF大学回顾了2025年9月签署的合作谅解备忘录落实情况，讨论研究咨询、伊斯兰银行审慎监管及流动性规范、人员培训等后续工作。",
+          "source": "UzDaily，援引乌兹别克斯坦央行",
+          "evidenceUrls": [
+            "https://www.uzdaily.uz/ru/uzbekistan-i-inceif-rasshiriat-sotrudnichestvo-v-sfere-islamskikh-finansov/"
+          ]
         },
         {
           "no": 11,
           "matchTitle": "可能调整公交车运行时间以匹配火车和飞机",
           "title": "乌兹别克斯坦拟协调公交、铁路和航空时刻表",
           "summary": "乌兹别克斯坦客运发展战略草案提出，由塔什干国立交通大学等单位在2028年1月1日前开发客流预测和数字建模系统，并据此优化公交、铁路和国内航班时刻表，改善换乘衔接。相关安排仍处于草案阶段。",
-          "source": "Spot"
+          "content": "乌兹别克斯坦客运发展战略草案提出，由塔什干国立交通大学等单位在2028年1月1日前开发客流预测和数字建模系统，并据此优化公交、铁路和国内航班时刻表，改善换乘衔接。相关安排仍处于草案阶段。",
+          "source": "Spot",
+          "evidenceUrls": [
+            "https://www.spot.uz/ru/2026/10/30/bus-airplane-sync/"
+          ]
         },
         {
           "no": 15,
           "matchTitle": "获1.037亿欧元CLiCA气候景观项目资金",
           "title": "乌兹别克斯坦获批CLiCA气候适应计划融资安排",
           "summary": "绿色气候基金批准中亚气候韧性景观计划CLiCA，区域总预算约2.644亿欧元。乌兹别克斯坦政府公布，其国别融资安排约1.037亿欧元，拟用于森林和牧场恢复、气候适应型农业技术及农户融资支持。区域预算还包括跨国活动和共同成本。",
-          "source": "乌兹别克斯坦政府、Asia-Plus"
+          "content": "绿色气候基金批准中亚气候韧性景观计划CLiCA，区域总预算约2.644亿欧元。乌兹别克斯坦政府公布，其国别融资安排约1.037亿欧元，拟用于森林和牧场恢复、气候适应型农业技术及农户融资支持。区域预算还包括跨国活动和共同成本。",
+          "source": "乌兹别克斯坦政府、Asia-Plus",
+          "evidenceUrls": [
+            "https://gov.uz/ru/urmon/news/view/240232",
+            "https://asiaplus.news/en/2026/10/30/tajikistan-to-receive-over-72-million-euros-to-combat-the-effects-of-climate-change/"
+          ]
         },
         {
           "no": 14,
           "matchTitle": "区域经济排名未体现薪资差异",
           "title": "乌兹别克斯坦区域经济高排名未必对应高工资",
           "summary": "乌兹别克斯坦地区经济综合排名与工资水平并不完全一致。例如，布哈拉州经济评分位列第三，但2026年上半年月均名义工资约562万苏姆，低于塔什干市的约1201万苏姆。综合排名同时考虑商业环境、就业和增长等指标，不宜直接用作劳动力成本排序。",
-          "source": "UzDaily"
+          "content": "乌兹别克斯坦地区经济综合排名与工资水平并不完全一致。例如，布哈拉州经济评分位列第三，但2026年上半年月均名义工资约562万苏姆，低于塔什干市的约1201万苏姆。综合排名同时考虑商业环境、就业和增长等指标，不宜直接用作劳动力成本排序。",
+          "source": "UzDaily",
+          "evidenceUrls": [
+            "https://www.uzdaily.uz/ru/vysokie-pozitsii-v-reitinge-ne-garantiruiut-vysokikh-zarplat/"
+          ]
         }
       ],
       "drop": [
@@ -186,98 +249,155 @@ export const EDITORIAL_OVERRIDES: {
           "matchTitle": "İhlas公布六座水电站，总估值62.65亿美元",
           "title": "土耳其投资者披露吉尔吉斯斯坦六座水电站开发条款",
           "summary": "据Economist.kg梳理İhlas Holding披露，卡扎尔曼和科科梅伦两级联项目共六座水电站，总装机2217兆瓦，初步投资估算62.65亿美元。安排包括20年购电、部分税费优惠及合同期满后无偿移交国家。最终投资和电价仍需结合可研确认；并非建成后立即移交。",
-          "source": "Economist.kg，援引İhlas Holding披露"
+          "content": "据Economist.kg梳理İhlas Holding披露，卡扎尔曼和科科梅伦两级联项目共六座水电站，总装机2217兆瓦，初步投资估算62.65亿美元。安排包括20年购电、部分税费优惠及合同期满后无偿移交国家。最终投资和电价仍需结合可研确认；并非建成后立即移交。",
+          "source": "Economist.kg，援引İhlas Holding披露",
+          "evidenceUrls": [
+            "https://economist.kg/enierghietika/2026/10/30/ges-kazarman-kokomeren-ihlas-usloviya/"
+          ]
         },
         {
           "no": 4,
           "matchTitle": "在楚河州为中吉乌铁路迁移62处输电线路",
           "title": "贾拉拉巴德州为中吉乌铁路迁改62处电网设施",
           "summary": "吉尔吉斯斯坦贾拉拉巴德州为中吉乌铁路建设确定62处电网迁改点，涉及0.4—500千伏线路。其中23处已完成，13处由当地电网企业继续施工；其余26处中，10处由用户自行迁改，16处已编制设计及预算文件，通过招标落实承包商。",
-          "source": "Economist.kg，援引贾拉拉巴德电网企业"
+          "content": "吉尔吉斯斯坦贾拉拉巴德州为中吉乌铁路建设确定62处电网迁改点，涉及0.4—500千伏线路。其中23处已完成，13处由当地电网企业继续施工；其余26处中，10处由用户自行迁改，16处已编制设计及预算文件，通过招标落实承包商。",
+          "source": "Economist.kg，援引贾拉拉巴德电网企业",
+          "evidenceUrls": [
+            "https://economist.kg/enierghietika/2026/10/30/zhd-kku-perenos-elektrosetey/"
+          ]
         },
         {
           "no": 5,
           "matchTitle": "农业优惠贷款12.65亿索姆，10599名借款人",
           "title": "吉尔吉斯斯坦年内农业优惠贷款达126.46亿索姆",
           "summary": "据吉尔吉斯斯坦农业部门数据，2026年以来，农业优惠贷款累计发放126.46亿索姆，覆盖10599名借款人。相关贷款年利率为2%—6%，期限3—7年，宽限期6—12个月。楚河州获得约37.99亿索姆，为各地区最多。",
-          "source": "Economist.kg，援引农业部门"
+          "content": "据吉尔吉斯斯坦农业部门数据，2026年以来，农业优惠贷款累计发放126.46亿索姆，覆盖10599名借款人。相关贷款年利率为2%—6%，期限3—7年，宽限期6—12个月。楚河州获得约37.99亿索姆，为各地区最多。",
+          "source": "Economist.kg，援引农业部门",
+          "evidenceUrls": [
+            "https://economist.kg/agriculture/2026/10/30/lgotnye-kredity-agrarii-kyrgyzstan-2026/"
+          ]
         },
         {
           "no": 6,
           "matchTitle": "国家住房计划参与者可通过ABank无首付购房",
           "title": "吉尔吉斯斯坦两项住房计划引入首付担保机制",
           "summary": "吉尔吉斯斯坦担保基金、国家住房抵押贷款公司与ABank达成安排，符合条件的两项国家住房计划参与者，可通过担保替代首付款，担保额最高为抵押贷款融资额的30%。该机制适用于KfW支持的住房融资计划及亚行支持的女性住房和绿色住房计划，并须满足项目及担保要求。",
-          "source": "Economist.kg，援引担保基金"
+          "content": "吉尔吉斯斯坦担保基金、国家住房抵押贷款公司与ABank达成安排，符合条件的两项国家住房计划参与者，可通过担保替代首付款，担保额最高为抵押贷款融资额的30%。该机制适用于KfW支持的住房融资计划及亚行支持的女性住房和绿色住房计划，并须满足项目及担保要求。",
+          "source": "Economist.kg，援引担保基金",
+          "evidenceUrls": [
+            "https://economist.kg/niedvizhimost/2026/10/30/ipoteka-bez-pervonachalnogo-vznosa-gik-abank/"
+          ]
         },
         {
           "no": 7,
           "matchTitle": "楚河州建设1.66亿美元图尔库巴什金矿",
           "title": "吉尔吉斯斯坦图尔库巴什金矿建设预算约1.66亿美元",
           "summary": "图尔库巴什金矿综合体正在吉尔吉斯斯坦贾拉拉巴德州恰特卡尔区建设，建设预算约1.66亿美元。项目拟采用露天开采和堆浸工艺，年处理矿石约500万吨，达产后预计年产黄金约3.4吨；2026年计划建设投入约4200万美元。",
-          "source": "Economist.kg"
+          "content": "图尔库巴什金矿综合体正在吉尔吉斯斯坦贾拉拉巴德州恰特卡尔区建设，建设预算约1.66亿美元。项目拟采用露天开采和堆浸工艺，年处理矿石约500万吨，达产后预计年产黄金约3.4吨；2026年计划建设投入约4200万美元。",
+          "source": "Economist.kg",
+          "evidenceUrls": [
+            "https://economist.kg/ekonomika/2026/10/30/tulkubash-zolotodobyvayushchiy-kompleks-166-mln/"
+          ]
         },
         {
           "no": 9,
           "matchTitle": "新奥什市场面积155万平方米",
           "title": "比什凯克新奥什市场主体完工，计划2027年春季开放",
           "summary": "比什凯克新奥什市场已完成主要建筑工程，目前仍在建设道路、工程管网和配套设施。综合体总面积约15.5万平方米，设有超过1万个交易摊位及仓储、停车设施，计划于2027年春季完成外部配套后投入使用。",
-          "source": "Economist.kg"
+          "content": "比什凯克新奥什市场已完成主要建筑工程，目前仍在建设道路、工程管网和配套设施。综合体总面积约15.5万平方米，设有超过1万个交易摊位及仓储、停车设施，计划于2027年春季完成外部配套后投入使用。",
+          "source": "Economist.kg",
+          "evidenceUrls": [
+            "https://economist.kg/biznes/2026/10/30/novyy-oshskiy-rynok/"
+          ]
         },
         {
           "no": 10,
           "matchTitle": "Tazalyk公布生活垃圾清运公共合同",
           "title": "比什凯克Tazalyk公布垃圾清运公共服务合同",
           "summary": "比什凯克市政企业Tazalyk公布垃圾清运合同，明确缴费、费用重算和争议处理规则。现行居民收费为每人每月41索姆，退休人员22.50索姆，须于每月27日前缴纳；逾期可按欠款每日0.1%计收滞纳金，累计不超过本金。上述费率源自既有规定，并非此次新设。",
-          "source": "Economist.kg"
+          "content": "比什凯克市政企业Tazalyk公布垃圾清运合同，明确缴费、费用重算和争议处理规则。现行居民收费为每人每月41索姆，退休人员22.50索姆，须于每月27日前缴纳；逾期可按欠款每日0.1%计收滞纳金，累计不超过本金。上述费率源自既有规定，并非此次新设。",
+          "source": "Economist.kg",
+          "evidenceUrls": [
+            "https://economist.kg/society/2026/10/30/tazalyk-dogovor-vyvoz-musora-bishkek/"
+          ]
         },
         {
           "no": 14,
           "matchTitle": "吉哈合作论坛目标2023年贸易额30亿美元",
           "title": "吉尔吉斯斯坦与哈萨克斯坦力争2030年贸易额达30亿美元",
           "summary": "10月30日，吉哈第二届地区合作论坛在比什凯克举行，双方讨论地区合作、工业、交通物流及旅游项目，重申争取到2030年将双边贸易额提高至30亿美元。2025年两国贸易额约24亿美元，同比增长33%。",
-          "source": "Economist.kg，援引两国政府信息"
+          "content": "10月30日，吉哈第二届地区合作论坛在比什凯克举行，双方讨论地区合作、工业、交通物流及旅游项目，重申争取到2030年将双边贸易额提高至30亿美元。2025年两国贸易额约24亿美元，同比增长33%。",
+          "source": "Economist.kg，援引两国政府信息",
+          "evidenceUrls": [
+            "https://economist.kg/ekonomika/2026/10/30/mezhregionalnyy-forum-kyrgyzstan-kazakhstan-2026/"
+          ]
         },
         {
           "no": 15,
           "matchTitle": "MBank前九个月盈利5.29亿索姆、资产194.26亿",
           "title": "MBank前三季度净利润52.9亿索姆，资产增长29.3%",
           "summary": "2026年前三季度，吉尔吉斯斯坦MBank净利润约52.9亿索姆，与上年同期基本持平。截至9月底，资产总额约1942.6亿索姆，同比增长29.3%；客户贷款总额（扣除准备金前）同比增长32.9%。",
-          "source": "Economist.kg，援引MBank财务报告"
+          "content": "2026年前三季度，吉尔吉斯斯坦MBank净利润约52.9亿索姆，与上年同期基本持平。截至9月底，资产总额约1942.6亿索姆，同比增长29.3%；客户贷款总额（扣除准备金前）同比增长32.9%。",
+          "source": "Economist.kg，援引MBank财务报告",
+          "evidenceUrls": [
+            "https://economist.kg/banki/2026/10/30/mbank-itogi-9-mesyatsev-2026/"
+          ]
         },
         {
           "no": 16,
           "matchTitle": "五处建筑违规罚款100万索姆",
           "title": "比什凯克五处建筑工地违规，承包商被罚100万索姆",
           "summary": "吉尔吉斯斯坦建设部门检查比什凯克五处住宅、办公及商业等建筑工地，发现违反建筑规范和施工安全要求的情况，对承包商合计罚款100万索姆，并下达整改要求。处罚不代表违规问题已经全部整改完成。",
-          "source": "Economist.kg"
+          "content": "吉尔吉斯斯坦建设部门检查比什凯克五处住宅、办公及商业等建筑工地，发现违反建筑规范和施工安全要求的情况，对承包商合计罚款100万索姆，并下达整改要求。处罚不代表违规问题已经全部整改完成。",
+          "source": "Economist.kg",
+          "evidenceUrls": [
+            "https://economist.kg/niedvizhimost/2026/10/30/bishkek-minstroy-shtrafy-pyat-stroek/"
+          ]
         },
         {
           "no": 17,
           "matchTitle": "巴赫塔耶夫：俄罗斯不是经济成功的引擎",
           "title": "吉尔吉斯斯坦央行行长谈经济增长与对俄联系",
           "summary": "吉尔吉斯斯坦央行行长阿尔马兹·巴克塔耶夫在接受Bloomberg采访时表示，吉俄经济和文化联系紧密，但他认为俄罗斯并非吉经济增长的主要引擎，增长具有自身基础。他同时承认，对俄制裁和跨境商品流动曾给吉经济带来额外推动。",
-          "source": "24.kg，转引Bloomberg采访"
+          "content": "吉尔吉斯斯坦央行行长阿尔马兹·巴克塔耶夫在接受Bloomberg采访时表示，吉俄经济和文化联系紧密，但他认为俄罗斯并非吉经济增长的主要引擎，增长具有自身基础。他同时承认，对俄制裁和跨境商品流动曾给吉经济带来额外推动。",
+          "source": "24.kg，转引Bloomberg采访",
+          "evidenceUrls": [
+            "https://www.nbkr.kg/printver.jsp?item=31&lang=RUS&material=130983",
+            "https://24kg.bemint.pro/article/baketaev-rf-ne-yavlyaetsya-glavnym-dvigatelem-ekonomicheskogo-uspeha-kyrgyzstana"
+          ]
         },
         {
           "no": 18,
           "matchTitle": "1月1日首开Ala-Too Resort，位于楚河州市",
           "title": "Ala-Too Resort一期计划于2026年12月1日开放",
           "summary": "吉尔吉斯斯坦总统扎帕罗夫10月30日在安卡拉举行的突厥国家组织峰会上表示，位于伊塞克湖州的Ala-Too Resort山区旅游项目一期计划于2026年12月1日开放，并邀请成员国代表出席，呼吁企业投资酒店、餐饮等旅游配套。项目首期开发区域为日尔加兰。",
-          "source": "Economist.kg"
+          "content": "吉尔吉斯斯坦总统扎帕罗夫10月30日在安卡拉举行的突厥国家组织峰会上表示，位于伊塞克湖州的Ala-Too Resort山区旅游项目一期计划于2026年12月1日开放，并邀请成员国代表出席，呼吁企业投资酒店、餐饮等旅游配套。项目首期开发区域为日尔加兰。",
+          "source": "Economist.kg",
+          "evidenceUrls": [
+            "https://economist.kg/vlast/2026/10/30/ala-too-rezort-1-dekabrya/"
+          ]
         },
         {
           "no": 19,
           "matchTitle": "中小企业2025年营收101.8亿/1018亿美元",
           "title": "吉尔吉斯斯坦中小企业2025年营收超过1万亿索姆",
           "summary": "据吉尔吉斯斯坦国家统计委员会数据，2025年中小企业营收约1.018万亿索姆，同比增长111.5%。金融中介和保险业贡献了营收增量的62.7%，其营收占中小企业总营收的约37.3%。上述金额以索姆计价。",
-          "source": "Economist.kg，援引国家统计委员会"
+          "content": "据吉尔吉斯斯坦国家统计委员会数据，2025年中小企业营收约1.018万亿索姆，同比增长111.5%。金融中介和保险业贡献了营收增量的62.7%，其营收占中小企业总营收的约37.3%。上述金额以索姆计价。",
+          "source": "Economist.kg，援引国家统计委员会",
+          "evidenceUrls": [
+            "https://economist.kg/biznes/2026/10/30/vyruchka-msp-kyrgyzstan-2025/"
+          ]
         },
         {
           "no": 20,
           "matchTitle": "11月起对游客、企业和船只实施新规定",
           "title": "吉尔吉斯斯坦11月起调整司法通知和商品合规程序",
           "summary": "2026年11月起，吉尔吉斯斯坦调整司法传票等文书的电子送达及商品符合性声明登记程序，比什凯克也将限制部分道路开挖许可。另有涉及非居民法人在吉银行开户许可或认证的收费规定开始适用，具体收费标准和缴纳办法仍需由内阁确定。出境埃及、哈萨克斯坦和立陶宛的部分手续也有变化。",
-          "source": "Economist.kg"
+          "content": "2026年11月起，吉尔吉斯斯坦调整司法传票等文书的电子送达及商品符合性声明登记程序，比什凯克也将限制部分道路开挖许可。另有涉及非居民法人在吉银行开户许可或认证的收费规定开始适用，具体收费标准和缴纳办法仍需由内阁确定。出境埃及、哈萨克斯坦和立陶宛的部分手续也有变化。",
+          "source": "Economist.kg",
+          "evidenceUrls": [
+            "https://economist.kg/exclusive/2026/10/30/izmeneniya-1-noyabrya-2026/"
+          ]
         }
       ],
       "drop": []
@@ -289,77 +409,124 @@ export const EDITORIAL_OVERRIDES: {
           "matchTitle": "交通部与韩国KUKJE签署基建合作备忘录",
           "title": "塔吉克斯坦与韩国企业签署智能道路安全项目备忘录",
           "summary": "10月29日，塔吉克斯坦交通部与韩国KUKJE ST公司在杜尚别签署谅解备忘录，拟开发主干道交通安全设施现代化及基于人工智能的“校园区域”安全系统，结合智能信号灯、视频分析和风险预警，提高学校周边道路安全。",
-          "source": "塔吉克斯坦交通部"
+          "content": "10月29日，塔吉克斯坦交通部与韩国KUKJE ST公司在杜尚别签署谅解备忘录，拟开发主干道交通安全设施现代化及基于人工智能的“校园区域”安全系统，结合智能信号灯、视频分析和风险预警，提高学校周边道路安全。",
+          "source": "塔吉克斯坦交通部",
+          "evidenceUrls": [
+            "https://mintrans.tj/index.php/news-page/details/1172"
+          ]
         },
         {
           "no": 2,
           "matchTitle": "北部将出现新的高压输电线路",
           "title": "塔吉克斯坦与乌兹别克斯坦拟加强500千伏电网互联",
           "summary": "据Sputnik援引欧亚开发银行报告，拟议线路将连接乌兹别克斯坦锡尔河火电站与塔吉克斯坦苏格德变电站，涉及约22公里高压线路及既有电网、变电设备改造，旨在提高苏格德地区供电可靠性并扩大跨境电力交换。",
-          "source": "Sputnik Tajikistan，援引欧亚开发银行报告"
+          "content": "据Sputnik援引欧亚开发银行报告，拟议线路将连接乌兹别克斯坦锡尔河火电站与塔吉克斯坦苏格德变电站，涉及约22公里高压线路及既有电网、变电设备改造，旨在提高苏格德地区供电可靠性并扩大跨境电力交换。",
+          "source": "Sputnik Tajikistan，援引欧亚开发银行报告",
+          "evidenceUrls": [
+            "https://tj.sputniknews.ru/20261031/sever-tajikistan-liniya-elektroperedachi-1081700997.html",
+            "https://eabr.org/analytics/special-reports/energy-without-borders/"
+          ]
         },
         {
           "no": 3,
           "matchTitle": "塔吉克斯坦和伊朗将实现贸易经济潜力",
           "title": "专家认为塔伊物流与生产合作仍有拓展空间",
           "summary": "经济学者阿列克谢·祖别茨接受Sputnik采访时表示，塔吉克斯坦与伊朗可通过交通物流、贸易和联合生产挖掘合作潜力。报道提到，两国此前提出先将贸易额提高至5亿美元、再争取达到10亿美元；该采访未宣布新的具体投资项目。",
-          "source": "Sputnik Tajikistan"
+          "content": "经济学者阿列克谢·祖别茨接受Sputnik采访时表示，塔吉克斯坦与伊朗可通过交通物流、贸易和联合生产挖掘合作潜力。报道提到，两国此前提出先将贸易额提高至5亿美元、再争取达到10亿美元；该采访未宣布新的具体投资项目。",
+          "source": "Sputnik Tajikistan",
+          "evidenceUrls": [
+            "https://tj.sputniknews.ru/20261031/tajikistan-iran-potencial-1081704920.html"
+          ]
         },
         {
           "no": 4,
           "matchTitle": "一周要闻：检查豁免、生态法典、Starlink等",
           "title": "塔吉克斯坦营商监管与基建融资周内动态",
           "summary": "塔吉克斯坦宣布对中小企业暂停各类检查至2029年1月1日，税务检查除外，实施文件仍需完善。新生态法典强化无许可污染收费和部分废弃物处置要求。另据Asia-Plus，塔方与EBRD签署基建融资安排，其中库利亚布供水排污项目990万欧元，巴尔朱旺—萨里霍索尔公路项目5218.5万欧元。",
-          "source": "Asia-Plus"
+          "content": "塔吉克斯坦宣布对中小企业暂停各类检查至2029年1月1日，税务检查除外，实施文件仍需完善。新生态法典强化无许可污染收费和部分废弃物处置要求。另据Asia-Plus，塔方与EBRD签署基建融资安排，其中库利亚布供水排污项目990万欧元，巴尔朱旺—萨里霍索尔公路项目5218.5万欧元。",
+          "source": "Asia-Plus",
+          "evidenceUrls": [
+            "https://asiaplus.news/2026/10/31/glavnoe-za-nedelyu-biznes-osvobodili-ot-proverok-do-2029-goda-ekokodeks-zapretil-svozit-plastik-na-svalki-a-starlink-priostanovil-novye-podklyucheniya/"
+          ]
         },
         {
           "no": 5,
           "matchTitle": "计划与俄罗斯Яндекс开展人工智能合作",
           "title": "塔吉克斯坦与Yandex探讨人工智能合作",
           "summary": "塔吉克斯坦工业和新技术部人工智能委员会副主席马斯鲁尔·纳扎里在AICONF-2026会议期间表示，塔方正与俄罗斯公司Yandex探讨人工智能合作，谈判仍处于初步阶段，尚未公布具体项目和投资安排。",
-          "source": "Avesta，转引塔斯社"
+          "content": "塔吉克斯坦工业和新技术部人工智能委员会副主席马斯鲁尔·纳扎里在AICONF-2026会议期间表示，塔方正与俄罗斯公司Yandex探讨人工智能合作，谈判仍处于初步阶段，尚未公布具体项目和投资安排。",
+          "source": "Avesta，转引塔斯社",
+          "evidenceUrls": [
+            "https://avesta.tj/2026/10/31/tadzhikistan-planiruet-sotrudnichat-s-yandeksom-v-sfere-iskusstvennogo-intellekta/"
+          ]
         },
         {
           "no": 6,
           "matchTitle": "政府拨款超过7000万欧元应对气候变化",
           "title": "CLiCA拟为塔吉克斯坦安排7225万欧元气候适应融资",
           "summary": "区域气候韧性景观计划CLiCA为塔吉克斯坦安排约7225万欧元，包括GCF及德国赠款、拟议欧洲投资银行贷款和塔政府实物投入。拟议贷款仍需后续协议与批准。七年计划重点支持森林和牧场恢复、节水农业及农户气候适应，并非政府单独拨款。",
-          "source": "Asia-Plus；绿色气候基金项目信息"
+          "content": "区域气候韧性景观计划CLiCA为塔吉克斯坦安排约7225万欧元，包括GCF及德国赠款、拟议欧洲投资银行贷款和塔政府实物投入。拟议贷款仍需后续协议与批准。七年计划重点支持森林和牧场恢复、节水农业及农户气候适应，并非政府单独拨款。",
+          "source": "Asia-Plus；绿色气候基金项目信息",
+          "evidenceUrls": [
+            "https://asiaplus.news/en/2026/10/30/tajikistan-to-receive-over-72-million-euros-to-combat-the-effects-of-climate-change/",
+            "https://www.greenclimate.fund/countries/tajikistan"
+          ]
         },
         {
           "no": 8,
           "matchTitle": "改善91.248公顷农田排灌状况",
           "title": "塔吉克斯坦2024—2028年计划改善91248公顷灌溉农田",
           "summary": "据塔吉克斯坦土地改良与灌溉部门，2024—2028年计划改善91248公顷灌溉农田的排灌条件。2026年计划完成18075公顷，截至10月1日已完成9329公顷，约占年度计划51.6%。政府于10月29日批准2027—2028年行动安排，规划总量不能视为已完成面积。",
-          "source": "Khovar"
+          "content": "据塔吉克斯坦土地改良与灌溉部门，2024—2028年计划改善91248公顷灌溉农田的排灌条件。2026年计划完成18075公顷，截至10月1日已完成9329公顷，约占年度计划51.6%。政府于10月29日批准2027—2028年行动安排，规划总量不能视为已完成面积。",
+          "source": "Khovar",
+          "evidenceUrls": [
+            "https://khovar.tj/2026/10/dar-to-ikiston-vazi-meliorativii-besh-az-91-azor-gektar-zamin-be-tar-gardonida-meshavad/"
+          ]
         },
         {
           "no": 9,
           "matchTitle": "中亚海关部门讨论打击走私",
           "title": "独联体成员国海关在杜尚别讨论反走私合作",
           "summary": "10月30日，独联体成员国海关执法部门负责人相关委员会第26次会议在杜尚别举行，八国海关代表参与，讨论打击“灰色进口”、虚假过境及烟草走私，加强信息交换、邮递货物风险识别和联合执法。",
-          "source": "Avesta，援引Khovar及塔吉克斯坦海关"
+          "content": "10月30日，独联体成员国海关执法部门负责人相关委员会第26次会议在杜尚别举行，八国海关代表参与，讨论打击“灰色进口”、虚假过境及烟草走私，加强信息交换、邮递货物风险识别和联合执法。",
+          "source": "Avesta，援引Khovar及塔吉克斯坦海关",
+          "evidenceUrls": [
+            "https://avesta.tj/2026/10/31/v-dushanbe-tamozhennye-sluzhby-stran-sng-obsudili-borbu-s-kontrabandoj/"
+          ]
         },
         {
           "no": 12,
           "matchTitle": "Razes Pharma计划建设新制药综合体",
           "title": "Razes Pharma制药综合体首期在杜尚别投运",
           "summary": "10月30日，塔印合资企业Razes Pharma制药综合体首期在杜尚别投入运营，已建成四条生产线，初期产品涵盖100种药品，后续计划扩至250种。首期投资超过2.5亿索莫尼，达产后预计提供300多个长期就业岗位。",
-          "source": "Khovar、Asia-Plus"
+          "content": "10月30日，塔印合资企业Razes Pharma制药综合体首期在杜尚别投入运营，已建成四条生产线，初期产品涵盖100种药品，后续计划扩至250种。首期投资超过2.5亿索莫尼，达产后预计提供300多个长期就业岗位。",
+          "source": "Khovar、Asia-Plus",
+          "evidenceUrls": [
+            "https://khovar.tj/rus/2026/10/glava-gosudarstva-emomali-rahmon-v-gorode-dushanbe-vvyol-v-ekspluatatsiyu-predpriyatie-ooo-razes-farma/",
+            "https://asiaplus.news/2026/10/31/razes-farma-kak-novyj-farmaczevticheskij-kompleks-izmenit-proizvodstvo-lekarstv-v-tadzhikistane/"
+          ]
         },
         {
           "no": 14,
           "matchTitle": "集安组织发现8万起可疑交易，超10亿索莫尼",
           "title": "集安组织联合反毒行动识别逾8万笔可疑金融交易",
           "summary": "据Avesta报道，集安组织成员国于10月26—30日开展“通道—里海灯塔”联合反毒行动，初步总结称识别超过8万笔金融交易，合计金额超过10亿俄罗斯卢布。该数据为区域行动汇总，并非塔吉克斯坦单一国家数据。",
-          "source": "Avesta"
+          "content": "据Avesta报道，集安组织成员国于10月26—30日开展“通道—里海灯塔”联合反毒行动，初步总结称识别超过8万笔金融交易，合计金额超过10亿俄罗斯卢布。该数据为区域行动汇总，并非塔吉克斯坦单一国家数据。",
+          "source": "Avesta",
+          "evidenceUrls": [
+            "https://avesta.tj/2026/10/31/v-hode-antinarkoticheskoj-operatsii-odkb-vyyavleno-bolee-80-tysyach-podozritelnyh-finansovyh-operatsij/"
+          ]
         },
         {
           "no": 7,
           "matchTitle": "杜尚别医疗中心和酒店等社会建筑投入使用",
           "title": "杜尚别新增医疗、物流及酒店项目",
           "summary": "杜尚别近期启用自闭症诊疗康复中心、物流设施及多家制造企业，Radisson Collection Dushanbe酒店也正式开业。上述项目涉及医疗服务、工业配套、仓储物流和商务接待等领域。",
-          "source": "Sputnik Tajikistan，援引总统新闻部门"
+          "content": "杜尚别近期启用自闭症诊疗康复中心、物流设施及多家制造企业，Radisson Collection Dushanbe酒店也正式开业。上述项目涉及医疗服务、工业配套、仓储物流和商务接待等领域。",
+          "source": "Sputnik Tajikistan，援引总统新闻部门",
+          "evidenceUrls": [
+            "https://tj.sputniknews.ru/20261031/medcentr-gostinica-obekty-rabotu-dushanbe-1081702441.html"
+          ]
         }
       ],
       "drop": [
@@ -380,63 +547,104 @@ export const EDITORIAL_OVERRIDES: {
           "matchTitle": "ECO集团强调战略交通枢纽作用",
           "title": "经济合作组织强调阿塞拜疆交通与过境枢纽作用",
           "summary": "据Trend报道，经济合作组织（ECO）将阿塞拜疆视为连接中亚、南高加索、土耳其与欧洲市场的战略交通和过境枢纽。该表态涉及区域运输合作，公开摘要未披露新的投资金额或运输协议。",
-          "source": "Trend"
+          "content": "据Trend报道，经济合作组织（ECO）将阿塞拜疆视为连接中亚、南高加索、土耳其与欧洲市场的战略交通和过境枢纽。该表态涉及区域运输合作，公开摘要未披露新的投资金额或运输协议。",
+          "source": "Trend",
+          "evidenceUrls": [
+            "https://www.trend.az/azerbaijan/business/4241218.html",
+            "https://inews.az/kateqoriya/news-in-english?evvel=hnq3s7cqlv"
+          ]
         },
         {
           "no": 7,
           "matchTitle": "原油126.16美元，达到2008年以来最高",
           "title": "Azeri Light原油报价升至每桶126.16美元",
           "summary": "10月31日公布的市场信息显示，阿塞拜疆Azeri Light原油报价为每桶126.16美元，较前次上涨3.88美元，涨幅3.17%。该报价为特定油种的市场价格，不能直接等同阿塞拜疆全部原油出口均价。",
-          "source": "Report.az"
+          "content": "10月31日公布的市场信息显示，阿塞拜疆Azeri Light原油报价为每桶126.16美元，较前次上涨3.88美元，涨幅3.17%。该报价为特定油种的市场价格，不能直接等同阿塞拜疆全部原油出口均价。",
+          "source": "Report.az",
+          "evidenceUrls": [
+            "https://www2.report.az/en/energy/azeri-light-oil-price-exceeds-126"
+          ]
         },
         {
           "no": 8,
           "matchTitle": "巴库—第比利斯往返班次每日4趟",
           "title": "巴库—第比利斯铁路11月1日起增至每日双向合计4班",
           "summary": "阿塞拜疆铁路公司（ADY）宣布，11月1日起，巴库—第比利斯—巴库线路每日双向合计运行4班，提供座位由386个增至564个。新增标准席别巴库至第比利斯最低单程票价为54马纳特；全线36马纳特起价对应贝尤克凯西克至第比利斯等较短区段。",
-          "source": "AZERTAC，援引ADY"
+          "content": "阿塞拜疆铁路公司（ADY）宣布，11月1日起，巴库—第比利斯—巴库线路每日双向合计运行4班，提供座位由386个增至564个。新增标准席别巴库至第比利斯最低单程票价为54马纳特；全线36马纳特起价对应贝尤克凯西克至第比利斯等较短区段。",
+          "source": "AZERTAC，援引ADY",
+          "evidenceUrls": [
+            "https://special.azertag.az/ru/xeber/4489566",
+            "https://special.azertag.az/en/xeber/4441692"
+          ]
         },
         {
           "no": 9,
           "matchTitle": "重建管理局执行董事莱桑·马梅多夫被免职",
           "title": "媒体称阿塞拜疆部分地区重建管理机构负责人被免职",
           "summary": "Banker.az援引消息称，负责阿格达姆、富祖利和霍贾万德地区重建、建设及管理工作的机构执行董事莱桑·马梅多夫已被免职，消息将其与财政部检查联系起来。相关正式任免文件及后续项目管理安排尚待核实。",
-          "source": "Banker.az"
+          "content": "Banker.az援引消息称，负责阿格达姆、富祖利和霍贾万德地区重建、建设及管理工作的机构执行董事莱桑·马梅多夫已被免职，消息将其与财政部检查联系起来。相关正式任免文件及后续项目管理安排尚待核实。",
+          "source": "Banker.az",
+          "evidenceUrls": [
+            "https://banker.az/nazirliyin-yoxlamalarindan-sonra-v%C9%99zif%C9%99sind%C9%99n-uzaqlasdirildi/"
+          ]
         },
         {
           "no": 10,
           "matchTitle": "莫斯科与巴库计划开通14天豪华邮轮航线",
           "title": "俄罗斯拟开通莫斯科—巴库豪华邮轮航线",
           "summary": "俄罗斯驻阿塞拜疆贸易代表Adam Hakimov表示，双方计划开通莫斯科—巴库豪华邮轮航线，预计单程约7天、往返约14天。目前一艘船已准备就绪，另两艘有望后续投入运营；俄罗斯政府为船舶建造提供支持。报道未公布确定首航日期。",
-          "source": "AZERTAC，经Kazinform及APA交叉核实"
+          "content": "俄罗斯驻阿塞拜疆贸易代表Adam Hakimov表示，双方计划开通莫斯科—巴库豪华邮轮航线，预计单程约7天、往返约14天。目前一艘船已准备就绪，另两艘有望后续投入运营；俄罗斯政府为船舶建造提供支持。报道未公布确定首航日期。",
+          "source": "AZERTAC，经Kazinform及APA交叉核实",
+          "evidenceUrls": [
+            "https://qazinform.com/news/moscow-baku-cruise-ship-service-to-launch-soon-af15fb/amp",
+            "https://en.apa.az/cis-countries/russia-and-azerbaijan-plan-to-introduce-luxury-cruise-service-533303"
+          ]
         },
         {
           "no": 11,
           "matchTitle": "女性家庭主妇食品支出占44%",
           "title": "阿塞拜疆女性户主家庭食品支出占44.1%",
           "summary": "据Banker.az报道，2025年阿塞拜疆女性户主家庭的食品支出占消费支出44.1%，男性户主家庭为42.6%。这些数据反映按户主性别划分的家庭消费结构，不是男女个人消费支出的直接比较。",
-          "source": "Banker.az"
+          "content": "据Banker.az报道，2025年阿塞拜疆女性户主家庭的食品支出占消费支出44.1%，男性户主家庭为42.6%。这些数据反映按户主性别划分的家庭消费结构，不是男女个人消费支出的直接比较。",
+          "source": "Banker.az",
+          "evidenceUrls": [
+            "https://banker.az/az%C9%99rbaycanda-qadinlarin-r%C9%99hb%C9%99rlik-etdiyi-ail%C9%99l%C9%99rd%C9%99-x%C9%99rcl%C9%99rin-44-faizi-%C9%99rzaga-gedir/"
+          ]
         },
         {
           "no": 14,
           "matchTitle": "居民每100马纳特可储蓄40马纳特40库比",
           "title": "阿塞拜疆居民2025年收入结余约占收入2.4%",
           "summary": "据Banker.az援引阿塞拜疆国家统计委员会数据，2025年居民收入合计899.16亿马纳特，支出877.559亿马纳特，差额约21.601亿马纳特，相当于每100马纳特收入约有2.40马纳特未用于支出。该比率是总体收入与支出之差，并非人均月储蓄额。",
-          "source": "Banker.az，援引国家统计委员会"
+          "content": "据Banker.az援引阿塞拜疆国家统计委员会数据，2025年居民收入合计899.16亿马纳特，支出877.559亿马纳特，差额约21.601亿马纳特，相当于每100马纳特收入约有2.40马纳特未用于支出。该比率是总体收入与支出之差，并非人均月储蓄额。",
+          "source": "Banker.az，援引国家统计委员会",
+          "evidenceUrls": [
+            "https://banker.az/az%C9%99rbaycanlilar-h%C9%99r-100-manatin-c%C9%99mi-2-manat-40-q%C9%99piyini-k%C9%99nara-qoya-bilir/"
+          ]
         },
         {
           "no": 16,
           "matchTitle": "阿塞拜疆外长与巴林秘书长讨论南高加索与TRIPP",
           "title": "亚美尼亚外长与海合会秘书长讨论地区互联互通",
           "summary": "亚美尼亚外长阿拉拉特·米尔佐扬在巴林麦纳麦会见海合会秘书长Jasem Albudaiwi，讨论经济联系、地区交通基础设施、“和平十字路口”和TRIPP倡议，以及亚美尼亚与阿塞拜疆和平进程。",
-          "source": "1news.az，援引米尔佐扬公开声明"
+          "content": "亚美尼亚外长阿拉拉特·米尔佐扬在巴林麦纳麦会见海合会秘书长Jasem Albudaiwi，讨论经济联系、地区交通基础设施、“和平十字路口”和TRIPP倡议，以及亚美尼亚与阿塞拜疆和平进程。",
+          "source": "1news.az，援引米尔佐扬公开声明",
+          "evidenceUrls": [
+            "https://1news.az/en/news/20261031204508422-Peace-process-between-Azerbaijan-and-Armenia-discussed-in-Bahrain-PHOTO",
+            "https://www.mfa.am/ru/press-releases/2026/10/31/Mirzoyan_Alzayani/14246"
+          ]
         },
         {
           "no": 1,
           "matchTitle": "Azvirt在波黑开通20公里高速公路路段",
           "title": "Azvirt参与建设的波黑20公里高速公路路段开通",
           "summary": "阿塞拜疆工程公司Azvirt与波黑合作伙伴Hering参与建设的Zenica North—Golubinja高速公路20公里路段开通，属于欧洲Vc交通走廊。Azvirt承建其中技术条件复杂的5.3公里Vranduk—Ponirak段，包括桥梁、隧道及高架桥，最高桥体约112米。",
-          "source": "AZERTAC"
+          "content": "阿塞拜疆工程公司Azvirt与波黑合作伙伴Hering参与建设的Zenica North—Golubinja高速公路20公里路段开通，属于欧洲Vc交通走廊。Azvirt承建其中技术条件复杂的5.3公里Vranduk—Ponirak段，包括桥梁、隧道及高架桥，最高桥体约112米。",
+          "source": "AZERTAC",
+          "evidenceUrls": [
+            "https://azertag.az/en/xeber/the_european_signature_of_azerbaijani_road_engineering___azvirt-4489440",
+            "https://fmpik.gov.ba/ba/2024/09/05/svecano-otvorena-poddionica-pocitelj-zvirovici-i-most-hercegovina-gradeci-most-gradimo-drzavu-i-gradimo-drustvo/"
+          ]
         }
       ],
       "drop": [
@@ -478,7 +686,7 @@ export const EDITORIAL_OVERRIDES: {
         }
       ]
     }
-  }
+  },
+  "unparsed": []
 };
-
 export default EDITORIAL_OVERRIDES;

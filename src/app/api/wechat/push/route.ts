@@ -4,6 +4,7 @@ import { getArticlesByDateRange } from '@/lib/db-articles';
 import { findCrossBatchDuplicates, CROSS_BATCH_SIM_FLOOR } from '@/lib/cross-batch-dup';
 import {
   beijingDate,
+  canonicalUrl,
   cleanDraftText,
   dedupeRepeatedCountry,
   extractFirstImage,
@@ -13,6 +14,11 @@ import {
   similarity,
 } from '@/lib/utils';
 import { applyEditorialOverrides } from '@/lib/editorial-overrides';
+import { reviewNewsArticles, NEWS_REVIEW_VERSION, type NewsReviewAudit } from '@/lib/news-review';
+import { newsReviewProviderStatus } from '@/lib/news-review-provider';
+import { assertReviewedRendering } from '@/lib/review-text';
+import { buildIdentity } from '@/lib/build-identity';
+import { existingDraftsForWindow, submitWechatDraft } from '@/lib/wechat-drafts';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 // ★ 2026-10-28：push 状态**落库**（`pushRunState` 是内存态 ⇒ 实例一换就丢 ⇒ 查不到上一轮）。
 import { persistPushRun, loadPersistedPushRun } from '@/lib/push-run-store';
@@ -34,7 +40,8 @@ import {
   isPushableText,
   sanitizeArticleContent,
 } from '@/lib/article-format';
-import { hasSourceBody, MIN_SOURCE_BODY_CHARS } from '@/lib/article-body';
+import { hasSourceBody, MIN_SOURCE_BODY_CHARS, decodeEntities } from '@/lib/article-body';
+import { readBoundedResponse } from '@/lib/bounded-download';
 import { generateWechatHtml } from '@/lib/wechat-template';
 import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 import {
@@ -56,7 +63,7 @@ import {
   type ReviewItem,
 } from '@/lib/editor-review';
 import { pickDraftCover } from '@/lib/draft-cover';
-import { PUSH_MAX_PER_COUNTRY, PUSH_JUDGE_CANDIDATE_CAP, CROSS_COUNTRY_DUP_SIM } from '@/lib/push-limits';
+import { PUSH_MAX_PER_COUNTRY, PUSH_JUDGE_CANDIDATE_CAP } from '@/lib/push-limits';
 import {
   readMemorySnapshot,
   MEMORY_PROBE_VERSION,
@@ -105,6 +112,7 @@ function imageFetchInit(): RequestInit {
       'Accept': 'image/*,*/*;q=0.8',
     },
     redirect: 'follow',
+    signal: AbortSignal.timeout(15_000),
   };
 }
 
@@ -180,7 +188,7 @@ async function toWechatReadyImage(raw: ArrayBuffer): Promise<ImagePayload | null
   const from = sniffed?.mime || '未知格式';
   try {
     const { default: sharp } = await import('sharp');
-    const jpeg = await sharp(Buffer.from(raw))
+    const jpeg = await sharp(Buffer.from(raw), { limitInputPixels: 16_000_000 })
       // webp 常带透明通道，JPEG 不支持，先压一层白底
       .flatten({ background: '#FFFFFF' })
       .jpeg({ quality: 88 })
@@ -206,6 +214,7 @@ async function uploadMaterial(img: ImagePayload): Promise<MaterialResult> {
     const res = await fetch(`${WECHAT_API_BASE}/material/add_material?type=image`, {
       method: 'POST',
       body: formData,
+      signal: AbortSignal.timeout(30_000),
     });
     const data = await res.json() as {
       media_id?: string;
@@ -227,12 +236,12 @@ async function uploadMaterial(img: ImagePayload): Promise<MaterialResult> {
 // 下载外链图 → 转码 → 上传。正文插图取 url，草稿封面取 mediaId。
 async function uploadRemoteImage(imageUrl: string): Promise<MaterialResult> {
   try {
-    const res = await fetch(imageUrl, imageFetchInit());
+    const res = await fetch(decodeEntities(imageUrl), imageFetchInit());
     if (!res.ok) {
       console.log(`下载图片失败 ${imageUrl}: HTTP ${res.status}`);
       return { mediaId: '', url: '' };
     }
-    const ready = await toWechatReadyImage(await res.arrayBuffer());
+    const ready = await toWechatReadyImage(await readBoundedResponse(res, 8 * 1024 * 1024));
     if (!ready) return { mediaId: '', url: '' };
     return await uploadMaterial(ready);
   } catch (err) {
@@ -278,28 +287,8 @@ interface DraftArticle {
   onlyFansCanComment: number;
 }
 
-async function addDraft(articles: DraftArticle[]): Promise<string> {
-  const url = `${WECHAT_API_BASE}/draft/add`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      articles: articles.map(a => ({
-        title: a.title,
-        author: a.author,
-        content: a.content,
-        digest: a.digest,
-        thumb_media_id: a.thumbMediaId,
-        need_open_comment: a.needOpenComment,
-        only_fans_can_comment: a.onlyFansCanComment,
-      })),
-    }),
-  });
-  const data = await res.json();
-  if (data.errcode) {
-    throw new Error(`创建草稿失败：${data.errmsg}`);
-  }
-  return data.media_id;
+async function addDraft(articles: DraftArticle[], existingId?: string): Promise<string> {
+  return submitWechatDraft(WECHAT_API_BASE, articles, existingId);
 }
 
 // 时段标记：由调度器传入，只用来给草稿标题加后缀。
@@ -352,6 +341,7 @@ interface PushFailure {
 }
 
 interface PushDraft {
+  action: 'created' | 'updated';
   country_code: string;
   country_name: string;
   media_id: string;
@@ -624,6 +614,12 @@ function toReviewItem(a: {
 }
 
 interface PushSummary {
+  allWindowDrafts: Array<{ country_code: string; media_id: string }>;
+  dryRun: boolean;
+  previews: Array<{ country_code: string; html: string; article_ids: number[] }>;
+  delivery: { mode: 'preview' | 'wechat'; countries: number; failedCountries: number; heldArticles: number };
+  finalReview: NewsReviewAudit[];
+  reviewManifest: { reviewDate: string; countries: Record<string, Array<{ no: number; id: number; source_url: string | null; title: string }>> };
   /** ★★ 2026-11-01：编辑覆盖层的处置统计（外部审稿意见的落地）。 */
   editorialOverrides?: {
     applied: number;
@@ -816,16 +812,25 @@ let pushRunState: PushRunState = {
 };
 
 export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  let body: Record<string, unknown>;
+  try {
+    const raw = new TextDecoder().decode(await readBoundedResponse(new Response(request.body), 16_384));
+    const value: unknown = raw.trim() ? JSON.parse(raw) : {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid body');
+    body = value as Record<string, unknown>;
+  } catch { return NextResponse.json({ success: false, error: '请求必须是有效JSON对象，且不超过16KB' }, { status: 400 }); }
   const qp = request.nextUrl.searchParams;
   // ⚠️⚠️ 2026-10-30 修：`period` / `hours` 原来**只认 body** ⇒ `POST ?period=daily` 被**静默忽略**
   // ⇒ ⇒ `scheduledWindow(null)` 返回 null ⇒ 窗口从「按时刻表固定（昨日04:00→今日04:00）」
   // ⇒ ⇒ **退化成「执行时刻 − 24h」** ⇒ ⇒ 推出来的稿子窗口整体平移了 8.8 小时，
   // ⇒ ⇒ 而**响应里看不出**（`period` 报 null、`window.source` 报 'hours'，都得细看才发现）。
   // ⇒ ⇒ 现在 **query 与 body 都认**（body 优先），与 `?countries=` 的口径一致。
-  const hours =
-    typeof body.hours === 'number' ? body.hours : Number(qp.get('hours')) || 24;
+  const hours = body.hours !== undefined ? typeof body.hours === 'number' ? body.hours : NaN : Number(qp.get('hours') ?? 24);
   const period = body.period ?? qp.get('period') ?? undefined;
+  const dryRun = body.dryRun === true || qp.get('dryRun') === '1';
+  if ((body.dryRun !== undefined && typeof body.dryRun !== 'boolean') || (qp.has('dryRun') && !['0', '1'].includes(qp.get('dryRun')!))) return NextResponse.json({ success: false, error: 'dryRun必须是JSON布尔值，或query中的0/1' }, { status: 400 });
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 168) return NextResponse.json({ success: false, error: 'hours必须大于0且不超过168小时' }, { status: 400 });
+  if (period !== undefined && !['daily', 'manual', 'morning', 'evening'].includes(String(period))) return NextResponse.json({ success: false, error: '未知period，不能静默改变选稿窗口' }, { status: 400 });
   // ★ 2026-10-28：**只推指定的国家**（`{"countries":["kg","tj","az"]}` 或 `?countries=kg,tj,az`）。
   //
   // ## 为什么需要它（**这是用户当时的需求**）
@@ -843,6 +848,7 @@ export async function POST(request: NextRequest) {
   const countries = (Array.isArray(rawCountries) ? rawCountries : String(rawCountries ?? '').split(','))
     .map((c) => String(c).trim().toLowerCase())
     .filter((c) => c.length > 0);
+  if (countries.some((code) => !countryList.some((country) => country.code === code))) return NextResponse.json({ success: false, error: 'countries包含未知国家' }, { status: 400 });
   if (countries.length > 0) {
     console.log(
       `[push] ★ 只推指定的国家：${countries.join('、')}` +
@@ -870,26 +876,29 @@ export async function POST(request: NextRequest) {
     summary: null,
     error: null,
   };
+  const previousSummary = dryRun ? null : (await loadPersistedPushRun())?.summary;
   // ★ 落库：这样「实例中途被换掉」也查得到这一轮的开始时间
-  void persistPushRun(pushRunState);
+  if (!dryRun) await persistPushRun({ ...pushRunState, summary: previousSummary ?? null });
 
   // 立即返回，后台异步处理
-  processPush(hours, period, countries)
-    .then((summary) => {
-      pushRunState = {
+  processPush(hours, period, countries, dryRun, previousSummary)
+    .then(async (summary) => {
+      const completedState: PushRunState = {
         running: false,
         startedAt,
         finishedAt: new Date().toISOString(),
         durationMs: Date.now() - new Date(startedAt).getTime(),
         summary,
-        error: null,
+        error: summary.failures.length && !summary.drafts.length && !summary.previews.length ? '本轮未生成任何通过审稿的成稿，见 summary.failures/finalReview' : null,
       };
-      void persistPushRun(pushRunState);
+      // Keep the task slot occupied until its draft IDs have been saved for a retry.
+      if (!dryRun) await persistPushRun(completedState);
+      pushRunState = completedState;
     })
-    .catch((err) => {
+    .catch(async (err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error('后台微信公众号推送失败:', err);
-      pushRunState = {
+      const failedState: PushRunState = {
         running: false,
         startedAt,
         finishedAt: new Date().toISOString(),
@@ -898,13 +907,18 @@ export async function POST(request: NextRequest) {
         error: message,
       };
       // ★ 落库：**崩了的原因必须留下**（2026-10-28 上午那轮 error 是 null ⇒ 查不到原因）
-      void persistPushRun(pushRunState);
+      if (!dryRun) {
+        const progress = (await loadPersistedPushRun())?.summary;
+        await persistPushRun({ ...failedState, summary: progress ?? previousSummary ?? null });
+      }
+      pushRunState = failedState;
     });
 
   return NextResponse.json({
     success: true,
     message: '微信公众号推送任务已启动，后台处理中（用 GET 查 lastRun 看结果）',
     hours,
+    dryRun,
     period: typeof period === 'string' ? period : null,
     startedAt,
   });
@@ -1044,6 +1058,10 @@ export async function GET(request: NextRequest) {
      * `lastRun` 的进程年龄（重启即清零）一起看。
      */
     codeVersion: {
+      build: buildIdentity(),
+      finalReviewVersion: NEWS_REVIEW_VERSION,
+      finalReviewProvider: newsReviewProviderStatus(),
+      crossCountryMode: 'same_source_url',
       /** L2 模型判组的默认值（2026-09-28 `fe0f84a` 起为 true；显式 off/0/false 才关） */
       dedupeLlmDefault: isLlmJudgeEnabled(),
       /** 整体总审（推送阶段 ②）的默认值（2026-09-29 `312644b` 起为 true） */
@@ -1292,7 +1310,7 @@ export async function GET(request: NextRequest) {
   });
 }
 
-async function processPush(hours: number, period: unknown, onlyCountries: string[] = []): Promise<PushSummary> {
+async function processPush(hours: number, period: unknown, onlyCountries: string[] = [], dryRun = false, previousSummary?: unknown): Promise<PushSummary> {
   try {
     const suffix = periodSuffix(period);
     const today = beijingDate();
@@ -1316,6 +1334,9 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       ? scheduled.start.toISOString()
       : new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
     const endDate = scheduled ? scheduled.end.toISOString() : now.toISOString();
+    const knownDrafts = existingDraftsForWindow(previousSummary, startDate, endDate);
+    if (!dryRun) await persistPushRun({ ...pushRunState, summary: { phase: 'selecting',
+      window: { start: startDate, end: endDate }, allWindowDrafts: [...knownDrafts].map(([country_code, media_id]) => ({ country_code, media_id })) } });
     /** 这次窗口是「按时刻表固定」还是「按 hours 浮动」—— 响应里要报，否则无法核实 */
     const windowSource: 'schedule' | 'hours' = scheduled ? 'schedule' : 'hours';
     const windowHours =
@@ -1375,6 +1396,8 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
   let cleanedArticles = 0;
     const judgeRuns: Array<PushJudge & { country_code: string }> = [];
     const reviews: PushReview[] = [];
+    const finalReview: NewsReviewAudit[] = [];
+    const previews: PushSummary['previews'] = [];
     /** 阶段 ① 的产出：已选题、待总审、待发布的稿件（见 `PreparedCountry`） */
     const prepared: PreparedCountry[] = [];
 
@@ -1638,32 +1661,9 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       }
 
       // 今日精选：取完去重后的前 N 篇（宽松上限，只防文章过长，不写死篇数）
-      let selectedArticles = dedupedArticles.slice(0, maxPerCountry);
+      const selectedArticles = dedupedArticles.slice(0, maxPerCountry);
 
-      // ★★ 2026-11-01：应用**编辑覆盖清单**（外部审稿意见的落地层）。
-      //
-      // 审稿人（人或模型）逐条说「这条要改 / 这条要删」⇒ 过去每轮都得改代码或手改库
-      // ⇒ 意见只能停在建议 ⇒ ⇒ 这一层把「逐条改稿」变成**一份数据清单**：
-      // 清单由 `scripts/build-editorial-overrides.ts` 从审稿 md 自动提取，
-      // 按**标题**匹配 ⇒ 命中就覆盖标题/摘要、命中「删除」就跳过该条。
-      //
-      // ⚠️ 放在**选稿之后、总审之后**（这里已经是总审改写后的标题 ⇒ 与审稿人看到的
-      // 草稿标题一致 ⇒ 对得上），且在**成品清洗之前** ⇒ 被替换的标题也会再过一次清洗。
-      // ⚠️ **不动数据库** ⇒ 可随时改清单再重推、可回滚、原始稿件不丢。
-      const overrideResult = applyEditorialOverrides(country.code, selectedArticles);
-      selectedArticles = overrideResult.kept;
-      editorialApplied += overrideResult.outcome.applied;
-      editorialDropped += overrideResult.outcome.dropped;
-      editorialUnmatched.push(...overrideResult.outcome.unmatched);
-      if (overrideResult.outcome.applied || overrideResult.outcome.dropped) {
-        console.log(
-          `[${country.name}][编辑覆盖] 覆盖 ${overrideResult.outcome.applied} 条、` +
-            `删除 ${overrideResult.outcome.dropped} 条` +
-            (overrideResult.outcome.unmatched.length
-              ? `；未匹配 ${overrideResult.outcome.unmatched.length} 条`
-              : ''),
-        );
-      }
+      // Dated human edits run after the collection editor, before independent full-body review.
 
       // ★ 2026-10-27：**被「每国篇数上限」砍掉多少**（原来完全没记账）。
       //
@@ -1763,7 +1763,9 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
           if (x === y || drop.has(y.art)) continue;
           if (x.pc.country.code === y.pc.country.code) continue;
           const sim = similarity(x.art.title || '', y.art.title || '');
-          if (sim < CROSS_COUNTRY_DUP_SIM) continue;
+          // Similar titles alone cannot prove two countries' stories are the same event.
+          const sourceUrl = canonicalUrl(x.art.source_url || '');
+          if (!sourceUrl || sourceUrl !== canonicalUrl(y.art.source_url || '')) continue;
           const xLen = (x.art.original_content || '').length;
           const yLen = (y.art.original_content || '').length;
           // 保留原文更长的；长度相同 ⇒ 保留国家顺序更前的（稳定）
@@ -2078,39 +2080,22 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
     }
 
     // ============================================================
-    // 阶段 ③：逐国发布（上传外链图 → 排版 → 建草稿）
-    // ============================================================
-    //
-    // 这里用**总审之后**的 `prepared[i].articles`。建草稿是不可逆的，
-    // 所以整段排版/上传都放在总审结论定下来之后 —— 顺序本身就是护栏。
 
-    for (const { country, articles: selectedArticles } of prepared) {
-      // ★★ 2026-10-29：**整个国家块包进 try** ⇒ 某国崩了**不许带走整轮**。
-      //
-      // 事故（2026-10-28）：整轮崩在**第 3 国** ⇒ 草稿箱里只剩前两国的稿子。
-      // ⇒ 而 `addDraft` 本身**早就有** try/catch（跳过该国）——
-      // ⇒ **漏掉的是它前面那些**：正文外链图上传（每篇一次网络请求）、
-      // ⇒ 缩略图上传、HTML 生成 —— 这些都在 try 之外 ⇒ ⇒ **它们一崩，整轮就没了**。
-      //
-      // ⇒ 现在的语义：**一国失败 ⇒ 记进 `failures` ⇒ 跳过该国 ⇒ 其余国家照常出稿**。
-      // ⇒ 建草稿不可逆 ⇒ ⇒ 绝不为了「整轮原子性」而重跑整轮。
-      try {
-        // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
-        // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
-        const wechatArticles = [];
-        for (const a of selectedArticles) {
-          // ★★ 2026-10-30：**发布前的最后一道文字清洗**（确定性，不调模型）。
-          //
-          // 放在**总审之后** ⇒ ⇒ 总审再怎么改写，最终发出去的正文也是干净的
-          // ⇒ ⇒ 这一层是「成品闸」，不是「建议」。
-          //
-          // 治两件事（都是用户在草稿箱里亲眼看到的「重复」）：
-          // ① **正文里同一句出现两次** ⇒ ⇒ 删第二次（零信息损失）；
-          // ② **正文首句把标题整句抄了一遍** ⇒ ⇒ 删掉它
-          //    （标题已经印在正文上方了 ⇒ ⇒ 再抄一遍，读者看到的就是同一句话两遍）。
-          //
-          // ⚠️ 护栏在 `cleanDraftText` 里：**删完正文必须还剩至少一句** ——
-          // 有的稿子正文只有一句、那句就是标题的复述 ⇒ ⇒ 那种**不删**（删了正文就空了）。
+    // Stage 2b: human edits -> cleanup -> independent full-body review -> rendered artifact check.
+    const reviewManifest: PushSummary['reviewManifest'] = {
+      reviewDate: today,
+      countries: {},
+    };
+    const reviewDeadline = Date.now() + 15 * 60_000;
+    for (let index = 0; index < prepared.length; index++) {
+      const pc = prepared[index];
+      const country = pc.country;
+      const overrides = applyEditorialOverrides(country.code, pc.articles, { reviewDate: today });
+      pc.articles = overrides.kept;
+      editorialApplied += overrides.outcome.applied;
+      editorialDropped += overrides.outcome.dropped;
+      editorialUnmatched.push(...overrides.outcome.unmatched.map((title) => country.code + ':' + title));
+      for (const a of pc.articles) {
           const cleaned = cleanDraftText(a.title || '', a.content || '');
           if (cleaned.title !== a.title) {
             console.log(`[${country.name}][清洗] 标题去后缀：「${a.title}」→「${cleaned.title}」`);
@@ -2137,23 +2122,62 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
             );
           }
           a.content = cleaned.content;
+          a.content = sanitizeArticleContent(a.content);
+      }
+      try {
+        const remaining = Math.max(0, reviewDeadline - Date.now());
+        const checked = await reviewNewsArticles(country.name, pc.articles, {
+          deadline: Date.now() + remaining / (prepared.length - index),
+          editionDate: today,
+        });
+        pc.articles = checked.kept;
+        reviewManifest.countries[country.code] = pc.articles.map((a, i) => ({ no: i + 1, id: a.id, source_url: a.source_url, title: a.title }));
+        finalReview.push(checked.audit);
+        if (!dryRun) await persistPushRun({ ...pushRunState, summary: { phase: 'full_body_review', country: country.code, finalReview, reviewManifest,
+          window: { start: startDate, end: endDate }, allWindowDrafts: [...knownDrafts].map(([country_code, media_id]) => ({ country_code, media_id })) } });
+        console.log('[' + country.name + '][全文审稿] 通过 ' + checked.audit.approved +
+          ' / 改写复核通过 ' + checked.audit.rewritten + ' / 待审 ' + checked.audit.held);
+        if (!pc.articles.length) failures.push({
+          country_code: country.code, country_name: country.name,
+          error: '无全文审稿通过的稿件；原始文章仍保存在数据库，原因见 finalReview',
+        });
+      } catch {
+        pc.articles = [];
+        failures.push({ country_code: country.code, country_name: country.name, error: '全文审稿阶段异常，本国未生成未经审核的草稿' });
+      }
+    }
+    // 阶段 ③：逐国发布（仅对全文审稿通过的成品上传图片、排版、建草稿）
+    // ============================================================
+    //
+    // 这里用**总审之后**的 `prepared[i].articles`。建草稿是不可逆的，
+    // 所以整段排版/上传都放在总审结论定下来之后 —— 顺序本身就是护栏。
 
-          // 先清洗再上传图片：清洗会删掉模型自己编的图（占位图 / example.com / picsum 之类），
-          // 放在上传之前能省掉一批注定失败的网络请求，也避免把破图放进草稿。
+    for (const { country, articles: selectedArticles } of prepared) {
+      if (!selectedArticles.length) continue;
+      // ★★ 2026-10-29：**整个国家块包进 try** ⇒ 某国崩了**不许带走整轮**。
+      //
+      // 事故（2026-10-28）：整轮崩在**第 3 国** ⇒ 草稿箱里只剩前两国的稿子。
+      // ⇒ 而 `addDraft` 本身**早就有** try/catch（跳过该国）——
+      // ⇒ **漏掉的是它前面那些**：正文外链图上传（每篇一次网络请求）、
+      // ⇒ 缩略图上传、HTML 生成 —— 这些都在 try 之外 ⇒ ⇒ **它们一崩，整轮就没了**。
+      //
+      // ⇒ 现在的语义：**一国失败 ⇒ 记进 `failures` ⇒ 跳过该国 ⇒ 其余国家照常出稿**。
+      // ⇒ 建草稿不可逆 ⇒ ⇒ 绝不为了「整轮原子性」而重跑整轮。
+      try {
+        // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
+        // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
+        const wechatArticles = [];
+        for (const a of selectedArticles) {
+          // Text has already passed full-body review; only image transport follows.
           const imgRegex = /<img[^>]*?\ssrc=["']([^"']+)["'][^>]*>/gi;
-          let content = sanitizeArticleContent(a.content);
+          let content = a.content;
           const urls = [...content.matchAll(imgRegex)].map(m => m[1]);
-          if (urls.length > 0) {
-            // 每个 URL 并行上传，替换成微信 CDN url
-            const replacements = await Promise.all(
-              urls.map(async (u) => {
-                const uploaded = await uploadRemoteImage(u);
-                // 正文插图优先用微信 CDN url，退回 media_id，都拿不到就保留原图
-                return { from: u, to: uploaded.url || uploaded.mediaId || u };
-              })
-            );
-            for (const r of replacements) {
-              content = content.split(r.from).join(r.to);
+          if (urls.length > 0 && !dryRun) {
+            // Serial bounded transfers keep the 512MB deployment from buffering many images at once.
+            for (const url of urls) {
+              const uploaded = await uploadRemoteImage(url);
+              // A material ID is not an image URL; never put it into img.src.
+              content = content.split(url).join(uploaded.url || url);
             }
           }
           wechatArticles.push({
@@ -2175,6 +2199,11 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
           suffix ? `${today} · ${suffix}` : today,
           wechatArticles
         );
+        assertReviewedRendering(htmlContent, wechatArticles);
+        if (dryRun) {
+          previews.push({ country_code: country.code, html: htmlContent, article_ids: selectedArticles.map((a) => a.id) });
+          continue;
+        }
 
         // 上传缩略图。**取「最终顺序里第一条有图的」**，而不是只看第一条（2026-09-29 改）。
         //
@@ -2202,6 +2231,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         const thumbMediaId = await uploadThumb(draftCover?.url);
 
         // 创建草稿（每个国家一个草稿，标题不含 emoji/特殊字符）
+        const existingId = knownDrafts.get(country.code);
         // 标题带时段后缀（日报 / 补报）：合并成日报后**同一天仍然可能有两份**草稿
         // （自动那一轮 + 人工补跑），标题必须能区分，否则草稿箱里会出现两份一模一样的标题。
         // 历史上 2026-09-19 用户投诉的就是这个观感。
@@ -2218,7 +2248,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
             thumbMediaId: thumbMediaId,
             needOpenComment: 0,
             onlyFansCanComment: 0,
-          }]);
+          }], existingId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[${country.name}] 创建草稿失败，跳过该国：`, err);
@@ -2227,6 +2257,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         }
 
         results.push({
+          action: existingId ? 'updated' : 'created',
           country_code: country.code,
           country_name: country.name,
           media_id: mediaId,
@@ -2234,6 +2265,9 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
           cover_from_index: draftCover ? draftCover.index : null,
           cover_from_title: draftCover ? draftCover.title : null,
         });
+        knownDrafts.set(country.code, mediaId);
+        await persistPushRun({ ...pushRunState, summary: { phase: 'creating_drafts', window: { start: startDate, end: endDate },
+          drafts: results, allWindowDrafts: [...knownDrafts].map(([country_code, media_id]) => ({ country_code, media_id })), finalReview, reviewManifest } });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[${country.name}] ★ 本国发布失败（已跳过该国，其余国家继续）：`, err);
@@ -2247,6 +2281,13 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
 
     return {
       hours,
+      allWindowDrafts: [...knownDrafts].map(([country_code, media_id]) => ({ country_code, media_id })),
+      dryRun,
+      previews,
+      delivery: { mode: dryRun ? 'preview' : 'wechat', countries: dryRun ? previews.length : results.length,
+        failedCountries: failures.length, heldArticles: finalReview.reduce((sum, review) => sum + review.held, 0) },
+      finalReview,
+      reviewManifest,
       period: typeof period === 'string' ? period : null,
       today,
       window: { start: startDate, end: endDate, source: windowSource, hours: windowHours },

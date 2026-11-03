@@ -1,103 +1,91 @@
-/**
- * 编辑覆盖层的离线回归（2026-11-01）。
- *
- * 为什么必须有：这一层会**静默改写成品**（覆盖标题/摘要、跳过条目）
- * ⇒ ⇒ 「匹配不上」和「匹配错了」都必须能看见 ⇒ 必须有断言钉住。
- */
-import { applyEditorialOverrides, sameTitle, normTitle } from '../src/lib/editorial-overrides';
-
-let failed = 0;
-function ok(name: string, cond: boolean, extra = ''): void {
-  if (cond) console.log('  ✓ ' + name);
-  else {
-    failed++;
-    console.log('  ✗ ' + name + (extra ? ' —— ' + extra : ''));
-  }
-}
-
-console.log('=== 一、标题归一化与匹配 ===');
-ok('标点/空格/引号差异算同一个标题',
-  sameTitle('阿塞拜疆「AzerGold」公司参展', '阿塞拜疆AzerGold公司参展'), 'AzerGold');
-ok('完全相同 ⇒ 命中', sameTitle('哈萨克斯坦粮食收获量达2430万吨', '哈萨克斯坦粮食收获量达2430万吨'));
-ok('短词不做包含匹配（防误配）', !sameTitle('木 ID', '木 ID 项目说明全文在这里'));
-ok('归一化去掉标点', normTitle('A，B。C') === 'ABC');
-
-console.log('\n=== 二、覆盖 / 删除 / 未匹配 ===');
-{
-  // 用清单里真实存在的一条（kz 第 1 条）做覆盖，一条（kz 第 7 条）做删除
-  const articles = [
-    { title: '哈萨克斯坦总统下令对中小企业实施三年税收检查禁令并扩大信贷', summary: '旧摘要', x: 1 },
-    { title: '三市货币兑换点汇率公布', summary: '旧摘要2', x: 2 },
-    { title: '一条清单里没有的稿件', summary: '旧摘要3', x: 3 },
-  ];
-  const { kept, outcome } = applyEditorialOverrides('kz', articles);
-  ok('覆盖生效（标题被换成审稿给的版本）',
-    kept.some((a) => a.title === '哈萨克斯坦研究对微型和小型企业暂停检查三年'),
-    JSON.stringify(kept.map((a) => a.title)));
-  ok('覆盖生效（摘要被换掉）',
-    kept.some((a) => a.summary && a.summary.includes('暂停检查及预防性监督三年')));
-  ok('删除生效（那条不在 kept 里）',
-    !kept.some((a) => a.title === '三市货币兑换点汇率公布'),
-    JSON.stringify(kept.map((a) => a.title)));
-  ok('没被清单提到的稿件原样保留',
-    kept.some((a) => a.title === '一条清单里没有的稿件'));
-  ok('统计：applied=1 / dropped=1',
-    outcome.applied === 1 && outcome.dropped === 1,
-    `applied=${outcome.applied} dropped=${outcome.dropped}`);
-}
-
-console.log('\n=== 二之二、★★ 序号优先匹配（审稿人的标题是简写 ⇒ 字面匹配对不上）===');
-{
-  // 用**清单里的真实条目**构造：把每条的 matchTitle 放到它在草稿里的**序号位置**，
-  // 并在标题尾部加几个字（模拟「审稿人写的是简写」）。
-  const mod = require('../src/data/editorial-overrides') as {
-    EDITORIAL_OVERRIDES: { countries: Record<string, { replace: { no: number; matchTitle: string }[]; drop: { no: number; matchTitle: string }[] }> };
-  };
-  const bucket = mod.EDITORIAL_OVERRIDES.countries.kz;
-  const all = [...bucket.replace, ...bucket.drop];
-  const maxNo = Math.max(...all.map((x) => x.no));
-  const arts: Array<{ title: string; summary: string }> = [];
-  for (let i = 1; i <= maxNo; i++) {
-    const item = all.find((x) => x.no === i);
-    arts.push({ title: item ? item.matchTitle + '（完整标题的其余部分）' : '第 ' + i + ' 条无关稿件', summary: 's' + i });
-  }
-  const { outcome } = applyEditorialOverrides('kz', arts);
-  ok('★ 简写标题按序号全部对得上（unmatched 应为 0）',
-    outcome.unmatched.length === 0, JSON.stringify(outcome.unmatched.slice(0, 4)));
-  ok('★ 覆盖 + 删除的总数应等于清单条目数',
-    outcome.applied + outcome.dropped === all.length,
-    `applied=${outcome.applied} dropped=${outcome.dropped} 清单=${all.length}`);
-  ok('★ 护栏生效：序号位上的标题完全无关时不按序号认（宁可漏不错）', (() => {
-    const wrong: Array<{ title: string; summary: string }> = [];
-    for (let i = 1; i <= maxNo; i++) wrong.push({ title: '完全无关的标题 ' + i, summary: 's' });
-    const r2 = applyEditorialOverrides('kz', wrong);
-    return r2.outcome.unmatched.length === all.length;
-  })());
-}
-
-console.log('\n=== 三、没有清单的国家 ⇒ 原样返回 ===');
-{
-  const articles = [{ title: '随便一条', summary: 's' }];
-  const { kept, outcome } = applyEditorialOverrides('zz', articles);
-  ok('未知国家不改动', kept.length === 1 && outcome.applied === 0 && outcome.dropped === 0);
-}
-
-console.log('\n=== 四、清单本身可用（数量与自洽） ===');
-{
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mod = require('../src/data/editorial-overrides') as { EDITORIAL_OVERRIDES: { countries: Record<string, { replace: { title: string; summary: string }[]; drop: unknown[] }> } };
-  const EDITORIAL_OVERRIDES = mod.EDITORIAL_OVERRIDES;
-  const cc = Object.keys(EDITORIAL_OVERRIDES.countries);
-  ok('五个国家都有清单', cc.length === 5, cc.join(','));
-  let total = 0;
-  for (const c of cc) {
-    const b = EDITORIAL_OVERRIDES.countries[c];
-    ok(`${c} 的替换项都有标题与摘要`,
-      b.replace.every((r) => r.title && r.summary));
-    total += b.replace.length + b.drop.length;
-  }
-  ok('清单条目总数 > 50（说明真的提取到了审稿意见）', total > 50, String(total));
-}
-
-console.log(failed === 0 ? '\n✅ 全部通过' : `\n❌ ${failed} 项失败`);
-process.exit(failed === 0 ? 0 : 1);
+/** Real regressions: rendered body, batch isolation, identity matching and complete conversion. */
+import assert from 'node:assert/strict';
+import { applyEditorialOverrides, sameTitle } from '../src/lib/editorial-overrides';
+import { parseEditorialReview } from '../src/lib/editorial-review-parser';
+import { generateWechatHtml } from '../src/lib/wechat-template';
+import { assertReviewedRendering } from '../src/lib/review-text';
+import { EDITORIAL_OVERRIDES } from '../src/data/editorial-overrides';
+let passed = 0;
+function test(name: string, fn: () => void) { fn(); passed++; console.log('✓ ' + name); }
+const report = [
+  '# 2026年11月1日五国日报审稿',
+  '## 哈萨克斯坦｜最终审稿意见', '### 必须修改',
+  '#### 原文第1条｜政策已实施',
+  '**意见：** 仍在研究。',
+  '> 政府正在研究小企业检查安排', '>',
+  '> 政策尚未生效，具体范围与开始时间仍需以正式文件为准。',
+  '> 来源：政府原始发布',
+  '#### 原文第8条｜伙食招标重复报道',
+  '**意见：** 删除本条，保留并修正第9条。',
+  '#### 原文第9条｜国防部采购公告',
+  '**意见：** 不建议删除，正文可保留。',
+  '### 可以不改', '#### 原文第10条｜另一项正常新闻',
+].join('\n');
+const review = parseEditorialReview(report, 'review.md', '2026-11-04T00:00:00Z');
+const article = { id: 42, title: '政策已实施', summary: '旧摘要', content: '<img src="https://media.example/photo.jpg" onclick="bad()" />政策已经全面实施。', source_name: '旧来源', source_url: 'https://media.example/story', category: 'policy' };
+test('删除本条被识别，否定删除不误认；未识别处置必须列出', () => {
+  assert.equal(review.countries.kz.drop.length, 1);
+  assert.equal(review.countries.kz.drop[0].no, 8);
+  assert.equal(review.unparsed.length, 1);
+  assert.equal(review.unparsed[0].no, 9);
+});
+test('解析保留完整正文和来源，不能把正文只当摘要', () => {
+  assert.equal(review.reviewDate, '2026-11-01');
+  assert.match(review.countries.kz.replace[0].content, /尚未生效/);
+  assert.equal(review.countries.kz.replace[0].source, '政府原始发布');
+});
+test('未提供批次时不应用任何历史编辑', () => {
+  const r = applyEditorialOverrides('kz', [article]);
+  assert.equal(r.outcome.applied, 0);
+  assert.equal(r.kept[0].content, article.content);
+});
+test('同标题在不同日期也不能应用旧清单', () => {
+  const r = applyEditorialOverrides('kz', [article], { reviewDate: '2026-11-04', review });
+  assert.equal(r.outcome.skipped, 'different_batch');
+  assert.equal(r.kept[0].content, article.content);
+});
+test('批次内唯一准确标题命中后，最终HTML确实显示新正文和新来源', () => {
+  const r = applyEditorialOverrides('kz', [article], { reviewDate: review.reviewDate, review });
+  assert.equal(r.outcome.applied, 1);
+  assert.match(r.kept[0].content, /尚未生效/);
+  assert.doesNotMatch(r.kept[0].content, /已经全面实施/);
+  assert.match(r.kept[0].content, /https:\/\/media.example\/photo.jpg/);
+  assert.doesNotMatch(r.kept[0].content, /onclick/);
+  const html = generateWechatHtml('哈萨克斯坦', '🇰🇿', review.reviewDate, r.kept);
+  assertReviewedRendering(html, r.kept);
+  assert.match(html, /尚未生效/);
+  assert.match(html, /政府原始发布/);
+  assert.doesNotMatch(html, /已经全面实施/);
+});
+test('同批次同主题但不同事实，不能凭4个共同字或序号认领', () => {
+  const r = applyEditorialOverrides('kz', [{ ...article, title: '政策拟延长至下一年度' }], { reviewDate: review.reviewDate, review });
+  assert.equal(r.outcome.applied, 0);
+  assert.equal(r.kept[0].title, '政策拟延长至下一年度');
+});
+test('显式稳定ID与URL可匹配改写后的标题，但不能应用到另一文章', () => {
+  const bound = structuredClone(review);
+  Object.assign(bound.countries.kz.replace[0], { articleId: 42, sourceUrl: article.source_url });
+  assert.equal(applyEditorialOverrides('kz', [{ ...article, title: '后来调整的标题' }], { reviewDate: review.reviewDate, review: bound }).outcome.applied, 1);
+  assert.equal(applyEditorialOverrides('kz', [{ ...article, id: 43 }], { reviewDate: review.reviewDate, review: bound }).outcome.applied, 0);
+  assert.equal(applyEditorialOverrides('kz', [{ ...article, source_url: 'https://different.example/story' }], { reviewDate: review.reviewDate, review: bound }).outcome.applied, 0);
+});
+test('无法唯一确定的同名文章不改；传入对象保持原样', () => {
+  assert.equal(applyEditorialOverrides('kz', [article, { ...article, id: 43 }], { reviewDate: review.reviewDate, review }).outcome.applied, 0);
+  assert.equal(article.summary, '旧摘要');
+});
+test('不再将包含关系当作同一标题', () => {
+  assert(!sameTitle('政府宣布贷款安排', '政府宣布贷款安排但仅适用于一家银行'));
+});
+test('真实清单完整转换为51项全文替换、20项删除，共71项', () => {
+  assert.equal(Object.values(EDITORIAL_OVERRIDES.countries).reduce((n, b) => n + b.replace.length, 0), 51);
+  assert.equal(Object.values(EDITORIAL_OVERRIDES.countries).reduce((n, b) => n + b.drop.length, 0), 20);
+  assert.equal(EDITORIAL_OVERRIDES.unparsed.length, 0);
+  assert(EDITORIAL_OVERRIDES.countries.kz.drop.some((d) => d.no === 8));
+  assert(Object.values(EDITORIAL_OVERRIDES.countries).every((b) => b.replace.every((r) => r.content && r.source)));
+});
+test('没有日期的审稿文件拒绝生成', () => {
+  assert.throws(() => parseEditorialReview('## 哈萨克斯坦｜审稿', 'unknown.md', ''), /日期/);
+  assert.throws(() => parseEditorialReview('# 审稿报告\n正文事件发生在2026年11月1日', 'unknown.md', ''), /日期/);
+  assert.throws(() => parseEditorialReview('# 2026年13月1日审稿报告', 'unknown.md', ''), /日期/);
+});
+console.log('全部通过：' + passed + ' 项回归场景');

@@ -34,6 +34,7 @@ try {
 "
 
 echo "Building the Next.js project..."
+node scripts/build-identity.mjs
 pnpm next build
 
 echo "Bundling server with tsup..."

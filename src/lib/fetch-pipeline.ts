@@ -22,7 +22,8 @@
  */
 
 import { isInvestmentTopic } from './investment-score';
-import { fetchArticleBody, needsBodyFetch, BODY_FETCH_GAP_MS } from './article-body';
+import { fetchArticleBody, needsBodyFetch, BODY_FETCH_GAP_MS, bestFeedBody } from './article-body';
+export { bestFeedBody };
 import type { ArticleInsert } from './db-articles';
 
 // 明显与投资者无关的「垃圾标题」关键词（命中即跳过，翻译都不做，纯省钱）。

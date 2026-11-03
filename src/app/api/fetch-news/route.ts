@@ -20,6 +20,7 @@ import {
   extractImagesFromHtml,
   fetchOgImage,
   backfillBody,
+  bestFeedBody,
 } from '@/lib/fetch-pipeline';
 
 import {
@@ -650,7 +651,7 @@ async function processFetchNews(
           item.pubDate = undefined;
           return true;
         }
-        const itemDate = parsed.toISOString().split('T')[0];
+        const itemDate = beijingDate(parsed);
         return itemDate === targetDate || itemDate === targetDateMinusOne;
       });
       result.afterDate = targetItems.length;
@@ -664,7 +665,7 @@ async function processFetchNews(
       let sourceCandidateCount = 0;
       for (const item of targetItems) {
         const title = item.title || '';
-        const description = item.contentSnippet || item.content || '';
+        const description = bestFeedBody(item);
 
         // 文体/生活类标题直接丢弃 —— 翻译是要花钱的，垃圾不值得进 LLM
         if (isJunkTitle(title)) {
@@ -944,7 +945,7 @@ async function processFetchNews(
             if (alreadyExists) continue;
 
             const t = item.title || '';
-            const d = item.contentSnippet || item.content || '';
+            const d = bestFeedBody(item);
             if (isJunkTitle(t)) continue;
             // ⚠️ 上面的 filter 保证 `source.country === country`（两者都在可推送清单里），
             // 所以这一行目前恒成立、属于防御性写法。留着是为了万一以后有人把 intl 源
@@ -1033,7 +1034,7 @@ async function processFetchNews(
           }
         }
 
-        const originalContent = item.contentSnippet || item.content || '';
+        const originalContent = bestFeedBody(item);
         const tags = extractTags(originalTitle, originalContent);
 
         let titleZh = originalTitle;

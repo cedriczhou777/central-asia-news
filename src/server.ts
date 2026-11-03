@@ -4,8 +4,7 @@ import next from 'next';
 import { startScheduler } from './lib/scheduler';
 import { resolvePort } from './lib/runtime';
 
-// 修复微信 API 调用的 SSL 证书问题
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+// Keep TLS verification enabled; configure private CA trust explicitly when needed.
 
 // 生产环境判断只看 NODE_ENV（start.sh 会显式设成 production）。
 // 旧版还带一个 `COZE_PROJECT_ENV !== 'PROD'` 的条件，是扣子时代的残留：

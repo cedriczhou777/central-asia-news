@@ -164,6 +164,12 @@ export function sourceBodyLength(raw: string | null | undefined): number {
   return htmlToText(raw || '').length;
 }
 
+/** Prefer actual feed body over its short teaser, without counting script/style markup as evidence. */
+export function bestFeedBody(item: { content?: string; contentSnippet?: string; 'content:encoded'?: string }): string {
+  return [item.content, item['content:encoded'], item.contentSnippet].filter((s): s is string => typeof s === 'string')
+    .sort((a, b) => sourceBodyLength(b) - sourceBodyLength(a))[0] || '';
+}
+
 /** RSS 给的正文够不够；不够就该去抓页面。 */
 export function needsBodyFetch(raw: string | null | undefined): boolean {
   return sourceBodyLength(raw) < MIN_SOURCE_BODY_CHARS;
