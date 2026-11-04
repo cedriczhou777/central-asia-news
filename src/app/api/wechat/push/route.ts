@@ -19,6 +19,7 @@ import { newsReviewProviderStatus } from '@/lib/news-review-provider';
 import { assertReviewedRendering } from '@/lib/review-text';
 import { buildIdentity } from '@/lib/build-identity';
 import { existingDraftsForWindow, submitWechatDraft } from '@/lib/wechat-drafts';
+import { createDraftArtifact, saveDraftArtifact, DRAFT_ARTIFACT_VERSION, type DraftArtifactRef } from '@/lib/draft-artifacts';
 import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from '@/lib/publish-schedule';
 // ★ 2026-10-28：push 状态**落库**（`pushRunState` 是内存态 ⇒ 实例一换就丢 ⇒ 查不到上一轮）。
 import { persistPushRun, loadPersistedPushRun } from '@/lib/push-run-store';
@@ -42,7 +43,7 @@ import {
 } from '@/lib/article-format';
 import { hasSourceBody, MIN_SOURCE_BODY_CHARS, decodeEntities } from '@/lib/article-body';
 import { readBoundedResponse } from '@/lib/bounded-download';
-import { generateWechatHtml } from '@/lib/wechat-template';
+import { generateWechatHtml, type WechatArticle } from '@/lib/wechat-template';
 import { FALLBACK_THUMB_JPEG_BASE64 } from '@/lib/wechat-thumb-fallback';
 import {
   crossCountryOverlaps,
@@ -614,6 +615,7 @@ function toReviewItem(a: {
 }
 
 interface PushSummary {
+  artifacts: DraftArtifactRef[];
   allWindowDrafts: Array<{ country_code: string; media_id: string }>;
   dryRun: boolean;
   previews: Array<{ country_code: string; html: string; article_ids: number[] }>;
@@ -1060,6 +1062,8 @@ export async function GET(request: NextRequest) {
     codeVersion: {
       build: buildIdentity(),
       finalReviewVersion: NEWS_REVIEW_VERSION,
+      artifactVersion: DRAFT_ARTIFACT_VERSION,
+      artifactReadConfigured: Boolean(process.env.NEWS_ARTIFACT_READ_TOKEN),
       finalReviewProvider: newsReviewProviderStatus(),
       crossCountryMode: 'same_source_url',
       /** L2 模型判组的默认值（2026-09-28 `fe0f84a` 起为 true；显式 off/0/false 才关） */
@@ -1397,6 +1401,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
     const judgeRuns: Array<PushJudge & { country_code: string }> = [];
     const reviews: PushReview[] = [];
     const finalReview: NewsReviewAudit[] = [];
+    const artifacts: DraftArtifactRef[] = [];
     const previews: PushSummary['previews'] = [];
     /** 阶段 ① 的产出：已选题、待总审、待发布的稿件（见 `PreparedCountry`） */
     const prepared: PreparedCountry[] = [];
@@ -2166,7 +2171,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       try {
         // 关键：把每篇文章正文里的外链图片上传到微信素材库，换成微信 CDN 地址
         // （否则微信保存草稿时抓不到外链图，正文图片会全部消失）
-        const wechatArticles = [];
+        const wechatArticles: WechatArticle[] = [];
         for (const a of selectedArticles) {
           // Text has already passed full-body review; only image transport follows.
           const imgRegex = /<img[^>]*?\ssrc=["']([^"']+)["'][^>]*>/gi;
@@ -2237,20 +2242,34 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         // 历史上 2026-09-19 用户投诉的就是这个观感。
         // 关键：建草稿失败只跳过这一国。旧实现在这里 throw，首个国家一失败就把
         // 整轮打成 500，后面四个国家一篇草稿都建不出来（2026-09-18 早报的实际情况）。
+        const draft: DraftArticle = {
+          title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
+          author: '中亚投资资讯', content: htmlContent,
+          digest: `${country.name}${suffix || '今日'}投资资讯精选`,
+          thumbMediaId, needOpenComment: 0, onlyFansCanComment: 0,
+        };
+        const review = finalReview.find((r) => r.country === country.name);
+        if (!review) throw new Error('缺少本国审稿记录，不能留存或交付成稿');
+        const artifact = createDraftArtifact({ editionDate: today, runStartedAt: pushRunState.startedAt!,
+          countryCode: country.code, countryName: country.name, window: { start: startDate, end: endDate },
+          draft, build: buildIdentity(), review,
+          articles: selectedArticles.map((a, i) => ({ ...wechatArticles[i], id: a.id,
+            source_url: a.source_url || '', original_title: a.original_title || '', original_content: a.original_content || '',
+            published_at: a.published_at })),
+        });
+        // Save the exact payload before submitting it. Retrying a future run cannot replace this attempt.
+        await saveDraftArtifact(artifact);
+        const artifactRef: DraftArtifactRef = { id: artifact.id, countryCode: artifact.countryCode,
+          contentHash: artifact.contentHash, status: 'prepared', statusPersisted: true };
+        artifacts.push(artifactRef);
         let mediaId: string;
         try {
-          mediaId = await addDraft([{
-            title: `${country.name} - ${today}${suffix ? ' ' + suffix : ''} 投资资讯`,
-            author: '中亚投资资讯',
-            content: htmlContent,
-            // 摘要不带篇数统计（2026-09-19 用户要求：标题/摘要里不要出现"30条"这类数字）
-            digest: `${country.name}${suffix || '今日'}投资资讯精选`,
-            thumbMediaId: thumbMediaId,
-            needOpenComment: 0,
-            onlyFansCanComment: 0,
-          }], existingId);
+          mediaId = await addDraft([draft], existingId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          artifact.delivery = { status: 'delivery_unconfirmed', error: msg, updatedAt: new Date().toISOString() };
+          artifactRef.status = artifact.delivery.status;
+          try { await saveDraftArtifact(artifact); } catch { artifactRef.statusPersisted = false; }
           console.error(`[${country.name}] 创建草稿失败，跳过该国：`, err);
           failures.push({ country_code: country.code, country_name: country.name, error: msg });
           continue;
@@ -2267,7 +2286,13 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         });
         knownDrafts.set(country.code, mediaId);
         await persistPushRun({ ...pushRunState, summary: { phase: 'creating_drafts', window: { start: startDate, end: endDate },
-          drafts: results, allWindowDrafts: [...knownDrafts].map(([country_code, media_id]) => ({ country_code, media_id })), finalReview, reviewManifest } });
+          drafts: results, allWindowDrafts: [...knownDrafts].map(([country_code, media_id]) => ({ country_code, media_id })), finalReview, reviewManifest, artifacts } });
+        artifact.delivery = { status: 'submitted', mediaId, updatedAt: new Date().toISOString() };
+        artifactRef.status = artifact.delivery.status;
+        try { await saveDraftArtifact(artifact); } catch {
+          artifactRef.statusPersisted = false;
+          console.error(`[${country.name}] 微信已返回草稿ID，但归档回执未保存；原始prepared成稿仍在，不应盲目重推`);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[${country.name}] ★ 本国发布失败（已跳过该国，其余国家继续）：`, err);
@@ -2281,6 +2306,7 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
 
     return {
       hours,
+      artifacts,
       allWindowDrafts: [...knownDrafts].map(([country_code, media_id]) => ({ country_code, media_id })),
       dryRun,
       previews,
