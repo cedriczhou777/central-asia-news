@@ -1992,11 +1992,38 @@ async function processPush(
         let decision: Awaited<ReturnType<typeof reviewDraft>>['decision'] | null = null;
         let audit: ReviewAudit;
         try {
+          // ★★ 2026-11-07：**Word 输入稿跳过总审**（用户明确要求：不改稿）。
+          //
+          // ## 为什么不直接「不调 reviewDraft」
+          //
+          // 因为那样要自己构造 `decision` 与 `audit` 两个结构 ⇒ `audit` 的字段多且
+          // 以后还会变 ⇒ ⇒ 自己构造迟早漏字段（今天已经因为这个坑推迟过一次）。
+          //
+          // ## 为什么用「必定失败的模型桩」而不是删掉整个分支
+          //
+          // `reviewDraft` 里**本来就有**「模型调用失败 ⇒ 不改任何东西」的路径
+          // （它内部有 `identity()`：全部保留、不删、不改、不加图）
+          // ⇒ ⇒ 传一个必定失败的 `ask` ⇒ 它就走那条既有路径
+          // ⇒ ⇒ **核心逻辑一个字没动**、audit 形状自动正确、行为=「失败即不改」。
+          const wordItems = perCountryItems[i].items;
+          const allWordInput = wordItems.length > 0 && wordItems.every((it) => it.fromWord === true);
+          if (allWordInput) {
+            console.log(`[${pc.country.name}] ★ Word 输入稿 ⇒ **跳过总审**（不改稿：按约定由 ChatGPT 独立审稿）`);
+          }
           const res = await reviewDraft({
             countryName: pc.country.name,
-            items: perCountryItems[i].items,
+            items: wordItems,
             overlaps,
             recentSimilar,
+            // ★ Word 输入稿 ⇒ 不调模型（走既有的「失败即不改任何东西」路径）
+            ...(allWordInput
+              ? {
+                  ask: async () => ({
+                    ok: false as const,
+                    error: 'skipped: Word 输入稿按约定不做审核、不改稿',
+                  }),
+                }
+              : {}),
           });
           decision = res.decision;
           audit = res.audit;

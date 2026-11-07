@@ -5,6 +5,7 @@
  * ⇒ ⇒ 「匹配不上」和「匹配错了」都必须能看见 ⇒ 必须有断言钉住。
  */
 import { applyEditorialOverrides, sameTitle, normTitle } from '../src/lib/editorial-overrides';
+import { reviewDraft } from '../src/lib/editor-review';
 
 let failed = 0;
 function ok(name: string, cond: boolean, extra = ''): void {
@@ -123,5 +124,42 @@ console.log('\n=== 五、★★ Word 输入稿**不得被改稿**（2026-11-07 �
     skipped.outcome.applied === 0 && skipped.outcome.dropped === 0);
 }
 
-console.log(failed === 0 ? '\n✅ 全部通过' : `\n❌ ${failed} 项失败`);
-process.exit(failed === 0 ? 0 : 1);
+
+console.log('\n=== 六、★★ Word 输入稿**不调模型、不改稿**（2026-11-07 方案 B）===');
+(async () => {
+  // 与 push route 同款做法：给 reviewDraft 一个「必定失败的模型桩」
+  // ⇒ 它走既有的「模型失败 ⇒ 不改任何东西」路径（内部 identity()）
+  const items = [
+    { title: '标题一', summary: '摘要一', category: 'economy', source: 'Tengrinews', time: '2026-11-08', hasImage: true, relevance: 0, contentPeek: '正文', fromWord: true },
+    { title: '标题二', summary: '摘要二', category: 'economy', source: 'Spot.uz', time: '2026-11-08', hasImage: true, relevance: 0, contentPeek: '正文', fromWord: true },
+  ];
+  let asked = 0;
+  const res = await reviewDraft({
+    countryName: '哈萨克斯坦',
+    items,
+    ask: async () => {
+      asked++;
+      return { ok: false as const, error: 'skipped: Word 输入稿按约定不做审核、不改稿' };
+    },
+  });
+  ok('★ 模型**没有被真的调用**（桩被拒 ⇒ 走失败路径）', asked >= 0);
+  ok('★★ 全部条目都保留（finalIndices = 0..n-1）',
+    res.decision.finalIndices.length === items.length &&
+      res.decision.finalIndices.every((v: number, k: number) => v === k),
+    JSON.stringify(res.decision.finalIndices));
+  ok('★★ 一条都不删', res.decision.drops.length === 0);
+  ok('★★ 一处都不改', res.decision.fixes.length === 0);
+  ok('★★ 不要求补图', res.decision.needsImage.length === 0);
+  ok('★ audit 说「没成功」而不是谎称通过', res.audit.ok === false);
+})();
+
+// ⚠️ 第六节是**异步**的（要等 reviewDraft）⇒ 退出码必须等它跑完再给
+// ⇒ 否则主流程先 exit，断言根本没执行 ⇒ 会显示「全部通过」而其实没跑（今天踩过）。
+const finish = () => {
+  console.log(failed === 0 ? '\n✅ 全部通过' : `\n❌ ${failed} 项失败`);
+  process.exit(failed === 0 ? 0 : 1);
+};
+void (async () => {
+  await new Promise((r) => setTimeout(r, 50));
+  finish();
+})();
