@@ -97,5 +97,41 @@ console.log('=== 配图契约 ===');
   ok('★ 图注跟在图后（ChatGPT 约定「附图注和来源」）', bodyHtml.includes('图注：'));
 }
 
+
+console.log('=== 推送侧「按指定日期取稿」（2026-11-07 新增）===');
+{
+  // 与 push/route.ts 的 processPush 同款窗口计算
+  const windowOf = (dateRaw: unknown, scheduled: { start: Date; end: Date; hours: number } | null, hours: number) => {
+    const dateParam =
+      typeof dateRaw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null;
+    const startDate = dateParam
+      ? new Date(`${dateParam}T00:00:00+08:00`).toISOString()
+      : scheduled
+        ? scheduled.start.toISOString()
+        : new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    const endDate = dateParam
+      ? new Date(`${dateParam}T23:59:59.999+08:00`).toISOString()
+      : scheduled ? scheduled.end.toISOString() : new Date().toISOString();
+    const source = dateParam ? 'date' : scheduled ? 'schedule' : 'hours';
+    return { startDate, endDate, source, dateParam };
+  };
+  const bj = (iso: string) =>
+    new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+  const w = windowOf('2026-11-08', null, 24);
+  ok('★ 传 date ⇒ source=date', w.source === 'date');
+  ok('★ 窗口 = 京时 00:00:00', bj(w.startDate).includes('00:00:00'), bj(w.startDate));
+  ok('★ 窗口 = 京时 23:59:59', bj(w.endDate).includes('23:59:59'), bj(w.endDate));
+
+  const w2 = windowOf(null, { start: new Date('2026-11-07T20:00:00Z'), end: new Date('2026-11-08T20:00:00Z'), hours: 24 }, 24);
+  ok('★★ 不传 date ⇒ 仍是时刻表窗口（旧行为不变）', w2.source === 'schedule');
+
+  const w3 = windowOf('11月8日', null, 24);
+  ok('★ date 格式不对 ⇒ 忽略（退回原窗口）', w3.source === 'hours' && w3.dateParam === null);
+
+  const w4 = windowOf('2026-11-08', null, 24);
+  ok('★ date 参数同时支持 query（body 优先在 route 里处理）', w4.dateParam === '2026-11-08');
+}
+
 console.log(failed === 0 ? '\n✅ 全部通过' : `\n❌ ${failed} 项失败`);
 process.exit(failed === 0 ? 0 : 1);

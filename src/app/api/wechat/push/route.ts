@@ -646,7 +646,8 @@ interface PushSummary {
     start: string;
     end: string;
     /** `schedule` = 按时刻表固定（定时时段）；`hours` = 执行时刻 − hours（人工补跑） */
-    source: 'schedule' | 'hours';
+    // ★ 2026-11-07 加 'date'：Word 输入链路按指定日期取稿（`{"date":"YYYY-MM-DD"}`）
+    source: 'schedule' | 'hours' | 'date';
     hours: number;
   };
   drafts: PushDraft[];
@@ -874,7 +875,18 @@ export async function POST(request: NextRequest) {
   void persistPushRun(pushRunState);
 
   // 立即返回，后台异步处理
-  processPush(hours, period, countries)
+  // ★ 2026-11-07：**按指定日期取稿**（Word 输入链路用）。
+  //
+  // 旧的取稿窗口是「时刻表固定」的（日报 = `[昨日04:00, 今日04:00]`）⇒
+  // 而 ChatGPT 早上交的稿落在这个窗口**之外** ⇒ ⇒ 必须能指定「推哪一天」。
+  // ⚠️ 不传 `date` ⇒ 行为与从前完全一致（定时任务与人工补跑都不受影响）。
+  const dateRaw = body.date ?? qp.get('date');
+  const dateParam =
+    typeof dateRaw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null;
+  if (dateRaw !== undefined && dateRaw !== null && !dateParam) {
+    console.warn(`[push] ⚠️ date="${String(dateRaw)}" 格式不对（要 YYYY-MM-DD）⇒ 已忽略，仍按原窗口取稿`);
+  }
+  processPush(hours, period, countries, dateParam)
     .then((summary) => {
       pushRunState = {
         running: false,
@@ -1292,7 +1304,17 @@ export async function GET(request: NextRequest) {
   });
 }
 
-async function processPush(hours: number, period: unknown, onlyCountries: string[] = []): Promise<PushSummary> {
+/**
+ * @param dateParam ★ 2026-11-07 新增：**按指定日期取稿**（`YYYY-MM-DD`，京时全天）。
+ *   Word 输入链路的稿子是当天早上交上来的 ⇒ 落在「时刻表固定窗口」之外 ⇒ 必须能指定日期。
+ *   ⚠️ 不传 ⇒ 行为与从前完全一致（旧的定时/补跑口径一点没动）。
+ */
+async function processPush(
+  hours: number,
+  period: unknown,
+  onlyCountries: string[] = [],
+  dateParam: string | null = null,
+): Promise<PushSummary> {
   try {
     const suffix = periodSuffix(period);
     const today = beijingDate();
@@ -1312,14 +1334,42 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
     // 要「从现在往回数 N 小时」，那是它本来的语义，不能套固定钟点。
     const now = new Date();
     const scheduled = scheduledWindow(period);
-    const startDate = scheduled
-      ? scheduled.start.toISOString()
-      : new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
-    const endDate = scheduled ? scheduled.end.toISOString() : now.toISOString();
-    /** 这次窗口是「按时刻表固定」还是「按 hours 浮动」—— 响应里要报，否则无法核实 */
-    const windowSource: 'schedule' | 'hours' = scheduled ? 'schedule' : 'hours';
-    const windowHours =
-      scheduled ? scheduled.hours : Math.round((now.getTime() - new Date(startDate).getTime()) / 3_600_000);
+
+    // ★★ 2026-11-07：**按指定日期取稿**（Word 输入链路用）。
+    //
+    // ## 为什么必须有
+    //
+    // 旧链路的取稿窗口是**时刻表固定**的（日报 = `[昨日04:00, 今日04:00]`）⇒
+    // 而 Word 链路的稿子是 ChatGPT **当天早上**交上来的 ⇒ ⇒ 落在那个窗口**之外**
+    // ⇒ ⇒ **推不出来**（推出来的是空的或别的批次）。
+    //
+    // ⇒ 所以给推送接口加一个 `date` 参数（`YYYY-MM-DD`，北京时间）：
+    //   窗口 = `[date 00:00:00+08:00, date 23:59:59.999+08:00]`
+    // ⇒ 与「当天入库的所有稿」对齐（Word 稿的 `published_at` 就是当天）。
+    //
+    // ⚠️ 时区**硬编码 +08:00**：本项目的日期口径本来就是北京时间
+    //   （`beijingDate()` / `fromBeijing()` / 时刻表全按京时），所以这里一致。
+    // ⚠️ 不传 `date` ⇒ **行为完全不变**（旧的定时/补跑口径一点没动）。
+    const startDate = dateParam
+      ? new Date(`${dateParam}T00:00:00+08:00`).toISOString()
+      : scheduled
+        ? scheduled.start.toISOString()
+        : new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
+    const endDate = dateParam
+      ? new Date(`${dateParam}T23:59:59.999+08:00`).toISOString()
+      : scheduled
+        ? scheduled.end.toISOString()
+        : now.toISOString();
+    /** 这次窗口是「按时刻表固定」「按 hours 浮动」还是「按指定日期」—— 响应里要报，否则无法核实 */
+    const windowSource: 'schedule' | 'hours' | 'date' = dateParam ? 'date' : scheduled ? 'schedule' : 'hours';
+    const windowHours = dateParam
+      ? 24
+      : scheduled
+        ? scheduled.hours
+        : Math.round((now.getTime() - new Date(startDate).getTime()) / 3_600_000);
+    if (dateParam) {
+      console.log(`[push] ★ 按指定日期取稿：${dateParam}（京时 00:00 → 23:59:59）`);
+    }
 
     // ⚠️ 2026-10-30：**传了 `period` 但时刻表里没有 ⇒ 静默退化成浮动窗口**。
     // ⇒ ⇒ 退化的后果是「窗口整体平移」（与定时那一轮重叠/漏段）⇒ ⇒ 必须**当场报警**，
@@ -1334,7 +1384,13 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
 
     console.log(
       `微信公众号推送：${today}${suffix ? ' ' + suffix : ''}，汇总 ${startDate} 至 ${endDate}` +
-        `（${windowSource === 'schedule' ? `按时刻表固定窗口 ${windowHours}h` : `过去 ${hours} 小时`}），` +
+        `（${
+          windowSource === 'schedule'
+            ? `按时刻表固定窗口 ${windowHours}h`
+            : windowSource === 'date'
+              ? `按指定日期（${dateParam}，京时全天）`
+              : `过去 ${hours} 小时`
+        }），` +
         `每国精选（上限 ${maxPerCountry} 篇）`
     );
 
