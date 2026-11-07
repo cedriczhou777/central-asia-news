@@ -1,0 +1,84 @@
+openapi: 3.0.3
+info:
+  title: 中亚五国日报 Word 稿上传与校核
+  description: |
+    接收 ChatGPT 产出的五国日报 Word 稿（.docx），解析成结构化稿件并做确定性校核，
+    返回「修正清单」——该清单可直接回喂给 ChatGPT 让它逐条修改。
+
+    ⚠️ 本接口**只校核、不改稿**（稿子由人过目）。
+    ⚠️ 校核依赖原文：若每条带了「原文关键句」，量级闸与机构名对照才生效。
+  version: 1.0.0
+servers:
+  - url: https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com
+    description: 微信云托管（生产）
+security:
+  - ingestSecret: []
+paths:
+  /api/word-ingest:
+    post:
+      operationId: ingestWordDaily
+      summary: 上传五国日报 Word 稿并做校核
+      description: |
+        上传 .docx ⇒ 返回解析预览、校核报告、以及可直接回喂的修正清单（Markdown）。
+        默认**不落库**；确认无误后再带 persist=1 落库。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fileBase64:
+                  type: string
+                  description: .docx 文件的 base64（不含 data: 前缀）
+                date:
+                  type: string
+                  description: 稿件日期 YYYY-MM-DD（可选，默认今天）
+                persist:
+                  type: string
+                  description: 传 "1" 才落库；默认只校核
+              required: [fileBase64]
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: .docx 文件
+                date:
+                  type: string
+                persist:
+                  type: string
+      responses:
+        '200':
+          description: 解析与校核结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  parsed:
+                    type: object
+                    properties:
+                      articles: { type: integer }
+                      warnings: { type: array, items: { type: string } }
+                  audit:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      findings: { type: array, items: { type: object } }
+                  fixList:
+                    type: string
+                    description: Markdown 修正清单，可直接贴回 ChatGPT
+                  persisted: { type: object, nullable: true }
+        '400': { description: 请求格式错误 }
+        '401': { description: 缺少或错误的 INGEST_SECRET }
+        '422': { description: 一个稿件都没解析出来（格式不对） }
+components:
+  securitySchemes:
+    ingestSecret:
+      type: apiKey
+      in: header
+      name: X-Ingest-Secret

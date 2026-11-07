@@ -1503,6 +1503,8 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
       // 拆成两步后，去重看的是「本国全部合格候选」，截取上限放在最后。
       // 逐条判据的剔除量在这里记账，最后进 `summary.skipped`（见 `PushSkip`）。
       const excludedByReason: Record<string, number> = {};
+      // ★ 2026-11-07：Word 输入稿**豁免**「无原文正文」闸的条数（可查）
+      let wordInputCount = 0;
       const eligible = scoredArticles.filter((article) => {
         // 第 0 条：**库里没有原文正文的一律不推**（2026-10-02 新增）。
         //
@@ -1518,10 +1520,24 @@ async function processPush(hours: number, period: unknown, onlyCountries: string
         // `original_content` 恒为 `undefined`，于是**把全部稿子判掉**，
         // 而且是静默的。改动进采集侧（`fetch-news` 的补抓）之后这种行只会越来越少，
         // 这条闸的作用是**兜住上线前已经入库的存量**，让今晚那一轮就干净。
-        if (!hasSourceBody(article.original_content)) {
+        // ★★ 2026-11-07：**Word 输入稿豁免这个闸**。
+        //
+        // 这个闸的 purpose 是「防模型照着标题编正文」（RSS 没给正文时它救过命），
+        // 而 Word 稿的正文是 **ChatGPT 基于原文写的、而且人已经审过** ⇒ ⇒ 闸不适用。
+        // ⇒ 而 Word 稿的「原文」只有 1–3 句关键句 ⇒ 长度必然不够 ⇒ 不豁免会被**全跳掉**。
+        //
+        // ⭐ 豁免范围**只限 `tags` 含 'word' 的稿子**（= Word 上传进来的）⇒ 其余一律照旧。
+        const isWordInput = Array.isArray(article.tags) && article.tags.includes('word');
+        if (!isWordInput && !hasSourceBody(article.original_content)) {
           excludedByReason.no_source_body = (excludedByReason.no_source_body || 0) + 1;
           console.warn(`[${country.name}] 无原文正文，不推：${article.title}`);
           return false;
+        }
+        if (isWordInput) {
+          // 留痕：Word 稿豁免了这个闸 ⇒ 要能查（不然「为什么它没被跳」没人知道）
+          // ⚠️ **不写进 `excludedByReason`** —— 那个字典是「被排除的原因」计数
+          //    ⇒ 把「豁免」塞进去会污染「跳过了多少」的语义。
+          wordInputCount++;
         }
         // 其余判据本体在 `@/lib/article-format` 的 `pushExclusionReason` ——
         // **不要在这里内联重写**。原因见那个函数的注释：诊断接口一度因为
