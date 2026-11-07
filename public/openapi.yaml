@@ -2,11 +2,18 @@ openapi: 3.0.3
 info:
   title: 中亚五国日报 Word 稿上传与校核
   description: |
+    ★★ **主通道是 `/api/word-package`**（结构化稿包，含配图 + 版本号）；
+    这个 `/api/word-ingest` 是**次要**通道（单个 .docx，分国分次时用）。
+
     接收 ChatGPT 产出的五国日报 Word 稿（.docx），解析成结构化稿件并做确定性校核，
     返回「修正清单」——该清单可直接回喂给 ChatGPT 让它逐条修改。
 
     ⚠️ 本接口**只校核、不改稿**（稿子由人过目）。
     ⚠️ 校核依赖原文：若每条带了「原文关键句」，量级闸与机构名对照才生效。
+
+    ★★ **动手前请先读 `HANDOVER-TO-CHATGPT.md`**（10 节：落库字段约束、配图规矩、
+    部署纪律、别动哪些文件、一处已知缺口）⇒ ⚠️ 落库时 `tags` **必须含 'word'**，
+    否则推送侧「无原文正文」闸会把整批稿子跳掉。
   version: 1.0.0
 servers:
   - url: https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com
