@@ -4,6 +4,10 @@
  * ⚠️ 这个接口**会写生产库** ⇒ ⇒ 这里的测试**不碰数据库**：
  * 只测「契约校验」与「幂等语义」这两层。
  */
+
+// ★ 2026-11-07：显式标成**模块** —— 否则门禁会判它是「全局作用域脚本」
+//    （scripts/ 与 src/ 下每个 .ts/.tsx 都必须是模块，见 scripts/test-module-scope.ts）
+export {};
 let failed = 0;
 function ok(name: string, cond: boolean, extra = ''): void {
   if (cond) console.log('  ✓ ' + name);
