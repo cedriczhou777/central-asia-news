@@ -112,3 +112,54 @@ X-Ingest-Secret: <INGEST_SECRET>        ← 配了环境变量就必带
 4. **推送侧接线**（还没做）：`db-articles.ts` 的 `getArticles({country_code, date})` 已经能用
    ⇒ 改动量 = 一个来源分支 + 跳过判组/总审两段
 5. **稳了之后**再考虑剪枝（删抓取/翻译/定时那些用不上的）
+
+
+---
+
+## 附：与 ChatGPT 那边商定的分工与接口契约（2026-11-07 12:37 对齐）
+
+### 分工（双方一致）
+| 谁 | 做什么 |
+|---|---|
+| **ChatGPT** | 取源、筛选、去重、**事实核实的正文**、**独立审稿 + 复核后的终版**、**逐条核验过的真实配图**（附图注与来源）、国别标题/摘要/封面/完整排版/来源链接 ⇒ 产出「待你终检发布」的成品包 |
+| **云托管（这里）** | **接收 + 投递**：存稿、存图、写入公众号草稿箱 ⇒ **不再调模型改写或审核**；最终发布仍由你决定 |
+
+### ⭐ 两处我方与 ChatGPT 的差异及理由
+
+1. **交付形态：结构化稿包（不是 Word）** —— 因为**图片塞不进 Word** ⇒ Word 稿收不到配图
+   ⇒ 草稿会没有图。⇒ 所以正文 HTML 里**直接带 `<img src="https://…">`**，
+   ⇒ **旧推送链路零改动**就会把它上传到微信素材库并换成 CDN 地址（`extractFirstImage` 那套现成）。
+2. **云托管这层保留「确定性校核」，但不调模型、不改稿、只出报告** ——
+   零成本、零延迟，能跨天跨实例核对（这是链路上唯一能做这件事的地方）⇒ 定位是**第二道保险**。
+
+### 接口（**直接用已实现的，不要另写一份**）
+
+仓库地址（**去密钥的**—— 仓库里本来就没有 `.env.local`）：
+```
+git@github.com:cedriczhou777/central-asia-news.git
+```
+⭐ 分支：**`main`**（= 线上那个服务在跑的分支）⇒ 部署 = push 到 main。
+
+| 接口 | 用途 | 形态 |
+|---|---|---|
+| `POST /api/word-package` | ★ **五国成品稿包**（正文含图 + 版本号） | JSON |
+| `POST /api/word-ingest` | 单个 .docx 上传（分国分次时用） | multipart **或** JSON+base64 |
+| `GET /openapi.yaml` | **GPT Action 的 OpenAPI 描述**（直接贴进 ChatGPT 的 Action 配置） | — |
+
+鉴权：请求头 `X-Ingest-Secret: <INGEST_SECRET>`（云托管环境变量；没配就不校验）。
+
+#### `word-package` 的请求体
+```json
+{
+  "version": "2026-11-07",
+  "countries": {
+    "kz": { "title": "…", "summary": "…",
+            "bodyHtml": "<p>正文…</p><p><img src=\"https://…/a.jpg\" />图注：…</p>",
+            "sourceName": "Tengrinews", "sourceUrl": "https://…", "coverUrl": "https://…" },
+    "uz": { … }, "kg": { … }, "tj": { … }, "az": { … }
+  }
+}
+```
+- ★ **五国必须齐** ⇒ 缺任一国返回 **409**，不落库（半套稿子不进生产）
+- ★ **幂等**：同 `version` + 同国 + 同标题 ⇒ 不重复插入（`tags` 里记 `word` 与 `v:<version>`）
+- ★ **配图只走 `bodyHtml` 的 `<img src>`** ⇒ 旧链路自动上传到微信素材库

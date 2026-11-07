@@ -76,6 +76,56 @@ paths:
         '400': { description: 请求格式错误 }
         '401': { description: 缺少或错误的 INGEST_SECRET }
         '422': { description: 一个稿件都没解析出来（格式不对） }
+  /api/word-package:
+    post:
+      operationId: ingestWordPackage
+      summary: 提交五国完整稿包（正文含配图 + 版本号）
+      description: |
+        ChatGPT 侧「采集 + 写作 + 审稿 + 配图 + 排版」完成后的**成品包**入口。
+        ★ **五国必须齐**（缺任一国 ⇒ 409，不提交）⇒ 避免半套稿子进生产。
+        ★ 配图请**直接写进 bodyHtml 的 `<img src="https://…">`** ⇒ 旧推送链路会照旧
+        把图上传到微信素材库并换成 CDN 地址（零改动）。
+        ★ 幂等：同版本 + 同国 + 同标题 ⇒ 不重复插入。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: string
+                  description: 版本号（幂等键），如 2026-11-07
+                countries:
+                  type: object
+                  description: 五国稿件，键为 kz/uz/kg/tj/az
+                  additionalProperties:
+                    type: object
+                    properties:
+                      title: { type: string }
+                      summary: { type: string }
+                      bodyHtml:
+                        type: string
+                        description: 正文 HTML（**含 <img src>** ⇒ 配图走这里）
+                      sourceName: { type: string }
+                      sourceUrl: { type: string }
+                      coverUrl: { type: string }
+              required: [version, countries]
+      responses:
+        '200':
+          description: 已提交
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string }
+                  inserted: { type: integer }
+                  skipped: { type: integer }
+                  byCountry: { type: object }
+        '401': { description: 缺少或错误的 INGEST_SECRET }
+        '409': { description: 五国未齐 ⇒ 按约定不提交 }
 components:
   securitySchemes:
     ingestSecret:
