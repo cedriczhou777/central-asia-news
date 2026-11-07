@@ -61,6 +61,16 @@ console.log('=== 幂等语义（ChatGPT 2026-11-07 指出的缺口）===');
 
   const p2 = plan('v', ['kz', 'uz', 'kg', 'tj', 'az']);
   ok('★ 五国齐 ⇒ 整批跳过（duplicate=true）', p2.duplicate && p2.todo.length === 0);
+
+  // ★★ ChatGPT 2026-11-07 指出的残留边界：同国同标题但**跨版本**的稿子
+  // ⇒ 原来只按「同国+同标题」查 ⇒ 会把**新版本**的同标题稿误判成重复 ⇒ **真丢稿**
+  // ⇒ 现在查重加了版本约束 ⇒ 只有「同版本+同国+同标题」才跳
+  const dupHit = (row: { country: string; titleKey: string; version: string }, v: string, k: string) =>
+    row.country === 'kz' && row.titleKey === k && row.version === v;
+  ok('★★ 同版本同国同标题 ⇒ 跳过（防重复提交）',
+    dupHit({ country: 'kz', titleKey: 't1', version: 'v1' }, 'v1', 't1'));
+  ok('★★ 跨版本同国同标题 ⇒ **不跳**（新稿能进来，不会丢稿）',
+    !dupHit({ country: 'kz', titleKey: 't1', version: 'v1' }, 'v2', 't1'));
 }
 
 console.log('=== 部分失败必须让调用方看见 ===');

@@ -152,12 +152,19 @@ export async function POST(req: Request): Promise<Response> {
     }
     const key = titleKey(title);
 
-    // ---- 幂等：同版本 + 同国 + 同标题 ⇒ 跳过 ----
+    // ---- 幂等：**同版本 + 同国 + 同标题** ⇒ 跳过 ----
+    //
+    // ⚠️⚠️ 2026-11-07：ChatGPT 指出的残留边界 —— 原来这里只按「同国 + 同标题」查
+    // ⇒ ⇒ **跨版本也会跳** ⇒ 同国两篇**内容不同、标题恰好相同**的新稿会被误判成重复
+    // ⇒ ⇒ **真丢稿**。
+    // ⇒ 现在加上版本约束：只有**同一个版本**里的同国同标题才跳
+    // ⇒ ⇒ 跨版本的同标题稿能正常进来。
     const { data: dup } = await sb
       .from('articles')
       .select('id')
       .eq('country_code', code)
       .eq('original_title', key)
+      .contains('tags', [versionTag])
       .limit(1);
     if (dup && dup.length > 0) {
       skipped++;
