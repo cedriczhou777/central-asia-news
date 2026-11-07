@@ -601,6 +601,8 @@ function toReviewItem(a: {
   original_title?: string | null;
   original_content?: string | null;
   original_language?: string | null;
+  /** ★ 2026-11-07：Word 输入稿的标记（在 `tags` 里）⇒ 用来跳过总审 */
+  tags?: string[] | null;
 }): ReviewItem {
   const content = sanitizeArticleContent(a.content || '');
   // v4：原文也要过一遍标签清洗 —— RSS 的 `content:encoded` 里常带 `<img>` 和
@@ -620,6 +622,8 @@ function toReviewItem(a: {
     originalTitle: a.original_title || '',
     originalExcerpt: original,
     ...(a.original_language ? { originalLang: String(a.original_language) } : {}),
+    // ★ 2026-11-07：Word 输入稿的标记 ⇒ 推送侧据此**跳过总审**（不改稿）
+    ...(Array.isArray(a.tags) && a.tags.includes('word') ? { fromWord: true } : {}),
   };
 }
 

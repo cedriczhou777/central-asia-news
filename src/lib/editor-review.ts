@@ -564,6 +564,14 @@ export interface ReviewItem {
   originalExcerpt?: string;
   /** 原文语言代码（ru / ky / kk / az / en / tg…），给模型判断该按哪种语言读 */
   originalLang?: string;
+  /**
+   * ★ 2026-11-07：**这条稿是「Word 输入稿」**（ChatGPT 写的、已独立审过）。
+   *
+   * ⇒ 推送侧据此**跳过总审**：用户明确要求「ChatGPT 过来的稿件不要做任何修改」，
+   * ⇒ 而总审的第七件事是「与原文核对」⇒ Word 稿的原文只有 1–3 句关键句
+   * ⇒ ⇒ 总审会**结构性失明**⇒ ⇒ 可能把稿子改坏。
+   */
+  fromWord?: boolean;
 }
 
 /** 模型**提议**的处置。所有字段都可能越界，必须逐条过闸（见 `applyVerdict`）。 */
