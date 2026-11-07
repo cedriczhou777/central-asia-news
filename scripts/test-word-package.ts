@@ -2,7 +2,7 @@
  * 「五国稿包」接口的离线回归（2026-11-07）。
  *
  * ⚠️ 这个接口**会写生产库** ⇒ ⇒ 这里的测试**不碰数据库**：
- * 只测「契约校验」那一层（五国齐不齐、版本号、鉴权头的形状）。
+ * 只测「契约校验」与「幂等语义」这两层。
  */
 let failed = 0;
 function ok(name: string, cond: boolean, extra = ''): void {
@@ -12,7 +12,7 @@ function ok(name: string, cond: boolean, extra = ''): void {
 
 const COUNTRIES = ['kz', 'uz', 'kg', 'tj', 'az'];
 
-/** 与 route.ts 同款的校验（保持一致 ⇒ 改了要同步） */
+/** 与 route.ts 同款（改了要同步） */
 function validate(body: { version?: string; countries?: Record<string, { title?: string; bodyHtml?: string }> }) {
   const version = (body.version || '').trim();
   if (!version) return { ok: false, error: '缺少 version（版本号 = 幂等键）' };
@@ -24,11 +24,17 @@ function validate(body: { version?: string; countries?: Record<string, { title?:
   return { ok: true, version };
 }
 
+/** 幂等语义：同版本已入库哪些国家 ⇒ 该补哪些 */
+function plan(version: string, done: string[]) {
+  const doneSet = new Set(done);
+  if (doneSet.size >= COUNTRIES.length) return { duplicate: true, todo: [] as string[] };
+  return { duplicate: false, todo: COUNTRIES.filter((c) => !doneSet.has(c)) };
+}
+
 console.log('=== 稿包契约校验 ===');
 {
   const full: Record<string, { title: string; bodyHtml: string }> = {};
   for (const c of COUNTRIES) full[c] = { title: `${c} 标题`, bodyHtml: '<p>正文</p>' };
-
   ok('五国齐 + 有版本号 ⇒ 通过', validate({ version: '2026-11-07', countries: full }).ok);
 
   const miss = { ...full }; delete (miss as Record<string, unknown>).tj;
@@ -43,12 +49,35 @@ console.log('=== 稿包契约校验 ===');
   ok('★ 有国家没标题 ⇒ 拒绝', !validate({ version: 'v', countries: noTitle }).ok);
 }
 
-console.log('=== 幂等键的形状（tags）===');
+console.log('=== 幂等语义（ChatGPT 2026-11-07 指出的缺口）===');
 {
-  const version = '2026-11-07';
-  const tags = ['word', `v:${version}`];
-  ok('★ tags 同时带输入源标记与版本号', tags.includes('word') && tags.includes(`v:${version}`), JSON.stringify(tags));
-  ok('★ 不同版本 ⇒ 不同 tags ⇒ 不会被当成同一批', ['word', 'v:2026-11-07'].join() !== ['word', 'v:2026-11-08'].join());
+  const p0 = plan('v', []);
+  ok('★ 新版本 ⇒ 五国都要写', p0.todo.length === 5, JSON.stringify(p0.todo));
+
+  const p1 = plan('v', ['kz', 'uz', 'kg']);
+  ok('★ 部分已入库 ⇒ **只补缺的国家**（不整批跳过）',
+    !p1.duplicate && p1.todo.length === 2 && p1.todo.includes('tj') && p1.todo.includes('az'),
+    JSON.stringify(p1));
+
+  const p2 = plan('v', ['kz', 'uz', 'kg', 'tj', 'az']);
+  ok('★ 五国齐 ⇒ 整批跳过（duplicate=true）', p2.duplicate && p2.todo.length === 0);
+}
+
+console.log('=== 部分失败必须让调用方看见 ===');
+{
+  // route.ts 的语义：failed 非空 ⇒ ok:false + 500（模拟）
+  const resp = (failed: Array<{ country: string; error: string }>) =>
+    failed.length === 0
+      ? { ok: true, status: 200 }
+      : { ok: false, status: 500, failed };
+
+  const none = resp([]);
+  ok('★ 全部成功 ⇒ ok:true / 200', none.ok === true && none.status === 200);
+
+  const some = resp([{ country: 'uz', error: 'boom' }]);
+  ok('★ ★ 有国家失败 ⇒ **ok 必须为 false**（不能报成功）',
+    some.ok === false && some.status === 500, JSON.stringify(some));
+  ok('★ 失败清单里带国别与原因', some.failed?.[0]?.country === 'uz' && some.failed?.[0]?.error === 'boom');
 }
 
 console.log('=== 配图契约 ===');

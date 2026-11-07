@@ -102,8 +102,47 @@ export async function POST(req: Request): Promise<Response> {
   let inserted = 0;
   let skipped = 0;
   const byCountry: Record<string, number> = {};
+  const failed: Array<{ country: string; error: string }> = [];
+
+  // ★★ 2026-11-07：**版本号幂等（整批级）** —— ChatGPT 指出的缺口，已补。
+  //
+  // 原来只按「同国 + 同标题」判重 ⇒ 「改过标题的同一批」会被当成新稿插进去
+  // ⇒ 同一版本出现两批稿。
+  // ⇒ 现在先问一次「这个版本已经在库里了吗」⇒ 有 ⇒ **整批跳过**（返回 duplicate=true）。
+  const versionTag = `v:${version}`;
+  const { data: already } = await sb
+    .from('articles')
+    .select('id, country_code')
+    .contains('tags', [versionTag]);
+  const doneCountries = new Set((already || []).map((r) => r.country_code as string));
+
+  // ⚠️⚠️ **不能「整批跳过」** —— 那样「部分失败后重发」时**缺的国家也会被跳过 ⇒ 永远补不上**。
+  // ⇒ 正确语义：
+  //   · **五国都齐了** ⇒ 整批跳过（真幂等，返回 duplicate=true）
+  //   · **只到了一部分** ⇒ **只补缺的国家**（已入库的按「同国+同标题」再挡一次）
+  if (doneCountries.size >= COUNTRIES.length) {
+    return NextResponse.json({
+      ok: true,
+      version,
+      duplicate: true,
+      inserted: 0,
+      skipped: COUNTRIES.length,
+      byCountry: {},
+      note: `版本 ${version} 的五国都已入库（tags 含 ${versionTag}）⇒ 整批跳过（幂等）`,
+    });
+  }
+  if (doneCountries.size > 0) {
+    console.warn(
+      `[word-package] 版本 ${version} 已有 ${[...doneCountries].join('、')} 入库 ⇒ 只补其余国家`,
+    );
+  }
 
   for (const code of COUNTRIES) {
+    // ★ 这一国在同版本里已经入库 ⇒ 跳过（补批时的幂等）
+    if (doneCountries.has(code)) {
+      skipped++;
+      continue;
+    }
     const d = countries[code];
     const title = (d.title || '').trim();
     const bodyHtml = (d.bodyHtml || '').trim();
@@ -144,6 +183,10 @@ export async function POST(req: Request): Promise<Response> {
     });
     if (error) {
       skipped++;
+      // ⚠️⚠️ 2026-11-07：**失败必须让调用方看见**（ChatGPT 指出的第二个问题）。
+      // 原来这里只 `skipped++` ⇒ 最后照样返回 `ok: true` ⇒ 调用方会以为五国都收到了
+      // ⇒ 而实际只收到部分稿件 ⇒ ⇒ **部分失败时 `ok` 必须是 false**。
+      failed.push({ country: code, error: error.message });
       console.warn(`[word-package] ${code} 落库失败：${error.message}`);
     } else {
       inserted++;
@@ -151,9 +194,27 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
+  // ⚠️ **部分失败 ⇒ 明确报错**（宁可让调用方重试，也不要「看起来成功」）
+  if (failed.length > 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `有 ${failed.length} 个国家落库失败 ⇒ **本批不完整**（已入库 ${inserted} 篇）⇒ 请修好后重发`,
+        version,
+        inserted,
+        skipped,
+        byCountry,
+        failed,
+        hint: '重发同一 version 是安全的：已入库的国家会按「同国+同标题」跳过',
+      },
+      { status: 500 },
+    );
+  }
+
   return NextResponse.json({
     ok: true,
     version,
+    duplicate: false,
     inserted,
     skipped,
     byCountry,
