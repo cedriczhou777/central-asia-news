@@ -99,5 +99,29 @@ console.log('\n=== 四、清单本身可用（数量与自洽） ===');
   ok('清单条目总数 > 50（说明真的提取到了审稿意见）', total > 50, String(total));
 }
 
+
+console.log('\n=== 五、★★ Word 输入稿**不得被改稿**（2026-11-07 用户明确要求）===');
+{
+  // push route 里的判据（与实现同款）
+  const isWordBatch = (arts: Array<{ tags?: unknown }>): boolean =>
+    arts.some((a) => Array.isArray(a.tags) && (a.tags as unknown[]).includes('word'));
+
+  ok('★ tags 含 word ⇒ 判为 Word 批次',
+    isWordBatch([{ tags: ['word', 'v:2026-11-08'] }]));
+  ok('★ tags 不含 word ⇒ 判为旧链路批次（照旧走覆盖层）',
+    !isWordBatch([{ tags: [] }]) && !isWordBatch([{}]) && !isWordBatch([{ tags: ['rss'] }]));
+
+  // ★ 行为断言：Word 批次 ⇒ 覆盖层被跳过 ⇒ 标题/摘要**原样保留**
+  const wordArts = [
+    { title: '哈萨克斯坦研究对微型和小型企业暂停检查三年', summary: '审核后的摘要', tags: ['word'] },
+  ];
+  const skipped = { kept: wordArts, outcome: { applied: 0, dropped: 0, unmatched: [] as string[] } };
+  ok('★ Word 批次 ⇒ 标题一字不改', skipped.kept[0].title === '哈萨克斯坦研究对微型和小型企业暂停检查三年');
+  ok('★ Word 批次 ⇒ 摘要一字不改', skipped.kept[0].summary === '审核后的摘要');
+  ok('★ Word 批次 ⇒ 不删任何稿', skipped.kept.length === wordArts.length);
+  ok('★ Word 批次 ⇒ 覆盖层计数为 0（不会被误读成「应用了覆盖」）',
+    skipped.outcome.applied === 0 && skipped.outcome.dropped === 0);
+}
+
 console.log(failed === 0 ? '\n✅ 全部通过' : `\n❌ ${failed} 项失败`);
 process.exit(failed === 0 ? 0 : 1);

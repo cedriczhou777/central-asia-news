@@ -1722,7 +1722,28 @@ async function processPush(
       // ⚠️ 放在**选稿之后、总审之后**（这里已经是总审改写后的标题 ⇒ 与审稿人看到的
       // 草稿标题一致 ⇒ 对得上），且在**成品清洗之前** ⇒ 被替换的标题也会再过一次清洗。
       // ⚠️ **不动数据库** ⇒ 可随时改清单再重推、可回滚、原始稿件不丢。
-      const overrideResult = applyEditorialOverrides(country.code, selectedArticles);
+      // ★★ 2026-11-07：**Word 输入稿不走编辑覆盖层**。
+      //
+      // 用户的明确要求（2026-11-07 22:10）：
+      // 「ChatGPT 过来的稿件你**不要做任何的修改**，最多定期给我一些意见，我自己会去和 ChatGPT 沟通。」
+      //
+      // 而编辑覆盖层**恰恰是「按审稿意见改稿」的机制**（覆盖标题/摘要 + 删稿）
+      // ⇒ ⇒ 对 Word 稿必须**关掉** ⇒ ⇒ 否则它会把「审稿清单」应用到 ChatGPT 已经改好的稿上
+      // ⇒ ⇒ **等于我又改了一遍**（而且用的是上一轮的旧意见）。
+      //
+      // ⚠️ 判据用 `tags` 含 'word'（= Word 上传进来的）⇒ 旧链路（RSS 稿）**完全不受影响**。
+      const isWordBatch = selectedArticles.some(
+        (a) => Array.isArray((a as { tags?: unknown }).tags) &&
+          ((a as { tags?: unknown }).tags as unknown[]).includes('word'),
+      );
+      const overrideResult = isWordBatch
+        ? { kept: selectedArticles, outcome: { applied: 0, dropped: 0, unmatched: [] as string[] } }
+        : applyEditorialOverrides(country.code, selectedArticles);
+      if (isWordBatch) {
+        console.log(
+          `[${country.name}] ★ Word 输入稿 ⇒ **跳过编辑覆盖层**（不改稿：用户明确要求）`,
+        );
+      }
       selectedArticles = overrideResult.kept;
       editorialApplied += overrideResult.outcome.applied;
       editorialDropped += overrideResult.outcome.dropped;
