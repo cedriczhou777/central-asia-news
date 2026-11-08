@@ -218,11 +218,17 @@ section('★★ push：判组前必须有候选上限（2026-10-28 事故的根�
       const v = Number(m[1]);
       return v > 0 && v <= 200;
     })());
+  // ⚠️ 2026-11-08：调用形态可以是 `dedupeStories(judgeCandidates)` **或**
+  //    `dedupeStories(judgeCandidates, { useLlm: false })`（Word 稿关 L2 判组）
+  //    ⇒ 断言不能只认「`judgeCandidates` 后面紧跟 `)`」这一种字面量（会因多一个参数而误红）
+  //    ⇒ 但**判据不许放松**：入参仍必须是 `judgeCandidates`（截断后的量），
+  //      且截断点仍必须排在 dedupeStories 调用之前。
+  const dedupeCallIdx = pu.search(/dedupeStories\(\s*judgeCandidates\b/);
   ok('★ ★ 截断真的在**判组之前**（dedupeStories 的入参是截断后的量）',
     /judgeCandidates/.test(pu) &&
-      /dedupeStories\(judgeCandidates\)/.test(pu) &&
+      dedupeCallIdx >= 0 &&
       // 截断必须在 dedupeStories 之前出现
-      pu.indexOf('PUSH_JUDGE_CANDIDATE_CAP') < pu.indexOf('dedupeStories(judgeCandidates)'),
+      pu.indexOf('PUSH_JUDGE_CANDIDATE_CAP') < dedupeCallIdx,
     '截断点必须排在 dedupeStories 调用之前');
   ok('★ 截断量被报进 summary（不许静默截断）',
     /candidatesDroppedByLimit\.push\(/.test(pu) && /stage:\s*'before_judge'/.test(pu));
