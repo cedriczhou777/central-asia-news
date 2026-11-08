@@ -8,6 +8,8 @@
 // ★ 2026-11-07：显式标成**模块** —— 否则门禁会判它是「全局作用域脚本」
 //    （scripts/ 与 src/ 下每个 .ts/.tsx 都必须是模块，见 scripts/test-module-scope.ts）
 export {};
+
+import { dedupeStories } from '../src/lib/same-event';
 let failed = 0;
 function ok(name: string, cond: boolean, extra = ''): void {
   if (cond) console.log('  ✓ ' + name);
@@ -137,5 +139,31 @@ console.log('=== 推送侧「按指定日期取稿」（2026-11-07 新增）==='
   ok('★ date 参数同时支持 query（body 优先在 route 里处理）', w4.dateParam === '2026-11-08');
 }
 
-console.log(failed === 0 ? '\n✅ 全部通过' : `\n❌ ${failed} 项失败`);
-process.exit(failed === 0 ? 0 : 1);
+// ⚠️ 有一节是**异步**的（要等 dedupeStories）⇒ 退出码必须等它跑完再给
+// ⇒ 否则主流程先 exit、断言根本没执行 ⇒ 会显示「全部通过」而其实没跑。
+
+void (async () => {
+console.log('=== Word 稿关掉 L2 判组（确定性去重仍生效）===');
+const base = { title: '哈萨克斯坦农业贷款增至6457亿坚戈', summary: 's', category: 'economy', source_name: 'Tengrinews', source_url: 'https://a.example/1' };
+const items = [
+  { ...base, tags: ['word', 'v:2026-11-08'] },
+  { ...base, title: '哈萨克斯坦农业贷款增至6457亿坚戈（另一处来源）', tags: ['word', 'v:2026-11-08'] },
+];
+const res = await dedupeStories(items as never, { useLlm: false });
+ok('★ 关掉 L2 后，确定性去重**仍然生效**（同链接只留一条）',
+  res.kept.length === 1, `kept=${res.kept.length} drops=${res.drops.length}`);
+ok('★ 关掉 L2 后**模型判组没跑**（llm.ran === false）',
+  !res.llm || res.llm.ran === false, JSON.stringify(res.llm));
+const near = [
+  { ...base, source_url: 'https://a.example/1', title: '哈萨克斯坦农业贷款增至6457亿坚戈' },
+  { ...base, source_url: 'https://b.example/2', title: '哈萨克斯坦农业贷款增至6457亿坚戈，外币贷款翻倍' },
+];
+const res2 = await dedupeStories(near as never, { useLlm: false });
+ok('★ 近同名闸（确定性）也仍生效', res2.kept.length === 1, `kept=${res2.kept.length}`);
+})();
+
+const finish = () => {
+  console.log(failed === 0 ? '\n✅ 全部通过' : `\n❌ ${failed} 项失败`);
+  process.exit(failed === 0 ? 0 : 1);
+};
+void new Promise((r) => setTimeout(r, 200)).then(finish);

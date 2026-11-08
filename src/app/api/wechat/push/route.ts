@@ -1652,8 +1652,28 @@ async function processPush(
       // 判据与入库端**完全同源**（同一个 `dedupeStories`），不另起一套。
       // ⚠️ 传的是 `judgeCandidates`（已按投资相关性截断到 60 条）⇒
       //   ⇒ 但**L2 开关仍走默认值（开）**⇒ 口径与 AGENTS.md 记的一致。
+      // ★★ 2026-11-07：**Word 输入稿关掉 L2 模型判组**（用户要求：不改稿）。
+      //
+      // `dedupeStories(items, { useLlm })` 里的 `useLlm` 就是 L2 的开关
+      // ⇒ ⇒ 传 false ⇒ **模型判组不跑**，
+      // ⇒ 而**确定性去重照跑**（链接/原文指纹/近同名闸）⇒ ⇒ 同一条新闻仍会被合并。
+      //
+      // ⚠️ 为什么不用环境变量 `SAME_EVENT_JUDGE=0`：那是**全局**的 ⇒ 旧链路也一起关
+      // ⇒ ⇒ 而旧链路（RSS 稿）还需要 L2 ⇒ ⇒ 按**稿件来源**关更准。
+      const allWordCandidates =
+        judgeCandidates.length > 0 &&
+        judgeCandidates.every(
+          (a) =>
+            Array.isArray((a as { tags?: unknown }).tags) &&
+            ((a as { tags?: unknown }).tags as unknown[]).includes('word'),
+        );
+      if (allWordCandidates) {
+        console.log(
+          `[${country.name}] ★ Word 输入稿 ⇒ **跳过 L2 模型判组**（只留确定性去重；不改稿）`,
+        );
+      }
       const { kept: dedupedArticles, drops: eventDrops, llm: llmJudge } =
-        await dedupeStories(judgeCandidates);
+        await dedupeStories(judgeCandidates, allWordCandidates ? { useLlm: false } : {});
       for (const d of eventDrops) {
         console.log(`[${country.code}][${d.reason}] 跳过重复：${d.dropped.title} ← 保留：${d.kept.title}`);
         merges.push({
