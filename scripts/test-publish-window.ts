@@ -247,6 +247,36 @@ try {
   const src = readFileSync(resolve(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
   // ★ 时刻表本体在 `publish-schedule.ts`（`scheduler.ts` 只 import 它）⇒ 断言要读对文件
   const schedSrc = readFileSync(resolve(process.cwd(), 'src/lib/publish-schedule.ts'), 'utf8');
+  // ---- ★★ 2026-11-08：早退挡住 cron 注册（ChatGPT 2026-11-08 22:19 抓出来的）----
+  //
+  // 当时我为了「下线旧链路」在 `startScheduler()` 开头插了 `return;`，
+  // 之后**只插了新注释、没删掉那段早退** ⇒ ⇒ `PUBLISH_SCHEDULES.forEach` 变成死代码
+  // ⇒ ⇒ **线上根本没注册定时任务 ⇒ 08:00 永远不会推送**。
+  // ⇒ 这条断言就是钉住「注册代码必须在第一个 return 之前」。
+  {
+    const fnStart = src.indexOf('export function startScheduler() {');
+    // ⚠️ 不要用 '\n}\n' 截函数体（内部有嵌套的 } ⇒ 会提前截断 ⇒ 断言读不到注册代码）
+    const fnEnd = fnStart >= 0 ? src.indexOf('export function', fnStart + 12) : -1;
+    const fnBody = fnStart >= 0 ? src.slice(fnStart, fnEnd > 0 ? fnEnd : src.length) : '';
+    const regAt = fnBody.indexOf('PUBLISH_SCHEDULES.forEach');
+    const retAt = fnBody.indexOf('return;');
+    // ⚠️ 不要拿「第一个 return」当判据 —— 幂等锁里那个 return 是**合法的**。
+    // ⇒ 精确判据：**`schedulerStarted = true;` 与注册代码之间不得有 return**
+    //   （早退的形态正是「设了 started 就 return」⇒ 会被这条抓住）。
+    const startedAt = fnBody.indexOf('schedulerStarted = true;');
+    const between = startedAt >= 0 && regAt > startedAt ? fnBody.slice(startedAt, regAt) : '';
+    ok(
+      '★★ startScheduler 里 cron 注册**可达**（`schedulerStarted=true` 与它之间没有 return）',
+      fnStart >= 0 && regAt >= 0 && startedAt >= 0 && regAt > startedAt && !/return;/.test(between),
+      `started=${startedAt} 注册=${regAt} between=${JSON.stringify(between.slice(0, 80))}`,
+    );
+    ok(
+      '★★ startScheduler 里没有把整个函数早退掉',
+      !/export function startScheduler\(\)\s*\{[\s\S]{0,400}?schedulerStarted = true;[\s\S]{0,80}?return;/.test(src),
+      '有一个「设了 started 就 return」的早退 ⇒ cron 永远注册不上',
+    );
+  }
+
   // ---- ★★ 2026-11-08：旧「抓取 → 翻译」链路已下线 ⇒ 这组断言整体换掉 ----
   //
   // 原来四条钉的是「抓取未完成就不推」「抓取与推送串行」—— 那是**给抓取用的**护栏。
