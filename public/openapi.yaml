@@ -133,6 +133,12 @@ paths:
                   byCountry: { type: object }
         '401': { description: 缺少或错误的 INGEST_SECRET }
         '409': { description: 五国未齐 ⇒ 按约定不提交 }
+        '503':
+          description: |
+          **实例冷启动中**（云托管 `minNum=0` ⇒ 09:30 之后实例会缩到 0，
+          下一次请求要重新拉起容器 ⇒ 首次请求可能 503 或很慢）。
+          ⇒ ★ **这不是失败** ⇒ 等 10 分钟再重试一次即可。
+          ⇒ 定时扩缩容窗口 07:50–09:30 期间实例常驻 ⇒ 那段时间不会有 503。
 components:
   securitySchemes:
     ingestSecret:
