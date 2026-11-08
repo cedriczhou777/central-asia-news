@@ -429,21 +429,18 @@ async function runPublishCycle(hours: number, period: string) {
   });
   try {
     // 变量名刻意不叫 `fetch` —— 那会遮住全局的 fetch，将来在这个函数里加一次请求就会踩空。
-    const fetchOutcome = await runFetchNews();
-    if (!fetchOutcome.finished) {
-      console.error(
-        `[${new Date().toISOString()}] ⛔ 抓取未在 ${FETCH_HARD_WAIT_MS / 60_000} 分钟内完成` +
-        `（时段 ${period}）—— **本轮不推送**，避免推出一份缺国家的稿子。` +
-        `等抓取跑完后手工补：POST /api/wechat/push {"hours":24,"period":"manual"}`
-      );
-      return;
-    }
-    if (fetchOutcome.overtime) {
-      console.warn(
-        `[${new Date().toISOString()}] ⚠️ 抓取是加时才完成的（耗时 ${Math.round(fetchOutcome.waitedMs / 60_000)} 分钟，` +
-        `软上限 ${FETCH_SOFT_WAIT_MS / 60_000} 分钟）—— 本轮照常推送，但请留意单篇耗时是否在恶化。`
-      );
-    }
+    // ★★ 2026-11-08：**抓取这一步已下线**（旧链路）。
+    //
+    // ⇒ 稿子来源改为 `/api/word-package`（ChatGPT 每天 06:00 采编、约 07:00 交包）
+    // ⇒ ⇒ 云端定时任务只负责**到点推送**，不抓取、不翻译 ⇒ 也**不再烧 LLM 额度**。
+    //
+    // ⚠️ 原来这里还有一段「抓取没在硬上限内跑完 ⇒ 本轮不推送」的护栏（`fetchOutcome`）
+    //   ⇒ 它是**给抓取用的** ⇒ 抓取不存在了 ⇒ 护栏也一起去掉（否则会永远不推）。
+    // ⚠️ 「推哪一期」现在由**稿包版本**决定（见 `push/route.ts` 的「date 缺省 ⇒
+    //   自动取库里最新的五国齐全的稿包版本」）⇒ 不再依赖窗口钟点。
+    console.log(
+      `[${new Date().toISOString()}] ★ 已跳过抓取（旧链路下线）⇒ 只推送 ChatGPT 的稿包`,
+    );
     await runWechatPush(hours, period);
   } finally {
     stopKeepalive('轮次结束（正常返回或异常抛出，两者都在此收口）');
@@ -458,20 +455,12 @@ async function runPublishCycle(hours: number, period: string) {
 let schedulerStarted = false;
 
 export function startScheduler() {
-  // ★★ 2026-11-08：**旧「抓取 + 推送」定时任务已下线。**
+  // ★★ 2026-11-08：旧链路的**抓取**那一步已下线（但**推送**保留、且改到 09:30）。
   //
-  // 用户决定（2026-11-08 14:27）：「不再单独去抓取写稿审稿，把这个部分完全删掉，
-  // 完全用新的直接去拿 ChatGPT 的稿件直接发布」。
-  //
-  // ⇒ 04:00 那轮**不再触发抓取与翻译**（它正在批量产出错稿：量级错
-  // 「907 млрд」→「907亿」这类一天几十处）⇒ ⇒ 推送改由**外部调度器**触发
-  // （本地 automation：09:30 按稿包版本日期推送）。
-  //
-  // ⚠️ 这里**只早退、不删文件**：删 `node-cron` 依赖要改 `package.json`
-  //   （历史上在那里丢过 16 个 scripts）⇒ ⇒ 物理删除放到下一个提交、单独验证。
-  console.log('启动定时任务调度器...（★ 旧「抓取 + 推送」定时任务已下线：只发 ChatGPT 的稿）');
-  schedulerStarted = true;
-  return;
+  // 用户决定（2026-11-08 14:27）：不再自己抓取写稿审稿，只发 ChatGPT 独立审稿过的稿。
+  // ⇒ 稿子来源 = `/api/word-package`（ChatGPT 交稿包）⇒ ⇒ 云端这个定时任务
+  //   只负责**到点把当天的稿包推成公众号草稿**（不抓取、不翻译、不审稿）。
+  // ⇒ 为什么保留在云端而不是靠外部调度器：**云端常驻** ⇒ 不依赖任何人的电脑开着。
 
   // ★★ 2026-11-08：**旧「抓取 + 推送」定时任务已下线。**
   //

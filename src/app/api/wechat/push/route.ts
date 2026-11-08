@@ -885,8 +885,49 @@ export async function POST(request: NextRequest) {
   // 而 ChatGPT 早上交的稿落在这个窗口**之外** ⇒ ⇒ 必须能指定「推哪一天」。
   // ⚠️ 不传 `date` ⇒ 行为与从前完全一致（定时任务与人工补跑都不受影响）。
   const dateRaw = body.date ?? qp.get('date');
-  const dateParam =
+  let dateParam =
     typeof dateRaw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null;
+
+  // ★★ 2026-11-08：**`date` 缺省 ⇒ 自动取「库里最新的、五国齐全的稿包版本日期」**。
+  //
+  // ## 为什么需要
+  //
+  // 稿子由 ChatGPT 交（`/api/word-package`，`tags` 里带 `v:<日期>`），
+  // 而窗口是「时刻表推导」的固定钟点 ⇒ 两者对不上 ⇒ ⇒ 不给 `date` 就推不到。
+  //
+  // ⇒ 这里**按稿包版本**取，而不是按钟点 ⇒ 「推哪一期」由**稿子自己说**。
+  // ⇒ 若找不到「五国齐全」的版本 ⇒ 沿用默认窗口（并打 warn）⇒ 不会推空批次而不自知。
+  if (!dateParam) {
+    try {
+      const from = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+      const to = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+      const rows = await getArticlesByDateRange(from, to);
+      const byVersion = new Map<string, Set<string>>();
+      for (const r of rows) {
+        const tags = (r as { tags?: string[] | null }).tags;
+        if (!Array.isArray(tags)) continue;
+        const v = tags.find((t) => typeof t === 'string' && t.startsWith('v:'));
+        if (!v) continue;
+        const set = byVersion.get(v) ?? new Set<string>();
+        set.add(String(r.country_code));
+        byVersion.set(v, set);
+      }
+      const complete = [...byVersion.entries()]
+        .filter(([, cs]) => cs.size >= 5)
+        .sort((a, b) => b[0].localeCompare(a[0]))[0];
+      if (complete) {
+        dateParam = complete[0].slice(2);
+        console.log(`[push] ★ 未指定 date ⇒ 自动选用最新「五国齐全」的稿包版本：${dateParam}`);
+      } else {
+        console.warn(
+          `[push] ⚠️ 库里没有「五国齐全」的稿包版本（近 3 天）⇒ 沿用默认窗口` +
+            `（若 ChatGPT 还没交稿包，这轮可能推不出东西）`,
+        );
+      }
+    } catch (err) {
+      console.warn('[push] ⚠️ 查稿包版本失败，沿用默认窗口：', err);
+    }
+  }
   if (dateRaw !== undefined && dateRaw !== null && !dateParam) {
     console.warn(`[push] ⚠️ date="${String(dateRaw)}" 格式不对（要 YYYY-MM-DD）⇒ 已忽略，仍按原窗口取稿`);
   }

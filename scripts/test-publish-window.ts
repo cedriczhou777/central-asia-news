@@ -90,8 +90,8 @@ section('scheduledWindow · 准时跑时的窗口（与时刻表一致）');
 {
   // 2026-10-10 凌晨 04:00 北京时间触发
   const w = scheduledWindow(P, bj(2026, 10, 10, 4));
-  ok('日报窗口终点 = 今日 04:00（北京）', iso(w?.end) === '2026-10-09T20:00:00.000Z', iso(w?.end));
-  ok('日报窗口起点 = 昨日 04:00（北京）', iso(w?.start) === '2026-10-08T20:00:00.000Z', iso(w?.start));
+  ok('日报窗口终点 = 今日 08:00（北京）', iso(w?.end) === '2026-10-10T00:00:00.000Z', iso(w?.end));
+  ok('日报窗口起点 = 昨日 08:00（北京）', iso(w?.start) === '2026-10-09T00:00:00.000Z', iso(w?.start));
   ok('日报窗口 24 小时', w?.hours === 24, String(w?.hours));
   // 来源标记必须说「按时刻表固定」—— 它是响应/日志里区分两条代码路径的唯一字段。
   ok('窗口来源 = schedule（不是浮动的 hours 分支）', w?.source === 'schedule', String(w?.source));
@@ -193,7 +193,8 @@ section('时刻表自身的一致性（跨字段校验）');
   for (const c of scheduleHoursCrossCheck()) {
     ok(`${c.period} 声明的 hours 与按 cron 推导的一致`, c.ok, `声明 ${c.declared} vs 推导 ${c.derived}`);
   }
-  ok('钟点是凌晨 4 点', cronHour(PUBLISH_SCHEDULES[0].cron) === 4, PUBLISH_SCHEDULES[0].cron);
+  // ★ 2026-11-08：钟点从 04:00 改成 **08:00**（ChatGPT 06:00 采编、约 07:00 交包 ⇒ 留 1 小时缓冲）
+  ok('钟点是上午 8 点', cronHour(PUBLISH_SCHEDULES[0].cron) === 8, PUBLISH_SCHEDULES[0].cron);
   ok('hours 声明值是 24（一天一段）', PUBLISH_SCHEDULES[0].hours === 24, String(PUBLISH_SCHEDULES[0].hours));
   ok("period 是 'daily'（草稿标题后缀「日报」靠它）", PUBLISH_SCHEDULES[0].period === 'daily', PUBLISH_SCHEDULES[0].period);
 }
@@ -244,25 +245,25 @@ section('调度器等待预算（抓取没跑完就不该往下走）');
 // 这类断言比行为断言脆（改个变量名就会红），但红的时候看一眼就知道是不是真删了。
 try {
   const src = readFileSync(resolve(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+  // ★ 时刻表本体在 `publish-schedule.ts`（`scheduler.ts` 只 import 它）⇒ 断言要读对文件
+  const schedSrc = readFileSync(resolve(process.cwd(), 'src/lib/publish-schedule.ts'), 'utf8');
+  // ---- ★★ 2026-11-08：旧「抓取 → 翻译」链路已下线 ⇒ 这组断言整体换掉 ----
+  //
+  // 原来四条钉的是「抓取未完成就不推」「抓取与推送串行」—— 那是**给抓取用的**护栏。
+  // ⇒ 抓取下线后护栏不存在了 ⇒ 断言必须跟着换（否则红的是「过时」，不是「真回归」）。
   ok(
-    '★ 抓取未完成时 `runPublishCycle` **直接 return**（不许推一份缺国家的稿子）',
-    /if\s*\(\s*!fetchOutcome\.finished\s*\)\s*\{[\s\S]{0,700}?return;/.test(src),
-    '这条没了 = 2026-09-27「五国只推一国、failures 却是空的」会重演',
+    '★★ 抓取那一步**已下线**（源码里不再有 `await runFetchNews();`）',
+    !/^\s*await runFetchNews\(\);/m.test(src),   // 只认真实调用（注释里那行不算）
+    '抓取还在跑 ⇒ 每天白烧 LLM 额度（zhipu 限流一天几百次）',
   );
   ok(
-    '★ 早退走的是 `console.error`（不是 warn / log）',
-    /!fetchOutcome\.finished\s*\)\s*\{[\s\S]{0,700}?console\.error/.test(src),
-    '降成 warn 就会被淹没在推流的日志里',
+    '★★ 推送仍会执行（同一函数里直接调 runWechatPush）',
+    /await runWechatPush\(/.test(src),
   );
   ok(
-    '★ 早退的日志里带了「手工补推」的指引（否则这一轮新闻永久漏掉）',
-    /手工补[\s\S]{0,200}?period["']?\s*:\s*["']?manual/.test(src),
-    '没有补推指引 = 运维只知道失败了，不知道该做什么',
-  );
-  ok(
-    '★ 抓取与推送在同一个函数里**串行**（推送不得先于抓取跑）',
-    /const fetchOutcome = await runFetchNews\(\);[\s\S]{0,1400}?await runWechatPush\(/.test(src),
-    '先推/并行 = 读到上一轮的旧数据，把上一次推过的新闻再推一遍',
+    '★★ 定时时刻表是 **08:00**（ChatGPT 06:00 采编、约 07:00 交包 ⇒ 留 1 小时缓冲）',
+    /cron: '0 8 \* \* \*'/.test(schedSrc),
+    '时刻表没改成 08:00 ⇒ 推送会早于交稿',
   );
 } catch (err) {
   ok('能读到 scheduler.ts 做源码断言', false, err instanceof Error ? err.message : String(err));
