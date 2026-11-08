@@ -1,3 +1,4 @@
+import { reviewedPush, reviewedStatus } from '@/lib/reviewed-push-handler';
 import { NextRequest, NextResponse } from 'next/server';
 import { countryList } from '@/lib/data/countries';
 import { getArticlesByDateRange } from '@/lib/db-articles';
@@ -821,6 +822,11 @@ let pushRunState: PushRunState = {
 };
 
 export async function POST(request: NextRequest) {
+  return reviewedPush(request);
+}
+
+// Retained legacy implementation; no public route invokes it.
+async function legacyPOST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const qp = request.nextUrl.searchParams;
   // ⚠️⚠️ 2026-10-30 修：`period` / `hours` 原来**只认 body** ⇒ `POST ?period=daily` 被**静默忽略**
@@ -968,6 +974,10 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  return reviewedStatus(request);
+}
+
+async function legacyGET(request: NextRequest) {
   // ★ 2026-10-28：读一次落库的 push 状态（跨实例可查）⇒ 读不到就退回内存态。
   const persistedPushRun = await loadPersistedPushRun();
   /**
