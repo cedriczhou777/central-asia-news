@@ -458,6 +458,36 @@ async function runPublishCycle(hours: number, period: string) {
 let schedulerStarted = false;
 
 export function startScheduler() {
+  // ★★ 2026-11-08：**旧「抓取 + 推送」定时任务已下线。**
+  //
+  // 用户决定（2026-11-08 14:27）：「不再单独去抓取写稿审稿，把这个部分完全删掉，
+  // 完全用新的直接去拿 ChatGPT 的稿件直接发布」。
+  //
+  // ⇒ 04:00 那轮**不再触发抓取与翻译**（它正在批量产出错稿：量级错
+  // 「907 млрд」→「907亿」这类一天几十处）⇒ ⇒ 推送改由**外部调度器**触发
+  // （本地 automation：09:30 按稿包版本日期推送）。
+  //
+  // ⚠️ 这里**只早退、不删文件**：删 `node-cron` 依赖要改 `package.json`
+  //   （历史上在那里丢过 16 个 scripts）⇒ ⇒ 物理删除放到下一个提交、单独验证。
+  console.log('启动定时任务调度器...（★ 旧「抓取 + 推送」定时任务已下线：只发 ChatGPT 的稿）');
+  schedulerStarted = true;
+  return;
+
+  // ★★ 2026-11-08：**旧「抓取 + 推送」定时任务已下线。**
+  //
+  // 用户决定（2026-11-08 14:27）：「不再单独去抓取写稿审稿，把这个部分完全删掉，
+  // 完全用新的直接去拿 ChatGPT 的稿件直接发布」。
+  //
+  // ⇒ 04:00 那轮定时任务**不再触发抓取与翻译**（它正在批量产出错稿：量级错
+  // 「907 млрд」→「907亿」这类一天几十处）⇒ ⇒ 推送改为**外部调度器**触发
+  // （本地 automation：09:30 按稿包版本日期推送）。
+  //
+  // ⚠️ 这里**只早退、不删文件**：删掉 `node-cron` 依赖要改 `package.json`
+  //   （历史上在那里丢过 16 个 scripts）⇒ ⇒ 物理删除放到下一个提交、单独验证。
+  console.log('启动定时任务调度器...（★ 旧「抓取 + 推送」定时任务已下线：只发 ChatGPT 的稿）');
+  schedulerStarted = true;
+  return;
+  // eslint-disable-next-line no-unreachable
   if (schedulerStarted) {
     console.warn('定时任务调度器已注册过，跳过重复注册（防止重复推送）');
     return;

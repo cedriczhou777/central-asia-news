@@ -1489,6 +1489,27 @@ async function processPush(
         continue;
       }
       
+      // ★★ 2026-11-08：**只推 ChatGPT 的稿**（Word 输入链路）。
+      //
+      // 旧「抓取 RSS/Telegram → 模型翻译 → 判组 → 总审」那条链路**已下线**：
+      // 它正在批量产出错稿（2026-11-08 那轮日志里量级错刷屏：
+      // 「907 млрд」→「907亿」「660 млн」→「660亿」「1,63 млрд」→「1.63亿」…）
+      // ⇒ ⇒ 现在**只发 ChatGPT 独立审稿过的稿**（`tags` 含 'word'）。
+      //
+      // ⚠️ 逃生阀：`PUBLISH_ALL=1` ⇒ 临时放开（万一要回查旧链路的数据时用）。
+      const PUBLISH_ALL = (process.env.PUBLISH_ALL || '').trim().toLowerCase() === '1';
+      if (!PUBLISH_ALL) {
+        const before = articles.length;
+        articles = articles.filter(
+          (a) => Array.isArray((a as { tags?: unknown }).tags) &&
+            ((a as { tags?: unknown }).tags as unknown[]).includes('word'),
+        );
+        console.log(
+          `[${country.name}] ★ 只推 ChatGPT 稿（tags 含 'word'）：${before} → ${articles.length} 篇` +
+            (before !== articles.length ? `（挡掉 ${before - articles.length} 篇旧链路稿）` : ''),
+        );
+      }
+
       if (articles.length === 0) {
         console.log(`${country.name}过去${hours}小时无文章，跳过`);
         skipped.push({
