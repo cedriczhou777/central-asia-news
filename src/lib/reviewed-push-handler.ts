@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { beijingDate } from './utils';
-import { issueDate, latestVersion } from './reviewed-package';
+import { issueDate, latestVersion, PACKAGE_COUNTRIES } from './reviewed-package';
 import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { persistPushRun } from './push-run-store';
 
@@ -12,6 +12,13 @@ export async function reviewedPush(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ ok:false, error:'鉴权失败' }, { status:401 });
   try {
     const body = await request.json().catch(()=>({}));
+    const requestedCountries = body.countries;
+    if (requestedCountries !== undefined && (!Array.isArray(requestedCountries) || requestedCountries.length === 0 ||
+      requestedCountries.some((country: unknown) => !PACKAGE_COUNTRIES.includes(country as (typeof PACKAGE_COUNTRIES)[number])) ||
+      new Set(requestedCountries).size !== requestedCountries.length)) {
+      throw new Error('countries 必须是无重复的五国代码子集');
+    }
+    const countries = (requestedCountries ?? PACKAGE_COUNTRIES) as readonly (typeof PACKAGE_COUNTRIES)[number][];
     const rawVersion = body.version ?? request.nextUrl.searchParams.get('version');
     const date = body.date ?? request.nextUrl.searchParams.get('date') ?? beijingDate();
     if (typeof date !== 'string' || issueDate(date) !== date) throw new Error('date 必须为 YYYY-MM-DD');
@@ -33,16 +40,16 @@ export async function reviewedPush(request: NextRequest) {
     const startedAt = new Date().toISOString();
     // Record a start for scheduler polling. Per-country records remain the authoritative receipt.
     const start = await getSupabaseClient().from('push_runs').upsert({id:'latest', running:true,
-      started_at:startedAt, finished_at:null, duration_ms:null, error:null, summary:{version}, updated_at:startedAt}, {onConflict:'id'});
+      started_at:startedAt, finished_at:null, duration_ms:null, error:null, summary:{version,countries}, updated_at:startedAt}, {onConflict:'id'});
     if (start.error) return NextResponse.json({ok:false,error:'任务状态无法持久化，未启动投递'}, {status:503});
-    void deliverReviewedPackage(payload).then(async summary => {
+    void deliverReviewedPackage(payload, undefined, undefined, countries).then(async summary => {
       await persistPushRun({ running:false, startedAt, finishedAt:new Date().toISOString(),
         durationMs:Date.now()-Date.parse(startedAt), error:summary.ok ? null : '部分国家待处理', summary });
     }).catch(async () => {
       await persistPushRun({ running:false, startedAt, finishedAt:new Date().toISOString(),
-        durationMs:Date.now()-Date.parse(startedAt), error:'投递失败，请读取分国状态', summary:{version} });
+        durationMs:Date.now()-Date.parse(startedAt), error:'投递失败，请读取分国状态', summary:{version,countries} });
     });
-    return NextResponse.json({ ok:true, accepted:true, success:true, running:true, version, startedAt, message:'已启动；不代表图片或草稿已完成' }, { status:202 });
+    return NextResponse.json({ ok:true, accepted:true, success:true, running:true, version, countries, startedAt, message:'已启动；不代表图片或草稿已完成' }, { status:202 });
   } catch (e) {
     return NextResponse.json({ ok:false, running:false, error:e instanceof Error ? e.message : '投递启动失败' }, { status:400 });
   }

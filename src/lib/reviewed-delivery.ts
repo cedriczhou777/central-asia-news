@@ -23,9 +23,14 @@ function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited
   const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && sourceUrlsVisible && imageMatch;
   return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch, imageMatch, verified:passed };
 }
-export async function deliverReviewedPackage(payload: ReviewedPackage, sb = getSupabaseClient(), adapters = deliveryAdapters) {
+export async function deliverReviewedPackage(
+  payload: ReviewedPackage,
+  sb = getSupabaseClient(),
+  adapters = deliveryAdapters,
+  onlyCountries: readonly (typeof PACKAGE_COUNTRIES)[number][] = PACKAGE_COUNTRIES,
+) {
   const drafts: object[] = []; const failures: object[] = [];
-  for (const country of PACKAGE_COUNTRIES) {
+  for (const country of onlyCountries) {
     const key = { version: payload.version, country };
     // The unique PK is the cross-process lock. A sending/uncertain row is never retried automatically.
     const claim = await sb.from('reviewed_deliveries').insert({ ...key, state: 'preparing' });
@@ -101,7 +106,7 @@ export async function deliverReviewedPackage(payload: ReviewedPackage, sb = getS
       failures.push({ country, state, media_id:mediaId, error:message });
     }
   }
-  return { ok:failures.length === 0 && drafts.length === 5, version:payload.version, drafts, failures };
+  return { ok:failures.length === 0 && drafts.length === onlyCountries.length, version:payload.version, drafts, failures };
 }
 export async function readPackage(version: string) {
   const result = await getSupabaseClient().from('reviewed_packages').select('payload,content_hash').eq('version',version).maybeSingle();
