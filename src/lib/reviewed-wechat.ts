@@ -1,4 +1,4 @@
-import { assertHttps, imageUrls, replaceImageSources, type ReviewedCountry } from './reviewed-package';
+import { assertHttps, imageUrls, makeSourceUrlsVisible, replaceImageSources, type ReviewedCountry } from './reviewed-package';
 import { lookup } from 'node:dns/promises';
 import { FALLBACK_THUMB_JPEG_BASE64 } from './wechat-thumb-fallback';
 
@@ -50,14 +50,14 @@ function publicAddress(address: string): boolean {
     !(p[0]===172&&p[1]>=16&&p[1]<=31) && !(p[0]===192&&p[1]===168) &&
     !(p[0]===100&&p[1]>=64&&p[1]<=127) && !(p[0]===198&&[18,19].includes(p[1]));
 }
-async function download(url: string) {
+async function download(url: string, referer: string) {
   let response: Response | undefined;
   for (let redirects=0;redirects<=5;redirects++) {
     assertHttps(url);
     const parsed=new URL(url);
     const addresses=await lookup(parsed.hostname.replace(/^\[|\]$/g,''),{all:true});
     if (!addresses.length || addresses.some(a=>!publicAddress(a.address))) throw new Error('图片地址不是公网地址');
-    response=await fetch(url,{signal:AbortSignal.timeout(30000),redirect:'manual'});
+    response=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; CentralAsiaNewsBot/1.0)','Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Referer':referer},signal:AbortSignal.timeout(60000),redirect:'manual'});
     if (![301,302,303,307,308].includes(response.status)) break;
     const location=response.headers.get('location');
     await response.body?.cancel();
@@ -84,12 +84,12 @@ export async function prepareReviewedDraft(d: ReviewedCountry) {
   const replacements = new Map<string,string>();
   let thumb = '';
   for (const url of [...new Set(images)]) {
-    const uploaded = await material(await download(url));
+    const uploaded = await material(await download(url, d.sourceUrl));
     replacements.set(url, uploaded.url);
     if (!thumb) thumb = uploaded.mediaId;
   }
   if (!thumb) thumb = (await material(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64'))).mediaId;
-  const html = replaceImageSources(d.bodyHtml, replacements);
+  const html = makeSourceUrlsVisible(replaceImageSources(d.bodyHtml, replacements));
   if (imageUrls(html).some(url => ![...replacements.values()].includes(url))) throw new Error('正文图片替换不完整');
   return {
     article: { title: d.title, digest: d.summary, content: html, author: '中亚动态–INVEST',
@@ -101,6 +101,9 @@ export async function createReviewedDraft(article: object): Promise<string> {
   const data = await api('draft/add', { articles: [article] });
   if (!data.media_id) throw new Error('微信未返回草稿 media_id，禁止盲目重试');
   return String(data.media_id);
+}
+export async function updateReviewedDraft(mediaId: string, article: object): Promise<void> {
+  await api('draft/update', { media_id: mediaId, index: 0, articles: article });
 }
 export async function readReviewedDraft(mediaId: string) {
   const data = await api('draft/get', { media_id: mediaId });
