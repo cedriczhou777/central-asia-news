@@ -84,6 +84,11 @@ async function main(){
  const repaired=await deliverReviewedPackage(sourcePayload,repairDb as any,repairAdapters);
  assert.equal(repaired.ok,true);assert.equal(repairUpdates,1,'only the known existing draft should be updated');assert.equal(repairCreates,0,'source-link repair must not create duplicates');
  assert.equal(repairDb.rows.get('2026-11-09/kz')?.media_id,'existing-kz');assert.equal(repairDb.rows.get('2026-11-09/kz')?.detail.verified,true);
+ const reasonDb=database();
+ reasonDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'uncertain',media_id:'existing-kz',detail:{imageUrls:[]}});
+ const reasonAdapters:typeof deliveryAdapters={...repairAdapters,async read(){return {title:'kz',digest:'审定摘要',content:makeSourceUrlsVisible(sourcePayload.countries.kz.bodyHtml)};},async prepare(){throw new Error('图片读取失败 https://example.org/private?token=secret');}};
+ const reasonResult=await deliverReviewedPackage(sourcePayload,reasonDb as any,reasonAdapters,['kz']);
+ assert.equal(reasonResult.ok,false);assert.equal((reasonResult.failures[0] as any).reason,'图片读取失败 [链接]');assert.equal(reasonDb.rows.get('2026-11-09/kz')?.state,'uncertain');
  const missingImagePayload=validatePackage({version:'2026-11-09-r2',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
   title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><img src="https://example.org/a.jpg"><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
  }]))});

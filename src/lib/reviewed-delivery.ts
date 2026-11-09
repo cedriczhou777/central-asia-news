@@ -70,7 +70,8 @@ export async function deliverReviewedPackage(
           drafts.push({country_code:country, media_id:existing.data.media_id,...detail});
         } catch (error) {
           if (updateLockAcquired) await sb.from('reviewed_deliveries').update({state:'uncertain',detail:{...existing.data.detail,error:error instanceof Error?error.message:String(error)},updated_at:new Date().toISOString()}).match(key).eq('state','updating');
-          failures.push({country,state:existing.data.state,media_id:existing.data.media_id,error:'已有草稿复核未通过；未重复创建'});
+          const reason = (error instanceof Error ? error.message : '未知错误').replace(/https?:\/\/\S+/gi, '[链接]').slice(0, 180);
+          failures.push({country,state:existing.data.state,media_id:existing.data.media_id,error:'已有草稿复核未通过；未重复创建',reason});
         }
         continue;
       }
