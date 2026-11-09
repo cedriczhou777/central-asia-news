@@ -62,13 +62,15 @@ function publicAddress(address: string): boolean {
     !(p[0]===172&&p[1]>=16&&p[1]<=31) && !(p[0]===192&&p[1]===168) &&
     !(p[0]===100&&p[1]>=64&&p[1]<=127) && !(p[0]===198&&[18,19].includes(p[1]));
 }
-async function download(url: string, referer: string) {
+async function download(url: string, referer: string, limits?: { deadline: number; requestMs: number }) {
   let response: Response | undefined;
   for (let redirects=0;redirects<=5;redirects++) {
+    if (limits && Date.now() >= limits.deadline) throw new Error('图片探测超时');
     assertHttps(url);
     const parsed=new URL(url);
     const addresses=await lookup(parsed.hostname.replace(/^\[|\]$/g,''),{all:true});
     if (!addresses.length || addresses.some(a=>!publicAddress(a.address))) throw new Error('图片地址不是公网地址');
+    if (limits && Date.now() >= limits.deadline) throw new Error('图片探测超时');
     // Image hosts vary in their hotlink rules: some require the article URL as
     // Referer, while others reject it. Retry transient network errors and try
     // a browser request without Referer before treating the source as unusable.
@@ -80,7 +82,8 @@ async function download(url: string, referer: string) {
     let lastError: unknown;
     for (const headers of requestVariants) {
       try {
-        response=await fetch(url,{headers,signal:AbortSignal.timeout(20000),redirect:'manual'});
+        const requestMs = limits ? Math.max(1, Math.min(limits.requestMs, limits.deadline-Date.now())) : 20000;
+        response=await fetch(url,{headers,signal:AbortSignal.timeout(requestMs),redirect:'manual'});
       } catch (error) {
         lastError=error;
         response=undefined;
@@ -111,6 +114,23 @@ async function download(url: string, referer: string) {
     chunks.push(next.value);
   }
   return Buffer.concat(chunks);
+}
+/** Probe the exact image download path without uploading media or creating a draft. */
+export async function probeReviewedImage(url: string, referer: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = Date.now() + 10000;
+    await Promise.race([
+      download(url, referer, { deadline, requestMs: 2500 }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('图片探测超时')), 10000); }),
+    ]);
+    return { accessible:true as const };
+  } catch (error) {
+    const reason = (error instanceof Error ? error.message : '图片读取失败').replace(/https?:\/\/\S+/gi, '[链接]').slice(0, 160);
+    return { accessible:false as const, reason };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 export async function prepareReviewedDraft(d: ReviewedCountry) {
   const images = imageUrls(d.bodyHtml);

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { beijingDate } from './utils';
-import { issueDate, latestVersion, PACKAGE_COUNTRIES } from './reviewed-package';
+import { issueDate, latestVersion, PACKAGE_COUNTRIES, imageUrls } from './reviewed-package';
 import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { persistPushRun } from './push-run-store';
-import { readReviewedDraft } from './reviewed-wechat';
+import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
 import { summarizeDraftReadback } from './reviewed-diagnostics';
 
 function authorized(request: NextRequest) {
@@ -67,6 +67,18 @@ export async function reviewedStatus(request: NextRequest) {
       const result = await sb.from('reviewed_deliveries').select('*').eq('version',version);
       if (result.error) throw new Error('读取投递回执失败');
       const rows = result.data || [];
+      const probeCountry = request.nextUrl.searchParams.get('probeCountry');
+      if (probeCountry) {
+        if (!PACKAGE_COUNTRIES.includes(probeCountry as (typeof PACKAGE_COUNTRIES)[number])) return NextResponse.json({ ok:false, error:'国家代码无效' }, { status:400 });
+        if (!payload) return NextResponse.json({ ok:false, error:'稿包不存在' }, { status:404 });
+        const rawIndex = request.nextUrl.searchParams.get('imageIndex');
+        if (rawIndex === null || !/^\d+$/.test(rawIndex)) return NextResponse.json({ ok:false, error:'图片序号无效' }, { status:400 });
+        const index = Number(rawIndex), country = payload.countries[probeCountry as (typeof PACKAGE_COUNTRIES)[number]];
+        const images = imageUrls(country.bodyHtml);
+        if (!Number.isSafeInteger(index) || index >= images.length) return NextResponse.json({ ok:false, error:'图片不存在' }, { status:404 });
+        const probe = await probeReviewedImage(images[index], country.sourceUrl);
+        return NextResponse.json({ ok:true, version, country:probeCountry, imageIndex:index, ...probe });
+      }
       const diagnosticCountry = request.nextUrl.searchParams.get('diagnose');
       if (diagnosticCountry) {
         if (!PACKAGE_COUNTRIES.includes(diagnosticCountry as (typeof PACKAGE_COUNTRIES)[number])) return NextResponse.json({ ok:false, error:'国家代码无效' }, { status:400 });

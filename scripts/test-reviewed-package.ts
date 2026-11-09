@@ -3,6 +3,7 @@ import { PACKAGE_COUNTRIES, validatePackage, latestVersion, replaceImageSources,
 import { deliverReviewedPackage, deliveryAdapters } from '../src/lib/reviewed-delivery';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
 import { summarizeDraftReadback } from '../src/lib/reviewed-diagnostics';
+import { probeReviewedImage } from '../src/lib/reviewed-wechat';
 
 const input = { version:'2026-11-09', countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c, {
  title:c, summary:'审定摘要', bodyHtml:'<section style="color:#112233"><p>审定正文 &amp; 来源</p></section>', sourceName:'原始公告', sourceUrl:'https://example.org/news', coverUrl:''
@@ -45,6 +46,8 @@ function database() {
  }};
 }
 async function main(){
+ const unsafeImage=await probeReviewedImage('http://127.0.0.1/private','');
+ assert.equal(unsafeImage.accessible,false,'image probes must reject non-HTTPS and internal destinations');
  const db=database();let creates=0;let failedRead=true;let failedPrepare=true;
  const adapters:typeof deliveryAdapters={
   async prepare(d){if(d.title==='uz'&&failedPrepare){failedPrepare=false;throw new Error('图片403');}
