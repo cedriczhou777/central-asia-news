@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { PACKAGE_COUNTRIES, validatePackage, latestVersion, replaceImageSources, contentHash, makeSourceUrlsVisible, sourceUrls } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, deliveryAdapters } from '../src/lib/reviewed-delivery';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
+import { summarizeDraftReadback } from '../src/lib/reviewed-diagnostics';
 
 const input = { version:'2026-11-09', countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c, {
  title:c, summary:'审定摘要', bodyHtml:'<section style="color:#112233"><p>审定正文 &amp; 来源</p></section>', sourceName:'原始公告', sourceUrl:'https://example.org/news', coverUrl:''
@@ -19,6 +20,8 @@ assert.equal(replaceImageSources(html,new Map([['https://example.org/a?a=1&b=2',
 const linked='<p>来源：<a href="https://example.org/news?a=1&amp;b=2">Example</a> · 日期</p>';
 assert.deepEqual(sourceUrls(linked),['https://example.org/news?a=1&b=2']);
 assert.equal(makeSourceUrlsVisible(linked),'<p>来源：Example（https://example.org/news?a=1&b=2） · 日期</p>');
+const diagnostic=summarizeDraftReadback({...payload.countries.kg,bodyHtml:linked}, {title:'kg',digest:'审定摘要',content:makeSourceUrlsVisible(linked)+'<img data-src="https://mmbiz.qpic.cn/x">'}, ['https://mmbiz.qpic.cn/x']);
+assert.equal(diagnostic.legacyTextMatch,true);assert.equal(diagnostic.expectedTextMatch,false);assert.equal(diagnostic.actualImageTags,1);assert.equal(diagnostic.imageAttributes[0].dataSrc,true);
 
 type Row = Record<string, any>;
 // Atomic in-memory store models database unique keys and conditional updates, not external calls.

@@ -4,6 +4,8 @@ import { beijingDate } from './utils';
 import { issueDate, latestVersion, PACKAGE_COUNTRIES } from './reviewed-package';
 import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { persistPushRun } from './push-run-store';
+import { readReviewedDraft } from './reviewed-wechat';
+import { summarizeDraftReadback } from './reviewed-diagnostics';
 
 function authorized(request: NextRequest) {
   return !!process.env.INGEST_SECRET && request.headers.get('x-ingest-secret') === process.env.INGEST_SECRET;
@@ -65,6 +67,15 @@ export async function reviewedStatus(request: NextRequest) {
       const result = await sb.from('reviewed_deliveries').select('*').eq('version',version);
       if (result.error) throw new Error('读取投递回执失败');
       const rows = result.data || [];
+      const diagnosticCountry = request.nextUrl.searchParams.get('diagnose');
+      if (diagnosticCountry) {
+        if (!PACKAGE_COUNTRIES.includes(diagnosticCountry as (typeof PACKAGE_COUNTRIES)[number])) return NextResponse.json({ ok:false, error:'国家代码无效' }, { status:400 });
+        const row = rows.find(r => r.country === diagnosticCountry);
+        if (!payload || !row?.media_id) return NextResponse.json({ ok:false, error:'未找到已有草稿' }, { status:404 });
+        const draft = await readReviewedDraft(row.media_id);
+        return NextResponse.json({ ok:true, version, country:diagnosticCountry, state:row.state,
+          checks:summarizeDraftReadback(payload.countries[diagnosticCountry as (typeof PACKAGE_COUNTRIES)[number]], draft, row.detail?.imageUrls || []) });
+      }
       return NextResponse.json({ ok:true, version, packageReceived:!!payload,
         draftsVerified:rows.length === 5 && rows.every(r=>r.state === 'succeeded'), byCountry:rows });
     }
