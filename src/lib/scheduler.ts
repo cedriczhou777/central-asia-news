@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { resolveSelfBaseUrl } from './runtime';
-import { PUBLISH_SCHEDULES, scheduledWindow, scheduleHoursCrossCheck } from './publish-schedule';
+import { PUBLISH_SCHEDULES, scheduleHoursCrossCheck } from './publish-schedule';
 import { startKeepalive, stopKeepalive, keepaliveCrossCheck } from './keepalive';
 
 // 北京时间定时任务
@@ -241,7 +241,8 @@ function sleep(ms: number) {
 async function readRunState(path: string): Promise<RunStateLite | null> {
   try {
     // 带 cb 破坏缓存：状态查询必须每次都拿到最新值，被任何一层缓存住就等于没等。
-    const res = await fetch(`${API_BASE}${path}?cb=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`${API_BASE}${path}?cb=${Date.now()}`, { cache: 'no-store', headers: { 'X-Ingest-Secret': process.env.INGEST_SECRET || '' } });
+    if (!res.ok) throw new Error(`状态查询 HTTP ${res.status}`);
     const body = await res.json() as { lastRun?: RunStateLite | null };
     // 有 lastRun 这个键 → 取它；lastRun 为 null 表示「还没跑过」，给个空对象
     // （running/finishedAt 都是 undefined/null，循环会继续等，正是想要的）。
@@ -380,13 +381,14 @@ async function runFetchNews(): Promise<WaitOutcome> {
 async function runWechatPush(hours: number, period: string): Promise<WaitOutcome> {
   return await triggerAndWait('微信公众号推送', '/api/wechat/push', PUSH_SOFT_WAIT_MS, async () => {
     console.log(
-      `[${new Date().toISOString()}] 开始执行微信公众号推送任务（时段 ${period}，回看过去 ${hours} 小时）...`
+      `[${new Date().toISOString()}] 开始投递北京时间当刊期的完整审定稿包（时段 ${period}）...`
     );
     const response = await fetch(`${API_BASE}/api/wechat/push`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Ingest-Secret': process.env.INGEST_SECRET || '' },
       body: JSON.stringify({ hours, period }),
     });
+    if (!response.ok) throw new Error(`草稿投递未启动，HTTP ${response.status}`);
     console.log(
       `[${new Date().toISOString()}] 微信公众号推送任务已触发:`,
       JSON.stringify(await response.json())
@@ -473,14 +475,7 @@ export function startScheduler() {
     }, {
       timezone: 'Asia/Shanghai',
     });
-    // 打**推导出来的**窗口，而不是 `hours`：2026-09-24 起窗口由时刻表的钟点决定，
-    // `hours` 只是交叉校验值。启动日志是唯一能确认「这个容器里的窗口到底覆盖哪一段」
-    // 的地方（接口响应也能看到，但要先发一个请求）。
-    const w = scheduledWindow(period);
-    console.log(
-      `已注册公众号推送任务：${schedule} (${label})，窗口 ` +
-        (w ? `${w.start.toISOString()} → ${w.end.toISOString()}（${w.hours}h，按时刻表固定）` : '（未知：时刻表里没有这一段）')
-    );
+    console.log(`已注册公众号推送任务：${schedule} (${label})，按北京时间刊期精确选择完整稿包；采编窗口为前日06:00至当日06:00`);
   });
 
   // 声明值与推导值必须一致 —— 不一致说明有人只改了 cron 或只改了 hours。

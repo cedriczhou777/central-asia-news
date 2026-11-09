@@ -14,10 +14,10 @@ info:
     ★★ **动手前请先读 `HANDOVER-TO-CHATGPT.md`**（10 节：落库字段约束、配图规矩、
     部署纪律、别动哪些文件、一处已知缺口）⇒ ⚠️ 落库时 `tags` **必须含 'word'**，
     否则推送侧「无原文正文」闸会把整批稿子跳掉。
-  version: 1.0.0
+  version: 1.1.0
 servers:
   - url: https://central-asia-news-307705-12-1480606601.sh.run.tcloudbase.com
-    description: 微信云托管（生产）
+    description: "微信云托管（生产）"
 security:
   - ingestSecret: []
 paths:
@@ -37,13 +37,13 @@ paths:
               properties:
                 fileBase64:
                   type: string
-                  description: .docx 文件的 base64（不含 data: 前缀）
+                  description: ".docx 文件的 base64（不含 data: 前缀）"
                 date:
                   type: string
-                  description: 稿件日期 YYYY-MM-DD（可选，默认今天）
+                  description: "稿件日期 YYYY-MM-DD（可选，默认今天）"
                 persist:
                   type: string
-                  description: 传 "1" 才落库；默认只校核
+                  description: "传 \"1\" 才落库；默认只校核"
               required: [fileBase64]
           multipart/form-data:
             schema:
@@ -52,14 +52,14 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: .docx 文件
+                  description: ".docx 文件"
                 date:
                   type: string
                 persist:
                   type: string
       responses:
         '200':
-          description: 解析与校核结果
+          description: "解析与校核结果"
           content:
             application/json:
               schema:
@@ -78,7 +78,7 @@ paths:
                       findings: { type: array, items: { type: object } }
                   fixList:
                     type: string
-                    description: Markdown 修正清单，可直接贴回 ChatGPT
+                    description: "Markdown 修正清单，可直接贴回 ChatGPT"
                   persisted: { type: object, nullable: true }
         '400': { description: 请求格式错误 }
         '401': { description: 缺少或错误的 INGEST_SECRET }
@@ -90,9 +90,8 @@ paths:
       description: |
         ChatGPT 侧「采集 + 写作 + 审稿 + 配图 + 排版」完成后的**成品包**入口。
         ★ **五国必须齐**（缺任一国 ⇒ 409，不提交）⇒ 避免半套稿子进生产。
-        ★ 配图请**直接写进 bodyHtml 的 `<img src="https://…">`** ⇒ 旧推送链路会照旧
-        把图上传到微信素材库并换成 CDN 地址（零改动）。
-        ★ 幂等：同版本 + 同国 + 同标题 ⇒ 不重复插入。
+        配图写进 bodyHtml 的 HTTPS img src，保留审定正文，仅替换转存图片地址。
+        同版本同内容幂等；同版本不同内容409。五国原子存储；inserted/skipped按国家计数。
       requestBody:
         required: true
         content:
@@ -102,10 +101,10 @@ paths:
               properties:
                 version:
                   type: string
-                  description: 版本号（幂等键），如 2026-11-07
+                  description: "版本号（幂等键），如 2026-11-07"
                 countries:
                   type: object
-                  description: 五国稿件，键为 kz/uz/kg/tj/az
+                  description: "五国稿件，键为 kz/uz/kg/tj/az"
                   additionalProperties:
                     type: object
                     properties:
@@ -113,14 +112,14 @@ paths:
                       summary: { type: string }
                       bodyHtml:
                         type: string
-                        description: 正文 HTML（**含 <img src>** ⇒ 配图走这里）
+                        description: "正文 HTML（**含 <img src>** ⇒ 配图走这里）"
                       sourceName: { type: string }
                       sourceUrl: { type: string }
                       coverUrl: { type: string }
               required: [version, countries]
       responses:
         '200':
-          description: 已提交
+          description: "已提交"
           content:
             application/json:
               schema:
@@ -133,12 +132,38 @@ paths:
                   byCountry: { type: object }
         '401': { description: 缺少或错误的 INGEST_SECRET }
         '409': { description: 五国未齐 ⇒ 按约定不提交 }
-        '503':
-          description: |
-          **实例冷启动中**（云托管 `minNum=0` ⇒ 09:30 之后实例会缩到 0，
-          下一次请求要重新拉起容器 ⇒ 首次请求可能 503 或很慢）。
-          ⇒ ★ **这不是失败** ⇒ 等 10 分钟再重试一次即可。
-          ⇒ 定时扩缩容窗口 07:50–09:30 期间实例常驻 ⇒ 那段时间不会有 503。
+        '400': { description: 版本或字段无效 }
+        '503': { description: 服务、数据库或权限未就绪；不保证仅为冷启动 }
+  /api/wechat/push:
+    post:
+      operationId: deliverReviewedPackage
+      summary: 将完整审定稿包写入微信草稿箱，不发布
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string, description: 精确稿包版本，可含修订后缀 }
+                date: { type: string, format: date, description: 省略时按北京时间当刊期 }
+      responses:
+        '202': { description: 已启动，尚不代表图片或草稿完成 }
+        '400': { description: 参数错误 }
+        '401': { description: 鉴权失败 }
+        '409': { description: 指定刊期或版本无完整稿包 }
+        '503': { description: 数据库未就绪 }
+    get:
+      operationId: reviewedDeliveryStatus
+      summary: 读取指定版本五国投递回执
+      parameters:
+        - in: query
+          name: version
+          schema: { type: string }
+          description: "指定精确版本；省略时返回最近任务状态"
+      responses:
+        '200': { description: packageReceived 与 draftsVerified 分开报告，byCountry 为分国状态 }
+        '401': { description: 鉴权失败 }
+        '503': { description: 状态读取失败 }
 components:
   securitySchemes:
     ingestSecret:

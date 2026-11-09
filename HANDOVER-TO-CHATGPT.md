@@ -1,3 +1,5 @@
+> 最新审定稿直投契约见 CHATGPT-INTERFACE.md 末尾及 REVIEWED-DELIVERY-ROLLOUT.md；以下旧 articles/tags/自动清稿说明仅适用于保留的旧路径。
+
 # 给 ChatGPT 的技术提醒（2026-11-07）
 
 > 这份是**给你（ChatGPT）**的：你接手了「云托管接收 + 投递」这一段，
