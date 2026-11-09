@@ -12,8 +12,9 @@ type DeliveryAdapters = {
 export const deliveryAdapters: DeliveryAdapters = { prepare: prepareReviewedDraft, create: createReviewedDraft, update: updateReviewedDraft, read: readReviewedDraft };
 function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited<ReturnType<typeof readReviewedDraft>>, expectedImages: string[]) {
   const text = (html: string) => load(html, {}, false).text().replace(/\s+/g,'');
-  const images = imageUrls(readback.content);
-  const imageKey = (url: string) => { try { const u=new URL(url); return `${u.hostname}${u.pathname}`; } catch { return ''; } };
+  const $ = load(readback.content, {}, false);
+  const images = $('img').toArray().map(el => $(el).attr('src') || $(el).attr('data-src') || '');
+  const imageKey = (url: string) => { try { const u=new URL(url); const path = u.hostname.endsWith('.qpic.cn') ? u.pathname.replace(/\/(?:0|640)$/, '') : u.pathname; return `${u.hostname}${path}`; } catch { return ''; } };
   const expectedSourceUrls = sourceUrls(d.bodyHtml);
   const actualText = text(readback.content);
   const expectedText = text(d.bodyHtml);

@@ -94,6 +94,11 @@ async function main(){
  };
  const fixedImage=await deliverReviewedPackage(missingImagePayload,imageDb as any,imageAdapters,['kg']);
  assert.equal(fixedImage.ok,true);assert.equal(imageUpdates,1);assert.equal(imageDb.rows.get('2026-11-09-r2/kg')?.media_id,'existing-kg');
+ const lazyDb=database();let lazyUpdates=0;
+ lazyDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'uncertain',media_id:'existing-kg',detail:{imageUrls:['https://mmbiz.qpic.cn/mmbiz_jpg/abc/0?wx_fmt=jpeg']}});
+ const lazyAdapters:typeof deliveryAdapters={...imageAdapters,async update(){lazyUpdates++;},async read(){return {title:'kg',digest:'审定摘要',content:missingImagePayload.countries.kg.bodyHtml.replace('src="https://example.org/a.jpg"','data-src="https://mmbiz.qpic.cn/mmbiz_jpg/abc/640?wx_fmt=jpeg"')};}};
+ const lazy=await deliverReviewedPackage(missingImagePayload,lazyDb as any,lazyAdapters,['kg']);
+ assert.equal(lazy.ok,true);assert.equal(lazyUpdates,0,'lazy-loaded image must not trigger a draft update');
  console.log('reviewed-package: validation, exact HTML replacement, version isolation, pre-send retry, uncertain outcome and concurrent duplicate prevention passed');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
