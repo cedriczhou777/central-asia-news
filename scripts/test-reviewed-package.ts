@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { PACKAGE_COUNTRIES, validatePackage, latestVersion, replaceImageSources, contentHash } from '../src/lib/reviewed-package';
+import { PACKAGE_COUNTRIES, validatePackage, latestVersion, replaceImageSources, contentHash, makeSourceUrlsVisible, sourceUrls } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, deliveryAdapters } from '../src/lib/reviewed-delivery';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
 
@@ -16,6 +16,9 @@ assert.notEqual(contentHash(payload),contentHash({...payload,version:'2026-11-09
 assert.equal(replaceImageSources('<img data-src="unused" src="https://example.org/x">',new Map([['https://example.org/x','https://mmbiz.qpic.cn/x']])), '<img data-src="unused" src="https://mmbiz.qpic.cn/x">');
 const html = '<section style="color:gold"><img src="https://example.org/a?a=1&amp;b=2"><p>图注、来源</p></section>';
 assert.equal(replaceImageSources(html,new Map([['https://example.org/a?a=1&b=2','https://mmbiz.qpic.cn/pic']])),html.replace('https://example.org/a?a=1&amp;b=2','https://mmbiz.qpic.cn/pic'));
+const linked='<p>来源：<a href="https://example.org/news?a=1&amp;b=2">Example</a> · 日期</p>';
+assert.deepEqual(sourceUrls(linked),['https://example.org/news?a=1&b=2']);
+assert.equal(makeSourceUrlsVisible(linked),'<p>来源：Example（https://example.org/news?a=1&b=2） · 日期</p>');
 
 type Row = Record<string, any>;
 // Atomic in-memory store models database unique keys and conditional updates, not external calls.
@@ -62,6 +65,22 @@ async function main(){
  assert.equal([...concurrentDb.rows.values()].filter(r=>r.state==='succeeded').length,5);
  await deliverReviewedPackage(payload,concurrentDb as any,adapters);
  assert.equal(creates,5,'completed delivery is idempotent');
+
+ const sourcePayload=validatePackage({version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
+  title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
+ }]))});
+ const repairDb=database();let repairedContent=sourcePayload.countries.kz.bodyHtml;let repairCreates=0;let repairUpdates=0;
+ repairDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'uncertain',media_id:'existing-kz',detail:{imageUrls:[]}});
+ for(const c of PACKAGE_COUNTRIES.filter(c=>c!=='kz'))repairDb.rows.set(`2026-11-09/${c}`,{version:'2026-11-09',country:c,state:'succeeded',media_id:`existing-${c}`,detail:{}});
+ const repairAdapters:typeof deliveryAdapters={
+  async prepare(d){const html=makeSourceUrlsVisible(d.bodyHtml);return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:0,cover:'brand'};},
+  async create(){repairCreates++;return 'unexpected-new-draft';},
+  async update(_mediaId,article:any){repairUpdates++;repairedContent=article.content;},
+  async read(mediaId){return {title:'kz',digest:'审定摘要',content:mediaId==='existing-kz'?repairedContent:sourcePayload.countries.kz.bodyHtml};}
+ };
+ const repaired=await deliverReviewedPackage(sourcePayload,repairDb as any,repairAdapters);
+ assert.equal(repaired.ok,true);assert.equal(repairUpdates,1,'only the known existing draft should be updated');assert.equal(repairCreates,0,'source-link repair must not create duplicates');
+ assert.equal(repairDb.rows.get('2026-11-09/kz')?.media_id,'existing-kz');assert.equal(repairDb.rows.get('2026-11-09/kz')?.detail.verified,true);
  console.log('reviewed-package: validation, exact HTML replacement, version isolation, pre-send retry, uncertain outcome and concurrent duplicate prevention passed');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

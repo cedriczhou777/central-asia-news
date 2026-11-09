@@ -23,6 +23,17 @@ export function imageUrls(html: string): string[] {
   const $ = load(html, {}, false);
   return $('img').toArray().map(el => $(el).attr('src') || '');
 }
+/** WeChat draft readback may discard anchor attributes. Keep source URLs readable in the article itself. */
+export function makeSourceUrlsVisible(html: string): string {
+  return html.replace(/<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/gi, (_tag, _quote: string, rawUrl: string, label: string) => {
+    const url = load(`<span>${rawUrl}</span>`, {}, false)('span').text();
+    return `${label}（${url}）`;
+  });
+}
+export function sourceUrls(html: string): string[] {
+  const $ = load(html, {}, false);
+  return $('a[href]').toArray().map(el => $(el).attr('href') || '').filter(Boolean);
+}
 export function validatePackage(input: unknown): ReviewedPackage {
   if (!input || typeof input !== 'object') throw new Error('请求体必须为 JSON 对象');
   const body = input as Record<string, unknown>;

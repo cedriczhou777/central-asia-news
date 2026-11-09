@@ -1,40 +1,70 @@
 import { getSupabaseClient } from '../storage/database/supabase-client';
-import { PACKAGE_COUNTRIES, contentHash, imageUrls, validatePackage, type ReviewedPackage } from './reviewed-package';
-import { prepareReviewedDraft, createReviewedDraft, readReviewedDraft } from './reviewed-wechat';
+import { PACKAGE_COUNTRIES, contentHash, imageUrls, makeSourceUrlsVisible, sourceUrls, validatePackage, type ReviewedPackage } from './reviewed-package';
+import { prepareReviewedDraft, createReviewedDraft, updateReviewedDraft, readReviewedDraft } from './reviewed-wechat';
 import { load } from 'cheerio';
 
-export const deliveryAdapters = { prepare: prepareReviewedDraft, create: createReviewedDraft, read: readReviewedDraft };
+type DeliveryAdapters = {
+  prepare: typeof prepareReviewedDraft;
+  create: typeof createReviewedDraft;
+  update?: typeof updateReviewedDraft;
+  read: typeof readReviewedDraft;
+};
+export const deliveryAdapters: DeliveryAdapters = { prepare: prepareReviewedDraft, create: createReviewedDraft, update: updateReviewedDraft, read: readReviewedDraft };
 function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited<ReturnType<typeof readReviewedDraft>>, expectedImages: string[]) {
   const text = (html: string) => load(html, {}, false).text().replace(/\s+/g,'');
-  const links = (html: string) => { const $=load(html,{},false); return $('a[href]').toArray().map(el=>$(el).attr('href')); };
   const images = imageUrls(readback.content);
   const imageKey = (url: string) => { try { const u=new URL(url); return `${u.hostname}${u.pathname}`; } catch { return ''; } };
-  const passed = readback.title === d.title && readback.digest === d.summary &&
-    text(readback.content) === text(d.bodyHtml) && JSON.stringify(links(readback.content)) === JSON.stringify(links(d.bodyHtml)) &&
-    images.length === expectedImages.length && images.every((url,i)=>imageKey(url) === imageKey(expectedImages[i]) && !!imageKey(url));
-  return { draftImages:images.length, readbackHash:contentHash(readback.content), verified:passed };
+  const expectedSourceUrls = sourceUrls(d.bodyHtml);
+  const actualText = text(readback.content);
+  const expectedText = text(makeSourceUrlsVisible(d.bodyHtml));
+  const imageMatch = images.length === expectedImages.length && images.every((url,i)=>imageKey(url) === imageKey(expectedImages[i]) && !!imageKey(url));
+  const legacyTextMatch = actualText === text(d.bodyHtml);
+  const sourceUrlsVisible = expectedSourceUrls.every(url => actualText.includes(text(url)));
+  const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && sourceUrlsVisible && imageMatch;
+  return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch, imageMatch, verified:passed };
 }
 export async function deliverReviewedPackage(payload: ReviewedPackage, sb = getSupabaseClient(), adapters = deliveryAdapters) {
   const drafts: object[] = []; const failures: object[] = [];
   for (const country of PACKAGE_COUNTRIES) {
     const key = { version: payload.version, country };
     // The unique PK is the cross-process lock. A sending/uncertain row is never retried automatically.
-    let claim = await sb.from('reviewed_deliveries').insert({ ...key, state: 'preparing' });
+    const claim = await sb.from('reviewed_deliveries').insert({ ...key, state: 'preparing' });
     if (claim.error) {
       if (claim.error.code !== '23505') throw new Error('无法取得持久化投递锁');
       const existing = await sb.from('reviewed_deliveries').select('*').match(key).single();
       if (existing.error) throw new Error('无法读取投递状态');
       if (existing.data.state === 'succeeded') { drafts.push({ country_code:country, media_id:existing.data.media_id, ...existing.data.detail }); continue; }
       // Read-only recovery: never call draft/add again when a media_id is known.
-      if (['uncertain','sending'].includes(existing.data.state) && existing.data.media_id) {
+      if (['uncertain','sending','updating'].includes(existing.data.state) && existing.data.media_id) {
+        let updateLockAcquired = false;
         try {
-          const verified = verifyReadback(payload.countries[country], await adapters.read(existing.data.media_id), existing.data.detail?.imageUrls || []);
-          if (!verified.verified) throw new Error('草稿与审定稿不一致');
+          const current = await adapters.read(existing.data.media_id);
+          let verified = verifyReadback(payload.countries[country], current, existing.data.detail?.imageUrls || []);
+          if (!verified.verified) {
+            const d = payload.countries[country];
+            const updateDraft = adapters.update;
+            const staleUpdate = existing.data.state === 'updating' && Date.now() - Date.parse(existing.data.updated_at || '') > 5 * 60_000;
+            const safelyRepairable = !!updateDraft && (existing.data.state === 'uncertain' || staleUpdate) && current.title === d.title && current.digest === d.summary &&
+              verified.legacyTextMatch && verified.imageMatch && !verified.sourceUrlsVisible && sourceUrls(d.bodyHtml).length > 0;
+            if (!safelyRepairable) throw new Error('已有草稿复核未通过；未重复创建');
+            const prepared = await adapters.prepare(d);
+            const lock = await sb.from('reviewed_deliveries').update({ state:'updating', updated_at:new Date().toISOString() })
+              .match(key).eq('state',existing.data.state).eq('media_id',existing.data.media_id).select('country');
+            if (lock.error || lock.data?.length !== 1) throw new Error('未取得原草稿更新锁');
+            updateLockAcquired = true;
+            await updateDraft(existing.data.media_id, prepared.article);
+            const updated = await adapters.read(existing.data.media_id);
+            verified = verifyReadback(d, updated, imageUrls(prepared.html));
+            if (!verified.verified) throw new Error('原草稿更新后仍未通过审定稿核验');
+          }
           const detail = {...existing.data.detail, ...verified, error:null};
           const saved = await sb.from('reviewed_deliveries').update({state:'succeeded', detail, updated_at:new Date().toISOString()}).match(key).eq('media_id',existing.data.media_id);
           if (saved.error) throw new Error('复核回执保存失败');
           drafts.push({country_code:country, media_id:existing.data.media_id,...detail});
-        } catch { failures.push({country,state:existing.data.state,media_id:existing.data.media_id,error:'已有草稿复核未通过；未重复创建'}); }
+        } catch (error) {
+          if (updateLockAcquired) await sb.from('reviewed_deliveries').update({state:'uncertain',detail:{...existing.data.detail,error:error instanceof Error?error.message:String(error)},updated_at:new Date().toISOString()}).match(key).eq('state','updating');
+          failures.push({country,state:existing.data.state,media_id:existing.data.media_id,error:'已有草稿复核未通过；未重复创建'});
+        }
         continue;
       }
       if (existing.data.state !== 'failed') { failures.push({ country, state: existing.data.state, error: '投递进行中或结果待核实，禁止重复创建' }); continue; }
