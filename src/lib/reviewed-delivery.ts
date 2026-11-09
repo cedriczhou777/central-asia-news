@@ -16,11 +16,11 @@ function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited
   const imageKey = (url: string) => { try { const u=new URL(url); return `${u.hostname}${u.pathname}`; } catch { return ''; } };
   const expectedSourceUrls = sourceUrls(d.bodyHtml);
   const actualText = text(readback.content);
-  const expectedText = text(makeSourceUrlsVisible(d.bodyHtml));
+  const expectedText = text(d.bodyHtml);
   const imageMatch = images.length === expectedImages.length && images.every((url,i)=>imageKey(url) === imageKey(expectedImages[i]) && !!imageKey(url));
-  const legacyTextMatch = actualText === text(d.bodyHtml);
+  const legacyTextMatch = actualText === text(makeSourceUrlsVisible(d.bodyHtml));
   const sourceUrlsVisible = expectedSourceUrls.every(url => actualText.includes(text(url)));
-  const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && sourceUrlsVisible && imageMatch;
+  const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && imageMatch;
   return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch, expectedTextMatch:actualText === expectedText, imageMatch, verified:passed };
 }
 export async function deliverReviewedPackage(
@@ -50,8 +50,8 @@ export async function deliverReviewedPackage(
             const updateDraft = adapters.update;
             const staleUpdate = existing.data.state === 'updating' && Date.now() - Date.parse(existing.data.updated_at || '') > 5 * 60_000;
             const safelyRepairable = !!updateDraft && (existing.data.state === 'uncertain' || staleUpdate) && current.title === d.title && current.digest === d.summary &&
-              ((verified.legacyTextMatch && verified.imageMatch && !verified.sourceUrlsVisible && sourceUrls(d.bodyHtml).length > 0) ||
-               (verified.expectedTextMatch && verified.sourceUrlsVisible && verified.draftImages === 0 && (existing.data.detail?.imageUrls || []).length > 0));
+              ((verified.legacyTextMatch && verified.imageMatch && sourceUrls(d.bodyHtml).length > 0) ||
+               ((verified.expectedTextMatch || verified.legacyTextMatch) && verified.draftImages === 0 && (existing.data.detail?.imageUrls || []).length > 0));
             if (!safelyRepairable) throw new Error('已有草稿复核未通过；未重复创建');
             const prepared = await adapters.prepare(d);
             const lock = await sb.from('reviewed_deliveries').update({ state:'updating', updated_at:new Date().toISOString() })

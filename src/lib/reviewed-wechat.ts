@@ -1,4 +1,4 @@
-import { assertHttps, imageUrls, makeSourceUrlsVisible, replaceImageSources, type ReviewedCountry } from './reviewed-package';
+import { assertHttps, imageUrls, replaceImageSources, type ReviewedCountry } from './reviewed-package';
 import { lookup } from 'node:dns/promises';
 import { FALLBACK_THUMB_JPEG_BASE64 } from './wechat-thumb-fallback';
 
@@ -122,7 +122,7 @@ export async function prepareReviewedDraft(d: ReviewedCountry) {
     replacements.set(url, await articleImage(bytes));
   }
   if (!thumb) thumb = (await material(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64'))).mediaId;
-  const html = makeSourceUrlsVisible(replaceImageSources(d.bodyHtml, replacements));
+  const html = replaceImageSources(d.bodyHtml, replacements);
   if (imageUrls(html).some(url => ![...replacements.values()].includes(url))) throw new Error('正文图片替换不完整');
   return {
     article: { title: d.title, digest: d.summary, content: html, author: '中亚动态–INVEST',

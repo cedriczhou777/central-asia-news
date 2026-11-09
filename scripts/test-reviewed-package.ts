@@ -69,11 +69,11 @@ async function main(){
  const sourcePayload=validatePackage({version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
   title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
  }]))});
- const repairDb=database();let repairedContent=sourcePayload.countries.kz.bodyHtml;let repairCreates=0;let repairUpdates=0;
+ const repairDb=database();let repairedContent=makeSourceUrlsVisible(sourcePayload.countries.kz.bodyHtml);let repairCreates=0;let repairUpdates=0;
  repairDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'uncertain',media_id:'existing-kz',detail:{imageUrls:[]}});
  for(const c of PACKAGE_COUNTRIES.filter(c=>c!=='kz'))repairDb.rows.set(`2026-11-09/${c}`,{version:'2026-11-09',country:c,state:'succeeded',media_id:`existing-${c}`,detail:{}});
  const repairAdapters:typeof deliveryAdapters={
-  async prepare(d){const html=makeSourceUrlsVisible(d.bodyHtml);return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:0,cover:'brand'};},
+  async prepare(d){const html=d.bodyHtml;return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:0,cover:'brand'};},
   async create(){repairCreates++;return 'unexpected-new-draft';},
   async update(_mediaId,article:any){repairUpdates++;repairedContent=article.content;},
   async read(mediaId){return {title:'kz',digest:'审定摘要',content:mediaId==='existing-kz'?repairedContent:sourcePayload.countries.kz.bodyHtml};}
@@ -87,7 +87,7 @@ async function main(){
  const imageDb=database();let imageContent=makeSourceUrlsVisible(missingImagePayload.countries.kg.bodyHtml).replace('<img src="https://example.org/a.jpg">','');let imageUpdates=0;
  imageDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'uncertain',media_id:'existing-kg',detail:{imageUrls:['https://mmbiz.qpic.cn/old.jpg']}});
  const imageAdapters:typeof deliveryAdapters={
-  async prepare(d){const html=makeSourceUrlsVisible(d.bodyHtml).replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg');return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:1,cover:'first_body_image'};},
+  async prepare(d){const html=d.bodyHtml.replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg');return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:1,cover:'first_body_image'};},
   async create(){throw new Error('must not create another draft');},
   async update(_id,article:any){imageUpdates++;imageContent=article.content;},
   async read(){return {title:'kg',digest:'审定摘要',content:imageContent};}
