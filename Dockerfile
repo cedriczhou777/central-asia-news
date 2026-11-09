@@ -12,7 +12,8 @@ COPY . .
 # 安装 → 构建 → 裁掉 devDependencies → 清缓存，必须写在同一条 RUN 里。
 # Docker 是分层存储：在后面的层里删除文件，前面的层照样留在镜像里，体积一点不省。
 # 想真正瘦身，「产生」和「删除」只能发生在同一个层里。
-RUN pnpm install --frozen-lockfile \
+# 镜像站故障时，用 npm 官方源重试同一锁文件。
+RUN (pnpm install --frozen-lockfile || pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/) \
  && pnpm build \
  && pnpm prune --prod \
  && rm -rf .next/cache \
