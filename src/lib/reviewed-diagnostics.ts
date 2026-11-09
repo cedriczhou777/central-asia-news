@@ -11,6 +11,8 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
   while (difference < oldText.length && difference < actualText.length && oldText[difference] === actualText[difference]) difference++;
   const $ = load(actual.content, {}, false);
   const imageAttributes = $('img').toArray().map(el => ({ src: !!$(el).attr('src'), dataSrc: !!$(el).attr('data-src') }));
+  const imageIdentity = (value: string) => { try { const u = new URL(value); return { host:u.hostname, path:u.pathname }; } catch { return null; } };
+  const actualImages = $('img').toArray().map(el => $(el).attr('src') || $(el).attr('data-src') || '');
   return {
     titleMatch: actual.title === expected.title, digestMatch: actual.digest === expected.summary,
     expectedTextMatch: actualText === expectedText, legacyTextMatch: actualText === oldText,
@@ -18,5 +20,6 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
     expectedSnippet: oldText.slice(Math.max(0, difference - 25), difference + 100),
     actualSnippet: actualText.slice(Math.max(0, difference - 25), difference + 100),
     expectedImages: expectedImages.length, actualImageTags: imageAttributes.length, imageAttributes,
+    expectedImageIdentities: expectedImages.map(imageIdentity), actualImageIdentities: actualImages.map(imageIdentity),
   };
 }
