@@ -81,6 +81,19 @@ async function main(){
  const repaired=await deliverReviewedPackage(sourcePayload,repairDb as any,repairAdapters);
  assert.equal(repaired.ok,true);assert.equal(repairUpdates,1,'only the known existing draft should be updated');assert.equal(repairCreates,0,'source-link repair must not create duplicates');
  assert.equal(repairDb.rows.get('2026-11-09/kz')?.media_id,'existing-kz');assert.equal(repairDb.rows.get('2026-11-09/kz')?.detail.verified,true);
+ const missingImagePayload=validatePackage({version:'2026-11-09-r2',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
+  title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><img src="https://example.org/a.jpg"><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
+ }]))});
+ const imageDb=database();let imageContent=makeSourceUrlsVisible(missingImagePayload.countries.kg.bodyHtml).replace('<img src="https://example.org/a.jpg">','');let imageUpdates=0;
+ imageDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'uncertain',media_id:'existing-kg',detail:{imageUrls:['https://mmbiz.qpic.cn/old.jpg']}});
+ const imageAdapters:typeof deliveryAdapters={
+  async prepare(d){const html=makeSourceUrlsVisible(d.bodyHtml).replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg');return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:1,cover:'first_body_image'};},
+  async create(){throw new Error('must not create another draft');},
+  async update(_id,article:any){imageUpdates++;imageContent=article.content;},
+  async read(){return {title:'kg',digest:'审定摘要',content:imageContent};}
+ };
+ const fixedImage=await deliverReviewedPackage(missingImagePayload,imageDb as any,imageAdapters,['kg']);
+ assert.equal(fixedImage.ok,true);assert.equal(imageUpdates,1);assert.equal(imageDb.rows.get('2026-11-09-r2/kg')?.media_id,'existing-kg');
  console.log('reviewed-package: validation, exact HTML replacement, version isolation, pre-send retry, uncertain outcome and concurrent duplicate prevention passed');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

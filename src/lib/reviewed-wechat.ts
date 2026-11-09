@@ -42,6 +42,18 @@ async function material(buffer: Buffer) {
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('微信图片返回地址无效');
   return { mediaId: String(data.media_id), url: String(data.url) };
 }
+async function articleImage(buffer: Buffer) {
+  const { default: sharp } = await import('sharp');
+  const bytes = await sharp(buffer, { limitInputPixels: 40000000 }).rotate().flatten({ background: '#fff' }).jpeg({ quality: 88 }).toBuffer();
+  const form = new FormData();
+  form.append('media', new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), 'news.jpg');
+  const response = await fetch(await apiUrl('media/uploadimg'), { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
+  const data = await response.json();
+  if (!response.ok || data.errcode || !data.url) throw new Error(`正文图片上传失败，错误码 ${data.errcode ?? response.status}`);
+  const url = new URL(data.url);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('微信正文图片地址无效');
+  return String(data.url);
+}
 function publicAddress(address: string): boolean {
   if (address.includes(':')) return /^[23][0-9a-f]{3}:/i.test(address); // globally routed IPv6 only
   const p=address.split('.').map(Number);
@@ -105,9 +117,9 @@ export async function prepareReviewedDraft(d: ReviewedCountry) {
   const replacements = new Map<string,string>();
   let thumb = '';
   for (const url of [...new Set(images)]) {
-    const uploaded = await material(await download(url, d.sourceUrl));
-    replacements.set(url, uploaded.url);
-    if (!thumb) thumb = uploaded.mediaId;
+    const bytes = await download(url, d.sourceUrl);
+    if (!thumb) thumb = (await material(bytes)).mediaId;
+    replacements.set(url, await articleImage(bytes));
   }
   if (!thumb) thumb = (await material(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64'))).mediaId;
   const html = makeSourceUrlsVisible(replaceImageSources(d.bodyHtml, replacements));
