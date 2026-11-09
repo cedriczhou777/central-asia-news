@@ -57,7 +57,28 @@ async function download(url: string, referer: string) {
     const parsed=new URL(url);
     const addresses=await lookup(parsed.hostname.replace(/^\[|\]$/g,''),{all:true});
     if (!addresses.length || addresses.some(a=>!publicAddress(a.address))) throw new Error('图片地址不是公网地址');
-    response=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; CentralAsiaNewsBot/1.0)','Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Referer':referer},signal:AbortSignal.timeout(60000),redirect:'manual'});
+    // Image hosts vary in their hotlink rules: some require the article URL as
+    // Referer, while others reject it. Retry transient network errors and try
+    // a browser request without Referer before treating the source as unusable.
+    const requestVariants = [
+      { 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8', ...(referer ? { Referer:referer } : {}) },
+      { 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' },
+      { 'User-Agent':'Mozilla/5.0 (compatible; CentralAsiaNewsBot/1.0)', 'Accept':'image/avif,image/webp,image/apng,image/*,*;q=0.8' },
+    ];
+    let lastError: unknown;
+    for (const headers of requestVariants) {
+      try {
+        response=await fetch(url,{headers,signal:AbortSignal.timeout(20000),redirect:'manual'});
+      } catch (error) {
+        lastError=error;
+        response=undefined;
+        continue;
+      }
+      if (response.ok || ![403,429,500,502,503,504].includes(response.status)) break;
+      await response.body?.cancel();
+    }
+    if (!response && lastError) throw new Error(`图片请求失败：${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    if (!response) throw new Error('图片请求失败');
     if (![301,302,303,307,308].includes(response.status)) break;
     const location=response.headers.get('location');
     await response.body?.cancel();
