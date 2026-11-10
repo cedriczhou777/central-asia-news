@@ -59,7 +59,7 @@
     "analyze:per-country-floor": "tsx scripts/analyze-per-country-floor.ts",
     "probe:feeds": "tsx scripts/probe-feed-candidates.ts",
     "diagnose:push": "tsx scripts/diagnose-push-window.ts",
-    "verify:offline": "pnpm ts-check && pnpm test:script-hygiene && pnpm test:judge-probe && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:dedup-before-translate && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance && pnpm test:api-field-contract && pnpm test:keepalive && pnpm test:telegram-direct && pnpm test:fetch-pipeline && pnpm test:gate-wiring && pnpm test:similarity-prefix && pnpm test:draft-cleanup && pnpm test:runtime-facts && pnpm test:reviewed-package && pnpm test:reviewed-ingest",
+    "verify:offline": "pnpm ts-check && pnpm test:script-hygiene && pnpm test:judge-probe && pnpm test:channels && pnpm test:format && pnpm test:investment-score && pnpm test:translate-providers && pnpm test:translate-prompt && pnpm test:zh-gate && pnpm test:cyrillic-strip && pnpm test:feed-fetch && pnpm test:article-body && pnpm test:dedup && pnpm test:dedup-before-translate && pnpm test:editor-review && pnpm test:publish-window && pnpm test:proper-nouns && pnpm test:country-relevance && pnpm test:api-field-contract && pnpm test:keepalive && pnpm test:telegram-direct && pnpm test:fetch-pipeline && pnpm test:gate-wiring && pnpm test:similarity-prefix && pnpm test:draft-cleanup && pnpm test:runtime-facts && pnpm test:reviewed-package && pnpm test:reviewed-ingest && pnpm test:reviewed-image-probe",
     "verify:online": "pnpm test:translate",
     "test:editor-review": "tsx scripts/test-editor-review.ts",
     "test:proper-nouns": "tsx scripts/test-proper-nouns.ts",
@@ -70,7 +70,8 @@
     "verify:knobs-live": "tsx scripts/verify-knobs-live.ts",
     "audit:drafts": "tsx scripts/audit-drafts.ts",
     "test:reviewed-package": "node --import tsx scripts/test-reviewed-package.ts",
-    "test:reviewed-ingest": "node --import tsx scripts/test-reviewed-ingest.ts"
+    "test:reviewed-ingest": "node --import tsx scripts/test-reviewed-ingest.ts",
+    "test:reviewed-image-probe": "node --import tsx scripts/test-reviewed-image-probe.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.95.3",

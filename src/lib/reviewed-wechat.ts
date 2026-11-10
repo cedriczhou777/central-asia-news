@@ -119,10 +119,10 @@ async function download(url: string, referer: string, limits?: { deadline: numbe
 export async function probeReviewedImage(url: string, referer: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const deadline = Date.now() + 10000;
+    const deadline = Date.now() + 55000;
     await Promise.race([
-      download(url, referer, { deadline, requestMs: 2500 }),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('图片探测超时')), 10000); }),
+      download(url, referer, { deadline, requestMs: 20000 }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('图片探测超时')), 55000); }),
     ]);
     return { accessible:true as const };
   } catch (error) {
