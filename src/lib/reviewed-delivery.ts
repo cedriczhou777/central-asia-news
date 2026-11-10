@@ -37,8 +37,9 @@ export async function deliverReviewedPackage(
     const claim = await sb.from('reviewed_deliveries').insert({ ...key, state: 'preparing' });
     if (claim.error) {
       if (claim.error.code !== '23505') throw new Error('无法取得持久化投递锁');
-      const existing = await sb.from('reviewed_deliveries').select('*').match(key).single();
+      const existing = await sb.from('reviewed_deliveries').select('*').match(key).maybeSingle();
       if (existing.error) throw new Error('无法读取投递状态');
+      if (!existing.data) { failures.push({ country, state:'blocked', error:'同刊期其他版本已有投递记录，禁止重复创建' }); continue; }
       if (existing.data.state === 'succeeded') { drafts.push({ country_code:country, media_id:existing.data.media_id, ...existing.data.detail }); continue; }
       // Read-only recovery: never call draft/add again when a media_id is known.
       if (['uncertain','sending','updating'].includes(existing.data.state) && existing.data.media_id) {
@@ -77,7 +78,7 @@ export async function deliverReviewedPackage(
       }
       if (existing.data.state !== 'failed') { failures.push({ country, state: existing.data.state, error: '投递进行中或结果待核实，禁止重复创建' }); continue; }
       const retry = await sb.from('reviewed_deliveries').update({ state: 'preparing', updated_at: new Date().toISOString() }).match(key).eq('state','failed').select('country');
-      if (retry.error || retry.data?.length !== 1) { failures.push({ country, error: '未取得重试锁' }); continue; }
+      if (retry.error || retry.data?.length !== 1) { failures.push({ country, error: '未取得重试锁；同刊期可能已有其他版本投递' }); continue; }
     }
     let sending = false;
     let mediaId: string | null = null;

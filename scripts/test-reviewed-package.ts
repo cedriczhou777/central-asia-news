@@ -3,7 +3,7 @@ import { PACKAGE_COUNTRIES, validatePackage, latestVersion, replaceImageSources,
 import { deliverReviewedPackage, deliveryAdapters } from '../src/lib/reviewed-delivery';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
 import { summarizeDraftReadback } from '../src/lib/reviewed-diagnostics';
-import { probeReviewedImage } from '../src/lib/reviewed-wechat';
+import { probeReviewedImage, prepareReviewedDraft } from '../src/lib/reviewed-wechat';
 
 const input = { version:'2026-11-09', countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c, {
  title:c, summary:'审定摘要', bodyHtml:'<section style="color:#112233"><p>审定正文 &amp; 来源</p></section>', sourceName:'原始公告', sourceUrl:'https://example.org/news', coverUrl:''
@@ -34,18 +34,25 @@ function database() {
    insert(v:Row){operation='insert';values=v;return query;},
    update(v:Row){operation='update';values=v;return query;},
    select(){selected=true;return query;}, match(v:Row){Object.assign(filter,v);return query;},
-   eq(k:string,v:unknown){filter[k]=v;return query;},single(){return query;},
+   eq(k:string,v:unknown){filter[k]=v;return query;},single(){return query;},maybeSingle(){return query;},
    then(resolve:any,reject:any){return Promise.resolve().then(()=>{
     const key=(r:Row)=>`${r.version}/${r.country}`;
-    if(operation==='insert') {if(rows.has(key(values)))return {error:{code:'23505'}};rows.set(key(values),{...values});return {error:null};}
+    if(operation==='insert') {if(rows.has(key(values)) || [...rows.values()].some(r=>r.country===values.country && r.version.slice(0,10)===values.version.slice(0,10) && (r.state!=='failed'||r.media_id)))return {error:{code:'23505'}};rows.set(key(values),{...values});return {error:null};}
     const matches=[...rows.values()].filter(r=>Object.entries(filter).every(([k,v])=>r[k]===v));
-    if(operation==='update'){for(const r of matches)Object.assign(r,values);return {error:null,data:selected?matches:null};}
+    if(operation==='update'){for(const r of matches){const next={...r,...values};const conflict=[...rows.values()].some(x=>x!==r && x.country===next.country && x.version.slice(0,10)===next.version.slice(0,10) && (x.state!=='failed'||x.media_id));if((next.state!=='failed'||next.media_id) && conflict)return {error:{code:'23505'},data:null};}for(const r of matches)Object.assign(r,values);return {error:null,data:selected?matches:null};}
     return {error:null,data:matches[0]};
    }).then(resolve,reject);}
   };return query;
  }};
 }
 async function main(){
+ const savedFetch=globalThis.fetch, savedCloud=process.env.USE_WECHAT_CLOUD_CALL;
+ process.env.USE_WECHAT_CLOUD_CALL='true';
+ try {
+  globalThis.fetch=async () => Response.json({media_id:'test-cover',url:'https://mmbiz.qpic.cn/test'});
+  const prepared=await prepareReviewedDraft(payload.countries.kz);
+  assert.equal(prepared.article.content_source_url,'','external source must never appear in the article-level original link');
+ } finally { globalThis.fetch=savedFetch; if(savedCloud===undefined)delete process.env.USE_WECHAT_CLOUD_CALL;else process.env.USE_WECHAT_CLOUD_CALL=savedCloud; }
  const unsafeImage=await probeReviewedImage('http://127.0.0.1/private','');
  assert.equal(unsafeImage.accessible,false,'image probes must reject non-HTTPS and internal destinations');
  const db=database();let creates=0;let failedRead=true;let failedPrepare=true;
@@ -71,6 +78,14 @@ async function main(){
  assert.equal([...concurrentDb.rows.values()].filter(r=>r.state==='succeeded').length,5);
  await deliverReviewedPackage(payload,concurrentDb as any,adapters);
  assert.equal(creates,5,'completed delivery is idempotent');
+ const newRevision=validatePackage({...input,version:'2026-11-09-r2'});
+ const duplicate=await deliverReviewedPackage(newRevision,concurrentDb as any,adapters);
+ assert.equal(duplicate.ok,false);assert.equal(creates,5,'a second version of the same country must not create another draft');
+ assert.equal(duplicate.failures.length,5,'each blocked country must be reported');
+ const retryDb=database();retryDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'failed',media_id:null});
+ retryDb.rows.set('2026-11-09-r2/kz',{version:'2026-11-09-r2',country:'kz',state:'sending',media_id:null});
+ const beforeRetryCreates=creates;const retryOld=await deliverReviewedPackage(payload,retryDb as any,adapters,['kz']);
+ assert.equal(retryOld.ok,false);assert.equal(creates,beforeRetryCreates,'failed version cannot be retried while another revision is sending');
 
  const sourcePayload=validatePackage({version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
   title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''

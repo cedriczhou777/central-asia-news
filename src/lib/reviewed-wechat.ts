@@ -146,7 +146,7 @@ export async function prepareReviewedDraft(d: ReviewedCountry) {
   if (imageUrls(html).some(url => ![...replacements.values()].includes(url))) throw new Error('正文图片替换不完整');
   return {
     article: { title: d.title, digest: d.summary, content: html, author: '中亚动态–INVEST',
-      thumb_media_id: thumb, content_source_url: d.sourceUrl, need_open_comment: 0, only_fans_can_comment: 0 },
+      thumb_media_id: thumb, content_source_url: '', need_open_comment: 0, only_fans_can_comment: 0 },
     images: images.length, cover: images.length ? 'first_body_image' : 'brand', html,
   };
 }
