@@ -52,6 +52,19 @@ async function main(){
   globalThis.fetch=async () => Response.json({media_id:'test-cover',url:'https://mmbiz.qpic.cn/test'});
   const prepared=await prepareReviewedDraft(payload.countries.kz);
   assert.equal(prepared.article.content_source_url,'','external source must never appear in the article-level original link');
+  const sharp=(await import('sharp')).default;
+  const bytes=await sharp({create:{width:2,height:2,channels:3,background:'#ff9900'}}).png().toBuffer();
+  globalThis.fetch=async (input) => {
+    const url=String(input);
+    if(url.startsWith('https://1.1.1.1/'))return new Response(new Uint8Array(bytes),{headers:{'content-type':'image/png'}});
+    if(url.includes('material/add_material'))return Response.json({media_id:'later-news-cover',url:'https://mmbiz.qpic.cn/cover'});
+    if(url.includes('media/uploadimg'))return Response.json({url:'https://mmbiz.qpic.cn/body'});
+    throw new Error('unexpected test fetch');
+  };
+  const laterImage=await prepareReviewedDraft({...payload.countries.kz,bodyHtml:'<p>First news has no image</p><p>Second news</p><img src=\"https://1.1.1.1/photo.png\">'});
+  assert.equal(laterImage.article.thumb_media_id,'later-news-cover','first available later news image must become the article cover');
+  assert.equal(laterImage.cover,'first_body_image');
+  assert.match(laterImage.html,/mmbiz.qpic.cn\/body/);
  } finally { globalThis.fetch=savedFetch; if(savedCloud===undefined)delete process.env.USE_WECHAT_CLOUD_CALL;else process.env.USE_WECHAT_CLOUD_CALL=savedCloud; }
  const unsafeImage=await probeReviewedImage('http://127.0.0.1/private','');
  assert.equal(unsafeImage.accessible,false,'image probes must reject non-HTTPS and internal destinations');
