@@ -19,8 +19,21 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
   const bodyStyles = $('p').toArray().map(el=>compactStyle($(el).attr('style')||'')).filter(style=>style.includes('font-size:16px'));
   const allStyles = $('[style]').toArray().map(el=>compactStyle($(el).attr('style')||''));
   const bodyCountMatch = expectedBodyCount>0 && bodyStyles.length===expectedBodyCount;
+  const footerLines=['中亚投资资讯 | Central Asia Investment Daily','数据来源：各国主流媒体'];
+  const paragraphs=$('p').toArray();
+  const actualFooterParagraphs=paragraphs.slice(-2);
+  const actualFooterLines=actualFooterParagraphs.map(el=>$(el).text().trim());
+  const actualFooterStyles=actualFooterParagraphs.map(el=>compactStyle($(el).attr('style')||''));
+  const footerContainerStyle=actualFooterParagraphs.length===2
+    ? compactStyle($(actualFooterParagraphs[0]).parent().attr('style')||'') : '';
+  const footerTextOrderMatch=actualFooterLines.length===2 && footerLines.every((line,index)=>actualFooterLines[index]===line);
+  const footerAtEnd=actualFooterParagraphs.length===2 && actualFooterParagraphs[1]===paragraphs.at(-1);
+  const footerCentered=actualFooterStyles.every(style=>style.includes('text-align:center')) && footerContainerStyle.includes('text-align:center');
+  const footerFontSize12=actualFooterStyles.every(style=>style.includes('font-size:12px'));
+  const footerGray=actualFooterStyles.every(style=>style.includes('color:#929292'));
+  const footerBackground=footerContainerStyle.includes('background:#f7f5ef');
   return {
-    diagnosticsVersion:2,
+    diagnosticsVersion:3,
     titleMatch: actual.title === expected.title, digestMatch: actual.digest === expected.summary,
     expectedTextMatch: actualText === expectedText, legacyTextMatch: actualText === oldText,
     actualLength: actualText.length, legacyLength: oldText.length, firstDifference: difference,
@@ -37,5 +50,9 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
       outerMargin10:allStyles.some(style=>/(?:^|;)padding:010px20px(?:;|$)/.test(style)),
       innerMargin12:allStyles.some(style=>/(?:^|;)padding:20px12px(?:;|$)/.test(style)),
     },
+    footer:{expectedLines:footerLines,actualLines:actualFooterLines,textOrderMatch:footerTextOrderMatch,
+      atEnd:footerAtEnd,centered:footerCentered,fontSize12:footerFontSize12,gray:footerGray,
+      backgroundF7F5EF:footerBackground,
+      passed:footerTextOrderMatch && footerAtEnd && footerCentered && footerFontSize12 && footerGray && footerBackground},
   };
 }
