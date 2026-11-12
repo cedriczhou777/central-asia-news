@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { resolveSelfBaseUrl } from './runtime';
 import { PUBLISH_SCHEDULES, scheduleHoursCrossCheck } from './publish-schedule';
 import { startKeepalive, stopKeepalive, keepaliveCrossCheck } from './keepalive';
+import { startReviewedRecovery } from './reviewed-recovery';
 
 // 北京时间定时任务
 //
@@ -462,6 +463,7 @@ export function startScheduler() {
     return;
   }
   schedulerStarted = true;
+  startReviewedRecovery();
 
   console.log('启动定时任务调度器...（★ 旧链路的抓取/翻译已下线 ⇒ 只在 08:00 推送 ChatGPT 的稿包）');
 
