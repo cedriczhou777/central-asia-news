@@ -1,12 +1,12 @@
 import cron from 'node-cron';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { beijingDate } from './utils';
-import { imageUrls, issueDate, latestVersion, PACKAGE_COUNTRIES, type ReviewedPackage } from './reviewed-package';
+import { imageUrls, issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, type ReviewedPackage } from './reviewed-package';
 import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { probeReviewedImage } from './reviewed-wechat';
 import { persistPushRun } from './push-run-store';
 
-export const REVIEWED_RECOVERY_VERSION = '2026-11-12-v2';
+export const REVIEWED_RECOVERY_VERSION = '2026-11-12-v3';
 type Row = { version:string; country:string; state:string; media_id?:string | null };
 type Dependencies = {
   packages:(date:string)=>Promise<string[]>;
@@ -54,7 +54,7 @@ let running=false, registered=false;
 let lastRecovery:Record<string,unknown> | null = null;
 export function reviewedRecoveryStatus(){return {version:REVIEWED_RECOVERY_VERSION,running,lastRun:lastRecovery};}
 export function queueReviewedRecovery(version:string, today=beijingDate()) {
-  if(issueDate(version)!==today)return false;
+  if(issueDate(version)!==today || !issueCutoffElapsed(version))return false;
   // Ingest is an explicit authorized write. Continue its accepted work even if
   // the client turn ends or the instance woke after the last cron tick.
   setTimeout(()=>{void runReviewedRecovery();},0);

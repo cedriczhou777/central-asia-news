@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { summarizeDraftReadback } from '../src/lib/reviewed-diagnostics';
+import { issueCutoffElapsed } from '../src/lib/reviewed-package';
+assert.equal(issueCutoffElapsed('2026-11-13',Date.parse('2026-11-13T05:59:59+08:00')),false);
+assert.equal(issueCutoffElapsed('2026-11-13-r2',Date.parse('2026-11-13T06:00:00+08:00')),true);
 const content='<section style="padding:0 10px 20px"><section style="padding:20px 12px"><p style="font-size:16px;line-height:1.9;text-align:justify;text-align-last:left">正文</p></section></section>';
 const country={title:'test',summary:'summary',bodyHtml:content,sourceName:'test',sourceUrl:'',coverUrl:''};
 const actual={title:'test',digest:'summary',content,content_source_url:'',thumb_media_id:'thumb'};

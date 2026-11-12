@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { beijingDate } from './utils';
-import { issueDate, latestVersion, PACKAGE_COUNTRIES, imageUrls } from './reviewed-package';
+import { issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, imageUrls } from './reviewed-package';
 import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { persistPushRun } from './push-run-store';
 import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
@@ -36,6 +36,7 @@ export async function reviewedPush(request: NextRequest) {
       version = latestVersion((result.data || []).map(r=>r.version), date);
     }
     if (!version) return NextResponse.json({ ok:false, success:false, running:false, error:'本刊期没有完整审定稿包；停止，不回退旧稿', date }, { status:409 });
+    if(!issueCutoffElapsed(version))return NextResponse.json({ok:false,error:'本刊期尚未到北京时间06:00截稿，不创建未来草稿'}, {status:409});
     const payload = await readPackage(version);
     if (!payload) return NextResponse.json({ ok:false, error:'指定版本不存在' }, { status:409 });
     const probe = await getSupabaseClient().from('reviewed_deliveries').select('country').eq('version',version);

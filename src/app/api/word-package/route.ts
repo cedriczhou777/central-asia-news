@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { PACKAGE_COUNTRIES, contentHash, issueDate, validatePackage } from '@/lib/reviewed-package';
+import { PACKAGE_COUNTRIES, contentHash, issueDate, issueCutoffElapsed, validatePackage } from '@/lib/reviewed-package';
 import { queueReviewedRecovery } from '@/lib/reviewed-recovery';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,6 +14,7 @@ export async function POST(req: Request): Promise<Response> {
     const error = e instanceof Error ? e.message : '稿包无效';
     return NextResponse.json({ ok:false, error }, { status:error.includes('五国未齐') ? 409 : 400 });
   }
+  if(!issueCutoffElapsed(payload.version))return NextResponse.json({ok:false,error:'本刊期尚未到北京时间06:00截稿，不接收未来完整稿包'}, {status:409});
   try {
     const sb = getSupabaseClient();
     const hash = contentHash(payload);

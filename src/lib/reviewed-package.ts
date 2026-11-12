@@ -19,6 +19,9 @@ export function issueDate(version: string): string {
   }
   return match[1];
 }
+export function issueCutoffElapsed(version:string,now=Date.now()):boolean {
+  return Date.parse(`${issueDate(version)}T06:00:00+08:00`)<=now;
+}
 export function imageUrls(html: string): string[] {
   const $ = load(html, {}, false);
   return $('img').toArray().map(el => $(el).attr('src') || '');
