@@ -3,6 +3,23 @@ import { lookup } from 'node:dns/promises';
 import { FALLBACK_THUMB_JPEG_BASE64 } from './wechat-thumb-fallback';
 
 let token: { value: string; until: number } | undefined;
+// Preflight and delivery must use the same verified bytes. A second origin
+// fetch used to fail after a successful preflight (and re-download shared images).
+const imageCache = new Map<string, { bytes: Buffer; until: number }>();
+const IMAGE_CACHE_BYTES = 64 * 1024 * 1024;
+let imageCacheBytes = 0;
+function cacheImage(key: string, bytes: Buffer) {
+  const now = Date.now();
+  const previous = imageCache.get(key);
+  if (previous) { imageCache.delete(key); imageCacheBytes -= previous.bytes.length; }
+  for (const [k, entry] of imageCache) {
+    if (entry.until <= now || imageCacheBytes + bytes.length > IMAGE_CACHE_BYTES) {
+      imageCache.delete(k); imageCacheBytes -= entry.bytes.length;
+    }
+  }
+  imageCache.set(key, { bytes, until: now + 2 * 60 * 60_000 });
+  imageCacheBytes += bytes.length;
+}
 async function apiUrl(path: string): Promise<string> {
   if (process.env.USE_WECHAT_CLOUD_CALL === 'true') return `http://api.weixin.qq.com/cgi-bin/${path}`;
   if (!token || token.until < Date.now()) {
@@ -63,6 +80,11 @@ function publicAddress(address: string): boolean {
     !(p[0]===100&&p[1]>=64&&p[1]<=127) && !(p[0]===198&&[18,19].includes(p[1]));
 }
 async function download(url: string, referer: string, limits?: { deadline: number; requestMs: number }) {
+  assertHttps(url);
+  const cacheKey = JSON.stringify([url, referer]);
+  const cached = imageCache.get(cacheKey);
+  if (cached && cached.until > Date.now()) return cached.bytes;
+  if (cached) { imageCache.delete(cacheKey); imageCacheBytes -= cached.bytes.length; }
   let response: Response | undefined;
   for (let redirects=0;redirects<=5;redirects++) {
     if (limits && Date.now() >= limits.deadline) throw new Error('图片探测超时');
@@ -101,7 +123,7 @@ async function download(url: string, referer: string, limits?: { deadline: numbe
     url=new URL(location,url).href;
   }
   if (!response) throw new Error('图片请求失败');
-  if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) throw new Error(`来源图片无法读取，HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`来源图片无法读取，HTTP ${response.status}`);
   if (Number(response.headers.get('content-length')) > 10000000) throw new Error('图片超过10MB');
   const reader = response.body?.getReader();
   if (!reader) throw new Error('图片内容为空');
@@ -113,7 +135,16 @@ async function download(url: string, referer: string, limits?: { deadline: numbe
     if (size > 10000000) { await reader.cancel(); throw new Error('图片超过10MB'); }
     chunks.push(next.value);
   }
-  return Buffer.concat(chunks);
+  const bytes = Buffer.concat(chunks);
+  // NBKR's official servlet returns genuine JPEGs without Content-Type.
+  // Decode rather than trusting either a missing MIME header or image/* on HTML.
+  const { default: sharp } = await import('sharp');
+  try {
+    const metadata = await sharp(bytes, { limitInputPixels: 40000000 }).metadata();
+    if (!metadata.width || !metadata.height || !['jpeg','png','webp','gif','avif','heif','tiff'].includes(metadata.format || '')) throw new Error();
+  } catch { throw new Error('来源响应不是可解码的图片'); }
+  cacheImage(cacheKey, bytes);
+  return bytes;
 }
 /** Probe the exact image download path without uploading media or creating a draft. */
 export async function probeReviewedImage(url: string, referer: string) {

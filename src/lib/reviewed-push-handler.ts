@@ -6,6 +6,7 @@ import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { persistPushRun } from './push-run-store';
 import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
 import { summarizeDraftReadback } from './reviewed-diagnostics';
+import { reviewedRecoveryStatus } from './reviewed-recovery';
 
 function authorized(request: NextRequest) {
   return !!process.env.INGEST_SECRET && request.headers.get('x-ingest-secret') === process.env.INGEST_SECRET;
@@ -88,7 +89,7 @@ export async function reviewedStatus(request: NextRequest) {
         return NextResponse.json({ ok:true, version, country:diagnosticCountry, state:row.state,
           checks:summarizeDraftReadback(payload.countries[diagnosticCountry as (typeof PACKAGE_COUNTRIES)[number]], draft, row.detail?.imageUrls || []) });
       }
-      return NextResponse.json({ ok:true, version, packageReceived:!!payload,
+      return NextResponse.json({ ok:true, version, packageReceived:!!payload, contentHash:payload ? (await import('./reviewed-package')).contentHash(payload) : null, recovery:reviewedRecoveryStatus(),
         draftsVerified:rows.length === 5 && rows.every(r=>r.state === 'succeeded'), byCountry:rows });
     }
     const result = await sb.from('push_runs').select('*').eq('id','latest').maybeSingle();

@@ -71,7 +71,8 @@
     "audit:drafts": "tsx scripts/audit-drafts.ts",
     "test:reviewed-package": "node --import tsx scripts/test-reviewed-package.ts",
     "test:reviewed-ingest": "node --import tsx scripts/test-reviewed-ingest.ts",
-    "test:reviewed-image-probe": "node --import tsx scripts/test-reviewed-image-probe.ts"
+    "test:reviewed-image-probe": "node --import tsx scripts/test-reviewed-image-probe.ts",
+    "test:reviewed-recovery": "node --import tsx scripts/test-reviewed-recovery.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.95.3",
