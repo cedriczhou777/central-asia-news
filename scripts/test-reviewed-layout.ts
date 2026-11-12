@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { summarizeDraftReadback } from '../src/lib/reviewed-diagnostics';
+const content='<section style="padding:0 10px 20px"><section style="padding:20px 12px"><p style="font-size:16px;line-height:1.9;text-align:justify;text-align-last:left">正文</p></section></section>';
+const country={title:'test',summary:'summary',bodyHtml:content,sourceName:'test',sourceUrl:'',coverUrl:''};
+const actual={title:'test',digest:'summary',content,content_source_url:'',thumb_media_id:'thumb'};
+const check=summarizeDraftReadback(country,actual,[]);
+assert.equal(check.layout.justified,true);assert.equal(check.layout.lastLineLeft,true);
+assert.equal(check.layout.outerMargin10,true);assert.equal(check.layout.innerMargin12,true);
+assert.equal(check.originalLinkEmpty,true);assert.equal(check.thumbnailPresent,true);
+const lost=summarizeDraftReadback(country,{...actual,content:content.replace('text-align:justify','text-align:left')},[]);
+assert.equal(lost.expectedTextMatch,true);
+assert.equal(lost.layout.justified,false,'Matching text must not conceal lost justification');
+const missing=summarizeDraftReadback(country,{...actual,content:'<p>正文</p>'},[]);
+assert.equal(missing.layout.bodyCountMatch,false);
+assert.equal(missing.layout.outerMargin10,false);
+assert.equal(summarizeDraftReadback(country,{...actual,content_source_url:'https://example.com'},[]).originalLinkEmpty,false);
+console.log('reviewed layout: real paragraph styles, both margins and blank original link verified; stripped styles detected');
