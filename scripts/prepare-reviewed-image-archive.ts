@@ -2,7 +2,7 @@
 // directory contains original files named by SHA-256. Never downloads or writes
 // production. Validate every file before installing the destination manifest.
 import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { resolve, join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { assertHttps } from '../src/lib/reviewed-package';
@@ -10,6 +10,8 @@ import { assertHttps } from '../src/lib/reviewed-package';
 async function main() {
   const [input,source,output]=process.argv.slice(2);
   if(!input||!source||!output)throw new Error('Usage: prepare-reviewed-image-archive.ts MANIFEST SOURCE_DIRECTORY OUTPUT_DIRECTORY');
+  const rel=relative(resolve('public'),resolve(output));
+  if(rel===''||(!rel.startsWith('..')&&!rel.startsWith('/')))throw new Error('Originals must not be staged in the public directory');
   const manifest=JSON.parse(await readFile(resolve(input),'utf8')) as {images:Array<{url:string;sha256:string;bytes:number}>};
   if(!Array.isArray(manifest.images)||manifest.images.length===0)throw new Error('Missing images');
   const seen=new Set<string>();

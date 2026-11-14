@@ -1,10 +1,12 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 
 /** Deployed, immutable copies of publicly obtained source bytes. No runtime writes,
  * arbitrary paths, alternate hosts or changes to the accepted editorial package. */
-export async function readArchivedImage(url: string, directory = join(process.cwd(), 'public/reviewed-image-archive')): Promise<Buffer | null> {
+export async function readArchivedImage(url: string, directory = join(process.cwd(), 'var/reviewed-image-archive')): Promise<Buffer | null> {
+  const rel=relative(resolve(process.cwd(),'public'),resolve(directory));
+  if (rel==='' || (!rel.startsWith('..') && !rel.startsWith('/'))) throw new Error('原图存档不得位于公开目录');
   let raw: string;
   try { raw = await readFile(join(directory, 'manifest.json'), 'utf8'); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }

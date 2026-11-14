@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { PACKAGE_COUNTRIES, contentHash, issueDate, issueCutoffElapsed, validatePackage } from '@/lib/reviewed-package';
+import { PACKAGE_COUNTRIES, contentHash, issueDate, issueCutoffElapsed, validatePackage, requirePrivateImages } from '@/lib/reviewed-package';
 import { queueReviewedRecovery } from '@/lib/reviewed-recovery';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,7 +9,7 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ ok:false, error:'缺少或错误的 X-Ingest-Secret' }, { status:401 });
   }
   let payload;
-  try { payload = validatePackage(await req.json()); }
+  try { payload = validatePackage(await req.json()); requirePrivateImages(payload); }
   catch (e) {
     const error = e instanceof Error ? e.message : '稿包无效';
     return NextResponse.json({ ok:false, error }, { status:error.includes('五国未齐') ? 409 : 400 });
@@ -27,7 +27,7 @@ export async function POST(req: Request): Promise<Response> {
       if (existing.error) throw new Error('无法核实已有版本');
       if (existing.data.content_hash !== hash) return NextResponse.json({ ok:false, version:payload.version, error:'同版本内容不同；修订稿须使用新的修订版本' }, { status:409 });
     }
-    const recoveryQueued=queueReviewedRecovery(payload.version);
+    const recoveryQueued=queueReviewedRecovery(payload.version,undefined,req.url);
     return NextResponse.json({ ok:true, version:payload.version, contentHash:hash, duplicate:!!error,recoveryQueued,
       inserted:error ? 0 : 5, skipped:error ? 5 : 0,
       byCountry:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,1])), failed:[],

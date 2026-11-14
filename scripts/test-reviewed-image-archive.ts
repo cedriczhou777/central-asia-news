@@ -30,13 +30,14 @@ async function main() {
     // an origin request, but still decode images and use normal WeChat uploads.
     const image=await sharp({create:{width:8,height:8,channels:3,background:'#345678'}}).png().toBuffer();
     const imageHash=createHash('sha256').update(image).digest('hex');
-    const archive=join(dir,'public/reviewed-image-archive');await mkdir(archive,{recursive:true});
+    const archive=join(dir,'var/reviewed-image-archive');await mkdir(archive,{recursive:true});
     await writeFile(join(archive,imageHash),image);
     await writeFile(join(archive,'manifest.json'),JSON.stringify({images:[{...entry,sha256:imageHash,bytes:image.length}]}));
     const cwd=process.cwd(),originalFetch=globalThis.fetch,cloud=process.env.USE_WECHAT_CLOUD_CALL;
     let uploads=0;
     try {
       process.chdir(dir);process.env.USE_WECHAT_CLOUD_CALL='true';
+      await assert.rejects(readArchivedImage(entry.url,join(dir,'public/reviewed-image-archive')),/公开目录/);
       globalThis.fetch=async input=>{
         const url=String(input);assert.equal(new URL(url).host,'api.weixin.qq.com','origin must not be contacted');uploads++;
         if(url.includes('material/add_material'))return Response.json({media_id:'thumb',url:'https://mmbiz.qpic.cn/cover'});
