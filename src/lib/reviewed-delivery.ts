@@ -41,7 +41,8 @@ export async function deliverReviewedPackage(
       if (existing.error) throw new Error('无法读取投递状态');
       if (!existing.data) { failures.push({ country, state:'blocked', error:'同刊期其他版本已有投递记录，禁止重复创建' }); continue; }
       if (existing.data.state === 'succeeded') { drafts.push({ country_code:country, media_id:existing.data.media_id, ...existing.data.detail }); continue; }
-      // Read-only recovery: never call draft/add again when a media_id is known.
+      // Never call draft/add again when a media_id is known. A narrowly verified
+      // repair may update that same draft, under a compare-and-swap receipt lock.
       if (['uncertain','sending','updating'].includes(existing.data.state) && existing.data.media_id) {
         let updateLockAcquired = false;
         try {
@@ -50,20 +51,22 @@ export async function deliverReviewedPackage(
           if (!verified.verified) {
             const d = payload.countries[country];
             const updateDraft = adapters.update;
-            const staleUpdate = existing.data.state === 'updating' && Date.now() - Date.parse(existing.data.updated_at || '') > 5 * 60_000;
-            const safelyRepairable = !!updateDraft && (existing.data.state === 'uncertain' || staleUpdate) && current.title === d.title && current.digest === d.summary &&
+            // Elapsed time cannot prove another worker stopped updating WeChat.
+            const safelyRepairable = !!updateDraft && existing.data.state === 'uncertain' && current.title === d.title && current.digest === d.summary &&
               ((verified.legacyTextMatch && verified.imageMatch && sourceUrls(d.bodyHtml).length > 0) ||
                ((verified.expectedTextMatch || verified.legacyTextMatch) && verified.draftImages === 0 && (existing.data.detail?.imageUrls || []).length > 0));
             if (!safelyRepairable) throw new Error('已有草稿复核未通过；未重复创建');
             const prepared = await adapters.prepare(d);
             const lock = await sb.from('reviewed_deliveries').update({ state:'updating', updated_at:new Date().toISOString() })
-              .match(key).eq('state',existing.data.state).eq('media_id',existing.data.media_id).select('country');
+              .match(key).eq('state',existing.data.state).eq('media_id',existing.data.media_id)
+              .eq('updated_at',existing.data.updated_at).select('country');
             if (lock.error || lock.data?.length !== 1) throw new Error('未取得原草稿更新锁');
             updateLockAcquired = true;
             await updateDraft(existing.data.media_id, prepared.article);
             const updated = await adapters.read(existing.data.media_id);
             verified = verifyReadback(d, updated, imageUrls(prepared.html));
             if (!verified.verified) throw new Error('原草稿更新后仍未通过审定稿核验');
+            existing.data.detail = { ...existing.data.detail, imageUrls:imageUrls(prepared.html), transportedHash:contentHash(prepared.html) };
           }
           const detail = {...existing.data.detail, ...verified, error:null};
           const saved = await sb.from('reviewed_deliveries').update({state:'succeeded', detail, updated_at:new Date().toISOString()}).match(key).eq('media_id',existing.data.media_id);
@@ -76,8 +79,8 @@ export async function deliverReviewedPackage(
         }
         continue;
       }
-      if (existing.data.state !== 'failed') { failures.push({ country, state: existing.data.state, error: '投递进行中或结果待核实，禁止重复创建' }); continue; }
-      const retry = await sb.from('reviewed_deliveries').update({ state: 'preparing', updated_at: new Date().toISOString() }).match(key).eq('state','failed').select('country');
+      if (existing.data.state !== 'failed' || existing.data.media_id) { failures.push({ country, state: existing.data.state, error: '投递进行中或结果待核实，禁止重复创建' }); continue; }
+      const retry = await sb.from('reviewed_deliveries').update({ state: 'preparing', updated_at: new Date().toISOString() }).match(key).eq('state','failed').is('media_id',null).select('country');
       if (retry.error || retry.data?.length !== 1) { failures.push({ country, error: '未取得重试锁；同刊期可能已有其他版本投递' }); continue; }
     }
     let sending = false;

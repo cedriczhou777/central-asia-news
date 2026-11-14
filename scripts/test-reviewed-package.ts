@@ -34,11 +34,11 @@ function database() {
    insert(v:Row){operation='insert';values=v;return query;},
    update(v:Row){operation='update';values=v;return query;},
    select(){selected=true;return query;}, match(v:Row){Object.assign(filter,v);return query;},
-   eq(k:string,v:unknown){filter[k]=v;return query;},single(){return query;},maybeSingle(){return query;},
+   eq(k:string,v:unknown){filter[k]=v;return query;},is(k:string,v:unknown){filter[k]=v;return query;},single(){return query;},maybeSingle(){return query;},
    then(resolve:any,reject:any){return Promise.resolve().then(()=>{
     const key=(r:Row)=>`${r.version}/${r.country}`;
     if(operation==='insert') {if(rows.has(key(values)) || [...rows.values()].some(r=>r.country===values.country && r.version.slice(0,10)===values.version.slice(0,10) && (r.state!=='failed'||r.media_id)))return {error:{code:'23505'}};rows.set(key(values),{...values});return {error:null};}
-    const matches=[...rows.values()].filter(r=>Object.entries(filter).every(([k,v])=>r[k]===v));
+    const matches=[...rows.values()].filter(r=>Object.entries(filter).every(([k,v])=>r[k]===v || (v===null && r[k]===undefined)));
     if(operation==='update'){for(const r of matches){const next={...r,...values};const conflict=[...rows.values()].some(x=>x!==r && x.country===next.country && x.version.slice(0,10)===next.version.slice(0,10) && (x.state!=='failed'||x.media_id));if((next.state!=='failed'||next.media_id) && conflict)return {error:{code:'23505'},data:null};}for(const r of matches)Object.assign(r,values);return {error:null,data:selected?matches:null};}
     return {error:null,data:matches[0]};
    }).then(resolve,reject);}
@@ -100,6 +100,28 @@ async function main(){
  const beforeRetryCreates=creates;const retryOld=await deliverReviewedPackage(payload,retryDb as any,adapters,['kz']);
  assert.equal(retryOld.ok,false);assert.equal(creates,beforeRetryCreates,'failed version cannot be retried while another revision is sending');
 
+ // The incident's five-country input must leave successful original drafts untouched.
+ const subsetDb=database();
+ for(const c of PACKAGE_COUNTRIES)subsetDb.rows.set(`2026-11-09/${c}`,{version:'2026-11-09',country:c,state:['uz','tj'].includes(c)?'succeeded':'failed',media_id:['uz','tj'].includes(c)?`preserved-${c}`:null,detail:{}});
+ const originalReceipts=JSON.stringify([...subsetDb.rows.values()]);
+ const subset=await deliverReviewedPackage(newRevision,subsetDb as any,adapters,['kz','kg','az']);
+ assert.equal(subset.ok,true);
+ assert.equal(JSON.stringify([...subsetDb.rows.values()].filter(r=>r.version===payload.version)),originalReceipts);
+ // Actual claim ordering, not just pre-seeded conflicts: exercise both winners.
+ for(const oldFirst of [true,false]){
+  const raceDb=database();raceDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'failed',media_id:null});
+  let release!:()=>void,entered!:()=>void,raceCreates=0;
+  const blocked=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const fast={...adapters,async create(a:any){raceCreates++;return a.title;}};
+  const slow={...fast,async prepare(d:any){entered();await blocked;return adapters.prepare(d);}};
+  const first=deliverReviewedPackage(oldFirst?payload:newRevision,raceDb as any,slow,['kz']);await started;
+  const second=await deliverReviewedPackage(oldFirst?newRevision:payload,raceDb as any,fast,['kz']);
+  assert.equal(second.ok,false);release();await first;assert.equal(raceCreates,1);
+ }
+ const mediaDb=database();mediaDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'failed',media_id:'already-created'});
+ const mediaCreates=creates;const mediaRetry=await deliverReviewedPackage(payload,mediaDb as any,adapters,['kz']);
+ assert.equal(mediaRetry.ok,false);assert.equal(creates,mediaCreates,'any known media_id prevents re-creation even in an inconsistent failed state');
+
  const sourcePayload=validatePackage({version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
   title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
  }]))});
@@ -133,6 +155,10 @@ async function main(){
  };
  const fixedImage=await deliverReviewedPackage(missingImagePayload,imageDb as any,imageAdapters,['kg']);
  assert.equal(fixedImage.ok,true);assert.equal(imageUpdates,1);assert.equal(imageDb.rows.get('2026-11-09-r2/kg')?.media_id,'existing-kg');
+ const staleDb=database();let staleUpdates=0;
+ staleDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'updating',media_id:'existing-kg',updated_at:'2026-01-01T00:00:00Z',detail:{imageUrls:['https://mmbiz.qpic.cn/old.jpg']}});
+ const stale=await deliverReviewedPackage(missingImagePayload,staleDb as any,{...imageAdapters,async update(){staleUpdates++;},async read(){return {title:'kg',digest:'审定摘要',content:'<p>原文内容</p><p>来源：Example</p>'};}},['kg']);
+ assert.equal(stale.ok,false);assert.equal(staleUpdates,0,'elapsed time never permits stealing an updating lock');
  const lazyDb=database();let lazyUpdates=0;
  lazyDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'uncertain',media_id:'existing-kg',detail:{imageUrls:['https://mmbiz.qpic.cn/mmbiz_jpg/abc/0?wx_fmt=jpeg']}});
  const lazyAdapters:typeof deliveryAdapters={...imageAdapters,async update(){lazyUpdates++;},async read(){return {title:'kg',digest:'审定摘要',content:missingImagePayload.countries.kg.bodyHtml.replace('src="https://example.org/a.jpg"','data-src="https://mmbiz.qpic.cn/mmbiz_jpg/abc/640?wx_fmt=jpeg"')};}};

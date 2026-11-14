@@ -1,6 +1,7 @@
 import { assertHttps, imageUrls, replaceImageSources, type ReviewedCountry } from './reviewed-package';
 import { lookup } from 'node:dns/promises';
 import { FALLBACK_THUMB_JPEG_BASE64 } from './wechat-thumb-fallback';
+import { readArchivedImage } from './reviewed-image-archive';
 
 let token: { value: string; until: number } | undefined;
 // Preflight and delivery must use the same verified bytes. A second origin
@@ -81,6 +82,11 @@ function publicAddress(address: string): boolean {
 }
 async function download(url: string, referer: string, limits?: { deadline: number; requestMs: number }) {
   assertHttps(url);
+  const archived = await readArchivedImage(url);
+  if (archived) {
+    await validateImage(archived);
+    return archived;
+  }
   const cacheKey = JSON.stringify([url, referer]);
   const cached = imageCache.get(cacheKey);
   if (cached && cached.until > Date.now()) return cached.bytes;
@@ -138,13 +144,16 @@ async function download(url: string, referer: string, limits?: { deadline: numbe
   const bytes = Buffer.concat(chunks);
   // NBKR's official servlet returns genuine JPEGs without Content-Type.
   // Decode rather than trusting either a missing MIME header or image/* on HTML.
+  await validateImage(bytes);
+  cacheImage(cacheKey, bytes);
+  return bytes;
+}
+async function validateImage(bytes: Buffer) {
   const { default: sharp } = await import('sharp');
   try {
     const metadata = await sharp(bytes, { limitInputPixels: 40000000 }).metadata();
     if (!metadata.width || !metadata.height || !['jpeg','png','webp','gif','avif','heif','tiff'].includes(metadata.format || '')) throw new Error();
   } catch { throw new Error('来源响应不是可解码的图片'); }
-  cacheImage(cacheKey, bytes);
-  return bytes;
 }
 /** Probe the exact image download path without uploading media or creating a draft. */
 export async function probeReviewedImage(url: string, referer: string) {

@@ -6,7 +6,7 @@ import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { probeReviewedImage } from './reviewed-wechat';
 import { persistPushRun } from './push-run-store';
 
-export const REVIEWED_RECOVERY_VERSION = '2026-11-12-v3';
+export const REVIEWED_RECOVERY_VERSION = '2026-11-14-v4';
 type Row = { version:string; country:string; state:string; media_id?:string | null };
 type Dependencies = {
   packages:(date:string)=>Promise<string[]>;
@@ -35,19 +35,22 @@ export async function recoverReviewedIssue(date:string,deps:Dependencies) {
   const payload = await deps.read(version);
   if (!payload) throw new Error('已接收稿包无法读取');
   const failures:object[] = [];
+  const ready: (typeof PACKAGE_COUNTRIES)[number][] = [];
   // Use exactly the origin path used by draft preparation; successful probes
   // populate its bounded cache. Do not silently discard any failed image.
   for (const country of pending) {
+    const before = failures.length;
     const d=payload.countries[country];
     for (const [index,url] of imageUrls(d.bodyHtml).entries()) {
       let result=await deps.probe(url,d.sourceUrl);
       if (!result.accessible && !/HTTP 40[134]/.test(result.reason || '')) result=await deps.probe(url,d.sourceUrl);
       if (!result.accessible) failures.push({country,index,reason:result.reason});
     }
+    if (failures.length === before) ready.push(country);
   }
-  if (failures.length) return {stage:'needs_image_revision',version,failures};
-  const result=await deps.deliver(payload,pending);
-  return {stage:'delivery_attempted',version,countries:pending,result};
+  if (!ready.length) return {stage:'needs_image_revision',version,failures};
+  const result=await deps.deliver(payload,ready);
+  return {stage:'delivery_attempted',version,countries:ready,failures,result};
 }
 
 let running=false, registered=false;
@@ -82,7 +85,11 @@ export async function runReviewedRecovery() {
     });
     lastRecovery={startedAt,finishedAt:new Date().toISOString(),...result};
     // Do not replace live push progress merely because no package exists.
-    if(result.stage==='delivery_attempted'||result.stage==='needs_image_revision')await persistPushRun({running:false,startedAt,finishedAt:new Date().toISOString(),durationMs:Date.now()-Date.parse(startedAt),error:result.stage==='needs_image_revision'?'图片需修订':null,summary:{recovery:lastRecovery}});
+    if(result.stage==='delivery_attempted'||result.stage==='needs_image_revision'){
+      const error=result.failures?.length?'部分国家图片待处理':
+        result.stage==='delivery_attempted' && (result.result as {ok?:boolean} | null)?.ok !== true ? '部分国家投递待处理' : null;
+      await persistPushRun({running:false,startedAt,finishedAt:new Date().toISOString(),durationMs:Date.now()-Date.parse(startedAt),error,summary:{recovery:lastRecovery}});
+    }
     return result;
   } catch(error) {
     lastRecovery={startedAt,finishedAt:new Date().toISOString(),stage:'failed',error:error instanceof Error?error.message:'恢复失败'};
