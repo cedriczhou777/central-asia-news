@@ -1,6 +1,9 @@
-import { assertHttps, imageUrls, replaceImageSources, type ReviewedCountry } from './reviewed-package';
+import { assertHttps, imageUrls, replaceImageSources, type ReviewedCountry, type ReviewedImageAsset } from './reviewed-package';
 import { lookup } from 'node:dns/promises';
 import { FALLBACK_THUMB_JPEG_BASE64 } from './wechat-thumb-fallback';
+import { readArchivedImage } from './reviewed-image-archive';
+import { readPrivateImage } from './reviewed-private-images';
+import { validateOriginalImage } from './reviewed-image-bytes';
 
 let token: { value: string; until: number } | undefined;
 // Preflight and delivery must use the same verified bytes. A second origin
@@ -79,8 +82,16 @@ function publicAddress(address: string): boolean {
     !(p[0]===172&&p[1]>=16&&p[1]<=31) && !(p[0]===192&&p[1]===168) &&
     !(p[0]===100&&p[1]>=64&&p[1]<=127) && !(p[0]===198&&[18,19].includes(p[1]));
 }
-async function download(url: string, referer: string, limits?: { deadline: number; requestMs: number }) {
+async function download(url: string, referer: string, limits?: { deadline: number; requestMs: number }, asset?: ReviewedImageAsset) {
   assertHttps(url);
+  // A pinned private original is authoritative. Missing/corrupt storage must not
+  // silently fall back to a changed image or retry a denied source through a proxy.
+  if (asset) return readPrivateImage(asset);
+  const archived = await readArchivedImage(url);
+  if (archived) {
+    await validateImage(archived);
+    return archived;
+  }
   const cacheKey = JSON.stringify([url, referer]);
   const cached = imageCache.get(cacheKey);
   if (cached && cached.until > Date.now()) return cached.bytes;
@@ -93,16 +104,11 @@ async function download(url: string, referer: string, limits?: { deadline: numbe
     const addresses=await lookup(parsed.hostname.replace(/^\[|\]$/g,''),{all:true});
     if (!addresses.length || addresses.some(a=>!publicAddress(a.address))) throw new Error('图片地址不是公网地址');
     if (limits && Date.now() >= limits.deadline) throw new Error('图片探测超时');
-    // Image hosts vary in their hotlink rules: some require the article URL as
-    // Referer, while others reject it. Retry transient network errors and try
-    // a browser request without Referer before treating the source as unusable.
-    const requestVariants = [
-      { 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8', ...(referer ? { Referer:referer } : {}) },
-      { 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' },
-      { 'User-Agent':'Mozilla/5.0 (compatible; CentralAsiaNewsBot/1.0)', 'Accept':'image/avif,image/webp,image/apng,image/*,*;q=0.8' },
-    ];
+    // Keep one request identity. Retry transient errors only; never change
+    // headers or routes after an authentication/access/rate-limit rejection.
+    const headers = { 'User-Agent':'CentralAsiaNews/1.0', 'Accept':'image/*', ...(referer ? { Referer:referer } : {}) };
     let lastError: unknown;
-    for (const headers of requestVariants) {
+    for (let attempt=0; attempt<3; attempt++) {
       try {
         const requestMs = limits ? Math.max(1, Math.min(limits.requestMs, limits.deadline-Date.now())) : 20000;
         response=await fetch(url,{headers,signal:AbortSignal.timeout(requestMs),redirect:'manual'});
@@ -111,7 +117,7 @@ async function download(url: string, referer: string, limits?: { deadline: numbe
         response=undefined;
         continue;
       }
-      if (response.ok || ![403,429,500,502,503,504].includes(response.status)) break;
+      if (response.ok || ![500,502,503,504].includes(response.status)) break;
       await response.body?.cancel();
     }
     if (!response && lastError) throw new Error(`图片请求失败：${lastError instanceof Error ? lastError.message : String(lastError)}`);
@@ -138,21 +144,20 @@ async function download(url: string, referer: string, limits?: { deadline: numbe
   const bytes = Buffer.concat(chunks);
   // NBKR's official servlet returns genuine JPEGs without Content-Type.
   // Decode rather than trusting either a missing MIME header or image/* on HTML.
-  const { default: sharp } = await import('sharp');
-  try {
-    const metadata = await sharp(bytes, { limitInputPixels: 40000000 }).metadata();
-    if (!metadata.width || !metadata.height || !['jpeg','png','webp','gif','avif','heif','tiff'].includes(metadata.format || '')) throw new Error();
-  } catch { throw new Error('来源响应不是可解码的图片'); }
+  await validateImage(bytes);
   cacheImage(cacheKey, bytes);
   return bytes;
 }
+async function validateImage(bytes: Buffer) {
+  await validateOriginalImage(bytes);
+}
 /** Probe the exact image download path without uploading media or creating a draft. */
-export async function probeReviewedImage(url: string, referer: string) {
+export async function probeReviewedImage(url: string, referer: string, asset?: ReviewedImageAsset) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const deadline = Date.now() + 55000;
     await Promise.race([
-      download(url, referer, { deadline, requestMs: 20000 }),
+      download(url, referer, { deadline, requestMs: 20000 }, asset),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('图片探测超时')), 55000); }),
     ]);
     return { accessible:true as const };
@@ -163,14 +168,21 @@ export async function probeReviewedImage(url: string, referer: string) {
     if (timer) clearTimeout(timer);
   }
 }
-export async function prepareReviewedDraft(d: ReviewedCountry) {
+export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>Promise<void>) {
   const images = imageUrls(d.bodyHtml);
   const replacements = new Map<string,string>();
+  const imageProbes: Array<{url:string;accessible:true;sha256?:string;bytes?:number;transport:string}> = [];
   let thumb = '';
   for (const url of [...new Set(images)]) {
-    const bytes = await download(url, d.sourceUrl);
+    await onProgress?.();
+    const asset = d.imageAssets?.[url];
+    let bytes: Buffer;
+    try { bytes = await download(url, d.sourceUrl, undefined, asset); }
+    catch(e) { throw new Error(`正文第${images.indexOf(url)+1}张图片：${e instanceof Error?e.message:'读取失败'}`); }
+    imageProbes.push({url,accessible:true,...asset,transport:asset?'private-original':'legacy-https'});
     if (!thumb) thumb = (await material(bytes)).mediaId;
     replacements.set(url, await articleImage(bytes));
+    await onProgress?.();
   }
   if (!thumb) thumb = (await material(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64'))).mediaId;
   const html = replaceImageSources(d.bodyHtml, replacements);
@@ -178,7 +190,7 @@ export async function prepareReviewedDraft(d: ReviewedCountry) {
   return {
     article: { title: d.title, digest: d.summary, content: html, author: '中亚动态–INVEST',
       thumb_media_id: thumb, content_source_url: '', need_open_comment: 0, only_fans_can_comment: 0 },
-    images: images.length, cover: images.length ? 'first_body_image' : 'brand', html,
+    images: images.length, cover: images.length ? 'first_body_image' : 'brand', html, imageProbes,
   };
 }
 export async function createReviewedDraft(article: object): Promise<string> {

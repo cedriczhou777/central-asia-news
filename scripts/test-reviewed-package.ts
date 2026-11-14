@@ -24,27 +24,7 @@ assert.equal(makeSourceUrlsVisible(linked),'<p>来源：Example（https://exampl
 const diagnostic=summarizeDraftReadback({...payload.countries.kg,bodyHtml:linked}, {title:'kg',digest:'审定摘要',content:makeSourceUrlsVisible(linked)+'<img data-src="https://mmbiz.qpic.cn/x">'}, ['https://mmbiz.qpic.cn/x']);
 assert.equal(diagnostic.legacyTextMatch,true);assert.equal(diagnostic.expectedTextMatch,false);assert.equal(diagnostic.actualImageTags,1);assert.equal(diagnostic.imageAttributes[0].dataSrc,true);
 
-type Row = Record<string, any>;
-// Atomic in-memory store models database unique keys and conditional updates, not external calls.
-function database() {
- const rows = new Map<string,Row>();
- return { rows, from() {
-  let operation='read', values:Row={}, filter:Row={}, selected=false;
-  const query:any={
-   insert(v:Row){operation='insert';values=v;return query;},
-   update(v:Row){operation='update';values=v;return query;},
-   select(){selected=true;return query;}, match(v:Row){Object.assign(filter,v);return query;},
-   eq(k:string,v:unknown){filter[k]=v;return query;},single(){return query;},maybeSingle(){return query;},
-   then(resolve:any,reject:any){return Promise.resolve().then(()=>{
-    const key=(r:Row)=>`${r.version}/${r.country}`;
-    if(operation==='insert') {if(rows.has(key(values)) || [...rows.values()].some(r=>r.country===values.country && r.version.slice(0,10)===values.version.slice(0,10) && (r.state!=='failed'||r.media_id)))return {error:{code:'23505'}};rows.set(key(values),{...values});return {error:null};}
-    const matches=[...rows.values()].filter(r=>Object.entries(filter).every(([k,v])=>r[k]===v));
-    if(operation==='update'){for(const r of matches){const next={...r,...values};const conflict=[...rows.values()].some(x=>x!==r && x.country===next.country && x.version.slice(0,10)===next.version.slice(0,10) && (x.state!=='failed'||x.media_id));if((next.state!=='failed'||next.media_id) && conflict)return {error:{code:'23505'},data:null};}for(const r of matches)Object.assign(r,values);return {error:null,data:selected?matches:null};}
-    return {error:null,data:matches[0]};
-   }).then(resolve,reject);}
-  };return query;
- }};
-}
+import { database } from './lib/reviewed-test-db';
 async function main(){
  const savedFetch=globalThis.fetch, savedCloud=process.env.USE_WECHAT_CLOUD_CALL;
  process.env.USE_WECHAT_CLOUD_CALL='true';
@@ -71,7 +51,7 @@ async function main(){
  const db=database();let creates=0;let failedRead=true;let failedPrepare=true;
  const adapters:typeof deliveryAdapters={
   async prepare(d){if(d.title==='uz'&&failedPrepare){failedPrepare=false;throw new Error('图片403');}
-   return {article:{title:d.title,digest:d.summary,content:d.bodyHtml,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html:d.bodyHtml,images:0,cover:'brand'};},
+   return {article:{title:d.title,digest:d.summary,content:d.bodyHtml,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html:d.bodyHtml,images:0,cover:'brand',imageProbes:[]};},
   async create(article:any){creates++;return article.title;},
   async read(id){if(id==='kg'&&failedRead){throw new Error('回读超时');}return {title:id,digest:'审定摘要',content:payload.countries.kz.bodyHtml};}
  };
@@ -91,6 +71,16 @@ async function main(){
  assert.equal([...concurrentDb.rows.values()].filter(r=>r.state==='succeeded').length,5);
  await deliverReviewedPackage(payload,concurrentDb as any,adapters);
  assert.equal(creates,5,'completed delivery is idempotent');
+ // A dead preparation can be reclaimed only with fencing support. The old
+ // worker may wake later, but must neither create nor overwrite the new receipt.
+ const leaseDb=database();let releaseLease!:()=>void,leaseEntered!:()=>void;
+ const leasePaused=new Promise<void>(r=>{releaseLease=r;}),leaseStarted=new Promise<void>(r=>{leaseEntered=r;});
+ const leaseBefore=creates;
+ const oldWorker=deliverReviewedPackage(payload,leaseDb as any,{...adapters,async prepare(d){leaseEntered();await leasePaused;return adapters.prepare(d);}},['kz']);
+ await leaseStarted;leaseDb.rows.get('2026-11-09/kz')!.updated_at='2026-01-01T00:00:00Z';
+ const resumed=await deliverReviewedPackage(payload,leaseDb as any,adapters,['kz']);assert.equal(resumed.ok,true);
+ releaseLease();const fenced=await oldWorker;assert.equal(fenced.ok,false);assert.equal(creates,leaseBefore+1);assert.equal(leaseDb.rows.get('2026-11-09/kz')?.state,'succeeded','late old worker cannot clobber the successful receipt');
+ creates=5;
  const newRevision=validatePackage({...input,version:'2026-11-09-r2'});
  const duplicate=await deliverReviewedPackage(newRevision,concurrentDb as any,adapters);
  assert.equal(duplicate.ok,false);assert.equal(creates,5,'a second version of the same country must not create another draft');
@@ -100,6 +90,28 @@ async function main(){
  const beforeRetryCreates=creates;const retryOld=await deliverReviewedPackage(payload,retryDb as any,adapters,['kz']);
  assert.equal(retryOld.ok,false);assert.equal(creates,beforeRetryCreates,'failed version cannot be retried while another revision is sending');
 
+ // The incident's five-country input must leave successful original drafts untouched.
+ const subsetDb=database();
+ for(const c of PACKAGE_COUNTRIES)subsetDb.rows.set(`2026-11-09/${c}`,{version:'2026-11-09',country:c,state:['uz','tj'].includes(c)?'succeeded':'failed',media_id:['uz','tj'].includes(c)?`preserved-${c}`:null,detail:{}});
+ const originalReceipts=JSON.stringify([...subsetDb.rows.values()]);
+ const subset=await deliverReviewedPackage(newRevision,subsetDb as any,adapters,['kz','kg','az']);
+ assert.equal(subset.ok,true);
+ assert.equal(JSON.stringify([...subsetDb.rows.values()].filter(r=>r.version===payload.version)),originalReceipts);
+ // Actual claim ordering, not just pre-seeded conflicts: exercise both winners.
+ for(const oldFirst of [true,false]){
+  const raceDb=database();raceDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'failed',media_id:null});
+  let release!:()=>void,entered!:()=>void,raceCreates=0;
+  const blocked=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
+  const fast={...adapters,async create(a:any){raceCreates++;return a.title;}};
+  const slow={...fast,async prepare(d:any){entered();await blocked;return adapters.prepare(d);}};
+  const first=deliverReviewedPackage(oldFirst?payload:newRevision,raceDb as any,slow,['kz']);await started;
+  const second=await deliverReviewedPackage(oldFirst?newRevision:payload,raceDb as any,fast,['kz']);
+  assert.equal(second.ok,false);release();await first;assert.equal(raceCreates,1);
+ }
+ const mediaDb=database();mediaDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'failed',media_id:'already-created'});
+ const mediaCreates=creates;const mediaRetry=await deliverReviewedPackage(payload,mediaDb as any,adapters,['kz']);
+ assert.equal(mediaRetry.ok,false);assert.equal(creates,mediaCreates,'any known media_id prevents re-creation even in an inconsistent failed state');
+
  const sourcePayload=validatePackage({version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
   title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
  }]))});
@@ -107,7 +119,7 @@ async function main(){
  repairDb.rows.set('2026-11-09/kz',{version:'2026-11-09',country:'kz',state:'uncertain',media_id:'existing-kz',detail:{imageUrls:[]}});
  for(const c of PACKAGE_COUNTRIES.filter(c=>c!=='kz'))repairDb.rows.set(`2026-11-09/${c}`,{version:'2026-11-09',country:c,state:'succeeded',media_id:`existing-${c}`,detail:{}});
  const repairAdapters:typeof deliveryAdapters={
-  async prepare(d){const html=d.bodyHtml;return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:0,cover:'brand'};},
+  async prepare(d){const html=d.bodyHtml;return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:0,cover:'brand',imageProbes:[]};},
   async create(){repairCreates++;return 'unexpected-new-draft';},
   async update(_mediaId,article:any){repairUpdates++;repairedContent=article.content;},
   async read(mediaId){return {title:'kz',digest:'审定摘要',content:mediaId==='existing-kz'?repairedContent:sourcePayload.countries.kz.bodyHtml};}
@@ -126,13 +138,17 @@ async function main(){
  const imageDb=database();let imageContent=makeSourceUrlsVisible(missingImagePayload.countries.kg.bodyHtml).replace('<img src="https://example.org/a.jpg">','');let imageUpdates=0;
  imageDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'uncertain',media_id:'existing-kg',detail:{imageUrls:['https://mmbiz.qpic.cn/old.jpg']}});
  const imageAdapters:typeof deliveryAdapters={
-  async prepare(d){const html=d.bodyHtml.replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg');return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:1,cover:'first_body_image'};},
+  async prepare(d){const html=d.bodyHtml.replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg');return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:1,cover:'first_body_image',imageProbes:[]};},
   async create(){throw new Error('must not create another draft');},
   async update(_id,article:any){imageUpdates++;imageContent=article.content;},
   async read(){return {title:'kg',digest:'审定摘要',content:imageContent};}
  };
  const fixedImage=await deliverReviewedPackage(missingImagePayload,imageDb as any,imageAdapters,['kg']);
  assert.equal(fixedImage.ok,true);assert.equal(imageUpdates,1);assert.equal(imageDb.rows.get('2026-11-09-r2/kg')?.media_id,'existing-kg');
+ const staleDb=database();let staleUpdates=0;
+ staleDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'updating',media_id:'existing-kg',updated_at:'2026-01-01T00:00:00Z',detail:{imageUrls:['https://mmbiz.qpic.cn/old.jpg']}});
+ const stale=await deliverReviewedPackage(missingImagePayload,staleDb as any,{...imageAdapters,async update(){staleUpdates++;},async read(){return {title:'kg',digest:'审定摘要',content:'<p>原文内容</p><p>来源：Example</p>'};}},['kg']);
+ assert.equal(stale.ok,false);assert.equal(staleUpdates,0,'elapsed time never permits stealing an updating lock');
  const lazyDb=database();let lazyUpdates=0;
  lazyDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'uncertain',media_id:'existing-kg',detail:{imageUrls:['https://mmbiz.qpic.cn/mmbiz_jpg/abc/0?wx_fmt=jpeg']}});
  const lazyAdapters:typeof deliveryAdapters={...imageAdapters,async update(){lazyUpdates++;},async read(){return {title:'kg',digest:'审定摘要',content:missingImagePayload.countries.kg.bodyHtml.replace('src="https://example.org/a.jpg"','data-src="https://mmbiz.qpic.cn/mmbiz_jpg/abc/640?wx_fmt=jpeg"')};}};

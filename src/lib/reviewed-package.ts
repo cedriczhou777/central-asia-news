@@ -3,9 +3,11 @@ import { load } from 'cheerio';
 
 export const PACKAGE_COUNTRIES = ['kz', 'uz', 'kg', 'tj', 'az'] as const;
 export type PackageCountry = typeof PACKAGE_COUNTRIES[number];
+export type ReviewedImageAsset = { sha256: string; bytes: number };
 export interface ReviewedCountry {
   title: string; summary: string; bodyHtml: string;
   sourceName: string; sourceUrl: string; coverUrl: string;
+  imageAssets?: Record<string, ReviewedImageAsset>;
 }
 export interface ReviewedPackage {
   version: string;
@@ -66,8 +68,29 @@ export function validatePackage(input: unknown): ReviewedPackage {
       title: d.title as string, summary: d.summary as string, bodyHtml: d.bodyHtml as string,
       sourceName: d.sourceName as string, sourceUrl: d.sourceUrl as string, coverUrl: d.coverUrl as string,
     };
+    if (d.imageAssets !== undefined) {
+      if (!d.imageAssets || typeof d.imageAssets !== 'object' || Array.isArray(d.imageAssets)) throw new Error(`${code} imageAssets 无效`);
+      const raw = d.imageAssets as Record<string, ReviewedImageAsset>;
+      if (Object.keys(raw).length !== new Set(imgs).size || Object.keys(raw).some(url => !imgs.includes(url))) throw new Error(`${code} 图片存档清单与正文不一致`);
+      const assets: Record<string, ReviewedImageAsset> = {};
+      for (const url of [...new Set(imgs)]) {
+        const asset = raw[url];
+        if (!asset || !/^[a-f0-9]{64}$/.test(asset.sha256) || !Number.isSafeInteger(asset.bytes) || asset.bytes < 1 || asset.bytes > 10_000_000) throw new Error(`${code} 图片原始哈希或长度无效`);
+        assets[url] = { sha256: asset.sha256, bytes: asset.bytes };
+      }
+      countries[code].imageAssets = assets;
+    }
   }
   return { version: body.version, countries };
+}
+/** New issues pin every adopted image to durable, private original bytes. Old
+ * accepted payloads retain their exact shape/hash and are never rewritten. */
+export function requirePrivateImages(payload: ReviewedPackage) {
+  if (issueDate(payload.version) < '2026-11-15') return;
+  for (const country of PACKAGE_COUNTRIES) {
+    const d = payload.countries[country];
+    if (imageUrls(d.bodyHtml).some(url => !d.imageAssets?.[url])) throw new Error(`${country} 须先上传全部采用原图并附 imageAssets`);
+  }
 }
 export function assertHttps(url: string) {
   const parsed = new URL(url);

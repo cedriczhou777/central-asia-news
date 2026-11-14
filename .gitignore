@@ -194,3 +194,6 @@ scripts/*.ts?????*
 # 会话工作数据（记忆 / 轮次报告）。自 2026-09-25 起存在于仓库根，
 # 但从未提交过 —— 它不是源码，而且 `git add -A` 会把它连带吞进提交。
 .workbuddy/
+# Runtime-only originals are private and must never enter Git.
+/var/reviewed-image-archive/
+__pycache__/

@@ -2,6 +2,12 @@ import { getSupabaseClient } from '../storage/database/supabase-client';
 import { PACKAGE_COUNTRIES, contentHash, imageUrls, makeSourceUrlsVisible, sourceUrls, validatePackage, type ReviewedPackage } from './reviewed-package';
 import { prepareReviewedDraft, createReviewedDraft, updateReviewedDraft, readReviewedDraft } from './reviewed-wechat';
 import { load } from 'cheerio';
+import { randomUUID } from 'node:crypto';
+
+export function canResumePreparation(row:{state:string;media_id?:string|null;updated_at?:string;detail?:Record<string,unknown>},now=Date.now()) {
+  return row.state==='preparing'&&!row.media_id&&row.detail?.preparationProtocol===1&&typeof row.detail.preparationToken==='string'&&
+    Number.isFinite(Date.parse(row.updated_at||''))&&now-Date.parse(row.updated_at!)>5*60_000;
+}
 
 type DeliveryAdapters = {
   prepare: typeof prepareReviewedDraft;
@@ -33,15 +39,18 @@ export async function deliverReviewedPackage(
   const drafts: object[] = []; const failures: object[] = [];
   for (const country of onlyCountries) {
     const key = { version: payload.version, country };
+    const preparationToken=randomUUID();
+    const ownership={preparationToken,preparationProtocol:1};
     // The unique PK is the cross-process lock. A sending/uncertain row is never retried automatically.
-    const claim = await sb.from('reviewed_deliveries').insert({ ...key, state: 'preparing' });
+    const claim = await sb.from('reviewed_deliveries').insert({ ...key, state: 'preparing',detail:ownership,updated_at:new Date().toISOString() });
     if (claim.error) {
       if (claim.error.code !== '23505') throw new Error('无法取得持久化投递锁');
       const existing = await sb.from('reviewed_deliveries').select('*').match(key).maybeSingle();
       if (existing.error) throw new Error('无法读取投递状态');
       if (!existing.data) { failures.push({ country, state:'blocked', error:'同刊期其他版本已有投递记录，禁止重复创建' }); continue; }
       if (existing.data.state === 'succeeded') { drafts.push({ country_code:country, media_id:existing.data.media_id, ...existing.data.detail }); continue; }
-      // Read-only recovery: never call draft/add again when a media_id is known.
+      // Never call draft/add again when a media_id is known. A narrowly verified
+      // repair may update that same draft, under a compare-and-swap receipt lock.
       if (['uncertain','sending','updating'].includes(existing.data.state) && existing.data.media_id) {
         let updateLockAcquired = false;
         try {
@@ -50,20 +59,22 @@ export async function deliverReviewedPackage(
           if (!verified.verified) {
             const d = payload.countries[country];
             const updateDraft = adapters.update;
-            const staleUpdate = existing.data.state === 'updating' && Date.now() - Date.parse(existing.data.updated_at || '') > 5 * 60_000;
-            const safelyRepairable = !!updateDraft && (existing.data.state === 'uncertain' || staleUpdate) && current.title === d.title && current.digest === d.summary &&
+            // Elapsed time cannot prove another worker stopped updating WeChat.
+            const safelyRepairable = !!updateDraft && existing.data.state === 'uncertain' && current.title === d.title && current.digest === d.summary &&
               ((verified.legacyTextMatch && verified.imageMatch && sourceUrls(d.bodyHtml).length > 0) ||
                ((verified.expectedTextMatch || verified.legacyTextMatch) && verified.draftImages === 0 && (existing.data.detail?.imageUrls || []).length > 0));
             if (!safelyRepairable) throw new Error('已有草稿复核未通过；未重复创建');
             const prepared = await adapters.prepare(d);
             const lock = await sb.from('reviewed_deliveries').update({ state:'updating', updated_at:new Date().toISOString() })
-              .match(key).eq('state',existing.data.state).eq('media_id',existing.data.media_id).select('country');
+              .match(key).eq('state',existing.data.state).eq('media_id',existing.data.media_id)
+              .eq('updated_at',existing.data.updated_at).select('country');
             if (lock.error || lock.data?.length !== 1) throw new Error('未取得原草稿更新锁');
             updateLockAcquired = true;
             await updateDraft(existing.data.media_id, prepared.article);
             const updated = await adapters.read(existing.data.media_id);
             verified = verifyReadback(d, updated, imageUrls(prepared.html));
             if (!verified.verified) throw new Error('原草稿更新后仍未通过审定稿核验');
+            existing.data.detail = { ...existing.data.detail, imageUrls:imageUrls(prepared.html), transportedHash:contentHash(prepared.html) };
           }
           const detail = {...existing.data.detail, ...verified, error:null};
           const saved = await sb.from('reviewed_deliveries').update({state:'succeeded', detail, updated_at:new Date().toISOString()}).match(key).eq('media_id',existing.data.media_id);
@@ -76,37 +87,45 @@ export async function deliverReviewedPackage(
         }
         continue;
       }
-      if (existing.data.state !== 'failed') { failures.push({ country, state: existing.data.state, error: '投递进行中或结果待核实，禁止重复创建' }); continue; }
-      const retry = await sb.from('reviewed_deliveries').update({ state: 'preparing', updated_at: new Date().toISOString() }).match(key).eq('state','failed').select('country');
+      const resume=canResumePreparation(existing.data);
+      if (!resume&&(existing.data.state !== 'failed' || existing.data.media_id)) { failures.push({ country, state: existing.data.state, error: '投递进行中或结果待核实，禁止重复创建' }); continue; }
+      let reclaim=sb.from('reviewed_deliveries').update({ state:'preparing',detail:ownership,updated_at:new Date().toISOString() }).match(key).eq('state',resume?'preparing':'failed').is('media_id',null);
+      if(resume)reclaim=reclaim.eq('updated_at',existing.data.updated_at).contains('detail',{preparationToken:existing.data.detail.preparationToken});
+      const retry = await reclaim.select('country');
       if (retry.error || retry.data?.length !== 1) { failures.push({ country, error: '未取得重试锁；同刊期可能已有其他版本投递' }); continue; }
     }
     let sending = false;
     let mediaId: string | null = null;
-    let detail: Record<string,unknown> = {};
+    let detail: Record<string,unknown> = {...ownership};
     try {
       const d = payload.countries[country];
-      const prepared = await adapters.prepare(d);
-      detail = { inputHash: contentHash(d.bodyHtml), transportedHash: contentHash(prepared.html),
-        inputImages: prepared.images, transferredImages: prepared.images, imageUrls:imageUrls(prepared.html), cover: prepared.cover };
-      const armed = await sb.from('reviewed_deliveries').update({ state:'sending', detail, updated_at: new Date().toISOString() }).match(key).eq('state','preparing').select('country');
+      const heartbeat=async()=>{
+        const kept=await sb.from('reviewed_deliveries').update({updated_at:new Date().toISOString()}).match(key).eq('state','preparing').contains('detail',{preparationToken}).select('country');
+        if(kept.error||kept.data?.length!==1)throw new Error('准备工作已由其他执行者接续，停止旧执行');
+      };
+      const prepared = await adapters.prepare(d,heartbeat);
+      detail = { ...ownership,inputHash: contentHash(d.bodyHtml), transportedHash: contentHash(prepared.html),
+        inputImages: prepared.images, transferredImages: prepared.images, imageUrls:imageUrls(prepared.html), cover: prepared.cover,
+        imageProbes: prepared.imageProbes };
+      const armed = await sb.from('reviewed_deliveries').update({ state:'sending', detail, updated_at: new Date().toISOString() }).match(key).eq('state','preparing').contains('detail',{preparationToken}).select('country');
       if (armed.error || armed.data?.length !== 1) throw new Error('发送前持久化失败');
       sending = true;
       mediaId = await adapters.create(prepared.article);
       // Save the returned media_id BEFORE readback; a readback error must never create a second draft.
-      const saved = await sb.from('reviewed_deliveries').update({ media_id:mediaId, detail, updated_at:new Date().toISOString() }).match(key).select('country');
+      const saved = await sb.from('reviewed_deliveries').update({ media_id:mediaId, detail, updated_at:new Date().toISOString() }).match(key).contains('detail',{preparationToken}).select('country');
       if (saved.error || saved.data?.length !== 1) throw new Error('草稿已创建但回执保存失败，须人工核对');
       const readback = await adapters.read(mediaId);
       const verified = verifyReadback(d, readback, imageUrls(prepared.html));
       const passed = verified.verified;
       detail = { ...detail, ...verified };
       if (!passed) throw new Error('草稿回读与审定稿不一致，保留现有草稿待检查');
-      const done = await sb.from('reviewed_deliveries').update({ state:'succeeded', media_id:mediaId, detail, updated_at:new Date().toISOString() }).match(key).select('country');
+      const done = await sb.from('reviewed_deliveries').update({ state:'succeeded', media_id:mediaId, detail, updated_at:new Date().toISOString() }).match(key).contains('detail',{preparationToken}).select('country');
       if (done.error || done.data?.length !== 1) throw new Error('成功状态保存失败');
       drafts.push({ country_code:country, media_id:mediaId, ...detail });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const state = sending ? 'uncertain' : 'failed';
-      await sb.from('reviewed_deliveries').update({ state, media_id:mediaId, detail:{ ...detail, error:message }, updated_at:new Date().toISOString() }).match(key);
+      await sb.from('reviewed_deliveries').update({ state, media_id:mediaId, detail:{ ...detail, error:message }, updated_at:new Date().toISOString() }).match(key).contains('detail',{preparationToken});
       failures.push({ country, state, media_id:mediaId, error:message });
     }
   }

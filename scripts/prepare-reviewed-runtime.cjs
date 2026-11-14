@@ -4,7 +4,7 @@ const path = require('node:path');
 if (process.env.REVIEWED_BUILD_ONLY !== '1') throw new Error('This script may run only in the image build stage');
 const api = path.join(process.cwd(), 'src/app/api');
 for (const entry of fs.readdirSync(api, { withFileTypes: true })) {
-  if (!['word-package', 'word-ingest', 'wechat'].includes(entry.name)) fs.rmSync(path.join(api, entry.name), { recursive: true, force: true });
+  if (!['word-package', 'word-ingest', 'reviewed-images', 'wechat'].includes(entry.name)) fs.rmSync(path.join(api, entry.name), { recursive: true, force: true });
 }
 const wechat = path.join(api, 'wechat');
 for (const entry of fs.readdirSync(wechat, { withFileTypes: true })) {

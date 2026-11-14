@@ -2,6 +2,19 @@
 
 当前分支代码需先建表再部署。不要把本文件当作已部署回执。
 
+## 2026-11-14 图片传输修复候选（尚未部署）
+
+- 保持已接收稿包的版本和内容哈希。可将合法公开取得、与独审 SHA-256 完全一致的原图放入 `public/reviewed-image-archive/`；清单格式为 `{"images":[{"url":"原始HTTPS地址","sha256":"64位小写哈希","bytes":123}]}`，文件名为哈希本身。Dockerfile 已复制 public，无需新存储服务、数据库迁移或修改自动任务。
+- 用 `node --import tsx scripts/prepare-reviewed-image-archive.ts MANIFEST SOURCE_DIRECTORY OUTPUT_DIRECTORY` 离线检查并组装；源目录文件同样按 SHA-256 命名。每次增补须保留仍需使用的清单项，并检查 URL 没有重复。所有输入须来自经授权的公开下载，不绕过源站限制。
+- 下载层只按原 URL 精确匹配，每次核实长度和 SHA-256，再解码校验；损坏、缺失或冲突存档均停止该图，不回退不受控内容。没有命中记录的图仍走现有 HTTPS 下载。微信上传仍按现有行为转 JPEG；原文件哈希只证明上传前原始内容一致，不代表微信输出字节不变。
+- 当前代码没有自带本次20张原图，也没有自动归档未来图片。部署前必须材料化、核对并加入真实资产。仅部署读取器不会解决当前源站故障；明日仍须做真实云端图片预检，不能承诺任意源站永不失效。
+- 自动恢复按国家隔离图片故障：某国缺一图则不建该国草稿，其余完整国家可以接续，失败清单保留。原有精确版本选择和多版本阻断保持不变；不要靠提交 r2 抢锁来转移已有草稿。
+- `failed` 且有 `media_id` 的异常回执不得重新创建；重试 CAS 同时要求 failed 和 media_id IS NULL。`updating` 不按时长偷锁；已知 media_id 只允许复核或受保护的同草稿修复。
+- 发布前须只读核对真实 `reviewed_deliveries_one_active_daily_country` 索引为 unique/valid/ready，线上实际构建提交、全部实例及在途任务。单次 `push_runs.running=false` 或单实例 recovery.running=false 不是全局空闲证明。滚动发布可能中断 preparing/sending，不能在无法核实任务时推 main。
+- 补投仍用原有 `POST /api/wechat/push`，精确 version 和未成功国家子集。202不代表完成。验收须逐国读取持久回执并实际 diagnose；本次 uz/tj 的原 media_id、旧包 contentHash 必须保持不变。
+- 本地验证：完整 `pnpm verify:offline` 已涵盖原图存档校验、部分图片失败隔离、两种跨版本抢锁顺序、同版本并发及异常 failed/media_id 防重。测试用内存数据库模拟锁，不能代替上线索引只读检查。
+- 待解阻碍：此环境尚无生产接口鉴权；网络策略未放行生产域名、源图域名及 Library 下载域名。`pnpm lint:build` 还存在基线配置错误：启用了 `import/no-cycle` 但未注册 import 插件。上述阻碍解除并完成真实验收前，不得声称已上线或三国已补齐。
+
 ## 一次性数据库准备
 
 1. 登录 Supabase，打开当前服务使用的项目（与云托管 SUPABASE_URL / COZE_SUPABASE_URL 对应）。不要复制任何密钥到聊天。

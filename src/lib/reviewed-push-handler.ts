@@ -7,6 +7,7 @@ import { persistPushRun } from './push-run-store';
 import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
 import { summarizeDraftReadback } from './reviewed-diagnostics';
 import { reviewedRecoveryStatus } from './reviewed-recovery';
+import { privateImageHealth } from './reviewed-private-images';
 
 function authorized(request: NextRequest) {
   return !!process.env.INGEST_SECRET && request.headers.get('x-ingest-secret') === process.env.INGEST_SECRET;
@@ -61,8 +62,25 @@ export async function reviewedPush(request: NextRequest) {
 export async function reviewedStatus(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ ok:false, error:'鉴权失败' }, { status:401 });
   try {
+    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v2',recovery:reviewedRecoveryStatus(),images:await privateImageHealth()});
     const sb = getSupabaseClient();
     const version = request.nextUrl.searchParams.get('version');
+    const date=request.nextUrl.searchParams.get('date');
+    if(!version&&date){
+      if(issueDate(date)!==date)throw new Error('date必须为刊期日期');
+      const found=await sb.from('reviewed_packages').select('version').eq('issue_date',date);
+      if(found.error)throw new Error('无法读取刊期稿包');
+      const versions=(found.data||[]).map(r=>r.version);
+      const records=versions.length?await sb.from('reviewed_deliveries').select('*').in('version',versions):{data:[],error:null};
+      if(records.error)throw new Error('无法读取刊期回执');
+      const byCountry=PACKAGE_COUNTRIES.map(country=>{
+        const active=(records.data||[]).filter(r=>r.country===country&&(r.state!=='failed'||r.media_id));
+        return {country,conflict:active.length>1,receipt:active.length===1?active[0]:null};
+      });
+      const draftsVerified=byCountry.every(r=>!r.conflict&&r.receipt?.state==='succeeded'&&r.receipt.media_id);
+      return NextResponse.json({ok:true,date,versions,packageReceived:versions.length>0,draftsVerified,byCountry,
+        deadlineMissed:!draftsVerified&&Date.now()>=Date.parse(date+'T08:00:00+08:00'),recovery:reviewedRecoveryStatus()});
+    }
     if (version) {
       issueDate(version);
       const payload = await readPackage(version);
@@ -78,7 +96,7 @@ export async function reviewedStatus(request: NextRequest) {
         const index = Number(rawIndex), country = payload.countries[probeCountry as (typeof PACKAGE_COUNTRIES)[number]];
         const images = imageUrls(country.bodyHtml);
         if (!Number.isSafeInteger(index) || index >= images.length) return NextResponse.json({ ok:false, error:'图片不存在' }, { status:404 });
-        const probe = await probeReviewedImage(images[index], country.sourceUrl);
+        const probe = await probeReviewedImage(images[index], country.sourceUrl, country.imageAssets?.[images[index]]);
         return NextResponse.json({ ok:true, version, country:probeCountry, imageIndex:index, ...probe });
       }
       const diagnosticCountry = request.nextUrl.searchParams.get('diagnose');
