@@ -76,7 +76,8 @@
     "test:reviewed-layout": "node --import tsx scripts/test-reviewed-layout.ts",
     "test:reviewed-image-archive": "node --import tsx scripts/test-reviewed-image-archive.ts",
     "test:reviewed-status": "node --import tsx scripts/test-reviewed-status.ts",
-    "test:reviewed-private-images": "node --import tsx scripts/test-reviewed-private-images.ts"
+    "test:reviewed-private-images": "node --import tsx scripts/test-reviewed-private-images.ts",
+    "test:work-collector": "python3 -m unittest discover -s scripts -p \"test_work_*.py\" -v"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.95.3",

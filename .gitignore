@@ -197,3 +197,7 @@ scripts/*.ts?????*
 # Runtime-only originals are private and must never enter Git.
 /var/reviewed-image-archive/
 __pycache__/
+
+# Work collector evidence belongs in private delivery storage.
+/scripts/sources/
+/scripts/__pycache__/
