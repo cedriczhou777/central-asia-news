@@ -1,8 +1,35 @@
 import { load } from 'cheerio';
 import { makeSourceUrlsVisible, type ReviewedCountry } from './reviewed-package';
 
+export const REVIEWED_DIAGNOSTICS_VERSION = 5;
+type CoverReadback = { thumb_media_id?: string; thumb_url?: string };
+export function compareReviewedCover(actual: CoverReadback, firstBodyUrl?: string, expectedThumbId?: string) {
+  const thumbnailMatchesPrepared = expectedThumbId === undefined ? null :
+    typeof expectedThumbId === 'string' && expectedThumbId.length > 0 && actual.thumb_media_id === expectedThumbId;
+  if (expectedThumbId !== undefined) return { thumbnailMatchesPrepared,
+    coverMatchesFirstBodyImage:firstBodyUrl ? thumbnailMatchesPrepared : null, coverProof:'prepared_material_id' };
+  const key = (value:string) => {
+    try { const u=new URL(value); return ['https:','http:'].includes(u.protocol) && u.hostname.endsWith('.qpic.cn')
+      ? u.hostname+u.pathname.replace(/\/(?:0|640)$/, '') : null; } catch { return null; }
+  };
+  const cover=key(actual.thumb_url || ''), first=key(firstBodyUrl || '');
+  return { thumbnailMatchesPrepared, coverMatchesFirstBodyImage:cover && first ? cover===first : null,
+    coverProof:cover && first ? 'wechat_image_identity' : 'unavailable' };
+}
+/** Pure deployment smoke check. No WeChat calls, uploads or draft mutations. */
+export function coverReadbackSelfTest() {
+  const first='https://mmbiz.qpic.cn/mmbiz_jpg/synthetic-fixture/0';
+  const cases={
+    preparedMatch:compareReviewedCover({thumb_media_id:'fixture-thumb'},first,'fixture-thumb').coverMatchesFirstBodyImage===true,
+    differentPreparedRejected:compareReviewedCover({thumb_media_id:'wrong-thumb'},first,'fixture-thumb').coverMatchesFirstBodyImage===false,
+    missingPreparedRejected:compareReviewedCover({},first,'fixture-thumb').coverMatchesFirstBodyImage===false,
+    legacyRenditionMatch:compareReviewedCover({thumb_url:first.replace('/0','/640')},first).coverMatchesFirstBodyImage===true,
+  };
+  return {passed:Object.values(cases).every(Boolean),cases,readOnly:true,scope:'cover_comparison_logic'};
+}
+
 // Read-only diagnostics for a known existing draft. Never includes credentials or media IDs.
-export function summarizeDraftReadback(expected: ReviewedCountry, actual: { title: string; digest: string; content: string; content_source_url?: string; thumb_media_id?: string; thumb_url?: string }, expectedImages: string[]) {
+export function summarizeDraftReadback(expected: ReviewedCountry, actual: { title: string; digest: string; content: string; content_source_url?: string; thumb_media_id?: string; thumb_url?: string }, expectedImages: string[], expectedThumbId?: string) {
   const text = (html: string) => load(html, {}, false).text().replace(/\s+/g, '');
   const oldText = text(makeSourceUrlsVisible(expected.bodyHtml));
   const expectedText = text(expected.bodyHtml);
@@ -13,17 +40,6 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
   const imageAttributes = $('img').toArray().map(el => ({ src: !!$(el).attr('src'), dataSrc: !!$(el).attr('data-src') }));
   const imageIdentity = (value: string) => { try { const u = new URL(value); return { host:u.hostname, path:u.pathname }; } catch { return null; } };
   const actualImages = $('img').toArray().map(el => $(el).attr('src') || $(el).attr('data-src') || '');
-  // Both uploads of identical bytes have a WeChat image identity. Ignore only
-  // WeChat's normal /0 -> /640 rendition and URL query changes, never the asset.
-  const wechatImageKey = (value: string) => {
-    try {
-      const u = new URL(value);
-      if (!['https:', 'http:'].includes(u.protocol) || !u.hostname.endsWith('.qpic.cn')) return null;
-      return u.hostname + u.pathname.replace(/\/(?:0|640)$/, '');
-    } catch { return null; }
-  };
-  const coverKey = wechatImageKey(actual.thumb_url || '');
-  const firstBodyKey = wechatImageKey(expectedImages[0] || '');
   const compactStyle = (style:string) => style.toLowerCase().replace(/\s+/g,'');
   const expectedDom = load(expected.bodyHtml,{},false);
   const expectedBodyCount = expectedDom('p').toArray().filter(el=>compactStyle(expectedDom(el).attr('style')||'').includes('font-size:16px')).length;
@@ -44,7 +60,7 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
   const footerGray=actualFooterStyles.every(style=>style.includes('color:#929292'));
   const footerBackground=footerContainerStyle.includes('background:#f7f5ef');
   return {
-    diagnosticsVersion:4,
+    diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,
     titleMatch: actual.title === expected.title, digestMatch: actual.digest === expected.summary,
     expectedTextMatch: actualText === expectedText, legacyTextMatch: actualText === oldText,
     actualLength: actualText.length, legacyLength: oldText.length, firstDifference: difference,
@@ -55,7 +71,7 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
     originalLinkEmpty:typeof actual.content_source_url==='string' ? actual.content_source_url==='' : null,
     thumbnailPresent:typeof actual.thumb_media_id==='string' && actual.thumb_media_id.length>0,
     coverImageIdentity:imageIdentity(actual.thumb_url || ''),
-    coverMatchesFirstBodyImage:coverKey && firstBodyKey ? coverKey === firstBodyKey : null,
+    ...compareReviewedCover(actual,expectedImages[0],expectedThumbId),
     layout:{expectedBodyParagraphs:expectedBodyCount,actualBodyParagraphs:bodyStyles.length,bodyCountMatch,
       justified:bodyCountMatch && bodyStyles.every(style=>style.includes('text-align:justify')),
       lastLineLeft:bodyCountMatch && bodyStyles.every(style=>style.includes('text-align-last:left')),

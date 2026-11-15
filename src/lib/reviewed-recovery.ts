@@ -6,7 +6,7 @@ import { deliverReviewedPackage, readPackage, canResumePreparation } from './rev
 import { probeReviewedImage } from './reviewed-wechat';
 import { persistPushRun } from './push-run-store';
 
-export const REVIEWED_RECOVERY_VERSION = '2026-11-14-v5';
+export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v6';
 type Row = { version:string; country:string; state:string; media_id?:string | null;updated_at?:string;detail?:Record<string,unknown> };
 type Dependencies = {
   packages:(date:string)=>Promise<string[]>;

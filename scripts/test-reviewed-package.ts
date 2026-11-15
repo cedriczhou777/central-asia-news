@@ -53,7 +53,7 @@ async function main(){
   async prepare(d){if(d.title==='uz'&&failedPrepare){failedPrepare=false;throw new Error('图片403');}
    return {article:{title:d.title,digest:d.summary,content:d.bodyHtml,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html:d.bodyHtml,images:0,cover:'brand',imageProbes:[]};},
   async create(article:any){creates++;return article.title;},
-  async read(id){if(id==='kg'&&failedRead){throw new Error('回读超时');}return {title:id,digest:'审定摘要',content:payload.countries.kz.bodyHtml};}
+  async read(id){if(id==='kg'&&failedRead){throw new Error('回读超时');}return {title:id,digest:'审定摘要',content:payload.countries.kz.bodyHtml,thumb_media_id:'thumb'};}
  };
  const sb=db as unknown as ReturnType<typeof getSupabaseClient>;
  const first=await deliverReviewedPackage(payload,sb,adapters);
@@ -122,7 +122,7 @@ async function main(){
   async prepare(d){const html=d.bodyHtml;return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:0,cover:'brand',imageProbes:[]};},
   async create(){repairCreates++;return 'unexpected-new-draft';},
   async update(_mediaId,article:any){repairUpdates++;repairedContent=article.content;},
-  async read(mediaId){return {title:'kz',digest:'审定摘要',content:mediaId==='existing-kz'?repairedContent:sourcePayload.countries.kz.bodyHtml};}
+  async read(mediaId){return {title:'kz',digest:'审定摘要',content:mediaId==='existing-kz'?repairedContent:sourcePayload.countries.kz.bodyHtml,thumb_media_id:'thumb'};}
  };
  const repaired=await deliverReviewedPackage(sourcePayload,repairDb as any,repairAdapters);
  assert.equal(repaired.ok,true);assert.equal(repairUpdates,1,'only the known existing draft should be updated');assert.equal(repairCreates,0,'source-link repair must not create duplicates');
@@ -141,7 +141,7 @@ async function main(){
   async prepare(d){const html=d.bodyHtml.replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg');return {article:{title:d.title,digest:d.summary,content:html,author:'',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},html,images:1,cover:'first_body_image',imageProbes:[]};},
   async create(){throw new Error('must not create another draft');},
   async update(_id,article:any){imageUpdates++;imageContent=article.content;},
-  async read(){return {title:'kg',digest:'审定摘要',content:imageContent};}
+  async read(){return {title:'kg',digest:'审定摘要',content:imageContent,thumb_media_id:'thumb'};}
  };
  const fixedImage=await deliverReviewedPackage(missingImagePayload,imageDb as any,imageAdapters,['kg']);
  assert.equal(fixedImage.ok,true);assert.equal(imageUpdates,1);assert.equal(imageDb.rows.get('2026-11-09-r2/kg')?.media_id,'existing-kg');
@@ -154,6 +154,49 @@ async function main(){
  const lazyAdapters:typeof deliveryAdapters={...imageAdapters,async update(){lazyUpdates++;},async read(){return {title:'kg',digest:'审定摘要',content:missingImagePayload.countries.kg.bodyHtml.replace('src="https://example.org/a.jpg"','data-src="https://mmbiz.qpic.cn/mmbiz_jpg/abc/640?wx_fmt=jpeg"')};}};
  const lazy=await deliverReviewedPackage(missingImagePayload,lazyDb as any,lazyAdapters,['kg']);
  assert.equal(lazy.ok,true);assert.equal(lazyUpdates,0,'lazy-loaded image must not trigger a draft update');
+ // A cover mismatch is an uncertain result, never a successful delivery or a
+ // reason to create another draft. Repair only a matching, unverified draft.
+ const coverDb=database();let coverCreates=0,coverUpdates=0,coverThumb:string|undefined='wrong-thumb';
+ const coverAdapters:typeof deliveryAdapters={...imageAdapters,
+  async create(){coverCreates++;return 'cover-test-draft';},
+  async read(){return {title:'kg',digest:'审定摘要',content:missingImagePayload.countries.kg.bodyHtml.replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg'),thumb_media_id:coverThumb};},
+  async update(_id,article){coverUpdates++;coverThumb=(article as {thumb_media_id:string}).thumb_media_id;}
+ };
+ const wrongCover=await deliverReviewedPackage(missingImagePayload,coverDb as any,coverAdapters,['kg']);
+ assert.equal(wrongCover.ok,false);assert.equal(coverDb.rows.get('2026-11-09-r2/kg')?.state,'uncertain');
+ assert.equal(coverDb.rows.get('2026-11-09-r2/kg')?.detail.expectedThumbMediaId,'thumb');
+ assert.equal(coverDb.rows.get('2026-11-09-r2/kg')?.detail.thumbnailMatchesPrepared,false);
+ const fixedCover=await deliverReviewedPackage(missingImagePayload,coverDb as any,coverAdapters,['kg']);
+ assert.equal(fixedCover.ok,true);assert.equal(coverCreates,1);assert.equal(coverUpdates,1);
+ assert.equal(coverDb.rows.get('2026-11-09-r2/kg')?.detail.coverMatchesFirstBodyImage,true);
+ await deliverReviewedPackage(missingImagePayload,coverDb as any,{...coverAdapters,async read(){throw new Error('40007: user already published');}},['kg']);
+ assert.equal(coverCreates,1);assert.equal(coverUpdates,1,'a completed delivery remains untouched after user publication');
+ const missingCoverDb=database();coverThumb=undefined;
+ const missingCover=await deliverReviewedPackage(missingImagePayload,missingCoverDb as any,coverAdapters,['kg']);
+ assert.equal(missingCover.ok,false,'missing actual thumbnail ID must not pass');
+ let editedUpdates=0;
+ const humanEdited=await deliverReviewedPackage(missingImagePayload,missingCoverDb as any,{...coverAdapters,
+  async read(){return {title:'kg',digest:'审定摘要',content:'<p>User changed the draft</p>',thumb_media_id:'wrong-thumb'};},
+  async update(){editedUpdates++;}
+ },['kg']);
+ assert.equal(humanEdited.ok,false);assert.equal(editedUpdates,0,'cover repair must not overwrite a changed body');
+ // Reconcile either side of an ambiguous update using the expectations saved
+ // before the call. No additional create and no repeated accepted update.
+ for(const appliedBeforeTimeout of [true,false]){
+  const retryCoverDb=database();let actualThumb='wrong-thumb',updates=0,readFails=false,failUpdate=true;
+  retryCoverDb.rows.set('2026-11-09-r2/kg',{version:'2026-11-09-r2',country:'kg',state:'uncertain',media_id:'same-cover-draft',
+   detail:{imageUrls:['https://mmbiz.qpic.cn/new.jpg'],expectedThumbMediaId:'thumb'}});
+  const retryCoverAdapters:typeof deliveryAdapters={...coverAdapters,
+   async create(){throw new Error('must not recreate');},
+   async read(){if(readFails){readFails=false;throw new Error('readback timeout');}return {title:'kg',digest:'审定摘要',content:missingImagePayload.countries.kg.bodyHtml.replace('https://example.org/a.jpg','https://mmbiz.qpic.cn/new.jpg'),thumb_media_id:actualThumb};},
+   async update(_id,article){updates++;if(failUpdate&&!appliedBeforeTimeout){failUpdate=false;throw new Error('update outcome unknown');}actualThumb=(article as {thumb_media_id:string}).thumb_media_id;if(failUpdate){failUpdate=false;readFails=true;}}
+  };
+  const interrupted=await deliverReviewedPackage(missingImagePayload,retryCoverDb as any,retryCoverAdapters,['kg']);
+  assert.equal(interrupted.ok,false);assert.equal(retryCoverDb.rows.get('2026-11-09-r2/kg')?.detail.expectedThumbMediaId,'thumb');
+  assert.ok(retryCoverDb.rows.get('2026-11-09-r2/kg')?.detail.repairFrom);
+  const resumedCover=await deliverReviewedPackage(missingImagePayload,retryCoverDb as any,retryCoverAdapters,['kg']);
+  assert.equal(resumedCover.ok,true);assert.equal(updates,appliedBeforeTimeout?1:2);
+ }
  console.log('reviewed-package: validation, exact HTML replacement, version isolation, pre-send retry, uncertain outcome and concurrent duplicate prevention passed');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

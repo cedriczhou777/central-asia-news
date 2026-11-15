@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { summarizeDraftReadback } from '../src/lib/reviewed-diagnostics';
+import { summarizeDraftReadback, coverReadbackSelfTest, REVIEWED_DIAGNOSTICS_VERSION } from '../src/lib/reviewed-diagnostics';
 import { issueCutoffElapsed } from '../src/lib/reviewed-package';
 assert.equal(issueCutoffElapsed('2026-11-13',Date.parse('2026-11-13T05:59:59+08:00')),false);
 assert.equal(issueCutoffElapsed('2026-11-13-r2',Date.parse('2026-11-13T06:00:00+08:00')),true);
@@ -15,6 +15,11 @@ const firstImage='http://mmbiz.qpic.cn/mmbiz_jpg/first-asset/0?from=appmsg';
 assert.equal(summarizeDraftReadback(country,{...actual,thumb_url:'https://mmbiz.qpic.cn/mmbiz_jpg/first-asset/640?wx_fmt=jpeg'},[firstImage]).coverMatchesFirstBodyImage,true);
 assert.equal(summarizeDraftReadback(country,{...actual,thumb_url:'https://mmbiz.qpic.cn/mmbiz_jpg/different-asset/0'},[firstImage]).coverMatchesFirstBodyImage,false,'A different cover asset must not pass');
 assert.equal(summarizeDraftReadback(country,{...actual,thumb_url:'https://example.com/mmbiz_jpg/first-asset/0'},[firstImage]).coverMatchesFirstBodyImage,null,'Only WeChat image identities are comparable');
+assert.equal(summarizeDraftReadback(country,actual,[firstImage],'thumb').coverMatchesFirstBodyImage,true,'A returned thumbnail ID must match the saved first-image material');
+assert.equal(summarizeDraftReadback(country,{...actual,thumb_media_id:'different'},[firstImage],'thumb').coverMatchesFirstBodyImage,false);
+assert.equal(summarizeDraftReadback(country,{...actual,thumb_media_id:undefined},[firstImage],'thumb').coverMatchesFirstBodyImage,false);
+assert.equal(coverReadbackSelfTest().passed,true);assert.equal(coverReadbackSelfTest().readOnly,true);
+assert.equal(check.diagnosticsVersion,REVIEWED_DIAGNOSTICS_VERSION);
 assert.equal(check.footer.passed,true);assert.equal(check.footer.atEnd,true);assert.equal(check.footer.textOrderMatch,true);
 const lost=summarizeDraftReadback(country,{...actual,content:content.replace('text-align:justify','text-align:left')},[]);
 assert.equal(lost.expectedTextMatch,true);
