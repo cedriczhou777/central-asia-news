@@ -19,6 +19,7 @@ process.env.USE_WECHAT_CLOUD_CALL='true';
 const originalFetch=globalThis.fetch, originalNow=Date.now;
 const images=new Map<string,Uint8Array>(),packages=new Map<string,unknown>(),drafts=new Map<string,Record<string,string>>();
 let bucketExists=false,bucketPublic=false,deniedRequests=0,created=0,originRequests=0;
+let bucketStatus=0,bucketTransportError:Error|null=null;
 globalThis.fetch=async(input,init)=>{
   const r=input instanceof Request?input:new Request(input,init),u=new URL(r.url);
   if(u.hostname==='1.1.1.1'){deniedRequests++;return new Response('denied',{status:403});}
@@ -32,7 +33,11 @@ globalThis.fetch=async(input,init)=>{
   }
   if(u.hostname!=='database.invalid'){originRequests++;throw new Error('Network unavailable at original source');}
   if(u.pathname==='/storage/v1/bucket'&&r.method==='POST'){const b=await r.json();assert.equal(b.public,false);bucketExists=true;return Response.json({name:b.id});}
-  if(u.pathname==='/storage/v1/bucket/reviewed-originals')return bucketExists?Response.json({id:'reviewed-originals',name:'reviewed-originals',public:bucketPublic}):Response.json({message:'Not found',error:'Not found',statusCode:'404'},{status:404});
+  if(u.pathname==='/storage/v1/bucket/reviewed-originals'){
+    if(bucketTransportError)throw bucketTransportError;
+    if(bucketStatus)return Response.json({message:'fixture storage failure',statusCode:String(bucketStatus)},{status:bucketStatus});
+    return bucketExists?Response.json({id:'reviewed-originals',name:'reviewed-originals',public:bucketPublic}):Response.json({message:'Not found',error:'Not found',statusCode:'404'},{status:404});
+  }
   if(u.pathname.startsWith('/storage/v1/object/')){
     const key=u.pathname.replace('/storage/v1/object/authenticated/','').replace('/storage/v1/object/','');
     if(r.method==='POST'||r.method==='PUT'){images.set(key,new Uint8Array(await r.arrayBuffer()));return Response.json({Key:key,Id:'fixture'});}
@@ -57,6 +62,26 @@ async function main(){
   assert.equal(response.status,200,JSON.stringify(receipt));assert.equal(receipt.ready,true);assert.equal(receipt.private,true);assert.equal(images.size,1);
   assert.equal((await POST(request('POST','',image,sha256))).status,200);assert.equal(images.size,1,'retries use content-addressed identity');
   assert.equal((await privateImageHealth()).private,true);
+  // Actual SDK error wrappers must retain enough classification for a HTTP 200
+  // health envelope to distinguish transient readiness from unsafe storage.
+  for(const status of [500,502,503,504]){
+    bucketStatus=status;const health=await privateImageHealth();
+    assert.equal(health.ready,false);assert.equal(health.retryable,true);assert.equal(health.failureKind,'service_unavailable');assert.equal(health.httpStatus,status);
+  }
+  for(const status of [401,403]){
+    bucketStatus=status;const health=await privateImageHealth();
+    assert.equal(health.ready,false);assert.equal(health.retryable,false);assert.equal(health.failureKind,'authorization');
+  }
+  bucketStatus=429;assert.equal((await privateImageHealth()).retryable,false);
+  bucketStatus=0;
+  bucketTransportError=new TypeError('fetch failed',{cause:{code:'ECONNRESET'}});
+  let health=await privateImageHealth();assert.equal(health.retryable,true);assert.equal(health.failureKind,'network');
+  bucketTransportError=new DOMException('fixture timeout','TimeoutError');
+  health=await privateImageHealth();assert.equal(health.retryable,true);assert.equal(health.failureKind,'timeout');
+  bucketTransportError=null;
+  process.env.SUPABASE_SERVICE_ROLE_KEY='';process.env.COZE_SUPABASE_SERVICE_ROLE_KEY='';
+  health=await privateImageHealth();assert.equal(health.retryable,false);assert.equal(health.failureKind,'configuration');
+  process.env.SUPABASE_SERVICE_ROLE_KEY='local-test-only';delete process.env.COZE_SUPABASE_SERVICE_ROLE_KEY;
   assert.deepEqual(await readPrivateImage(asset,true),image,'persistent original bytes must survive independent reads');
   const binary=await GET(request('GET',`?sha256=${sha256}&bytes=${image.length}&download=1`));assert.deepEqual(Buffer.from(await binary.arrayBuffer()),image);assert.match(binary.headers.get('cache-control')!,/private/);
   const source='https://source.invalid/photo.jpg';
@@ -65,7 +90,7 @@ async function main(){
   const prepared=await prepareReviewedDraft(d);assert.equal(prepared.images,1);assert.match(prepared.html,/事实保持原样/);assert.equal(prepared.imageProbes[0].sha256,sha256);assert.equal(originRequests,0,'pinned images never request the original source');
   const legacy=await probeReviewedImage('https://1.1.1.1/denied.jpg','');assert.equal(legacy.accessible,false);assert.equal(deniedRequests,1,'403 must not trigger header/proxy retries');
   await assert.rejects(readPrivateImage({...asset,bytes:asset.bytes+1}),/哈希|长度/);
-  bucketPublic=true;assert.equal((await privateImageHealth()).ready,false);await assert.rejects(readPrivateImage(asset),/公开/);bucketPublic=false;
+  bucketPublic=true;health=await privateImageHealth();assert.equal(health.ready,false);assert.equal(health.retryable,false);assert.equal(health.failureKind,'public_bucket');await assert.rejects(readPrivateImage(asset),/公开/);bucketPublic=false;
   const old={version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{title:c,summary:'摘要',bodyHtml:'<p>旧包正文</p>',sourceName:'来源',sourceUrl:'',coverUrl:''}]))};assert.equal(contentHash(validatePackage(old)),contentHash(old),'legacy accepted package hashes remain unchanged');
   const input={version:'2026-11-15',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{...d,title:c}]))};const payload=validatePackage(input);requirePrivateImages(payload);
   const missing=structuredClone(payload);delete missing.countries.kz.imageAssets;assert.throws(()=>requirePrivateImages(missing),/先上传/);
