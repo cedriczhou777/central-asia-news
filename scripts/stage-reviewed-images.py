@@ -10,6 +10,30 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+class ImageServiceError(ValueError):
+    def __init__(self,status=None):
+        self.status=status
+        super().__init__('Image service HTTP '+str(status) if status is not None else 'Image service network timeout')
+
+def wait_for_private_service(api,timeout_seconds=180,clock=time.monotonic,pause=time.sleep):
+    started=clock();deadline=started+timeout_seconds;attempts=0
+    while True:
+        remaining=deadline-clock()
+        if remaining<=0:raise ValueError('Private image service readiness timed out; no draft was created')
+        attempts+=1
+        try:
+            result=api('GET','/api/wechat/push?health=1',request_timeout=min(15,remaining),attempts=1)
+            images=result.get('images',{})
+            if not(result.get('ok') and images.get('ready') is True and images.get('private') is True):
+                raise ValueError('Private image storage is not ready or not private; no upload attempted')
+            return {'ready':True,'attempts':attempts,'elapsedSeconds':round(clock()-started,3),
+                    'serviceRelease':result.get('recovery',{}).get('version')}
+        except ImageServiceError as error:
+            if error.status not in (None,500,502,503,504):raise
+        remaining=deadline-clock()
+        if remaining<=0:raise ValueError('Private image service readiness timed out; no draft was created')
+        pause(min(5,remaining))
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--manifest',required=True,type=Path)
@@ -18,6 +42,7 @@ def main():
     p.add_argument('--package',type=Path)
     p.add_argument('--output',type=Path)
     p.add_argument('--receipt',required=True,type=Path)
+    p.add_argument('--ready-timeout',type=int,default=180)
     a=p.parse_args()
     contract=json.loads(a.contract.read_text()) if a.contract else {}
     base=(a.base_url or contract.get('base_url') or '').rstrip('/')
@@ -27,16 +52,21 @@ def main():
     raw=json.loads(a.manifest.read_text());items=raw.get('images',[])
     if not isinstance(items,list) or len(items)>200:raise ValueError('Expected at most 200 reviewed images')
     if len({e['url'] for e in items})!=len(items):raise ValueError('Duplicate source URL in manifest')
-    def api(method,path,data=None,extra=None):
+    if not 1<=a.ready_timeout<=600:raise ValueError('ready-timeout must be between 1 and 600 seconds')
+    def api(method,path,data=None,extra=None,request_timeout=60,attempts=3):
         headers={'X-Ingest-Secret':secret,**(extra or {})}
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
-                with urlopen(Request(base+path,data=data,headers=headers,method=method),timeout=60) as r:return json.load(r)
+                with urlopen(Request(base+path,data=data,headers=headers,method=method),timeout=request_timeout) as r:return json.load(r)
             except HTTPError as e:
-                if e.code not in (500,502,503,504) or attempt==2:raise ValueError('Image service HTTP '+str(e.code)) from None
+                if e.code not in (500,502,503,504) or attempt==attempts-1:raise ImageServiceError(e.code) from None
             except (URLError,TimeoutError):
-                if attempt==2:raise ValueError('Image service network timeout') from None
+                if attempt==attempts-1:raise ImageServiceError() from None
             time.sleep(attempt+1)
+    try:readiness=wait_for_private_service(api,a.ready_timeout) if items else {'required':False}
+    except Exception as error:
+        a.receipt.write_text(json.dumps({'ok':False,'images':[],'failures':[{'stage':'readiness','error':str(error)}],'createdDrafts':False},ensure_ascii=False,indent=2))
+        raise
     def stage(e):
         url=e['url'];sha=e['sha256']
         if urlparse(url).scheme!='https' or not re.fullmatch('[a-f0-9]{64}',sha):raise ValueError('Invalid reviewed URL/hash')
@@ -60,7 +90,7 @@ def main():
             e=jobs[future]
             try:results.append(future.result())
             except Exception as error:failures.append({'url':e.get('url'),'error':str(error)[:180]})
-    receipt={'ok':not failures,'images':results,'failures':failures,'createdDrafts':False}
+    receipt={'ok':not failures,'images':results,'failures':failures,'createdDrafts':False,'readiness':readiness}
     a.receipt.write_text(json.dumps(receipt,ensure_ascii=False,indent=2))
     if failures:raise ValueError(f'{len(failures)} images not staged; see receipt. No package submitted')
     if a.package:
