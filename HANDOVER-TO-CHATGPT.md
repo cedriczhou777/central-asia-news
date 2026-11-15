@@ -106,10 +106,12 @@ POST /api/wechat/push   body: {"period":"daily"}
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | 读稿与落库 |
 | `WECHAT_APP_ID` / `WECHAT_APP_SECRET` | 建公众号草稿 |
 
-⚠️ **数据库（RLS）**：`push_runs` 表是**故意不开 RLS** 的 —— 因为落库代码走的是
-**anon key**（`supabase-client.ts` 的 `getSupabaseClient()`）⇒ anon key 在「开了 RLS
-且没有 policy」的表上读写都会被拒 ⇒ 代码只打一条 warn 就**静默降级**回内存态
-⇒ **表建了也等于没建**。⇒ 若你要建新表，**同样别开 RLS**，或改用 service role key。
+**数据库权限（2026-11-15更新）**：`push_runs` 是后台专用运行回执表，已启用RLS，
+并撤销 `anon` / `authenticated` 的表访问权限。后台无用户token的
+`getSupabaseClient()` 优先使用 `SUPABASE_SERVICE_ROLE_KEY`，保留SELECT/INSERT/UPDATE，
+角色测试已验证普通客户端拒绝、服务器读写可用，未修改业务记录。
+线上必须保留服务角色配置；缺失时修复服务器配置，不通过关闭RLS恢复公共访问。
+迁移记录：`20261115155756_protect_push_run_receipts`。
 
 ---
 
