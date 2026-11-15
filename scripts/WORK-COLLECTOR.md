@@ -36,3 +36,8 @@ comparison. User-published completed deliveries are not read or modified again.
 Authenticated `GET /api/wechat/push?health=1&selftest=cover` reports the deployed
 diagnostics version and a pure cover-comparison smoke check. It creates no media
 or drafts and does not substitute for real daily delivery acceptance.
+
+Recovery v7 also reconciles known draft IDs left in `updating` after an
+interrupted update. It reads the same draft without preparing, creating or
+updating anything. An exact readback closes the receipt; a mismatch or missing
+draft ID keeps the existing lock and never creates a replacement.

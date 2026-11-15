@@ -6,7 +6,7 @@ import { deliverReviewedPackage, readPackage, canResumePreparation } from './rev
 import { probeReviewedImage } from './reviewed-wechat';
 import { persistPushRun } from './push-run-store';
 
-export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v6';
+export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v7';
 type Row = { version:string; country:string; state:string; media_id?:string | null;updated_at?:string;detail?:Record<string,unknown> };
 type Dependencies = {
   packages:(date:string)=>Promise<string[]>;
@@ -35,7 +35,9 @@ export async function recoverReviewedIssue(date:string,deps:Dependencies) {
     if(active.length===1){
       const row=active[0];versionsByCountry[country]=row.version;
       if(row.state==='succeeded'&&row.media_id)completed++;
-      else if(['uncertain','sending'].includes(row.state)&&row.media_id)pending.push({country,version:row.version,reconcileOnly:true});
+      // A worker may stop after WeChat accepted an update but before readback.
+      // Reconcile that known draft; the delivery layer never steals its update lock.
+      else if(['uncertain','sending','updating'].includes(row.state)&&row.media_id)pending.push({country,version:row.version,reconcileOnly:true});
       else if(canResumePreparation(row))pending.push({country,version:row.version});
       continue; // Includes failed+media_id, preparing and uncertain; never steal locks.
     }
