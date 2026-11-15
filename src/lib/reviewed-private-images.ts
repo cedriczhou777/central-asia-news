@@ -11,22 +11,61 @@ const objectPath = (sha256: string) => {
 };
 const cache=new Map<string,{bytes:Buffer;until:number}>();
 let cacheBytes=0;
+type StorageFailureKind = 'configuration' | 'authorization' | 'public_bucket' | 'invalid_metadata' |
+  'timeout' | 'network' | 'service_unavailable' | 'not_found' | 'rate_limited' | 'unavailable';
+class PrivateStorageError extends Error {
+  constructor(message:string, readonly failureKind:StorageFailureKind, readonly retryable=false, readonly status?:number) {
+    super(message);
+  }
+}
+// SDK transport failures can be wrapped in StorageUnknownError.originalError.
+// Classify only known transient causes; unknown failures must not weaken the
+// private-bucket gate or turn an authorization/configuration error into a retry.
+function storageFailure(error:unknown): PrivateStorageError {
+  if(error instanceof PrivateStorageError)return error;
+  const chain:Record<string,unknown>[]=[];const seen=new Set<unknown>();const pending=[error];
+  while(pending.length&&chain.length<8){
+    const value=pending.shift();if(!value||typeof value!=='object'||seen.has(value))continue;
+    seen.add(value);const entry=value as Record<string,unknown>;chain.push(entry);
+    pending.push(entry.originalError,entry.cause);
+  }
+  const status=chain.map(entry=>Number(entry.status)).find(value=>Number.isInteger(value)&&value>=400&&value<=599);
+  if(status===401||status===403)return new PrivateStorageError('原图私有存储鉴权失败','authorization',false,status);
+  if(status===429)return new PrivateStorageError('原图私有存储触发限流','rate_limited',false,status);
+  if(status!==undefined&&status>=500)return new PrivateStorageError('原图私有存储暂时不可用','service_unavailable',true,status);
+  if(status===408||chain.some(entry=>entry.name==='TimeoutError'||entry.name==='AbortError'))
+    return new PrivateStorageError('原图私有存储请求超时','timeout',true,status);
+  const networkCodes=new Set(['ETIMEDOUT','ECONNRESET','ECONNREFUSED','ENOTFOUND','EAI_AGAIN','EHOSTUNREACH','ENETUNREACH','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET']);
+  if(chain.some(entry=>networkCodes.has(String(entry.code))||
+    ((entry.name==='TypeError'||entry.name==='StorageUnknownError')&&typeof entry.message==='string'&&/fetch failed|failed to fetch|network request failed|network error|networkerror/i.test(entry.message))))
+    return new PrivateStorageError('原图私有存储网络暂不可用','network',true,status);
+  if(status===404)return new PrivateStorageError('原图私有存储桶不存在','not_found',false,status);
+  return new PrivateStorageError('原图私有存储尚未就绪','unavailable',false,status);
+}
 async function bucket(create: boolean) {
-  if (!getSupabaseServiceRoleKey()) throw new Error('原图私有存储须配置服务角色');
-  const sb = getSupabaseClient();
-  let result = await sb.storage.getBucket(PRIVATE_IMAGE_BUCKET);
+  if (!getSupabaseServiceRoleKey()) throw new PrivateStorageError('原图私有存储须配置服务角色','configuration');
+  let sb:ReturnType<typeof getSupabaseClient>;
+  try { sb=getSupabaseClient(); } catch { throw new PrivateStorageError('原图私有存储配置不完整','configuration'); }
+  let result:Awaited<ReturnType<typeof sb.storage.getBucket>>;
+  try { result=await sb.storage.getBucket(PRIVATE_IMAGE_BUCKET); } catch(error) { throw storageFailure(error); }
   if (result.error && create && ['404','400'].includes(String(result.error.status))) {
     const created = await sb.storage.createBucket(PRIVATE_IMAGE_BUCKET, { public:false, fileSizeLimit:MAX_IMAGE_BYTES });
-    if (created.error && !['409','400'].includes(String(created.error.status))) throw new Error('无法建立原图私有存储');
+    if (created.error && !['409','400'].includes(String(created.error.status))) throw storageFailure(created.error);
     result = await sb.storage.getBucket(PRIVATE_IMAGE_BUCKET);
   }
-  if (result.error || !result.data) throw new Error('原图私有存储尚未就绪');
-  if (result.data.public !== false) throw new Error('原图存储意外公开，已拒绝读写');
+  if (result.error) throw storageFailure(result.error);
+  if (!result.data) throw new PrivateStorageError('原图私有存储尚未就绪','invalid_metadata');
+  if (result.data.public === true) throw new PrivateStorageError('原图存储意外公开，已拒绝读写','public_bucket');
+  if (result.data.public !== false) throw new PrivateStorageError('无法核实原图存储私有属性，已拒绝读写','invalid_metadata');
   return sb.storage.from(PRIVATE_IMAGE_BUCKET);
 }
-export async function privateImageHealth() {
-  try { await bucket(false); return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:true, private:true, requestTimeoutMs:SUPABASE_REQUEST_TIMEOUT_MS }; }
-  catch (e) { return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:false, private:false, requestTimeoutMs:SUPABASE_REQUEST_TIMEOUT_MS, reason:e instanceof Error?e.message:'原图存储不可用' }; }
+type PrivateImageHealth = { protocol:string; ready:boolean; private:boolean; retryable:boolean;
+  requestTimeoutMs:number; failureKind?:StorageFailureKind; httpStatus?:number; reason?:string };
+export async function privateImageHealth():Promise<PrivateImageHealth> {
+  try { await bucket(false); return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:true, private:true, retryable:false, requestTimeoutMs:SUPABASE_REQUEST_TIMEOUT_MS }; }
+  catch (e) { const error=storageFailure(e);return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:false, private:false,
+    retryable:error.retryable,failureKind:error.failureKind,...(error.status===undefined?{}:{httpStatus:error.status}),
+    requestTimeoutMs:SUPABASE_REQUEST_TIMEOUT_MS,reason:error.message }; }
 }
 export async function readPrivateImage(asset: ReviewedImageAsset, fresh=false) {
   objectPath(asset.sha256);

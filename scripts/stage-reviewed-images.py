@@ -24,12 +24,19 @@ def wait_for_private_service(api,timeout_seconds=180,clock=time.monotonic,pause=
         try:
             result=api('GET','/api/wechat/push?health=1',request_timeout=min(15,remaining),attempts=1)
             images=result.get('images',{})
-            if not(result.get('ok') and images.get('ready') is True and images.get('private') is True):
+            if not(result.get('ok') is True and isinstance(images,dict)):
                 raise ValueError('Private image storage is not ready or not private; no upload attempted')
-            return {'ready':True,'attempts':attempts,'elapsedSeconds':round(clock()-started,3),
-                    'serviceRelease':result.get('recovery',{}).get('version')}
+            if images.get('ready') is True and images.get('private') is True:
+                return {'ready':True,'attempts':attempts,'elapsedSeconds':round(clock()-started,3),
+                        'serviceRelease':result.get('recovery',{}).get('version')}
+            # A HTTP 200 health envelope can still report a transient storage
+            # dependency failure. Retry reads only, within the same deadline;
+            # known public/denied/misconfigured storage must fail immediately.
+            transient=images.get('ready') is False and images.get('retryable') is True and images.get('failureKind') in ('network','timeout','service_unavailable')
+            if not transient:
+                raise ValueError('Private image storage is not ready or not private; no upload attempted')
         except ImageServiceError as error:
-            if error.status not in (None,500,502,503,504):raise
+            if error.status is not None and not 500<=error.status<=599:raise
         remaining=deadline-clock()
         if remaining<=0:raise ValueError('Private image service readiness timed out; no draft was created')
         pause(min(5,remaining))

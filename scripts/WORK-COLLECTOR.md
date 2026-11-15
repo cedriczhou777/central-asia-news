@@ -26,7 +26,7 @@ image inspection/captions or a concrete image gap are required.
 With Python 3, Pillow and lxml installed, run
 `python3 -m unittest discover -s scripts -p 'test_work_*.py' -v`.
 Tests use synthetic HTML and mocked transport, never real news or publication.
-The 26 regressions cover decompression, corrupt HTTP 200 responses, SVG titles,
+The 30 regressions cover decompression, corrupt HTTP 200 responses, SVG titles,
 cache expiry, bounded retries, denials, handoff identity, premature cutoff and
 private-service startup readiness. The image stager waits at most three minutes
 for a transient cold start before uploading; authentication denials and nonprivate
@@ -60,3 +60,10 @@ metadata, uploads, downloads and response-body consumption. Caller cancellation
 signals and the existing 10-second PostgREST timeout remain effective. A stalled
 storage request can fail and release the recovery loop instead of holding it
 forever. The authenticated health result reports `images.requestTimeoutMs`.
+
+Recovery v10 identifies transient storage dependency failures explicitly through
+`images.retryable` and `images.failureKind`, including HTTP 200 health envelopes.
+The image stager retries only these known temporary failures within its existing
+180-second deadline. Authorization, configuration, public/unknown bucket metadata
+and other nontransient failures stop immediately; uploads still require actual
+`ready=true` and `private=true`.
