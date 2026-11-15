@@ -5,8 +5,9 @@ import { imageUrls, issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTR
 import { deliverReviewedPackage, readPackage, canResumePreparation } from './reviewed-delivery';
 import { probeReviewedImage } from './reviewed-wechat';
 import { persistPushRun } from './push-run-store';
+import { getReviewedRecoveryState } from './reviewed-recovery-state';
 
-export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v7';
+export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v8';
 type Row = { version:string; country:string; state:string; media_id?:string | null;updated_at?:string;detail?:Record<string,unknown> };
 type Dependencies = {
   packages:(date:string)=>Promise<string[]>;
@@ -73,55 +74,53 @@ export async function recoverReviewedIssue(date:string,deps:Dependencies) {
   return {stage:'delivery_attempted',version,versionsByCountry,countries:attempted,failures,result:{ok:!failures.length&&results.every(r=>(r as {ok?:boolean})?.ok===true),results}};
 }
 
-let running=false, registered=false;
-let lastRecovery:Record<string,unknown> | null = null;
-let acceptedOrigin:string|undefined;
-export function reviewedRecoveryStatus(){return {version:REVIEWED_RECOVERY_VERSION,running,lastRun:lastRecovery};}
+const recoveryState=getReviewedRecoveryState();
+export function reviewedRecoveryStatus(){return {version:REVIEWED_RECOVERY_VERSION,registered:recoveryState.registered,running:recoveryState.running,lastRun:recoveryState.lastRecovery};}
 export function queueReviewedRecovery(version:string, today=beijingDate(), requestUrl?:string) {
   if(issueDate(version)!==today || !issueCutoffElapsed(version))return false;
-  if(requestUrl){try{const origin=new URL(requestUrl);if(origin.protocol==='https:'&&!origin.username&&!origin.password)acceptedOrigin=origin.origin+'/';}catch{/* Optional heartbeat only. */}}
+  if(requestUrl){try{const origin=new URL(requestUrl);if(origin.protocol==='https:'&&!origin.username&&!origin.password)recoveryState.acceptedOrigin=origin.origin+'/';}catch{/* Optional heartbeat only. */}}
   // Ingest is an explicit authorized write. Continue its accepted work even if
   // the client turn ends or the instance woke after the last cron tick.
   setTimeout(()=>{void runReviewedRecovery();},0);
   return true;
 }
 export async function runReviewedRecovery() {
-  if(running)return {stage:'already_running'};
-  running=true;
+  if(recoveryState.running)return {stage:'already_running'};
+  recoveryState.running=true;
   const startedAt=new Date().toISOString();
   let heartbeat:ReturnType<typeof setInterval> | undefined;
   const keepAwake=()=>{
-    const target=process.env.KEEPALIVE_TARGET_URL || acceptedOrigin;
+    const target=process.env.KEEPALIVE_TARGET_URL || recoveryState.acceptedOrigin;
     if(!target?.startsWith('https://'))return;
     const ping=async()=>{try{const r=await fetch(target,{signal:AbortSignal.timeout(30000)});await r.body?.cancel();}catch{/* next bounded heartbeat retries */}};
     void ping(); heartbeat=setInterval(()=>{void ping();},5*60_000);heartbeat.unref();
   };
-  lastRecovery={startedAt,stage:'checking'};
+  recoveryState.lastRecovery={startedAt,stage:'checking'};
   try {
     const sb=getSupabaseClient();
     const result=await recoverReviewedIssue(beijingDate(),{
       packages:async date=>{const r=await sb.from('reviewed_packages').select('version').eq('issue_date',date);if(r.error)throw new Error('稿包恢复查询失败');return (r.data||[]).map(r=>r.version);},
       deliveries:async versions=>{const r=await sb.from('reviewed_deliveries').select('version,country,state,media_id,updated_at,detail').in('version',versions);if(r.error)throw new Error('投递恢复查询失败');return r.data||[];},
       read:readPackage,probe:probeReviewedImage,onPending:keepAwake,
-      onProgress:progress=>{lastRecovery={startedAt,...progress};},
+      onProgress:progress=>{recoveryState.lastRecovery={startedAt,...progress};},
       deliver:(payload,countries)=>deliverReviewedPackage(payload,sb,undefined,countries),
     });
-    lastRecovery={startedAt,finishedAt:new Date().toISOString(),...result};
+    recoveryState.lastRecovery={startedAt,finishedAt:new Date().toISOString(),...result};
     // Do not replace live push progress merely because no package exists.
     if(result.stage==='delivery_attempted'||result.stage==='needs_image_revision'){
       const error=result.failures?.length?'部分国家图片待处理':
         result.stage==='delivery_attempted' && (result.result as {ok?:boolean} | null)?.ok !== true ? '部分国家投递待处理' : null;
-      await persistPushRun({running:false,startedAt,finishedAt:new Date().toISOString(),durationMs:Date.now()-Date.parse(startedAt),error,summary:{recovery:lastRecovery}});
+      await persistPushRun({running:false,startedAt,finishedAt:new Date().toISOString(),durationMs:Date.now()-Date.parse(startedAt),error,summary:{recovery:recoveryState.lastRecovery}});
     }
     return result;
   } catch(error) {
-    lastRecovery={startedAt,finishedAt:new Date().toISOString(),stage:'failed',error:error instanceof Error?error.message:'恢复失败'};
-    return lastRecovery;
-  } finally {if(heartbeat)clearInterval(heartbeat);running=false;}
+    recoveryState.lastRecovery={startedAt,finishedAt:new Date().toISOString(),stage:'failed',error:error instanceof Error?error.message:'恢复失败'};
+    return recoveryState.lastRecovery;
+  } finally {if(heartbeat)clearInterval(heartbeat);recoveryState.running=false;}
 }
 export function startReviewedRecovery(){
-  if(registered)return;
-  registered=true;
+  if(recoveryState.registered)return;
+  recoveryState.registered=true;
   // Catch up after a cold start instead of waiting for the next exact cron tick.
   if(issueCutoffElapsed(beijingDate()))void runReviewedRecovery();
   cron.schedule('*/10 6-14 * * *',()=>{void runReviewedRecovery();},{timezone:'Asia/Shanghai'});

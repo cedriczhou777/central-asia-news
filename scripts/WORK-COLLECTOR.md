@@ -41,3 +41,10 @@ Recovery v7 also reconciles known draft IDs left in `updating` after an
 interrupted update. It reads the same draft without preparing, creating or
 updating anything. An exact readback closes the receipt; a mismatch or missing
 draft ID keeps the existing lock and never creates a replacement.
+
+Recovery v8 shares scheduler registration, the running lock, progress and the
+accepted service origin across separately bundled Next instrumentation/routes.
+The authenticated health check exposes `recovery.registered` and the same live
+progress. Database ownership remains authoritative across processes. Migration
+`20261115103632_reviewed_delivery_allow_updating.sql` adds `updating` to the
+existing state constraint without changing receipts or the daily-country lock.
