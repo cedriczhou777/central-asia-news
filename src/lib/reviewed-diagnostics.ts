@@ -2,7 +2,7 @@ import { load } from 'cheerio';
 import { makeSourceUrlsVisible, type ReviewedCountry } from './reviewed-package';
 
 // Read-only diagnostics for a known existing draft. Never includes credentials or media IDs.
-export function summarizeDraftReadback(expected: ReviewedCountry, actual: { title: string; digest: string; content: string; content_source_url?: string; thumb_media_id?: string }, expectedImages: string[]) {
+export function summarizeDraftReadback(expected: ReviewedCountry, actual: { title: string; digest: string; content: string; content_source_url?: string; thumb_media_id?: string; thumb_url?: string }, expectedImages: string[]) {
   const text = (html: string) => load(html, {}, false).text().replace(/\s+/g, '');
   const oldText = text(makeSourceUrlsVisible(expected.bodyHtml));
   const expectedText = text(expected.bodyHtml);
@@ -13,6 +13,17 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
   const imageAttributes = $('img').toArray().map(el => ({ src: !!$(el).attr('src'), dataSrc: !!$(el).attr('data-src') }));
   const imageIdentity = (value: string) => { try { const u = new URL(value); return { host:u.hostname, path:u.pathname }; } catch { return null; } };
   const actualImages = $('img').toArray().map(el => $(el).attr('src') || $(el).attr('data-src') || '');
+  // Both uploads of identical bytes have a WeChat image identity. Ignore only
+  // WeChat's normal /0 -> /640 rendition and URL query changes, never the asset.
+  const wechatImageKey = (value: string) => {
+    try {
+      const u = new URL(value);
+      if (!['https:', 'http:'].includes(u.protocol) || !u.hostname.endsWith('.qpic.cn')) return null;
+      return u.hostname + u.pathname.replace(/\/(?:0|640)$/, '');
+    } catch { return null; }
+  };
+  const coverKey = wechatImageKey(actual.thumb_url || '');
+  const firstBodyKey = wechatImageKey(expectedImages[0] || '');
   const compactStyle = (style:string) => style.toLowerCase().replace(/\s+/g,'');
   const expectedDom = load(expected.bodyHtml,{},false);
   const expectedBodyCount = expectedDom('p').toArray().filter(el=>compactStyle(expectedDom(el).attr('style')||'').includes('font-size:16px')).length;
@@ -33,7 +44,7 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
   const footerGray=actualFooterStyles.every(style=>style.includes('color:#929292'));
   const footerBackground=footerContainerStyle.includes('background:#f7f5ef');
   return {
-    diagnosticsVersion:3,
+    diagnosticsVersion:4,
     titleMatch: actual.title === expected.title, digestMatch: actual.digest === expected.summary,
     expectedTextMatch: actualText === expectedText, legacyTextMatch: actualText === oldText,
     actualLength: actualText.length, legacyLength: oldText.length, firstDifference: difference,
@@ -43,6 +54,8 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
     expectedImageIdentities: expectedImages.map(imageIdentity), actualImageIdentities: actualImages.map(imageIdentity),
     originalLinkEmpty:typeof actual.content_source_url==='string' ? actual.content_source_url==='' : null,
     thumbnailPresent:typeof actual.thumb_media_id==='string' && actual.thumb_media_id.length>0,
+    coverImageIdentity:imageIdentity(actual.thumb_url || ''),
+    coverMatchesFirstBodyImage:coverKey && firstBodyKey ? coverKey === firstBodyKey : null,
     layout:{expectedBodyParagraphs:expectedBodyCount,actualBodyParagraphs:bodyStyles.length,bodyCountMatch,
       justified:bodyCountMatch && bodyStyles.every(style=>style.includes('text-align:justify')),
       lastLineLeft:bodyCountMatch && bodyStyles.every(style=>style.includes('text-align-last:left')),
