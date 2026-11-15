@@ -7,6 +7,7 @@ from decimal import Decimal,InvalidOperation
 from datetime import date,datetime,timedelta,timezone
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit,urlunsplit,parse_qsl,urlencode
 COUNTRIES=('kz','uz','kg','tj','az')
 NUM=r'\d+(?:[ \u00a0\u202f,]\d{3})*(?:[.,]\d+)?'
 def number(raw,decimal_comma=False):
@@ -82,6 +83,10 @@ def editorial_remnants(text):
 def digest(value):
  if isinstance(value,list):value=[{k:v for k,v in item.items() if k!='cloudImageProbe'} if isinstance(item,dict) else item for item in value]
  return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+def story_source_key(url):
+ parts=urlsplit(url)
+ query=[(k,v) for k,v in parse_qsl(parts.query,keep_blank_values=True) if not k.lower().startswith('utm_') and k.lower() not in ('fbclid','gclid','_ga')]
+ return urlunsplit((parts.scheme.lower(),parts.netloc.lower(),parts.path,urlencode(sorted(query)),''))
 class Markup(HTMLParser):
  def __init__(self):super().__init__();self.images=[];self.styles=[];self.text=[]
  def handle_starttag(self,tag,attrs):
@@ -89,13 +94,19 @@ class Markup(HTMLParser):
   if tag=='img':self.images.append(a.get('src',''))
   if tag=='p':self.styles.append(a.get('style','').replace(' ',''))
  def handle_data(self,data):self.text.append(data)
-def quantity_report(data,now=None):
+def country_scope(countries=None):
+ """A partial transport scope must be requested explicitly; default is all five."""
+ if countries is None:return COUNTRIES
+ if not isinstance(countries,(list,tuple)) or not countries or any(not isinstance(c,str) or c not in COUNTRIES for c in countries) or len(set(countries))!=len(countries):
+  raise ValueError('countries must be a nonempty unique list of known country codes')
+ return tuple(c for c in COUNTRIES if c in countries)
+def quantity_report(data,now=None,countries=None):
  """Recompute supply/selection coverage; never trust a ready flag in a draft."""
  if str(data.get('issueDate',''))<'2026-11-16':return {}
  try:from work_quantity_policy import evaluate_quantity
- except ImportError:return {c:{'quantityReady':False,'quantityStatus':'needs_expansion','shortfallOpen':True,'error':'work_quantity_policy helper missing'} for c in COUNTRIES}
+ except ImportError:return {c:{'quantityReady':False,'quantityStatus':'needs_expansion','shortfallOpen':True,'error':'work_quantity_policy helper missing'} for c in country_scope(countries)}
  result={}
- for code in COUNTRIES:
+ for code in country_scope(countries):
   draft=copy.deepcopy(data.get('drafts',{}).get(code,{}));review=data.get('reviews',{}).get(code,{})
   draft['articles']=review.get('articles',[])
   for key in ('candidateLedger','quantityExceptionReview'):
@@ -113,10 +124,12 @@ def quantity_report(data,now=None):
   except (TypeError,ValueError,KeyError,AssertionError) as error:
    result[code]={'quantityReady':False,'quantityStatus':'needs_expansion','shortfallOpen':True,'error':str(error)}
  return result
-def validate(data,require_cloud_images=True,now=None,delivery_mode='normal'):
+def validate(data,require_cloud_images=True,now=None,delivery_mode='normal',countries=None):
  errors=[]
  def check(ok,message):
   if not ok:errors.append(message)
+ try:scope=country_scope(countries)
+ except ValueError as error:return [str(error)]
  issue=data.get('issueDate','')
  try:
   d=date.fromisoformat(issue);tz=timezone(timedelta(hours=8))
@@ -126,13 +139,18 @@ def validate(data,require_cloud_images=True,now=None,delivery_mode='normal'):
  check(delivery_mode in ('normal','deadline_under_delivery'),'invalid delivery mode')
  under_delivery=delivery_mode=='deadline_under_delivery'
  if under_delivery:check(current>=end+timedelta(hours=1,minutes=30),'under-delivery fallback is only available from real 07:30 Beijing time')
- quantities=quantity_report(data,now=current)
+ quantities=quantity_report(data,now=current,countries=scope)
  check(end <= (now or datetime.now(timezone.utc)), 'issue cutoff has not elapsed')
  pack=data.get('package',{});drafts=data.get('drafts',{});reviews=data.get('reviews',{})
- check(re.fullmatch(re.escape(issue)+r'(?:-r[1-9]\d*)?',str(pack.get('version',''))) is not None,'package issue/version mismatch')
+ declared=pack.get('readyCountries')
+ if countries is not None or 'readyCountries' in pack:
+  try:declared_scope=country_scope(declared) if declared is not None else ()
+  except ValueError:declared_scope=()
+  check(declared_scope==scope,'package.readyCountries must exactly match the explicitly selected countries')
+ check(re.fullmatch(re.escape(issue)+r'(?:-r(?:[2-9]|[1-9]\d+))?',str(pack.get('version',''))) is not None,'package issue/version mismatch')
  for name,value in [('drafts',drafts),('reviews',reviews),('package.countries',pack.get('countries',{}))]:
-  check(isinstance(value,dict) and set(value)==set(COUNTRIES),name+': require exactly five countries')
- for code in COUNTRIES:
+  check(isinstance(value,dict) and set(value)==set(scope),name+(': require exactly five countries' if countries is None else ': require exactly the selected countries'))
+ for code in scope:
   draft=drafts.get(code,{});review=reviews.get(code,{});country=pack.get('countries',{}).get(code,{})
   prefix=code+': '
   check(draft.get('issueDate')==issue and draft.get('country')==code,prefix+'draft identity mismatch')
@@ -147,6 +165,10 @@ def validate(data,require_cloud_images=True,now=None,delivery_mode='normal'):
   entries=review.get('articles',[])
   check(isinstance(entries,list) and 0<len(entries)<=20,prefix+'invalid article count')
   if not isinstance(entries,list):continue
+  ids=[e.get('id') for e in entries if isinstance(e,dict)]
+  urls=[story_source_key(e.get('source_url','')) for e in entries if isinstance(e,dict) and isinstance(e.get('source_url'),str)]
+  check(len(ids)==len(entries) and len(set(map(str,ids)))==len(entries),prefix+'duplicate adopted article IDs')
+  check(len(urls)==len(entries) and len(set(urls))==len(entries),prefix+'duplicate adopted source URLs')
   check(review.get('finalBodyHash')==digest(entries),prefix+'final content hash mismatch')
   check(review.get('fullSourceReviewCompleted') is True and review.get('revisedFullTextRechecked') is True,prefix+'full-source review/recheck incomplete')
   if issue>='2026-11-14':
@@ -154,7 +176,8 @@ def validate(data,require_cloud_images=True,now=None,delivery_mode='normal'):
    check(review.get('bodyFactReviewCompleted') is True,prefix+'separate body fact review incomplete')
   check(isinstance(review.get('issues'),list) and all(i.get('closed') is True or (under_delivery and i.get('kind')=='quantity_shortfall') for i in review.get('issues',[])),prefix+'unclosed or missing review issues')
   if issue>='2026-11-16':
-   if not under_delivery:check(quantities.get(code,{}).get('quantityReady') is True,prefix+'quantity/coverage/selection incomplete; continue source expansion')
+   if under_delivery:check(len(entries)>=10,prefix+'deadline transport requires at least ten real reviewed stories; continue source expansion')
+   else:check(quantities.get(code,{}).get('quantityReady') is True,prefix+'quantity/coverage/selection incomplete; continue source expansion')
   else:check(len(entries)>=10 or bool(review.get('coverageShortfallExplanation')),prefix+'shortfall coverage explanation required')
   for i,e in enumerate(entries):
    item=prefix+str(i+1)+': '
@@ -224,11 +247,15 @@ def selftest():
  d=copy.deepcopy(imaged);d['package']['countries']['kz']['coverUrl']='https://example.com/other.jpg';assert validate(d);cases.append('wrong cover')
  print(json.dumps({'passed':True,'validSyntheticFixture':True,'rejections':cases},ensure_ascii=False))
 if __name__=='__main__':
- parser=argparse.ArgumentParser();parser.add_argument('input',nargs='?');parser.add_argument('--selftest',action='store_true');parser.add_argument('--stage',choices=['ingest','deliver'],default='deliver');parser.add_argument('--delivery-mode',choices=['normal','deadline_under_delivery'],default='normal');args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('input',nargs='?');parser.add_argument('--selftest',action='store_true');parser.add_argument('--stage',choices=['ingest','deliver'],default='deliver');parser.add_argument('--delivery-mode',choices=['normal','deadline_under_delivery'],default='normal');parser.add_argument('--countries',help='Explicit partial transport scope, e.g. kz,uz; requires identical package.readyCountries and scoped drafts/reviews/countries');args=parser.parse_args()
  if args.selftest:selftest()
  elif args.input:
-  data=json.loads(Path(args.input).read_text());quantities=quantity_report(data)
-  errors=validate(data,require_cloud_images=args.stage=='deliver',delivery_mode=args.delivery_mode)
+  data=json.loads(Path(args.input).read_text());selected=args.countries.split(',') if args.countries is not None else None
+  try:scope=country_scope(selected)
+  except ValueError as error:parser.error(str(error))
+  quantities=quantity_report(data,countries=scope)
+  errors=validate(data,require_cloud_images=args.stage=='deliver',delivery_mode=args.delivery_mode,countries=selected)
   quantity_ok=not quantities or all(q.get('quantityReady') is True for q in quantities.values())
-  print(json.dumps({'ok':not errors,'stage':args.stage,'deliveryMode':args.delivery_mode,'transportAllowed':not errors,'quantityReady':quantity_ok,'qualityDeliveryComplete':not errors and quantity_ok,'underDelivery':not quantity_ok,'continueExpansion':not quantity_ok,'quantities':quantities,'errors':errors},ensure_ascii=False,indent=2));sys.exit(bool(errors))
+  missing=[c for c in COUNTRIES if c not in scope]
+  print(json.dumps({'ok':not errors,'stage':args.stage,'deliveryMode':args.delivery_mode,'transportAllowed':not errors,'selectedCountries':list(scope),'missingCountries':missing,'partialDelivery':bool(missing),'selectedQuantityReady':quantity_ok,'quantityReady':quantity_ok and not missing,'qualityDeliveryComplete':not errors and quantity_ok and not missing,'underDelivery':not quantity_ok,'continueExpansion':not quantity_ok or bool(missing),'quantities':quantities,'errors':errors},ensure_ascii=False,indent=2));sys.exit(bool(errors))
  else:parser.error('input file or --selftest required')

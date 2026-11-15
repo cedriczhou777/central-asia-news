@@ -1,5 +1,5 @@
 import { getSupabaseClient } from '../storage/database/supabase-client';
-import { PACKAGE_COUNTRIES, contentHash, imageUrls, makeSourceUrlsVisible, sourceUrls, validatePackage, type ReviewedPackage } from './reviewed-package';
+import { PACKAGE_COUNTRIES, packageCountries, reviewedCountry, contentHash, imageUrls, makeSourceUrlsVisible, sourceUrls, validatePackage, type ReviewedPackage, type ReviewedCountry } from './reviewed-package';
 import { prepareReviewedDraft, createReviewedDraft, updateReviewedDraft, readReviewedDraft } from './reviewed-wechat';
 import { load } from 'cheerio';
 import { randomUUID } from 'node:crypto';
@@ -17,7 +17,7 @@ type DeliveryAdapters = {
   read: typeof readReviewedDraft;
 };
 export const deliveryAdapters: DeliveryAdapters = { prepare: prepareReviewedDraft, create: createReviewedDraft, update: updateReviewedDraft, read: readReviewedDraft };
-function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited<ReturnType<typeof readReviewedDraft>>, expectedImages: string[], expectedThumbId?:string) {
+function verifyReadback(d: ReviewedCountry, readback: Awaited<ReturnType<typeof readReviewedDraft>>, expectedImages: string[], expectedThumbId?:string) {
   const text = (html: string) => load(html, {}, false).text().replace(/\s+/g,'');
   const $ = load(readback.content, {}, false);
   const images = $('img').toArray().map(el => $(el).attr('src') || $(el).attr('data-src') || '');
@@ -36,8 +36,13 @@ export async function deliverReviewedPackage(
   payload: ReviewedPackage,
   sb = getSupabaseClient(),
   adapters = deliveryAdapters,
-  onlyCountries: readonly (typeof PACKAGE_COUNTRIES)[number][] = PACKAGE_COUNTRIES,
+  onlyCountries: readonly import('./reviewed-package').PackageCountry[] = packageCountries(payload),
 ) {
+  payload=validatePackage(payload);
+  if(!onlyCountries.length||new Set(onlyCountries).size!==onlyCountries.length)throw new Error('投递国家须为非空无重复子集');
+  // Validate the whole requested scope before claiming any country, including
+  // callers which invoke the delivery layer without passing through HTTP.
+  for(const country of onlyCountries)reviewedCountry(payload,country);
   const drafts: object[] = []; const failures: object[] = [];
   for (const country of onlyCountries) {
     const key = { version: payload.version, country };
@@ -57,9 +62,9 @@ export async function deliverReviewedPackage(
         let updateLockAcquired = false;
         try {
           const current = await adapters.read(existing.data.media_id);
-          let verified = verifyReadback(payload.countries[country], current, existing.data.detail?.imageUrls || [], existing.data.detail?.expectedThumbMediaId);
+          let verified = verifyReadback(reviewedCountry(payload,country), current, existing.data.detail?.imageUrls || [], existing.data.detail?.expectedThumbMediaId);
           if (!verified.verified) {
-            const d = payload.countries[country];
+            const d = reviewedCountry(payload,country);
             const updateDraft = adapters.update;
             // Elapsed time cannot prove another worker stopped updating WeChat.
             const candidates=[{check:verified,images:existing.data.detail?.imageUrls || []}];
@@ -112,7 +117,7 @@ export async function deliverReviewedPackage(
     let mediaId: string | null = null;
     let detail: Record<string,unknown> = {...ownership};
     try {
-      const d = payload.countries[country];
+      const d = reviewedCountry(payload,country);
       const heartbeat=async()=>{
         const kept=await sb.from('reviewed_deliveries').update({updated_at:new Date().toISOString()}).match(key).eq('state','preparing').contains('detail',{preparationToken}).select('country');
         if(kept.error||kept.data?.length!==1)throw new Error('准备工作已由其他执行者接续，停止旧执行');
@@ -143,7 +148,9 @@ export async function deliverReviewedPackage(
       failures.push({ country, state, media_id:mediaId, error:message });
     }
   }
-  return { ok:failures.length === 0 && drafts.length === onlyCountries.length, version:payload.version, drafts, failures };
+  return { ok:failures.length === 0 && drafts.length === onlyCountries.length, version:payload.version, drafts, failures,
+    countries:[...onlyCountries],readyCountries:packageCountries(payload),partialDelivery:onlyCountries.length<5,
+    missingCountries:PACKAGE_COUNTRIES.filter(country=>!onlyCountries.includes(country)) };
 }
 export async function readPackage(version: string) {
   const result = await getSupabaseClient().from('reviewed_packages').select('payload,content_hash').eq('version',version).maybeSingle();

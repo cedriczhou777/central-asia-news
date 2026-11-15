@@ -1,6 +1,8 @@
-import copy,unittest
+import copy,hashlib,io,json,tempfile,unittest
 from datetime import datetime
-from finalize_writer_handoff import finalize,digest
+from pathlib import Path
+from PIL import Image
+from finalize_writer_handoff import finalize,digest,restore_image_paths
 from test_work_quantity import fixture
 
 class HandoffIdentity(unittest.TestCase):
@@ -66,5 +68,81 @@ class HandoffIdentity(unittest.TestCase):
         self.assertTrue(d['quantityReady'])
         self.assertFalse(d['qualityDeliveryComplete'])
         self.assertFalse(d['shortfallOpen'])
+
+class RestoredImageHandoff(unittest.TestCase):
+    def setUp(self):
+        fixture=HandoffIdentity();fixture.setUp()
+        self.draft,self.audit,self.now=fixture.draft,fixture.audit,fixture.now
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)/'restored'
+        (self.root/'images').mkdir(parents=True)
+        buffer=io.BytesIO();Image.new('RGB',(2,2),(30,80,120)).save(buffer,format='PNG')
+        self.data=buffer.getvalue();self.sha=hashlib.sha256(self.data).hexdigest()
+        self.path=self.root/'images'/self.sha;self.path.write_bytes(self.data)
+        self.entry=self.draft['articles'][0]
+        self.entry.update(image_url='https://example.com/photo.png',image_sha256=self.sha,image_bytes=len(self.data),
+                          image_local_path='/expired/producer/images/'+self.sha,imageReviewCompleted=True,
+                          image_caption='Synthetic original image fixture, not news')
+        self.manifest={'images':[{'url':self.entry['image_url'],'sha256':self.sha,'bytes':len(self.data),
+                                  'path':'images/'+self.sha}]}
+        self.save_manifest()
+
+    def tearDown(self):self.temp.cleanup()
+    def save_manifest(self):(self.root/'manifest.json').write_text(json.dumps(self.manifest))
+
+    def test_restored_paths_rebind_with_explicit_hash_change_and_no_editorial_change(self):
+        original=copy.deepcopy(self.entry);before=digest(self.draft['articles'])
+        self.draft['review']={'independentReviewCompleted':True,'reviewer':'previous-independent','originalHash':before,'issues':[]}
+        result=finalize(self.draft,self.audit,self.now,image_root=self.root)
+        receipt=result['imagePathRestore']
+        self.assertEqual(self.entry['image_local_path'],str(self.path.resolve()))
+        self.assertEqual({k:v for k,v in self.entry.items() if k!='image_local_path'},
+                         {k:v for k,v in original.items() if k!='image_local_path'})
+        self.assertEqual(receipt['previousHandoffHash'],before)
+        self.assertEqual(receipt['restoredHandoffHash'],result['bodyHash'])
+        self.assertNotEqual(result['bodyHash'],before)
+        self.assertTrue(receipt['reviewRebindingRequired'])
+        self.assertFalse(receipt['editorialContentChanged'])
+        self.assertFalse(result['review']['independentReviewCompleted'])
+        self.assertIsNone(result['review']['reviewer'])
+        self.assertEqual(result['review']['originalHash'],before,'never silently rewrite an old independent review hash')
+
+    def test_old_manifest_absolute_images_path_is_rebased_only_inside_extracted_root(self):
+        self.manifest['images'][0]['path']='/old/author/session/images/'+self.sha;self.save_manifest()
+        receipt=restore_image_paths(self.draft,self.root,self.now)
+        self.assertEqual(self.entry['image_local_path'],str(self.path.resolve()))
+        self.assertTrue(receipt['reviewRebindingRequired'])
+        second=restore_image_paths(self.draft,self.root,self.now)
+        self.assertEqual(second['reboundImages'],0)
+        self.assertFalse(second['reviewRebindingRequired'])
+
+    def test_byte_or_manifest_mismatch_rejected_before_any_path_is_rebound(self):
+        original=self.entry['image_local_path']
+        self.path.write_bytes(self.data+b'corrupt')
+        with self.assertRaisesRegex(ValueError,'byte identity mismatch'):restore_image_paths(self.draft,self.root,self.now)
+        self.assertEqual(self.entry['image_local_path'],original)
+        self.path.write_bytes(self.data)
+        for field,value in [('url','https://example.com/another-photo.png'),('sha256','0'*64),('bytes',len(self.data)+1)]:
+            with self.subTest(field=field):
+                item=self.manifest['images'][0];prior=item[field];item[field]=value;self.save_manifest()
+                with self.assertRaisesRegex(ValueError,'does not match'):restore_image_paths(self.draft,self.root,self.now)
+                self.assertEqual(self.entry['image_local_path'],original)
+                item[field]=prior
+
+    def test_traversal_external_absolute_and_symlink_are_rejected(self):
+        for value in ('../outside.png','images/../photo.png','/etc/passwd','images\\photo.png'):
+            with self.subTest(path=value):
+                self.manifest['images'][0]['path']=value;self.save_manifest()
+                with self.assertRaises(ValueError):restore_image_paths(self.draft,self.root,self.now)
+        self.manifest['images'][0]['path']='images/'+self.sha;self.save_manifest()
+        outside=Path(self.temp.name)/'outside.png';outside.write_bytes(self.data)
+        self.path.unlink();self.path.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError,'symlink'):restore_image_paths(self.draft,self.root,self.now)
+
+    def test_restore_never_invents_existing_byte_proofs_or_visual_review(self):
+        self.entry.pop('image_sha256')
+        with self.assertRaisesRegex(ValueError,'existing adopted image hash/length'):restore_image_paths(self.draft,self.root,self.now)
+        self.entry['image_sha256']=self.sha;self.entry.pop('imageReviewCompleted')
+        with self.assertRaisesRegex(AssertionError,'actual author visual review'):finalize(self.draft,self.audit,self.now,image_root=self.root)
+        self.assertNotIn('imageReviewCompleted',self.entry)
 
 if __name__=='__main__':unittest.main()

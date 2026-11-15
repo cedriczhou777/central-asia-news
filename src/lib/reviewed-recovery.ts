@@ -1,13 +1,13 @@
 import cron from 'node-cron';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { beijingDate } from './utils';
-import { imageUrls, issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, type ReviewedPackage } from './reviewed-package';
+import { imageUrls, issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, packageCountries, reviewedCountry, validatePackage, type ReviewedPackage } from './reviewed-package';
 import { deliverReviewedPackage, readPackage, canResumePreparation, deliveryAdapters } from './reviewed-delivery';
 import { probeReviewedImage } from './reviewed-wechat';
 import { persistPushRun } from './push-run-store';
 import { getReviewedRecoveryState } from './reviewed-recovery-state';
 
-export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v11';
+export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v12';
 /** The existing CloudBase reservation is the only keep-alive. New expensive
  * batches stop at 09:20, leaving its last ten minutes for admitted work to settle. */
 export function reviewedRecoveryWindow(now=Date.now()) {
@@ -38,10 +38,14 @@ type Dependencies = {
   canContinue?:()=>boolean;
   canStartWork?:()=>boolean;
 };
+type RecoveryResult={stage:string;date?:string;version?:string;versionsByCountry?:Record<string,string>;
+  failures?:Array<{country:string;index?:number;reason?:string}>;countries?:typeof PACKAGE_COUNTRIES[number][];
+  readyCountries?:typeof PACKAGE_COUNTRIES[number][];missingCountries?:typeof PACKAGE_COUNTRIES[number][];partialDelivery?:boolean;
+  result?:{ok:boolean;results:unknown[]}};
 /** Plan per country across revisions. An active receipt pins that country's
  * version; failed-before-create rows do not block other countries or corrections.
  * The database's unique active (issue,country) index remains the final lock. */
-export async function recoverReviewedIssue(date:string,deps:Dependencies) {
+export async function recoverReviewedIssue(date:string,deps:Dependencies):Promise<RecoveryResult> {
   const failures:Array<{country:string;index?:number;reason?:string}>=[];
   const canContinue=()=>deps.canContinue?.()??true;
   const canStart=()=>canContinue()&&(deps.canStartWork?.()??true);
@@ -54,6 +58,19 @@ export async function recoverReviewedIssue(date:string,deps:Dependencies) {
   const version = latestVersion(versions,date)!;
   if(!canContinue())return paused({version});
   const versionsByCountry:Record<string,string>={};
+  const missingCountries:typeof PACKAGE_COUNTRIES[number][]=[];
+  const deferredCountries:typeof PACKAGE_COUNTRIES[number][]=[];
+  const packages=new Map<string,ReviewedPackage>();
+  const readVersion=async(selected:string)=>{
+    let payload=packages.get(selected);
+    if(!payload){
+      const found=await deps.read(selected);
+      if(!found||found.version!==selected)throw new Error('已接收稿包无法读取或版本不一致');
+      payload=validatePackage(found);packages.set(selected,payload);
+    }
+    return payload;
+  };
+  const ordered=versions.filter(v=>issueDate(v)===date).sort((a,b)=>Number(b.split('-r')[1]||1)-Number(a.split('-r')[1]||1));
   const pending: Array<{country:typeof PACKAGE_COUNTRIES[number];version:string;reconcileOnly?:boolean}>=[];
   let completed=0;
   for(const country of PACKAGE_COUNTRIES){
@@ -68,26 +85,36 @@ export async function recoverReviewedIssue(date:string,deps:Dependencies) {
       else if(canResumePreparation(row))pending.push({country,version:row.version});
       continue; // Includes failed+media_id, preparing and uncertain; never steal locks.
     }
-    versionsByCountry[country]=version;pending.push({country,version});
+    if(!canStart()){deferredCountries.push(country);continue;}
+    let selected:string|undefined;
+    for(const candidate of ordered){
+      if(!canContinue())return paused({version,versionsByCountry});
+      const payload=await readVersion(candidate);
+      if(packageCountries(payload).includes(country)){selected=candidate;break;}
+    }
+    if(selected){versionsByCountry[country]=selected;pending.push({country,version:selected});}
+    else missingCountries.push(country);
   }
-  if (!pending.length) return {stage:completed===5?'complete':'waiting_existing_delivery',version,versionsByCountry,failures};
-  if(!canStart()&&!pending.some(item=>item.reconcileOnly))return paused({version,versionsByCountry});
+  missingCountries.push(...deferredCountries);
+  const scope={readyCountries:PACKAGE_COUNTRIES.filter(c=>!missingCountries.includes(c)),missingCountries,partialDelivery:missingCountries.length>0};
+  if(!pending.length&&deferredCountries.length)return {...paused({version,versionsByCountry}),...scope};
+  if (!pending.length) return {stage:completed===5?'complete':missingCountries.length?'awaiting_ready_countries':'waiting_existing_delivery',version,versionsByCountry,failures,...scope};
+  if(!canStart()&&!pending.some(item=>item.reconcileOnly))return {...paused({version,versionsByCountry}),...scope};
   deps.onPending?.();
   const results:unknown[]=[];const attempted:typeof PACKAGE_COUNTRIES[number][]=[];
-  const packages=new Map<string,ReviewedPackage>();
   for (const item of pending) {
     if(!canContinue()||(!item.reconcileOnly&&!canStart()))return paused({version,versionsByCountry,countries:attempted,result:{ok:false,results}});
     const {country}=item;
     try{
-      let payload=packages.get(item.version);
-      if(!payload){payload=await deps.read(item.version)||undefined;if(!payload)throw new Error('已接收稿包无法读取');packages.set(item.version,payload);}
+      const payload=await readVersion(item.version);
+      reviewedCountry(payload,country);
       if(!canContinue()||(!item.reconcileOnly&&!canStart()))return paused({version,versionsByCountry,countries:attempted,result:{ok:false,results}});
       if(item.reconcileOnly){
         const result=await deps.deliver(payload,[country]);results.push(result);attempted.push(country);
         if(!canStart()&&(result as {ok?:boolean})?.ok!==true)return paused({version,versionsByCountry,countries:attempted,result:{ok:false,results}});
         continue;
       }
-      const d=payload.countries[country],images=imageUrls(d.bodyHtml),before=failures.length;
+      const d=reviewedCountry(payload,country),images=imageUrls(d.bodyHtml),before=failures.length;
       deps.onProgress?.({country,version:item.version,stage:'checking_images',totalImages:images.length});
       // Small bounded concurrency; delivery starts as soon as THIS country is
       // ready, rather than waiting behind every other country's slow origin.
@@ -107,8 +134,8 @@ export async function recoverReviewedIssue(date:string,deps:Dependencies) {
       if(!canStart()&&(result as {ok?:boolean})?.ok!==true)return paused({version,versionsByCountry,countries:attempted,result:{ok:false,results}});
     }catch(e){failures.push({country,reason:e instanceof Error?e.message:'国别接续失败'});}
   }
-  if(!attempted.length)return {stage:'needs_image_revision',version,versionsByCountry,failures};
-  return {stage:'delivery_attempted',version,versionsByCountry,countries:attempted,failures,result:{ok:!failures.length&&results.every(r=>(r as {ok?:boolean})?.ok===true),results}};
+  if(!attempted.length)return {stage:'needs_image_revision',version,versionsByCountry,failures,...scope};
+  return {stage:'delivery_attempted',version,versionsByCountry,countries:attempted,failures,...scope,result:{ok:!failures.length&&results.every(r=>(r as {ok?:boolean})?.ok===true),results}};
 }
 
 const recoveryState=getReviewedRecoveryState();

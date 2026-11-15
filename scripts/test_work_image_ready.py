@@ -84,4 +84,21 @@ class CloudBudget(unittest.TestCase):
             self.assertEqual(request.call_count,0)
             receipt=json.loads((p/'receipt.json').read_text());self.assertFalse(receipt['ok']);self.assertFalse(receipt['createdDrafts']);self.assertEqual(receipt['images'],[])
 
+class CountryImageScope(unittest.TestCase):
+    def test_partial_manifest_cannot_carry_unreviewed_country(self):
+        stage.validate_staging_scope({'readyCountries':['kz'],'countries':{'kz':{}}})
+        stage.validate_staging_scope({'countries':{c:{} for c in ('kz','uz','kg','tj','az')}})
+        for countries in ({},{'kz':{}},{'xx':{}}):
+            with self.assertRaisesRegex(ValueError,'all five'):stage.validate_staging_scope({'countries':countries})
+        for ready,countries in ((None,{'kz':{}}),(['kz'],{'kz':{},'uz':{}}),(['kz','uz'],{'kz':{}}),(['kz','kz'],{'kz':{}}),([],{}),(['xx'],{'xx':{}})):
+            with self.subTest(ready=ready,countries=countries),self.assertRaises(ValueError):stage.validate_staging_scope({'readyCountries':ready,'countries':countries})
+    def test_bad_partial_package_is_rejected_before_readiness_http(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p=Path(directory);(p/'manifest.json').write_text('{"images":[]}');(p/'contract.json').write_text('{"base_url":"https://example.invalid","ingest_secret":"synthetic-test-key"}')
+            (p/'package.json').write_text('{"readyCountries":["kz"],"countries":{"kz":{},"uz":{}}}')
+            args=['stage-reviewed-images.py','--manifest',str(p/'manifest.json'),'--contract',str(p/'contract.json'),'--receipt',str(p/'receipt.json'),'--package',str(p/'package.json'),'--output',str(p/'staged.json')]
+            with patch.object(sys,'argv',args),patch.object(stage,'urlopen',side_effect=AssertionError('No HTTP on invalid scope')) as request:
+                with self.assertRaisesRegex(ValueError,'readyCountries'):stage.main()
+            self.assertEqual(request.call_count,0);self.assertFalse((p/'staged.json').exists())
+
 if __name__=='__main__':unittest.main()
