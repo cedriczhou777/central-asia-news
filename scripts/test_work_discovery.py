@@ -1,13 +1,16 @@
 """Offline contracts for candidate discovery; no source or draft mutations."""
 import gzip
+import concurrent.futures
 import hashlib
 import json
 from pathlib import Path
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 
-from discover_work_sources import discover, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads
+from discover_work_sources import discover, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads, _FetchFlights
 
 
 STAMP = '2026-11-15T00:01:00+00:00'
@@ -268,6 +271,72 @@ class DiscoveryTests(unittest.TestCase):
         records[another] = dict(page(another, kind='article'), canonical_url=home)
         _, third = self.run_scan(records, sources)
         self.assertEqual(len(third), 2)
+
+    def test_concurrent_aliases_fetch_once_and_keep_nonempty_archive_across_runs(self):
+        home, article = 'https://news.test/', 'https://news.test/news/shared'
+        sources = [source('one', 'A'), source('two', 'B')]
+        records = {home: page(home, [(article, 'The same primary company disclosure', '')]),
+                   article: page(article, kind='article', published='2026-11-14T20:00:00+05:00')}
+        lock = threading.Lock()
+        calls = []
+
+        def actual_fetch(url, minimum, source_role='auto'):
+            with lock:
+                calls.append((url, minimum, source_role))
+            result = dict(records[url])
+            key = hashlib.sha256(url.encode()).hexdigest()[:18]
+            result['key'] = key
+            target = self.output / 'sources' / (key + '.html.gz')
+            # Expose the original truncate/snapshot race deterministically if
+            # two source aliases are allowed to fetch the same URL together.
+            with gzip.GzipFile(filename=str(target), mode='wb', mtime=0) as handle:
+                time.sleep(.005)
+                handle.write(b'<html><body>shared original source evidence</body></html>')
+            return result
+
+        registry = {'sources': sources}
+        for run in range(3):
+            before = len(calls)
+            result = discover(registry, 'kz', '2026-11-15', self.output,
+                              fetcher=actual_fetch, workers=4)
+            actual_calls = calls[before:]
+            self.assertEqual(sum(u == home for u, _, _ in actual_calls), 1)
+            self.assertEqual(sum(u == article for u, _, _ in actual_calls), 1)
+            rows = [r for r in result['sourceScanAudit'] if r.get('url') == article]
+            self.assertEqual({r['fetchedAt'] for r in rows}, {STAMP})
+            ledger = json.loads((self.output / 'candidate_ledger.json').read_text())['candidateLedger']
+            self.assertEqual(len(ledger), 1)
+            candidate = ledger[0]
+            self.assertEqual({o['sourceId'] for o in candidate['discoveryOrigins']}, {'one', 'two'})
+            archived = Path(candidate['sourceHTML'])
+            self.assertGreater(archived.stat().st_size, 0)
+            self.assertEqual(hashlib.sha256(archived.read_bytes()).hexdigest(), candidate['sourceHTMLSha256'])
+            self.assertIn(b'shared original source evidence', gzip.open(archived, 'rb').read())
+            self.assertEqual(rebase_discovery_paths(self.output)['rebasedPaths'], 0)
+
+    def test_shared_fetch_results_are_isolated_and_request_key_retains_role_and_cutoff(self):
+        flights = _FetchFlights()
+        calls = []
+        record = {'fetchedAt': STAMP, 'meta': {'title': 'Original observed title'},
+                  'publicationEvidence': [{'raw': '2026-11-14T20:00:00+05:00'}]}
+
+        def actual_fetch():
+            calls.append(True)
+            time.sleep(.005)
+            return record
+
+        key = ('https://news.test/shared', None, 'article')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(lambda _: flights.get(key, actual_fetch), range(6)))
+        self.assertEqual(len(calls), 1)
+        results[0]['meta']['title'] = 'Changed by only one consumer'
+        results[0]['publicationEvidence'][0]['raw'] = 'changed'
+        self.assertEqual(results[1], record)
+        self.assertEqual(flights.get(key, actual_fetch), record)
+        self.assertEqual(len(calls), 1)
+        flights.get((key[0], None, 'listing'), actual_fetch)
+        flights.get((key[0], STAMP, 'listing'), actual_fetch)
+        self.assertEqual(len(calls), 3)
 
     def test_bad_shared_nonroot_canonical_does_not_merge_different_text(self):
         home = 'https://news.test/'

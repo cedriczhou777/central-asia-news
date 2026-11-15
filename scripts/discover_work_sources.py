@@ -5,6 +5,7 @@ successful crawl is evidence collection, not an editorial quantity certificate.
 """
 import argparse
 import concurrent.futures
+import copy
 import gzip
 import hashlib
 import importlib.util
@@ -12,6 +13,7 @@ import inspect
 import json
 import re
 import shutil
+import threading
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
@@ -32,6 +34,30 @@ ARTICLE_PATTERNS = {
     'az-central-bank-azerbaijan': r'^/(?:[a-z]{2}/)?press-release-\d+',
     'az-state-customs-committee-azerbaijan': r'^/az/faydali/xeberler/\d+',
 }
+
+
+class _FetchFlights:
+    """Share one actual fetch per request key within a single discovery run.
+
+    Source aliases may observe the same response, but must not concurrently
+    truncate its URL-addressed cache or mutate another consumer's evidence.
+    """
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.results = {}
+
+    def get(self, key, fetch):
+        with self.lock:
+            owner = key not in self.results
+            if owner:
+                self.results[key] = concurrent.futures.Future()
+            future = self.results[key]
+        if owner:
+            try:
+                future.set_result(copy.deepcopy(fetch()))
+            except BaseException as error:
+                future.set_exception(error)
+        return copy.deepcopy(future.result())
 
 
 def lead_route(url, source, known_listings=()):
@@ -816,15 +842,22 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
     listing_queue = deque(round_robin(seed_groups))
     known_listings = {e['url'] for source in all_sources for e in source_entries(source)} | {job[1] for group in seed_groups for job in group}
 
+    flights = _FetchFlights()
+
     def fetch_job(job):
-        try:
-            minimum = listing_not_before if job[2] != 'article' else None
-            if role_hint_supported:
-                return fetcher(job[1], minimum, source_role='article' if job[2] == 'article' else 'listing')
-            return fetcher(job[1], minimum)
-        except Exception as error:
-            return {'url': job[1], 'fetchedAt': utcnow(), 'contentValidated': False,
-                    'error': type(error).__name__ + ': ' + str(error)[:200]}
+        minimum = listing_not_before if job[2] != 'article' else None
+        source_role = 'article' if job[2] == 'article' else 'listing'
+
+        def actual_fetch():
+            try:
+                if role_hint_supported:
+                    return fetcher(job[1], minimum, source_role=source_role)
+                return fetcher(job[1], minimum)
+            except Exception as error:
+                return {'url': job[1], 'fetchedAt': utcnow(), 'contentValidated': False,
+                        'error': type(error).__name__ + ': ' + str(error)[:200]}
+
+        return flights.get((job[1], minimum, source_role), actual_fetch)
 
     def observe(job, record):
         source_id, url, role, expected_language = job

@@ -5,6 +5,7 @@ Paths may be relative to the manifest. SHA-256 comes from the actual review.
 Optional --package attaches imageAssets to a NEW output package, preserving text.
 """
 import argparse, concurrent.futures, hashlib, json, os, re, time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
@@ -14,6 +15,24 @@ class ImageServiceError(ValueError):
     def __init__(self,status=None):
         self.status=status
         super().__init__('Image service HTTP '+str(status) if status is not None else 'Image service network timeout')
+
+class CloudWindowClosed(ValueError):
+    pass
+
+def cloud_request_budget(request_timeout,manual=False,now=None):
+    """Scheduled uploads never wake the service before its paid warm window.
+
+    Stop new requests at 09:20, leaving ten minutes for accepted operations to
+    settle before the photographed 09:30 warm-window end. This does not change
+    the provider's billing or scaling settings.
+    """
+    if manual:return request_timeout
+    now=(now or datetime.now(timezone.utc)).astimezone(timezone(timedelta(hours=8)))
+    start=now.replace(hour=5,minute=50,second=0,microsecond=0)
+    end=now.replace(hour=9,minute=20,second=0,microsecond=0)
+    if not start<=now<end:
+        raise CloudWindowClosed('Automatic cloud window closed: new image requests require 05:50–09:20 Beijing time; preserve progress without waking the service')
+    return min(request_timeout,(end-now).total_seconds())
 
 def wait_for_private_service(api,timeout_seconds=180,clock=time.monotonic,pause=time.sleep):
     started=clock();deadline=started+timeout_seconds;attempts=0
@@ -50,6 +69,7 @@ def main():
     p.add_argument('--output',type=Path)
     p.add_argument('--receipt',required=True,type=Path)
     p.add_argument('--ready-timeout',type=int,default=180)
+    p.add_argument('--manual-outside-window',action='store_true',help='Only for an explicitly requested one-off manual recovery; never for scheduled runs')
     a=p.parse_args()
     contract=json.loads(a.contract.read_text()) if a.contract else {}
     base=(a.base_url or contract.get('base_url') or '').rstrip('/')
@@ -63,8 +83,9 @@ def main():
     def api(method,path,data=None,extra=None,request_timeout=60,attempts=3):
         headers={'X-Ingest-Secret':secret,**(extra or {})}
         for attempt in range(attempts):
+            bounded_timeout=cloud_request_budget(request_timeout,manual=a.manual_outside_window)
             try:
-                with urlopen(Request(base+path,data=data,headers=headers,method=method),timeout=request_timeout) as r:return json.load(r)
+                with urlopen(Request(base+path,data=data,headers=headers,method=method),timeout=bounded_timeout) as r:return json.load(r)
             except HTTPError as e:
                 if e.code not in (500,502,503,504) or attempt==attempts-1:raise ImageServiceError(e.code) from None
             except (URLError,TimeoutError):

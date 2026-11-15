@@ -55,7 +55,8 @@ existing fact, source, image, layout and independent-review checks.
 
 ## Preserve punctual transport without claiming quality completion
 
-The 07:35 review run first tries the normal gate and continues actual expansion.
+The 07:25 review run first tries the normal gate and continues actual expansion;
+it must keep working until the real 07:30 threshold if the fallback is needed.
 From real 07:30 Beijing time, a deadline fallback can transport the existing
 independently verified drafts if quantity alone remains short. Run the same
 aggregate gate with `--delivery-mode deadline_under_delivery`; this cannot
@@ -74,11 +75,29 @@ date, checkpoint complete country files and image bytes, and continue from
 durable evidence rather than the chat connection. The backend only transports
 an accepted package; it cannot repair a missing upstream manuscript by itself.
 
-CloudBase's photographed 05:50–09:30 warm interval covers the primary 06:35
-and 07:35 runs but ends before 09:35 recovery. A proposed 05:40–15:00 warm
-interval covers the backend's 06:00–14:50 recovery timer. This repository does
-not apply control-plane settings; console access and actual application must
-be verified separately. Current evidence does not establish an OOM or identify
+The user's cloud-cost constraint preserves the photographed **05:50–09:30**
+warm interval (3 hours 40 minutes); the previously proposed extension to 15:00
+was rejected and must not be applied. Work collection runs at 03:10, 04:10,
+05:10, 06:10, 07:10 and 08:10 Beijing time. Independent review runs at :25
+from 03 through 09. A real-time admission check forbids collection before
+03:00, including early scheduler dispatch. Before 05:50, review is local/file
+work only: a health probe or private image upload would also wake CloudBase.
+
+The first post-cutoff delivery target is 06:25; 07:25 performs the main recovery
+and acceptance work, while the 08:25 run continues already-owned repairs toward
+the safe write cutoff. The 09:25 run reads saved state or database receipts only,
+without calling CloudBase. New automatic country/image work stops at 09:20;
+automatic recovery admits no work outside 05:50–09:30 and has no self-HTTP
+heartbeat. Image staging enforces 05:50–09:20 for new requests by default;
+its explicit manual override is reserved for a separately requested one-off
+manual recovery, never scheduled work. Preserve unknown external results and
+known media IDs rather than blindly recreating a draft after a time limit.
+
+These are application controls, not a claim that provider billing is exactly
+3 hours 40 minutes: in-flight work and provider idle reclamation still follow
+the provider's rules. This repository does not change control-plane settings.
+Do not shorten the paid warm interval until measured full-volume delivery shows
+the same quality and sufficient recovery margin. Current evidence does not establish an OOM or identify
 the actual model of the failed runs. Do not attribute failures to Terra, CPU
 size or frontend disconnection without corresponding evidence.
 

@@ -1,4 +1,6 @@
-import importlib.util,unittest
+import importlib.util,unittest,json,sys,tempfile,hashlib
+from datetime import datetime,timezone
+from unittest.mock import patch
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('stage_images',Path(__file__).with_name('stage-reviewed-images.py'))
 stage=importlib.util.module_from_spec(spec);spec.loader.exec_module(stage)
@@ -60,4 +62,26 @@ class Readiness(unittest.TestCase):
             return {'ok':True,'images':{'ready':False,'private':False,'retryable':True,'failureKind':'service_unavailable'}}
         with self.assertRaisesRegex(ValueError,'timed out'):self.check(api,12)
         self.assertEqual(self.clock.value,12);self.assertEqual(len(self.calls),3)
+class CloudBudget(unittest.TestCase):
+    def test_window_and_actual_timezone_boundaries(self):
+        for stamp in ('2026-11-16T05:49:59+08:00','2026-11-16T09:20:00+08:00','2026-11-16T09:30:00+08:00','2026-11-16T03:25:00+08:00'):
+            with self.subTest(stamp=stamp),self.assertRaises(stage.CloudWindowClosed):stage.cloud_request_budget(60,now=datetime.fromisoformat(stamp))
+        self.assertEqual(stage.cloud_request_budget(60,now=datetime.fromisoformat('2026-11-15T21:50:00+00:00')),60)
+        self.assertEqual(stage.cloud_request_budget(60,now=datetime.fromisoformat('2026-11-16T09:19:50+08:00')),10)
+    def test_explicit_manual_recovery_is_separate_from_scheduled_default(self):
+        self.assertEqual(stage.cloud_request_budget(30,manual=True,now=datetime.fromisoformat('2026-11-16T12:00:00+08:00')),30)
+    def test_early_scheduled_cli_writes_receipt_without_any_http(self):
+        class EarlyClock(datetime):
+            @classmethod
+            def now(cls,tz=None):return datetime.fromisoformat('2026-11-16T03:25:00+08:00').astimezone(tz or timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            p=Path(directory);data=b'synthetic test bytes, not a real image';(p/'image.bin').write_bytes(data)
+            (p/'manifest.json').write_text(json.dumps({'images':[{'url':'https://example.com/fixture.jpg','sha256':hashlib.sha256(data).hexdigest(),'path':'image.bin','bytes':len(data)}]}))
+            (p/'contract.json').write_text(json.dumps({'base_url':'https://example.invalid','ingest_secret':'synthetic-test-key'}))
+            args=['stage-reviewed-images.py','--manifest',str(p/'manifest.json'),'--contract',str(p/'contract.json'),'--receipt',str(p/'receipt.json')]
+            with patch.object(sys,'argv',args),patch.object(stage,'datetime',EarlyClock),patch.object(stage,'urlopen',side_effect=AssertionError('Must not wake CloudBase')) as request:
+                with self.assertRaises(stage.CloudWindowClosed):stage.main()
+            self.assertEqual(request.call_count,0)
+            receipt=json.loads((p/'receipt.json').read_text());self.assertFalse(receipt['ok']);self.assertFalse(receipt['createdDrafts']);self.assertEqual(receipt['images'],[])
+
 if __name__=='__main__':unittest.main()
