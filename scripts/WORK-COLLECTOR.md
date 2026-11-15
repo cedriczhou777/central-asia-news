@@ -17,11 +17,19 @@ window being open. It never certifies independent content review. Country codes
 are canonicalized; writer identity, category, source, time evidence, and actual
 image inspection/captions or a concrete image gap are required.
 
-With Python 3, Pillow and lxml installed, run `pnpm test:work-collector`.
+With Python 3, Pillow and lxml installed, run
+`python3 -m unittest discover -s scripts -p 'test_work_*.py' -v`.
 Tests use synthetic HTML and mocked transport, never real news or publication.
 The 15 regressions cover decompression, corrupt HTTP 200 responses, SVG titles,
 cache expiry, bounded retries, denials, handoff identity and premature cutoff.
 
-Cover readback diagnostics additionally compare the actual WeChat cover URL with
-the first transported body image identity. A thumbnail merely being present is
-not sufficient. This check is read-only and does not recreate existing drafts.
+The first-image thumbnail material ID is persisted before draft creation and
+compared with the actual draft readback. Missing or different IDs cannot be
+reported as successful delivery. Recovery may fix the same unverified draft only
+when its title, digest, text and body images still match; it never recreates it.
+Older receipts without the material ID retain a read-only WeChat image identity
+comparison. User-published completed deliveries are not read or modified again.
+
+Authenticated `GET /api/wechat/push?health=1&selftest=cover` reports the deployed
+diagnostics version and a pure cover-comparison smoke check. It creates no media
+or drafts and does not substitute for real daily delivery acceptance.

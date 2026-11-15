@@ -3,6 +3,7 @@ import { PACKAGE_COUNTRIES, contentHash, imageUrls, makeSourceUrlsVisible, sourc
 import { prepareReviewedDraft, createReviewedDraft, updateReviewedDraft, readReviewedDraft } from './reviewed-wechat';
 import { load } from 'cheerio';
 import { randomUUID } from 'node:crypto';
+import { compareReviewedCover } from './reviewed-diagnostics';
 
 export function canResumePreparation(row:{state:string;media_id?:string|null;updated_at?:string;detail?:Record<string,unknown>},now=Date.now()) {
   return row.state==='preparing'&&!row.media_id&&row.detail?.preparationProtocol===1&&typeof row.detail.preparationToken==='string'&&
@@ -16,7 +17,7 @@ type DeliveryAdapters = {
   read: typeof readReviewedDraft;
 };
 export const deliveryAdapters: DeliveryAdapters = { prepare: prepareReviewedDraft, create: createReviewedDraft, update: updateReviewedDraft, read: readReviewedDraft };
-function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited<ReturnType<typeof readReviewedDraft>>, expectedImages: string[]) {
+function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited<ReturnType<typeof readReviewedDraft>>, expectedImages: string[], expectedThumbId?:string) {
   const text = (html: string) => load(html, {}, false).text().replace(/\s+/g,'');
   const $ = load(readback.content, {}, false);
   const images = $('img').toArray().map(el => $(el).attr('src') || $(el).attr('data-src') || '');
@@ -27,8 +28,9 @@ function verifyReadback(d: ReviewedPackage['countries']['kz'], readback: Awaited
   const imageMatch = images.length === expectedImages.length && images.every((url,i)=>imageKey(url) === imageKey(expectedImages[i]) && !!imageKey(url));
   const legacyTextMatch = actualText === text(makeSourceUrlsVisible(d.bodyHtml));
   const sourceUrlsVisible = expectedSourceUrls.every(url => actualText.includes(text(url)));
-  const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && imageMatch;
-  return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch, expectedTextMatch:actualText === expectedText, imageMatch, verified:passed };
+  const cover=compareReviewedCover(readback,expectedImages[0],expectedThumbId);
+  const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && imageMatch && cover.thumbnailMatchesPrepared !== false;
+  return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch, expectedTextMatch:actualText === expectedText, imageMatch, ...cover, verified:passed };
 }
 export async function deliverReviewedPackage(
   payload: ReviewedPackage,
@@ -55,26 +57,38 @@ export async function deliverReviewedPackage(
         let updateLockAcquired = false;
         try {
           const current = await adapters.read(existing.data.media_id);
-          let verified = verifyReadback(payload.countries[country], current, existing.data.detail?.imageUrls || []);
+          let verified = verifyReadback(payload.countries[country], current, existing.data.detail?.imageUrls || [], existing.data.detail?.expectedThumbMediaId);
           if (!verified.verified) {
             const d = payload.countries[country];
             const updateDraft = adapters.update;
             // Elapsed time cannot prove another worker stopped updating WeChat.
-            const safelyRepairable = !!updateDraft && existing.data.state === 'uncertain' && current.title === d.title && current.digest === d.summary &&
-              ((verified.legacyTextMatch && verified.imageMatch && sourceUrls(d.bodyHtml).length > 0) ||
-               ((verified.expectedTextMatch || verified.legacyTextMatch) && verified.draftImages === 0 && (existing.data.detail?.imageUrls || []).length > 0));
-            if (!safelyRepairable) throw new Error('已有草稿复核未通过；未重复创建');
+            const candidates=[{check:verified,images:existing.data.detail?.imageUrls || []}];
+            const repairFrom=existing.data.detail?.repairFrom;
+            if(Array.isArray(repairFrom?.imageUrls))candidates.push({
+              check:verifyReadback(d,current,repairFrom.imageUrls,repairFrom.expectedThumbMediaId),images:repairFrom.imageUrls});
+            const repairable=candidates.find(({check,images})=>
+              (check.legacyTextMatch && check.imageMatch && sourceUrls(d.bodyHtml).length>0) ||
+              ((check.expectedTextMatch || check.legacyTextMatch) && check.draftImages===0 && images.length>0) ||
+              (check.expectedTextMatch && check.imageMatch && check.thumbnailMatchesPrepared===false));
+            if (!updateDraft || existing.data.state!=='uncertain' || current.title!==d.title || current.digest!==d.summary || !repairable)
+              throw new Error('已有草稿复核未通过；未重复创建');
             const prepared = await adapters.prepare(d);
-            const lock = await sb.from('reviewed_deliveries').update({ state:'updating', updated_at:new Date().toISOString() })
+            // Persist both the planned outcome and the observed safe input
+            // before the external update. An accepted update with a lost
+            // readback can then be reconciled without uploading again.
+            const plannedDetail={...existing.data.detail,imageUrls:imageUrls(prepared.html),transportedHash:contentHash(prepared.html),
+              expectedThumbMediaId:prepared.article.thumb_media_id,
+              repairFrom:{imageUrls:repairable.images,expectedThumbMediaId:current.thumb_media_id}};
+            const lock = await sb.from('reviewed_deliveries').update({ state:'updating', detail:plannedDetail, updated_at:new Date().toISOString() })
               .match(key).eq('state',existing.data.state).eq('media_id',existing.data.media_id)
               .eq('updated_at',existing.data.updated_at).select('country');
             if (lock.error || lock.data?.length !== 1) throw new Error('未取得原草稿更新锁');
             updateLockAcquired = true;
+            existing.data.detail=plannedDetail;
             await updateDraft(existing.data.media_id, prepared.article);
             const updated = await adapters.read(existing.data.media_id);
-            verified = verifyReadback(d, updated, imageUrls(prepared.html));
+            verified = verifyReadback(d, updated, imageUrls(prepared.html), prepared.article.thumb_media_id);
             if (!verified.verified) throw new Error('原草稿更新后仍未通过审定稿核验');
-            existing.data.detail = { ...existing.data.detail, imageUrls:imageUrls(prepared.html), transportedHash:contentHash(prepared.html) };
           }
           const detail = {...existing.data.detail, ...verified, error:null};
           const saved = await sb.from('reviewed_deliveries').update({state:'succeeded', detail, updated_at:new Date().toISOString()}).match(key).eq('media_id',existing.data.media_id);
@@ -106,7 +120,7 @@ export async function deliverReviewedPackage(
       const prepared = await adapters.prepare(d,heartbeat);
       detail = { ...ownership,inputHash: contentHash(d.bodyHtml), transportedHash: contentHash(prepared.html),
         inputImages: prepared.images, transferredImages: prepared.images, imageUrls:imageUrls(prepared.html), cover: prepared.cover,
-        imageProbes: prepared.imageProbes };
+        imageProbes: prepared.imageProbes, expectedThumbMediaId:prepared.article.thumb_media_id };
       const armed = await sb.from('reviewed_deliveries').update({ state:'sending', detail, updated_at: new Date().toISOString() }).match(key).eq('state','preparing').contains('detail',{preparationToken}).select('country');
       if (armed.error || armed.data?.length !== 1) throw new Error('发送前持久化失败');
       sending = true;
@@ -115,7 +129,7 @@ export async function deliverReviewedPackage(
       const saved = await sb.from('reviewed_deliveries').update({ media_id:mediaId, detail, updated_at:new Date().toISOString() }).match(key).contains('detail',{preparationToken}).select('country');
       if (saved.error || saved.data?.length !== 1) throw new Error('草稿已创建但回执保存失败，须人工核对');
       const readback = await adapters.read(mediaId);
-      const verified = verifyReadback(d, readback, imageUrls(prepared.html));
+      const verified = verifyReadback(d, readback, imageUrls(prepared.html), prepared.article.thumb_media_id);
       const passed = verified.verified;
       detail = { ...detail, ...verified };
       if (!passed) throw new Error('草稿回读与审定稿不一致，保留现有草稿待检查');

@@ -5,7 +5,7 @@ import { issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, imageU
 import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { persistPushRun } from './push-run-store';
 import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
-import { summarizeDraftReadback } from './reviewed-diagnostics';
+import { summarizeDraftReadback, REVIEWED_DIAGNOSTICS_VERSION, coverReadbackSelfTest } from './reviewed-diagnostics';
 import { reviewedRecoveryStatus } from './reviewed-recovery';
 import { privateImageHealth } from './reviewed-private-images';
 
@@ -62,7 +62,8 @@ export async function reviewedPush(request: NextRequest) {
 export async function reviewedStatus(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ ok:false, error:'鉴权失败' }, { status:401 });
   try {
-    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v2',recovery:reviewedRecoveryStatus(),images:await privateImageHealth()});
+    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v2',diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,recovery:reviewedRecoveryStatus(),images:await privateImageHealth(),
+      ...(request.nextUrl.searchParams.get('selftest')==='cover' ? {coverSelfTest:coverReadbackSelfTest()} : {})});
     const sb = getSupabaseClient();
     const version = request.nextUrl.searchParams.get('version');
     const date=request.nextUrl.searchParams.get('date');
@@ -106,7 +107,7 @@ export async function reviewedStatus(request: NextRequest) {
         if (!payload || !row?.media_id) return NextResponse.json({ ok:false, error:'未找到已有草稿' }, { status:404 });
         const draft = await readReviewedDraft(row.media_id);
         return NextResponse.json({ ok:true, version, country:diagnosticCountry, state:row.state,
-          checks:summarizeDraftReadback(payload.countries[diagnosticCountry as (typeof PACKAGE_COUNTRIES)[number]], draft, row.detail?.imageUrls || []) });
+          checks:summarizeDraftReadback(payload.countries[diagnosticCountry as (typeof PACKAGE_COUNTRIES)[number]], draft, row.detail?.imageUrls || [], row.detail?.expectedThumbMediaId) });
       }
       return NextResponse.json({ ok:true, version, packageReceived:!!payload, contentHash:payload ? (await import('./reviewed-package')).contentHash(payload) : null, recovery:reviewedRecoveryStatus(),
         draftsVerified:rows.length === 5 && rows.every(r=>r.state === 'succeeded'), byCountry:rows });

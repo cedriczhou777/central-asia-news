@@ -205,5 +205,5 @@ export async function readReviewedDraft(mediaId: string) {
   const data = await api('draft/get', { media_id: mediaId });
   const article = data.news_item?.[0];
   if (!article || data.news_item.length !== 1) throw new Error('草稿回读结构异常');
-  return article as { title: string; digest: string; content: string };
+  return article as { title: string; digest: string; content: string; content_source_url?:string; thumb_media_id?:string; thumb_url?:string };
 }
