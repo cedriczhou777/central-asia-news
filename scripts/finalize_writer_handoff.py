@@ -3,6 +3,7 @@ import argparse,hashlib,json,re
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from PIL import Image
+from work_quantity_policy import evaluate_quantity
 
 def dt(value):
     if not isinstance(value,str) or not value:raise ValueError('valid timezone-aware timestamp required')
@@ -40,15 +41,19 @@ def finalize(draft,audit,now=None):
     last=max(scans);assert last>=start,'source scan is older than issue window'
     covered=min(last,end)
     if now>=end:assert last>=end,'after cutoff, actually scan the window end before finalizing'
-    assert len(entries)>=10 or draft.get('coverageShortfallExplanation'),'shortfall needs concrete source/selection explanation'
     draft['coverageEnd']=covered.isoformat();draft['stage']='drafted' if covered==end and now>=end else 'precollected'
     draft['manuscriptReady']=True;draft['writerHandoffComplete']=True
-    draft['review']={'independentReviewCompleted':False,'reviewer':None}
+    # Preserve unresolved review issues and their original wording. A useful small
+    # manuscript can be handed over, but cannot silently become a complete issue.
+    review=dict(draft.get('review') or {})
+    review.update(independentReviewCompleted=False,reviewer=None)
+    draft['review']=review
     draft['sourceScanAudit']=audit;draft['bodyHash']=digest(entries)
+    draft.update(evaluate_quantity(draft,audit,now))
     draft['updatedAt']=now.isoformat()
     return draft
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--draft',required=True,type=Path);p.add_argument('--source-audit',required=True,type=Path);p.add_argument('--output',required=True,type=Path);a=p.parse_args()
     d=finalize(json.loads(a.draft.read_text()),json.loads(a.source_audit.read_text()))
     a.output.write_text(json.dumps(d,ensure_ascii=False,indent=2))
-    print(json.dumps({'issueDate':d['issueDate'],'country':d['country'],'stage':d['stage'],'manuscriptReady':True,'articles':len(d['articles']),'independentReviewCompleted':False}))
+    print(json.dumps({'issueDate':d['issueDate'],'country':d['country'],'stage':d['stage'],'manuscriptReady':True,'articles':len(d['articles']),'independentReviewCompleted':False,'quantityStatus':d['quantityStatus'],'quantityReady':d['quantityReady'],'qualityDeliveryComplete':d['qualityDeliveryComplete'],'shortfallOpen':d['shortfallOpen'],'sourceCoverage':d['sourceCoverage'],'candidateLedgerValidation':d['candidateLedgerValidation']}))

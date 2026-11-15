@@ -1,0 +1,5044 @@
+{
+  "schemaVersion": "work-source-registry-v1",
+  "registryVersion": "SOURCE-REGISTRY-20261115-v4",
+  "generatedAt": "2026-11-15T13:06:03.133041+00:00",
+  "availableDefinition": "available=true means public entrypoint is permitted to attempt; operationalReadableListing separately records actual readable listing success. Denied/unreadable attempts do not establish coverage or no-news.",
+  "sources": [
+    {
+      "id": "kz-kazinform",
+      "country": "kz",
+      "family": "Kazinform",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "www.inform.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.inform.kz/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:58:36.822634+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kz-tengrinews",
+      "country": "kz",
+      "family": "Tengrinews",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "en.tengrinews.kz",
+        "tengrinews.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://tengrinews.kz/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tengrinews.kz/",
+          "validatedAt": "2026-11-15T12:58:36.823424+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:36.823424+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://tengrinews.kz/economic/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tengrinews.kz/economic/",
+          "validatedAt": "2026-11-15T13:00:15.803657+00:00",
+          "discoveredFrom": "https://tengrinews.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:15.803657+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://tengrinews.kz/page/corrections/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tengrinews.kz/page/corrections/",
+          "validatedAt": "2026-11-15T13:00:15.802961+00:00",
+          "discoveredFrom": "https://tengrinews.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:15.802961+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://tengrinews.kz/economic/page/2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tengrinews.kz/economic/page/2/",
+          "validatedAt": "2026-11-15T13:01:43.620296+00:00",
+          "discoveredFrom": "https://tengrinews.kz/economic/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.620296+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://en.tengrinews.kz/",
+          "role": "language",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://en.tengrinews.kz/",
+          "validatedAt": "2026-11-15T13:02:31.555212+00:00",
+          "discoveredFrom": "https://tengrinews.kz/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:31.555212+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "publisher_English_entrypoint_and_actual_html_language"
+        }
+      ]
+    },
+    {
+      "id": "kz-kursiv-kazakhstan",
+      "country": "kz",
+      "family": "Kursiv Kazakhstan",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "kz.kursiv.media"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://kz.kursiv.media/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kz.kursiv.media/",
+          "validatedAt": "2026-11-15T12:58:36.824060+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:36.824060+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kz.kursiv.media/guide/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kz.kursiv.media/guide/",
+          "validatedAt": "2026-11-15T13:00:15.805180+00:00",
+          "discoveredFrom": "https://kz.kursiv.media/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:15.805180+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        },
+        {
+          "url": "https://kz.kursiv.media/newspaper/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kz.kursiv.media/newspaper/",
+          "validatedAt": "2026-11-15T13:00:15.804714+00:00",
+          "discoveredFrom": "https://kz.kursiv.media/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:15.804714+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kz.kursiv.media/guide/page/2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kz.kursiv.media/guide/page/2/",
+          "validatedAt": "2026-11-15T13:01:43.621232+00:00",
+          "discoveredFrom": "https://kz.kursiv.media/guide/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.621232+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        },
+        {
+          "url": "https://kz.kursiv.media/en/",
+          "role": "language",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kz.kursiv.media/en/",
+          "validatedAt": "2026-11-15T13:01:43.622733+00:00",
+          "discoveredFrom": "https://kz.kursiv.media/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.622733+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "kz-kapital-kz",
+      "country": "kz",
+      "family": "Kapital.kz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "kapital.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://kapital.kz/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:58:36.824560+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kz-inbusiness-kz",
+      "country": "kz",
+      "family": "Inbusiness.kz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "inbusiness.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://inbusiness.kz/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://inbusiness.kz/ru",
+          "validatedAt": "2026-11-15T12:58:36.825457+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:36.825457+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://inbusiness.kz/ru/cat/biznes",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://inbusiness.kz/ru/cat/biznes",
+          "validatedAt": "2026-11-15T13:00:15.809268+00:00",
+          "discoveredFrom": "https://inbusiness.kz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:15.809268+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://inbusiness.kz/ru/cat/biznes/industriya",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://inbusiness.kz/ru/cat/biznes/industriya",
+          "validatedAt": "2026-11-15T13:00:15.809868+00:00",
+          "discoveredFrom": "https://inbusiness.kz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business",
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:15.809868+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://inbusiness.kz/ru/cat/biznes/?page=2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://inbusiness.kz/ru/cat/biznes?page=2",
+          "validatedAt": "2026-11-15T13:01:43.623736+00:00",
+          "discoveredFrom": "https://inbusiness.kz/ru/cat/biznes",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.623736+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kz-the-astana-times",
+      "country": "kz",
+      "family": "The Astana Times",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "astanatimes.com"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://astanatimes.com/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:58:36.826473+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kz-ls",
+      "country": "kz",
+      "family": "LS",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "lsm.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://lsm.kz/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://lsm.kz/",
+          "validatedAt": "2026-11-15T12:58:36.828386+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:36.828386+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://lsm.kz/banks",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://lsm.kz/banks",
+          "validatedAt": "2026-11-15T13:00:22.516711+00:00",
+          "discoveredFrom": "https://lsm.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:22.516711+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://lsm.kz/markets",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://lsm.kz/markets",
+          "validatedAt": "2026-11-15T13:00:23.256366+00:00",
+          "discoveredFrom": "https://lsm.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:23.256366+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://lsm.kz/latest",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://lsm.kz/latest",
+          "validatedAt": "2026-11-15T13:00:22.485754+00:00",
+          "discoveredFrom": "https://lsm.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:22.485754+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://lsm.kz/banks?page=2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://lsm.kz/banks?page=2",
+          "validatedAt": "2026-11-15T13:01:43.623926+00:00",
+          "discoveredFrom": "https://lsm.kz/banks",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.623926+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kz-forbes-kazakhstan",
+      "country": "kz",
+      "family": "Forbes Kazakhstan",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "forbes.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://forbes.kz/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://forbes.kz/",
+          "validatedAt": "2026-11-15T12:58:36.832529+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:36.832529+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://forbes.kz/category/economy",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://forbes.kz/category/economy",
+          "validatedAt": "2026-11-15T13:00:23.904168+00:00",
+          "discoveredFrom": "https://forbes.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:23.904168+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://forbes.kz/category/agriculture",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://forbes.kz/category/agriculture",
+          "validatedAt": "2026-11-15T13:00:24.067542+00:00",
+          "discoveredFrom": "https://forbes.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:24.067542+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://forbes.kz/announce",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://forbes.kz/announce",
+          "validatedAt": "2026-11-15T13:00:23.779577+00:00",
+          "discoveredFrom": "https://forbes.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:23.779577+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://forbes.kz/category/economy?page=2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://forbes.kz/category/economy?page=2",
+          "validatedAt": "2026-11-15T13:01:43.625086+00:00",
+          "discoveredFrom": "https://forbes.kz/category/economy",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.625086+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kz-informburo",
+      "country": "kz",
+      "family": "Informburo",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "informburo.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://informburo.kz/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://informburo.kz/",
+          "validatedAt": "2026-11-15T12:58:44.156599+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:44.156599+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://informburo.kz/page/politika-konfidencialnosti-i-obrabotki-personalnyx-dannyx",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://informburo.kz/page/politika-konfidencialnosti-i-obrabotki-personalnyx-dannyx",
+          "validatedAt": "2026-11-15T13:00:29.929286+00:00",
+          "discoveredFrom": "https://informburo.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:29.929286+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kz-total-kz",
+      "country": "kz",
+      "family": "Total.kz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "total.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://total.kz/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:58:44.598433+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "uz-gazeta-uz",
+      "country": "uz",
+      "family": "Gazeta.uz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "www.gazeta.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.gazeta.uz/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.gazeta.uz/ru/",
+          "validatedAt": "2026-11-15T12:58:44.818300+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:44.818300+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.gazeta.uz/ru/politics/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.gazeta.uz/ru/politics/",
+          "validatedAt": "2026-11-15T13:00:30.272788+00:00",
+          "discoveredFrom": "https://www.gazeta.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:30.272788+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.gazeta.uz/ru/economy/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.gazeta.uz/ru/economy/",
+          "validatedAt": "2026-11-15T13:00:30.520741+00:00",
+          "discoveredFrom": "https://www.gazeta.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:30.520741+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.gazeta.uz/ru/archive/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.gazeta.uz/ru/archive/",
+          "validatedAt": "2026-11-15T13:00:30.053621+00:00",
+          "discoveredFrom": "https://www.gazeta.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:30.053621+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.gazeta.uz/ru/politics?page=2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.gazeta.uz/ru/politics?page=2",
+          "validatedAt": "2026-11-15T13:01:43.626764+00:00",
+          "discoveredFrom": "https://www.gazeta.uz/ru/politics/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.626764+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.gazeta.uz/en/",
+          "role": "language",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.gazeta.uz/en/",
+          "validatedAt": "2026-11-15T13:01:43.627528+00:00",
+          "discoveredFrom": "https://www.gazeta.uz/ru/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:43.627528+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "uz-kun-uz",
+      "country": "uz",
+      "family": "Kun.uz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "kun.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://kun.uz/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:58:46.298200+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "uz-spot-uz",
+      "country": "uz",
+      "family": "Spot.uz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "www.spot.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.spot.uz/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.spot.uz/ru/",
+          "validatedAt": "2026-11-15T12:58:46.974425+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:46.974425+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.spot.uz/ru/fintech/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.spot.uz/ru/fintech/",
+          "validatedAt": "2026-11-15T13:00:30.763894+00:00",
+          "discoveredFrom": "https://www.spot.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:30.763894+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.spot.uz/ru/transport/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.spot.uz/ru/transport/",
+          "validatedAt": "2026-11-15T13:00:35.789689+00:00",
+          "discoveredFrom": "https://www.spot.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:35.789689+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "uz-uzdaily",
+      "country": "uz",
+      "family": "UzDaily",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "www.uzdaily.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.uzdaily.uz/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.uzdaily.uz/ru/",
+          "validatedAt": "2026-11-15T12:58:49.123320+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:49.123320+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.uzdaily.uz/ru/section/economy/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.uzdaily.uz/ru/section/economy/",
+          "validatedAt": "2026-11-15T13:00:36.822251+00:00",
+          "discoveredFrom": "https://www.uzdaily.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:36.822251+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.uzdaily.uz/ru/news/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.uzdaily.uz/ru/news/",
+          "validatedAt": "2026-11-15T13:00:36.770699+00:00",
+          "discoveredFrom": "https://www.uzdaily.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:36.770699+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.uzdaily.uz/ru/section/economy/page/2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.uzdaily.uz/ru/section/economy/page/2/",
+          "validatedAt": "2026-11-15T13:01:50.943401+00:00",
+          "discoveredFrom": "https://www.uzdaily.uz/ru/section/economy/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:50.943401+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.uzdaily.uz/en/",
+          "role": "language",
+          "language": "und",
+          "accessStatus": "html_received_unreadable_or_invalid",
+          "httpStatus": 200,
+          "finalUrl": "https://www.uzdaily.uz/en/",
+          "validatedAt": "2026-11-15T13:05:41.038046+00:00",
+          "discoveredFrom": "https://www.uzdaily.uz/ru/",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "uz-review-uz",
+      "country": "uz",
+      "family": "Review.uz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "review.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://review.uz/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://review.uz/",
+          "validatedAt": "2026-11-15T12:58:50.601984+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:50.601984+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://review.uz/rinki",
+          "role": "section",
+          "language": "und",
+          "accessStatus": "html_received_unreadable_or_invalid",
+          "httpStatus": 200,
+          "finalUrl": "https://review.uz/rinki",
+          "validatedAt": "2026-11-15T13:03:30.707485+00:00",
+          "discoveredFrom": "https://review.uz/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ]
+        },
+        {
+          "url": "https://review.uz/biznes",
+          "role": "section",
+          "language": "und",
+          "accessStatus": "html_received_unreadable_or_invalid",
+          "httpStatus": 200,
+          "finalUrl": "https://review.uz/biznes",
+          "validatedAt": "2026-11-15T13:03:30.707043+00:00",
+          "discoveredFrom": "https://review.uz/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ]
+        },
+        {
+          "url": "https://review.uz/regioni",
+          "role": "section",
+          "language": "und",
+          "accessStatus": "html_received_unreadable_or_invalid",
+          "httpStatus": 200,
+          "finalUrl": "https://review.uz/regioni",
+          "validatedAt": "2026-11-15T13:03:30.706243+00:00",
+          "discoveredFrom": "https://review.uz/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ]
+        },
+        {
+          "url": "https://review.uz/en",
+          "role": "language",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://review.uz/en",
+          "validatedAt": "2026-11-15T13:02:31.563311+00:00",
+          "discoveredFrom": "https://review.uz/ru",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:31.563311+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "uz-kursiv-uzbekistan",
+      "country": "uz",
+      "family": "Kursiv Uzbekistan",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "uz.kursiv.media"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://uz.kursiv.media/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uz.kursiv.media/",
+          "validatedAt": "2026-11-15T12:58:51.014097+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:51.014097+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://uz.kursiv.media/category/banks/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uz.kursiv.media/category/banks/",
+          "validatedAt": "2026-11-15T13:00:43.635675+00:00",
+          "discoveredFrom": "https://uz.kursiv.media/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:43.635675+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://uz.kursiv.media/archive/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uz.kursiv.media/archive/",
+          "validatedAt": "2026-11-15T13:00:43.537184+00:00",
+          "discoveredFrom": "https://uz.kursiv.media/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:43.537184+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://uz.kursiv.media/category/banks/page/2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uz.kursiv.media/category/banks/page/2/",
+          "validatedAt": "2026-11-15T13:01:51.269379+00:00",
+          "discoveredFrom": "https://uz.kursiv.media/category/banks/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:51.269379+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://uz.kursiv.media/en/",
+          "role": "language",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uz.kursiv.media/en/",
+          "validatedAt": "2026-11-15T13:01:51.626658+00:00",
+          "discoveredFrom": "https://uz.kursiv.media/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:51.626658+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "uz-uznews",
+      "country": "uz",
+      "family": "Uznews",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "uznews.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://uznews.uz/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:58:51.140161+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "uz-nuz",
+      "country": "uz",
+      "family": "NUZ",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "nuz.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://nuz.uz/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_encoding_review_required",
+          "httpStatus": 200,
+          "finalUrl": "https://nuz.uz/",
+          "validatedAt": "2026-11-15T12:58:52.226000+00:00",
+          "encodingReviewRequired": true,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:52.226000+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "uz-podrobno-uz",
+      "country": "uz",
+      "family": "Podrobno.uz",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "podrobno.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://podrobno.uz/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://podrobno.uz/",
+          "validatedAt": "2026-11-15T12:58:52.778090+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:52.778090+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://podrobno.uz/cat/politic/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://podrobno.uz/cat/politic/",
+          "validatedAt": "2026-11-15T13:00:44.048108+00:00",
+          "discoveredFrom": "https://podrobno.uz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:44.048108+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://podrobno.uz/cat/economic/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://podrobno.uz/cat/economic/",
+          "validatedAt": "2026-11-15T13:00:44.420773+00:00",
+          "discoveredFrom": "https://podrobno.uz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:44.420773+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://podrobno.uz/all_news/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://podrobno.uz/all_news/",
+          "validatedAt": "2026-11-15T13:00:43.940402+00:00",
+          "discoveredFrom": "https://podrobno.uz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:43.940402+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "uz-daryo",
+      "country": "uz",
+      "family": "Daryo",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "daryo.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://daryo.uz/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:58:52.882742+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kg-kabar",
+      "country": "kg",
+      "family": "Kabar",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "ru.kabar.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://ru.kabar.kg/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "transient_http_failure_502",
+          "httpStatus": 502,
+          "validatedAt": "2026-11-15T12:58:53.323358+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kg-24-kg",
+      "country": "kg",
+      "family": "24.kg",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "24.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://24.kg/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://24.kg/",
+          "validatedAt": "2026-11-15T12:58:54.760269+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:54.760269+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://24.kg/obshestvo",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://24.kg/obshestvo",
+          "validatedAt": "2026-11-15T13:00:50.975366+00:00",
+          "discoveredFrom": "https://24.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:50.975366+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://24.kg/ekonomika",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://24.kg/ekonomika",
+          "validatedAt": "2026-11-15T13:00:50.981098+00:00",
+          "discoveredFrom": "https://24.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:50.981098+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://24.kg/obshestvo/page/2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://24.kg/obshestvo/page/2",
+          "validatedAt": "2026-11-15T13:01:52.139909+00:00",
+          "discoveredFrom": "https://24.kg/obshestvo",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:52.139909+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-kaktus-media",
+      "country": "kg",
+      "family": "Kaktus.media",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "kaktus.media"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://kaktus.media/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kaktus.media/",
+          "validatedAt": "2026-11-15T12:58:56.794616+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:56.794616+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kaktus.media/?lable=8",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kaktus.media/?lable=8&date=2026-11-15&order=time",
+          "validatedAt": "2026-11-15T13:00:52.166248+00:00",
+          "discoveredFrom": "https://kaktus.media/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:52.166248+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kaktus.media/?lable=8&date=2026-11-02&order=time",
+          "role": "date_archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kaktus.media/?lable=8&date=2026-11-02&order=time",
+          "validatedAt": "2026-11-15T13:01:52.701629+00:00",
+          "discoveredFrom": "https://kaktus.media/?lable=8",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:52.701629+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-akipress",
+      "country": "kg",
+      "family": "AKIpress media group",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "akipress.org",
+        "analitika.akipress.org",
+        "bilim.akipress.org",
+        "culture.akipress.org",
+        "kg.akipress.org"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [
+        "AKIpress portal itself links Tazabek and Turmush as its economic/regional services; merge family counts pending formal ownership review."
+      ],
+      "entrypoints": [
+        {
+          "url": "https://akipress.org/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://akipress.org/",
+          "validatedAt": "2026-11-15T12:58:57.367687+00:00",
+          "encodingReviewRequired": false
+        },
+        {
+          "url": "https://kg.akipress.org/cat:1?from=portal&place=menu",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kg.akipress.org/cat:1?from=portal&place=menu",
+          "validatedAt": "2026-11-15T13:00:53.865172+00:00",
+          "discoveredFrom": "https://akipress.org/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:53.865172+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://analitika.akipress.org/archive:2?from=portal&place=menu",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://analitika.akipress.org/archive:2?from=portal&place=menu",
+          "validatedAt": "2026-11-15T13:00:53.671119+00:00",
+          "discoveredFrom": "https://akipress.org/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive",
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:53.671119+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kg.akipress.org/page:2/cat:1",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kg.akipress.org/page:2/cat:1",
+          "validatedAt": "2026-11-15T13:01:55.633913+00:00",
+          "discoveredFrom": "https://kg.akipress.org/cat:1?from=portal&place=menu",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:55.633913+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://culture.akipress.org/news:2567548/?from=portal&place=nowread&b=3",
+          "role": "language",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://culture.akipress.org/news:2567548/?from=portal&place=nowread&b=3",
+          "validatedAt": "2026-11-15T13:01:56.669691+00:00",
+          "discoveredFrom": "https://akipress.org/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:56.669691+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-tazabek",
+      "country": "kg",
+      "family": "AKIpress media group",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "tazabek.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [
+        "AKIpress portal itself links Tazabek and Turmush as its economic/regional services; merge family counts pending formal ownership review."
+      ],
+      "entrypoints": [
+        {
+          "url": "https://tazabek.kg/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tazabek.kg/",
+          "validatedAt": "2026-11-15T12:58:57.549083+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:57.549083+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://tazabek.kg/cat:business",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tazabek.kg/cat:business",
+          "validatedAt": "2026-11-15T13:00:58.016045+00:00",
+          "discoveredFrom": "https://tazabek.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:58.016045+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://tazabek.kg/cat:agro",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tazabek.kg/cat:agro",
+          "validatedAt": "2026-11-15T13:00:58.080801+00:00",
+          "discoveredFrom": "https://tazabek.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:58.080801+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://tazabek.kg/page:2/cat:business",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tazabek.kg/page:2/cat:business",
+          "validatedAt": "2026-11-15T13:02:31.568323+00:00",
+          "discoveredFrom": "https://tazabek.kg/cat:business",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:31.568323+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://tazabek.kg/page:2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://tazabek.kg/page:2/",
+          "validatedAt": "2026-11-15T13:01:56.784105+00:00",
+          "discoveredFrom": "https://tazabek.kg/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:56.784105+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-economist-kg",
+      "country": "kg",
+      "family": "Economist.kg",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "economist.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://economist.kg/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economist.kg/",
+          "validatedAt": "2026-11-15T12:58:59.513250+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:58:59.513250+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://economist.kg/kursy-valyut/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economist.kg/kursy-valyut/",
+          "validatedAt": "2026-11-15T13:01:00.562126+00:00",
+          "discoveredFrom": "https://economist.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:00.562126+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://economist.kg/archive/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economist.kg/archive/",
+          "validatedAt": "2026-11-15T13:00:59.657964+00:00",
+          "discoveredFrom": "https://economist.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive",
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:59.657964+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://economist.kg/tag/society/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economist.kg/tag/society/",
+          "validatedAt": "2026-11-15T13:01:00.325765+00:00",
+          "discoveredFrom": "https://economist.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business",
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:00.325765+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-turmush",
+      "country": "kg",
+      "family": "AKIpress media group",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "turmush.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [
+        "AKIpress portal itself links Tazabek and Turmush as its economic/regional services; merge family counts pending formal ownership review."
+      ],
+      "entrypoints": [
+        {
+          "url": "https://turmush.kg/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://turmush.kg/",
+          "validatedAt": "2026-11-15T12:59:00.499392+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:00.499392+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://turmush.kg/cat:society",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://turmush.kg/cat:society",
+          "validatedAt": "2026-11-15T13:01:04.344361+00:00",
+          "discoveredFrom": "https://turmush.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:04.344361+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://turmush.kg/cat:agro",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://turmush.kg/cat:agro",
+          "validatedAt": "2026-11-15T13:01:04.715701+00:00",
+          "discoveredFrom": "https://turmush.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:04.715701+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://turmush.kg/cat:economy",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://turmush.kg/cat:economy",
+          "validatedAt": "2026-11-15T13:01:04.524353+00:00",
+          "discoveredFrom": "https://turmush.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:04.524353+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://turmush.kg/page:2/cat:society",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://turmush.kg/page:2/cat:society",
+          "validatedAt": "2026-11-15T13:02:31.569592+00:00",
+          "discoveredFrom": "https://turmush.kg/cat:society",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:31.569592+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://turmush.kg/page:2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://turmush.kg/page:2/",
+          "validatedAt": "2026-11-15T13:01:57.046777+00:00",
+          "discoveredFrom": "https://turmush.kg/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:57.046777+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-vesti-kg",
+      "country": "kg",
+      "family": "Vesti.kg",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "vesti.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://vesti.kg/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:00.652271+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kg-azattyk",
+      "country": "kg",
+      "family": "Azattyk",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "rus.azattyk.org",
+        "www.azattyk.org",
+        "www.azattyqasia.org"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.azattyk.org/",
+          "role": "home",
+          "language": "ky",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.azattyk.org/",
+          "validatedAt": "2026-11-15T12:59:03.194112+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ky",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:03.194112+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.azattyk.org/politics",
+          "role": "section",
+          "language": "ky",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.azattyk.org/politics",
+          "validatedAt": "2026-11-15T13:01:04.930590+00:00",
+          "discoveredFrom": "https://www.azattyk.org/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ky",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:04.930590+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.azattyk.org/economics",
+          "role": "section",
+          "language": "ky",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.azattyk.org/economics",
+          "validatedAt": "2026-11-15T13:01:05.851707+00:00",
+          "discoveredFrom": "https://www.azattyk.org/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ky",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:05.851707+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://rus.azattyk.org",
+          "role": "language",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.azattyqasia.org/?utm_medium=referral&utm_campaign=internal-rus-azattyk-org&utm_source=rus-azattyk-org&utm_content=kyrgyz&property_id=440",
+          "validatedAt": "2026-11-15T13:01:57.319743+00:00",
+          "discoveredFrom": "https://www.azattyk.org/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:57.319743+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-sputnik-kyrgyzstan",
+      "country": "kg",
+      "family": "Sputnik Kyrgyzstan",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "sputnik.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://sputnik.kg/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "network_or_transport_failure",
+          "validatedAt": "2026-11-15T12:59:04.059196+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-khovar",
+      "country": "tj",
+      "family": "Khovar",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "eng.khovar.tj",
+        "khovar.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://khovar.tj/rus/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://khovar.tj/rus/",
+          "validatedAt": "2026-11-15T12:59:04.067274+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:04.067274+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://khovar.tj/rus/category/economic/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://khovar.tj/rus/category/economic/",
+          "validatedAt": "2026-11-15T13:01:12.043317+00:00",
+          "discoveredFrom": "https://khovar.tj/rus/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:12.043317+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://khovar.tj/rus/category/society/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://khovar.tj/rus/category/society/",
+          "validatedAt": "2026-11-15T13:01:12.004632+00:00",
+          "discoveredFrom": "https://khovar.tj/rus/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:12.004632+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://khovar.tj/rus/category/25year/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://khovar.tj/rus/category/25year/",
+          "validatedAt": "2026-11-15T13:01:06.751119+00:00",
+          "discoveredFrom": "https://khovar.tj/rus/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:06.751119+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://khovar.tj/rus/category/economic/page/2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://khovar.tj/rus/category/economic/page/2/",
+          "validatedAt": "2026-11-15T13:02:31.571258+00:00",
+          "discoveredFrom": "https://khovar.tj/rus/category/economic/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:31.571258+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://khovar.tj/rus/2026/11/02/",
+          "role": "date_archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://khovar.tj/rus/2026/11/02/",
+          "validatedAt": "2026-11-15T13:01:58.054850+00:00",
+          "discoveredFrom": "https://khovar.tj/rus/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:58.054850+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "http://eng.khovar.tj/",
+          "role": "language",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://eng.khovar.tj:443/",
+          "validatedAt": "2026-11-15T13:02:31.571403+00:00",
+          "discoveredFrom": "https://khovar.tj/rus/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:31.571403+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "tj-asia-plus",
+      "country": "tj",
+      "family": "Asia-Plus",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "asiaplus.news"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://asiaplus.news/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:05.440756+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-avesta",
+      "country": "tj",
+      "family": "Avesta",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "avesta.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://avesta.tj/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:06.056925+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-radio-ozodi",
+      "country": "tj",
+      "family": "Radio Ozodi",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "www.ozodi.org"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.ozodi.org/",
+          "role": "home",
+          "language": "tg",
+          "accessStatus": "public_html_encoding_review_required",
+          "httpStatus": 200,
+          "finalUrl": "https://www.ozodi.org/",
+          "validatedAt": "2026-11-15T12:59:07.130295+00:00",
+          "encodingReviewRequired": true,
+          "htmlLanguageObserved": "tg",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:07.130295+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "tj-your-tj",
+      "country": "tj",
+      "family": "Your.tj",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "your.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://your.tj/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:08.532863+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-pressa-tj",
+      "country": "tj",
+      "family": "Pressa.tj",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "pressa.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://pressa.tj/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:09.374834+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-sugdpressa",
+      "country": "tj",
+      "family": "SugdPressa",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "sugdpressa.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://sugdpressa.tj/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_encoding_review_required",
+          "httpStatus": 200,
+          "finalUrl": "https://sugdpressa.tj/",
+          "validatedAt": "2026-11-15T12:59:10.168925+00:00",
+          "encodingReviewRequired": true,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:10.168925+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        },
+        {
+          "url": "https://sugdpressa.tj/category/business/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_encoding_review_required",
+          "httpStatus": 200,
+          "finalUrl": "https://sugdpressa.tj/category/business/",
+          "validatedAt": "2026-11-15T13:01:12.408180+00:00",
+          "discoveredFrom": "https://sugdpressa.tj/",
+          "encodingReviewRequired": true,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:12.408180+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        },
+        {
+          "url": "https://sugdpressa.tj/category/business/page/2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_encoding_review_required",
+          "httpStatus": 200,
+          "finalUrl": "https://sugdpressa.tj/category/business/page/2/",
+          "validatedAt": "2026-11-15T13:01:58.060187+00:00",
+          "discoveredFrom": "https://sugdpressa.tj/category/business/",
+          "encodingReviewRequired": true,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:58.060187+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "tj-sputnik-tajikistan",
+      "country": "tj",
+      "family": "Sputnik Tajikistan",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "sputnik.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://sputnik.tj/",
+          "role": "home",
+          "language": "tg",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://sputnik.tj/",
+          "validatedAt": "2026-11-15T12:59:10.950159+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "tg",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:10.950159+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://sputnik.tj/news/",
+          "role": "archive",
+          "language": "tg",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://sputnik.tj/news/",
+          "validatedAt": "2026-11-15T13:01:13.030741+00:00",
+          "discoveredFrom": "https://sputnik.tj/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "tg",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:13.030741+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://sputnik.tj/politics/",
+          "role": "section",
+          "language": "tg",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://sputnik.tj/politics/",
+          "validatedAt": "2026-11-15T13:01:15.416659+00:00",
+          "discoveredFrom": "https://sputnik.tj/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "tg",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:15.416659+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://sputnik.tj/economy/",
+          "role": "section",
+          "language": "tg",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://sputnik.tj/economy/",
+          "validatedAt": "2026-11-15T13:01:15.571408+00:00",
+          "discoveredFrom": "https://sputnik.tj/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "tg",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:15.571408+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "tj-toptj",
+      "country": "tj",
+      "family": "TopTJ",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "www.toptj.com"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [
+        "Aggregator: leads only; return to original publisher for full text and first publication."
+      ],
+      "entrypoints": [
+        {
+          "url": "https://www.toptj.com/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.toptj.com/",
+          "validatedAt": "2026-11-15T12:59:12.337388+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:12.337388+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.toptj.com/news/NewsFolder-5",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.toptj.com/news/obshchestvo",
+          "validatedAt": "2026-11-15T13:01:16.262286+00:00",
+          "discoveredFrom": "https://www.toptj.com/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:16.262286+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.toptj.com/news/NewsFolder-12",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.toptj.com/news/ekonomika",
+          "validatedAt": "2026-11-15T13:01:18.688098+00:00",
+          "discoveredFrom": "https://www.toptj.com/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:18.688098+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.toptj.com/news/obshchestvo?page=2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.toptj.com/news/obshchestvo?page=2",
+          "validatedAt": "2026-11-15T13:01:59.078494+00:00",
+          "discoveredFrom": "https://www.toptj.com/news/NewsFolder-5",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:59.078494+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "az-azertac",
+      "country": "az",
+      "family": "AZERTAC",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "azertag.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://azertag.az/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:13.183247+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "az-apa",
+      "country": "az",
+      "family": "APA",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "apa.az",
+        "en.apa.az",
+        "ru.apa.az"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [
+        "https://apa.az/ru redirects to Azerbaijani homepage; prefer observed canonical Russian https://ru.apa.az/."
+      ],
+      "entrypoints": [
+        {
+          "url": "https://apa.az/ru",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://apa.az/",
+          "validatedAt": "2026-11-15T12:59:14.125016+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:14.125016+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://apa.az/all-news",
+          "role": "archive",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://apa.az/all-news",
+          "validatedAt": "2026-11-15T13:01:19.270774+00:00",
+          "discoveredFrom": "https://apa.az/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:19.270774+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://apa.az/politic",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://apa.az/politic",
+          "validatedAt": "2026-11-15T13:01:20.765239+00:00",
+          "discoveredFrom": "https://apa.az/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:20.765239+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://apa.az/economy",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://apa.az/economy",
+          "validatedAt": "2026-11-15T13:01:20.831933+00:00",
+          "discoveredFrom": "https://apa.az/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:20.831933+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://apa.az/all-news?page=2",
+          "role": "pagination",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://apa.az/all-news?page=2",
+          "validatedAt": "2026-11-15T13:02:02.178821+00:00",
+          "discoveredFrom": "https://apa.az/all-news",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:02.178821+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://ru.apa.az/",
+          "role": "language",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://ru.apa.az/",
+          "validatedAt": "2026-11-15T13:00:44.625880+00:00",
+          "discoveredFrom": "https://apa.az/ru",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:44.625880+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://en.apa.az/",
+          "role": "language",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://en.apa.az/",
+          "validatedAt": "2026-11-15T13:02:40.473759+00:00",
+          "discoveredFrom": "https://apa.az/ru",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:40.473759+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://ru.apa.az/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://ru.apa.az/",
+          "validatedAt": "2026-11-15T13:00:44.625880+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:00:44.625880+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://ru.apa.az/all-news",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://ru.apa.az/all-news",
+          "validatedAt": "2026-11-15T13:02:22.819329+00:00",
+          "discoveredFrom": "https://ru.apa.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:22.819329+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://ru.apa.az/politic",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://ru.apa.az/politic",
+          "validatedAt": "2026-11-15T13:02:22.822398+00:00",
+          "discoveredFrom": "https://ru.apa.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:22.822398+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://ru.apa.az/economy",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://ru.apa.az/economy",
+          "validatedAt": "2026-11-15T13:02:29.144168+00:00",
+          "discoveredFrom": "https://ru.apa.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:29.144168+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://ru.apa.az/all-news?page=2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://ru.apa.az/all-news?page=2",
+          "validatedAt": "2026-11-15T13:02:39.225877+00:00",
+          "discoveredFrom": "https://ru.apa.az/all-news",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:39.225877+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "az-report-az",
+      "country": "az",
+      "family": "Report.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "report.az"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://report.az/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://report.az/ru",
+          "validatedAt": "2026-11-15T12:59:14.311695+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:14.311695+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://report.az/ru/posledniye-novosti",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://report.az/ru/posledniye-novosti",
+          "validatedAt": "2026-11-15T13:01:21.057655+00:00",
+          "discoveredFrom": "https://report.az/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:21.057655+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://report.az/ru/politika",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://report.az/ru/politika",
+          "validatedAt": "2026-11-15T13:01:22.615790+00:00",
+          "discoveredFrom": "https://report.az/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:22.615790+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://report.az/ru/ekonomika",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://report.az/ru/ekonomika",
+          "validatedAt": "2026-11-15T13:01:25.183863+00:00",
+          "discoveredFrom": "https://report.az/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:25.183863+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://report.az/en",
+          "role": "language",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://report.az/en",
+          "validatedAt": "2026-11-15T13:02:02.195644+00:00",
+          "discoveredFrom": "https://report.az/ru",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:02.195644+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "az-trend",
+      "country": "az",
+      "family": "Trend",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "trend.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://trend.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:14.390999+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "az-news-az",
+      "country": "az",
+      "family": "News.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "news.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://news.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:15.284231+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "az-caliber-az",
+      "country": "az",
+      "family": "Caliber.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "caliber.az"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://caliber.az/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://caliber.az/",
+          "validatedAt": "2026-11-15T12:59:16.942751+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:16.942751+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://caliber.az/category/politics",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://caliber.az/category/politics",
+          "validatedAt": "2026-11-15T13:01:25.405740+00:00",
+          "discoveredFrom": "https://caliber.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:25.405740+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://caliber.az/category/economics",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://caliber.az/category/economics",
+          "validatedAt": "2026-11-15T13:01:25.682589+00:00",
+          "discoveredFrom": "https://caliber.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:25.682589+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://caliber.az/en",
+          "role": "language",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://caliber.az/en",
+          "validatedAt": "2026-11-15T13:02:03.428206+00:00",
+          "discoveredFrom": "https://caliber.az/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:03.428206+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageStatus": "actual_HTML_language_declaration"
+        }
+      ]
+    },
+    {
+      "id": "az-marja-az",
+      "country": "az",
+      "family": "Marja.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "marja.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://marja.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:17.913073+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "az-abc-az",
+      "country": "az",
+      "family": "ABC.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "abc.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://abc.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:18.073147+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "az-vergiler-az",
+      "country": "az",
+      "family": "Vergiler.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "vergiler.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://vergiler.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:18.618928+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "az-banker-az",
+      "country": "az",
+      "family": "Banker.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "banker.az"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://banker.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://banker.az/",
+          "validatedAt": "2026-11-15T12:59:19.767601+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en-GB",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:19.767601+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://banker.az/category/x%c9%99b%c9%99rl%c9%99r/",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://banker.az/category/x%c9%99b%c9%99rl%c9%99r/",
+          "validatedAt": "2026-11-15T13:01:27.403249+00:00",
+          "discoveredFrom": "https://banker.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "en-GB",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:27.403249+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://banker.az/category/c%c9%99miyy%c9%99t/",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://banker.az/category/c%c9%99miyy%c9%99t/",
+          "validatedAt": "2026-11-15T13:01:27.292407+00:00",
+          "discoveredFrom": "https://banker.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business",
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "en-GB",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:27.292407+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://banker.az/category/x%C9%99b%C9%99rl%C9%99r/page/2/",
+          "role": "pagination",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://banker.az/category/x%C9%99b%C9%99rl%C9%99r/page/2/",
+          "validatedAt": "2026-11-15T13:02:03.816783+00:00",
+          "discoveredFrom": "https://banker.az/category/x%c9%99b%c9%99rl%c9%99r/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en-GB",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:03.816783+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        }
+      ]
+    },
+    {
+      "id": "az-fins-az",
+      "country": "az",
+      "family": "Fins.az",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "fins.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://fins.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:20.612724+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kz-national-bank-of-kazakhstan",
+      "country": "kz",
+      "family": "National Bank of Kazakhstan",
+      "kind": "institution",
+      "institutionType": "central_bank",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "nationalbank.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://nationalbank.kz/",
+          "role": "home",
+          "language": "kk",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://nationalbank.kz/kz",
+          "validatedAt": "2026-11-15T12:59:22.955303+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "kz",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:22.955303+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://nationalbank.kz/kz",
+          "role": "section",
+          "language": "kk",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://nationalbank.kz/kz",
+          "validatedAt": "2026-11-15T13:01:27.655907+00:00",
+          "discoveredFrom": "https://nationalbank.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "kz",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:27.655907+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        }
+      ]
+    },
+    {
+      "id": "kz-prime-minister-kazakhstan",
+      "country": "kz",
+      "family": "Prime Minister Kazakhstan",
+      "kind": "institution",
+      "institutionType": "government",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "primeminister.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://primeminister.kz/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://primeminister.kz/ru",
+          "validatedAt": "2026-11-15T12:59:23.237565+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:23.237565+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://primeminister.kz/ru/archive",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://primeminister.kz/ru/archive",
+          "validatedAt": "2026-11-15T13:01:32.054530+00:00",
+          "discoveredFrom": "https://primeminister.kz/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:32.054530+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://primeminister.kz/ru/hrpolitic/appointments/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://primeminister.kz/ru/hrpolitic/appointments/",
+          "validatedAt": "2026-11-15T13:01:32.138600+00:00",
+          "discoveredFrom": "https://primeminister.kz/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:32.138600+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://primeminister.kz/ru/hrpolitic/appointments?page=1",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://primeminister.kz/ru/hrpolitic/appointments?page=1",
+          "validatedAt": "2026-11-15T13:05:41.049774+00:00",
+          "discoveredFrom": "https://primeminister.kz/ru/hrpolitic/appointments/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:05:41.049774+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kz-atameken",
+      "country": "kz",
+      "family": "Atameken",
+      "kind": "institution",
+      "institutionType": "business_association",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "atameken.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://atameken.kz/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "http_404",
+          "httpStatus": 404,
+          "validatedAt": "2026-11-15T12:59:23.261949+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kz-kazakhstan-stock-exchange",
+      "country": "kz",
+      "family": "Kazakhstan Stock Exchange",
+      "kind": "institution",
+      "institutionType": "exchange",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "kase.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://kase.kz/",
+          "role": "home",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kase.kz/en/",
+          "validatedAt": "2026-11-15T12:59:23.704190+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:23.704190+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kase.kz/en/information/news",
+          "role": "archive",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kase.kz/en/information/news/all",
+          "validatedAt": "2026-11-15T13:01:34.244043+00:00",
+          "discoveredFrom": "https://kase.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:34.244043+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kase.kz/en/investors/instruments/shares",
+          "role": "section",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kase.kz/en/investors/instruments/shares",
+          "validatedAt": "2026-11-15T13:01:34.380367+00:00",
+          "discoveredFrom": "https://kase.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:34.380367+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://kase.kz/en/information/trades",
+          "role": "section",
+          "language": "en",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://kase.kz/en/information/trades",
+          "validatedAt": "2026-11-15T13:01:34.827080+00:00",
+          "discoveredFrom": "https://kase.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:34.827080+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "uz-central-bank-uzbekistan",
+      "country": "uz",
+      "family": "Central Bank Uzbekistan",
+      "kind": "institution",
+      "institutionType": "central_bank",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "cbu.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://cbu.uz/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbu.uz/ru/",
+          "validatedAt": "2026-11-15T12:59:26.523390+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:26.523390+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbu.uz/ru/financial-stability/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbu.uz/ru/financial-stability/",
+          "validatedAt": "2026-11-15T13:01:42.209894+00:00",
+          "discoveredFrom": "https://cbu.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:42.209894+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbu.uz/ru/payment-systems/tariffs-for-payment-services/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbu.uz/ru/payment-systems/tariffs-for-payment-services/",
+          "validatedAt": "2026-11-15T13:01:42.275587+00:00",
+          "discoveredFrom": "https://cbu.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:42.275587+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbu.uz/ru/press_center/forums-and-conferences/silk-road-forum-2026/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbu.uz/ru/press_center/forums-and-conferences/silk-road-forum-2026/",
+          "validatedAt": "2026-11-15T13:01:42.923217+00:00",
+          "discoveredFrom": "https://cbu.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:42.923217+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbu.uz/ru/arkhiv-kursov-valyut/index.php",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbu.uz/ru/arkhiv-kursov-valyut/index.php",
+          "validatedAt": "2026-11-15T13:01:35.998252+00:00",
+          "discoveredFrom": "https://cbu.uz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:35.998252+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "uz-tax-committee-uzbekistan",
+      "country": "uz",
+      "family": "Tax Committee Uzbekistan",
+      "kind": "institution",
+      "institutionType": "tax_authority",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "gov.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://gov.uz/ru/soliq",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "html_received_unreadable_or_invalid",
+          "httpStatus": 200,
+          "finalUrl": "https://gov.uz/ru/soliq",
+          "validatedAt": "2026-11-15T12:59:26.687671+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "uz-president-uzbekistan",
+      "country": "uz",
+      "family": "President Uzbekistan",
+      "kind": "institution",
+      "institutionType": "government",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "president.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://president.uz/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://president.uz/ru",
+          "validatedAt": "2026-11-15T12:59:26.882232+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:26.882232+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://president.uz/ru/lists/news",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://president.uz/ru/lists/news",
+          "validatedAt": "2026-11-15T13:01:44.383317+00:00",
+          "discoveredFrom": "https://president.uz/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:44.383317+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://president.uz/ru/site/regions?menu_id=12",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://president.uz/ru/site/regions?menu_id=12",
+          "validatedAt": "2026-11-15T13:01:45.174952+00:00",
+          "discoveredFrom": "https://president.uz/ru",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:45.174952+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://president.uz/ru/lists/news?page=1&per-page=15",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://president.uz/ru/lists/news?page=1&per-page=15",
+          "validatedAt": "2026-11-15T13:02:38.641234+00:00",
+          "discoveredFrom": "https://president.uz/ru/lists/news",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:38.641234+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "uz-uzbek-commodity-exchange",
+      "country": "uz",
+      "family": "Uzbek Commodity Exchange",
+      "kind": "institution",
+      "institutionType": "exchange",
+      "timezone": "Asia/Tashkent",
+      "allowedHosts": [
+        "old.uzex.uz",
+        "uzex.uz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://uzex.uz/",
+          "role": "home",
+          "language": "uz",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uzex.uz/",
+          "validatedAt": "2026-11-15T12:59:28.909546+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:28.909546+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://uzex.uz/fr/pages/online-exchange-trades-tariff",
+          "role": "section",
+          "language": "uz",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uzex.uz/fr/pages/online-exchange-trades-tariff",
+          "validatedAt": "2026-11-15T13:01:49.551816+00:00",
+          "discoveredFrom": "https://uzex.uz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:49.551816+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://uzex.uz/fr/pages/public-financial-statements",
+          "role": "section",
+          "language": "uz",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uzex.uz/fr/pages/public-financial-statements",
+          "validatedAt": "2026-11-15T13:01:49.040347+00:00",
+          "discoveredFrom": "https://uzex.uz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:49.040347+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://uzex.uz/fr/News/uzex-cotton-section",
+          "role": "section",
+          "language": "uz",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uzex.uz/fr/News/uzex-cotton-section",
+          "validatedAt": "2026-11-15T13:01:46.068850+00:00",
+          "discoveredFrom": "https://uzex.uz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:46.068850+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://uzex.uz/Home/ChangeLang?culture=ru&returnUrl=%2F",
+          "role": "language",
+          "language": "uz",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://uzex.uz/",
+          "validatedAt": "2026-11-15T13:02:04.438942+00:00",
+          "discoveredFrom": "https://uzex.uz/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:04.438942+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        }
+      ]
+    },
+    {
+      "id": "kg-national-bank-kyrgyzstan",
+      "country": "kg",
+      "family": "National Bank Kyrgyzstan",
+      "kind": "institution",
+      "institutionType": "central_bank",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "www.nbkr.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.nbkr.kg/",
+          "role": "home",
+          "language": "ky",
+          "accessStatus": "public_html_encoding_review_required",
+          "httpStatus": 200,
+          "finalUrl": "https://www.nbkr.kg/",
+          "validatedAt": "2026-11-15T12:59:33.036206+00:00",
+          "encodingReviewRequired": true
+        },
+        {
+          "url": "https://www.nbkr.kg/all_news.jsp?lang=KGZ&news_type=news-main",
+          "role": "archive",
+          "language": "ky",
+          "accessStatus": "public_html_encoding_review_required",
+          "httpStatus": 200,
+          "finalUrl": "https://www.nbkr.kg/all_news.jsp?lang=KGZ&news_type=news-main",
+          "validatedAt": "2026-11-15T13:01:50.839122+00:00",
+          "discoveredFrom": "https://www.nbkr.kg/",
+          "encodingReviewRequired": true,
+          "coverageGroups": [
+            "archive"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "kg-cabinet-kyrgyzstan",
+      "country": "kg",
+      "family": "Cabinet Kyrgyzstan",
+      "kind": "institution",
+      "institutionType": "government",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "www.gov.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.gov.kg/ru",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "transient_http_failure_503",
+          "httpStatus": 503,
+          "validatedAt": "2026-11-15T12:59:34.634346+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kg-state-tax-service-kyrgyzstan",
+      "country": "kg",
+      "family": "State Tax Service Kyrgyzstan",
+      "kind": "institution",
+      "institutionType": "tax_authority",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "sti.gov.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://sti.gov.kg/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "html_received_unreadable_or_invalid",
+          "httpStatus": 200,
+          "finalUrl": "https://sti.gov.kg/",
+          "validatedAt": "2026-11-15T12:59:36.217571+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kg-kyrgyz-stock-exchange",
+      "country": "kg",
+      "family": "Kyrgyz Stock Exchange",
+      "kind": "institution",
+      "institutionType": "exchange",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "www.kse.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.kse.kg/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.kse.kg/",
+          "validatedAt": "2026-11-15T12:59:36.260705+00:00",
+          "encodingReviewRequired": false
+        },
+        {
+          "url": "https://www.kse.kg/ru/Finmarket",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.kse.kg/ru/Finmarket",
+          "validatedAt": "2026-11-15T13:01:51.518894+00:00",
+          "discoveredFrom": "https://www.kse.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru-ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:51.518894+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.kse.kg/ru/TradeResults",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.kse.kg/ru/TradeResults",
+          "validatedAt": "2026-11-15T13:01:52.249962+00:00",
+          "discoveredFrom": "https://www.kse.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ]
+        },
+        {
+          "url": "https://www.kse.kg/ru/TradeArchive",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.kse.kg/ru/TradeArchive",
+          "validatedAt": "2026-11-15T13:01:51.515377+00:00",
+          "discoveredFrom": "https://www.kse.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive",
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "ru-ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:51.515377+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.kse.kg/ru/FinMarket/2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.kse.kg/ru/FinMarket/2",
+          "validatedAt": "2026-11-15T13:02:39.107425+00:00",
+          "discoveredFrom": "https://www.kse.kg/ru/Finmarket",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru-ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:39.107425+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://www.kse.kg/ru/MainPage",
+          "role": "language",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.kse.kg/",
+          "validatedAt": "2026-11-15T13:02:05.812149+00:00",
+          "discoveredFrom": "https://www.kse.kg/",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-national-bank-tajikistan",
+      "country": "tj",
+      "family": "National Bank Tajikistan",
+      "kind": "institution",
+      "institutionType": "central_bank",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "nbt.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://nbt.tj/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "html_received_unreadable_or_invalid",
+          "httpStatus": 200,
+          "finalUrl": "https://nbt.tj/ru/",
+          "validatedAt": "2026-11-15T12:59:36.723164+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-tax-committee-tajikistan",
+      "country": "tj",
+      "family": "Tax Committee Tajikistan",
+      "kind": "institution",
+      "institutionType": "tax_authority",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "andoz.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://andoz.tj/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "transient_http_failure_503",
+          "httpStatus": 503,
+          "validatedAt": "2026-11-15T12:59:36.746397+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-ministry-finance-tajikistan",
+      "country": "tj",
+      "family": "Ministry Finance Tajikistan",
+      "kind": "institution",
+      "institutionType": "finance_ministry",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "moliya.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://moliya.tj/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "transient_http_failure_503",
+          "httpStatus": 503,
+          "validatedAt": "2026-11-15T12:59:41.787764+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "tj-sugd-regional-government",
+      "country": "tj",
+      "family": "Sugd Regional Government",
+      "kind": "institution",
+      "institutionType": "regional_government",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "www.sugd.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.sugd.tj/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.sugd.tj/ru/",
+          "validatedAt": "2026-11-15T12:59:44.825231+00:00",
+          "encodingReviewRequired": false
+        },
+        {
+          "url": "https://www.sugd.tj/ru/novosty/archive",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.sugd.tj/ru/novosty/archive",
+          "validatedAt": "2026-11-15T13:01:52.725540+00:00",
+          "discoveredFrom": "https://www.sugd.tj/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ]
+        },
+        {
+          "url": "https://www.sugd.tj/ru/novosty/archive?start=10",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.sugd.tj/ru/novosty/archive?start=10",
+          "validatedAt": "2026-11-15T13:02:39.122107+00:00",
+          "discoveredFrom": "https://www.sugd.tj/ru/novosty/archive",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "az-central-bank-azerbaijan",
+      "country": "az",
+      "family": "Central Bank Azerbaijan",
+      "kind": "institution",
+      "institutionType": "central_bank",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "cbar.az"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://cbar.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbar.az/",
+          "validatedAt": "2026-11-15T12:59:45.308403+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:45.308403+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbar.az/page-195/banks",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbar.az/page-195/banks",
+          "validatedAt": "2026-11-15T13:01:57.569653+00:00",
+          "discoveredFrom": "https://cbar.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:57.569653+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbar.az/page-214/laws",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbar.az/page-214/laws",
+          "validatedAt": "2026-11-15T13:01:58.632009+00:00",
+          "discoveredFrom": "https://cbar.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:58.632009+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbar.az/page-60/corporate-social-responsibility",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbar.az/page-60/corporate-social-responsibility",
+          "validatedAt": "2026-11-15T13:01:52.819170+00:00",
+          "discoveredFrom": "https://cbar.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:01:52.819170+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://cbar.az/home?language=en",
+          "role": "language",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://cbar.az/home?language=en",
+          "validatedAt": "2026-11-15T13:02:07.652607+00:00",
+          "discoveredFrom": "https://cbar.az/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:07.652607+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        }
+      ]
+    },
+    {
+      "id": "az-ministry-economy-azerbaijan",
+      "country": "az",
+      "family": "Ministry Economy Azerbaijan",
+      "kind": "institution",
+      "institutionType": "economy_ministry",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "economy.gov.az"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://economy.gov.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economy.gov.az/az",
+          "validatedAt": "2026-11-15T12:59:52.795790+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:52.795790+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://economy.gov.az/az",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economy.gov.az/az",
+          "validatedAt": "2026-11-15T13:02:22.816199+00:00",
+          "discoveredFrom": "https://economy.gov.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:22.816199+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://economy.gov.az/en",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economy.gov.az/en",
+          "validatedAt": "2026-11-15T13:02:07.789782+00:00",
+          "discoveredFrom": "https://economy.gov.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:07.789782+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://economy.gov.az/az/page/beynelxalq-elaqeler/maliyye-institutlari-ile-emekdasliq",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economy.gov.az/az/page/beynelxalq-elaqeler/maliyye-institutlari-ile-emekdasliq",
+          "validatedAt": "2026-11-15T13:02:22.816626+00:00",
+          "discoveredFrom": "https://economy.gov.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:22.816626+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://economy.gov.az/az/page/regionlarin-inkisafi/strateji-senedler",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economy.gov.az/az/page/regionlarin-inkisafi/strateji-senedler",
+          "validatedAt": "2026-11-15T13:02:22.815546+00:00",
+          "discoveredFrom": "https://economy.gov.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business",
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:22.815546+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://economy.gov.az/en",
+          "role": "language",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://economy.gov.az/en",
+          "validatedAt": "2026-11-15T13:02:07.789782+00:00",
+          "discoveredFrom": "https://economy.gov.az/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:07.789782+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        }
+      ]
+    },
+    {
+      "id": "az-state-customs-committee-azerbaijan",
+      "country": "az",
+      "family": "State Customs Committee Azerbaijan",
+      "kind": "institution",
+      "institutionType": "customs_authority",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "customs.gov.az"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://customs.gov.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://customs.gov.az/",
+          "validatedAt": "2026-11-15T12:59:52.856219+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T12:59:52.856219+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://customs.gov.az/en",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://customs.gov.az/en",
+          "validatedAt": "2026-11-15T13:02:00.309330+00:00",
+          "discoveredFrom": "https://customs.gov.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:00.309330+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        },
+        {
+          "url": "https://customs.gov.az/az/ferdler-ucun/dovlet-serhedinden-buraxilis-menteqeleri",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://customs.gov.az/az/ferdler-ucun/dovlet-serhedinden-buraxilis-menteqeleri",
+          "validatedAt": "2026-11-15T13:02:00.371090+00:00",
+          "discoveredFrom": "https://customs.gov.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:00.371090+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://customs.gov.az/az/sahibkarlar-ucun/biznesle-emekdasliq",
+          "role": "section",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://customs.gov.az/az/sahibkarlar-ucun/biznesle-emekdasliq",
+          "validatedAt": "2026-11-15T13:02:00.226618+00:00",
+          "discoveredFrom": "https://customs.gov.az/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business",
+            "operating_industry"
+          ],
+          "htmlLanguageObserved": "az",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:00.226618+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://customs.gov.az/en",
+          "role": "language",
+          "language": "az",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://customs.gov.az/en",
+          "validatedAt": "2026-11-15T13:02:00.309330+00:00",
+          "discoveredFrom": "https://customs.gov.az/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "en",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:00.309330+00:00",
+          "languageReparsedWith": "source-html-v14",
+          "languageDeclarationMismatch": true
+        }
+      ]
+    },
+    {
+      "id": "az-baku-stock-exchange",
+      "country": "az",
+      "family": "Baku Stock Exchange",
+      "kind": "institution",
+      "institutionType": "exchange",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "www.bfb.az"
+      ],
+      "available": true,
+      "operationalReadableListing": false,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.bfb.az/",
+          "role": "home",
+          "language": "az",
+          "accessStatus": "access_denied_403",
+          "httpStatus": 403,
+          "validatedAt": "2026-11-15T12:59:52.974563+00:00",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kz-finprom",
+      "country": "kz",
+      "family": "Finprom",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "finprom.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://finprom.kz/ru/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://finprom.kz/ru/",
+          "validatedAt": "2026-11-15T13:02:57.027382+00:00",
+          "encodingReviewRequired": false
+        },
+        {
+          "url": "https://finprom.kz/tagmix/obzory/finansy",
+          "role": "section",
+          "language": "und",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://finprom.kz/tagmix/obzory/finansy",
+          "validatedAt": "2026-11-15T13:03:30.771212+00:00",
+          "discoveredFrom": "https://finprom.kz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ]
+        },
+        {
+          "url": "https://finprom.kz/tagmix/analytics/trudovye-resursy-predpiyatij",
+          "role": "section",
+          "language": "und",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://finprom.kz/tagmix/analytics/trudovye-resursy-predpiyatij",
+          "validatedAt": "2026-11-15T13:03:30.772385+00:00",
+          "discoveredFrom": "https://finprom.kz/ru/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "operating_industry"
+          ]
+        },
+        {
+          "url": "https://finprom.kz/tagmix/obzory/finansy?page=2",
+          "role": "pagination",
+          "language": "und",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://finprom.kz/tagmix/obzory/finansy?page=2",
+          "validatedAt": "2026-11-15T13:05:41.055875+00:00",
+          "discoveredFrom": "https://finprom.kz/tagmix/obzory/finansy",
+          "encodingReviewRequired": false
+        },
+        {
+          "url": "https://finprom.kz/en",
+          "role": "language",
+          "language": "und",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://finprom.kz/en",
+          "validatedAt": "2026-11-15T13:05:41.057070+00:00",
+          "discoveredFrom": "https://finprom.kz/ru/",
+          "encodingReviewRequired": false
+        }
+      ]
+    },
+    {
+      "id": "kz-newtimes",
+      "country": "kz",
+      "family": "NewTimes",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "newtimes.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://newtimes.kz/ekonomika",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://newtimes.kz/ekonomika",
+          "validatedAt": "2026-11-15T13:02:57.027905+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:57.027905+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://newtimes.kz/politika",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://newtimes.kz/politika",
+          "validatedAt": "2026-11-15T13:03:30.774153+00:00",
+          "discoveredFrom": "https://newtimes.kz/ekonomika",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:03:30.774153+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://newtimes.kz/politika?page=2",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://newtimes.kz/politika?page=2",
+          "validatedAt": "2026-11-15T13:05:41.058552+00:00",
+          "discoveredFrom": "https://newtimes.kz/politika",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:05:41.058552+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kz-alau",
+      "country": "kz",
+      "family": "Alau",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Almaty",
+      "allowedHosts": [
+        "alau.kz"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://alau.kz/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://alau.kz/",
+          "validatedAt": "2026-11-15T13:02:57.028428+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:02:57.028428+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://alau.kz/category/economics/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://alau.kz/category/economics/",
+          "validatedAt": "2026-11-15T13:03:38.702373+00:00",
+          "discoveredFrom": "https://alau.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:03:38.702373+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://alau.kz/category/society/",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://alau.kz/category/society/",
+          "validatedAt": "2026-11-15T13:03:38.701976+00:00",
+          "discoveredFrom": "https://alau.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:03:38.701976+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://alau.kz/category/arhiv/",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://alau.kz/category/arhiv/",
+          "validatedAt": "2026-11-15T13:03:38.404607+00:00",
+          "discoveredFrom": "https://alau.kz/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:03:38.404607+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://alau.kz/category/economics/page/2/",
+          "role": "pagination",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://alau.kz/category/economics/page/2/",
+          "validatedAt": "2026-11-15T13:05:41.059541+00:00",
+          "discoveredFrom": "https://alau.kz/category/economics/",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru",
+          "languageEvidenceObservedAt": "2026-11-15T13:05:41.059541+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "tj-vecherka",
+      "country": "tj",
+      "family": "Vecherka",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Dushanbe",
+      "allowedHosts": [
+        "vecherka.tj"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://vecherka.tj/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://vecherka.tj/",
+          "validatedAt": "2026-11-15T13:03:10.956288+00:00",
+          "encodingReviewRequired": false,
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:03:10.956288+00:00",
+          "languageReparsedWith": "source-html-v14"
+        },
+        {
+          "url": "https://vecherka.tj/archives/author/vecherka",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://vecherka.tj/archives/author/vecherka",
+          "validatedAt": "2026-11-15T13:03:39.457038+00:00",
+          "discoveredFrom": "https://vecherka.tj/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ],
+          "htmlLanguageObserved": "ru-RU",
+          "languageEvidenceObservedAt": "2026-11-15T13:03:39.457038+00:00",
+          "languageReparsedWith": "source-html-v14"
+        }
+      ]
+    },
+    {
+      "id": "kg-vecherniy-bishkek",
+      "country": "kg",
+      "family": "Vecherniy Bishkek",
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Bishkek",
+      "allowedHosts": [
+        "www.vb.kg"
+      ],
+      "available": true,
+      "operationalReadableListing": true,
+      "notes": [],
+      "entrypoints": [
+        {
+          "url": "https://www.vb.kg/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.vb.kg/",
+          "validatedAt": "2026-11-15T13:03:10.956754+00:00",
+          "encodingReviewRequired": false
+        },
+        {
+          "url": "https://www.vb.kg/?lable=8",
+          "role": "archive",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.vb.kg/?date=2026-11-15&lable=8&order=main",
+          "validatedAt": "2026-11-15T13:03:39.844701+00:00",
+          "discoveredFrom": "https://www.vb.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "archive"
+          ]
+        },
+        {
+          "url": "https://www.vb.kg/?lable=1",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.vb.kg/?date=2026-11-15&lable=1&order=main",
+          "validatedAt": "2026-11-15T13:03:40.051060+00:00",
+          "discoveredFrom": "https://www.vb.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "society_politics_regions"
+          ]
+        },
+        {
+          "url": "https://www.vb.kg/?lable=2",
+          "role": "section",
+          "language": "ru",
+          "accessStatus": "public_html_readable_listing",
+          "httpStatus": 200,
+          "finalUrl": "https://www.vb.kg/?date=2026-11-15&lable=2&order=main",
+          "validatedAt": "2026-11-15T13:03:45.617999+00:00",
+          "discoveredFrom": "https://www.vb.kg/",
+          "encodingReviewRequired": false,
+          "coverageGroups": [
+            "economy_business"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "kz-social-instagram-1",
+      "country": "kz",
+      "family": "Tengrinews",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://www.instagram.com/tengrinewskz/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://tengrinews.kz/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "kz-social-telegram-2",
+      "country": "kz",
+      "family": "Tengrinews",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "telegram.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://telegram.me/tengrinews/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://tengrinews.kz/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "uz-social-telegram-3",
+      "country": "uz",
+      "family": "Gazeta.uz",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "telegram.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://telegram.me/gazetauz",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://www.gazeta.uz/ru/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "uz-social-instagram-4",
+      "country": "uz",
+      "family": "Gazeta.uz",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://instagram.com/gazetauzb/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://www.gazeta.uz/ru/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "uz-social-telegram-5",
+      "country": "uz",
+      "family": "Spot.uz",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "telegram.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://telegram.me/spotuz/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://www.spot.uz/ru/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "uz-social-instagram-6",
+      "country": "uz",
+      "family": "Spot.uz",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://instagram.com/spot.uz/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://www.spot.uz/ru/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "kg-social-instagram-7",
+      "country": "kg",
+      "family": "Kaktus.media",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://www.instagram.com/kaktus__media/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://kaktus.media/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "kg-social-telegram-8",
+      "country": "kg",
+      "family": "Kaktus.media",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://t.me/kaktus_mediakg",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://kaktus.media/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "az-social-instagram-9",
+      "country": "az",
+      "family": "Report.az",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://www.instagram.com/report.az_ru",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://report.az/ru",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "az-social-telegram-10",
+      "country": "az",
+      "family": "Report.az",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://t.me/reportazru",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://report.az/ru",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "az-social-instagram-11",
+      "country": "az",
+      "family": "APA",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://www.instagram.com/apaazerbaijan/",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://apa.az/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "az-social-telegram-12",
+      "country": "az",
+      "family": "APA",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://t.me/apa_az",
+          "role": "home",
+          "language": "und",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_website_link_verified",
+        "identityEvidenceUrl": "https://apa.az/",
+        "identityEvidence": "媒体官网直接对外链接；不以粉丝数或同名认定身份",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "tj-social-telegram-13",
+      "country": "tj",
+      "family": "Asia-Plus",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://t.me/asiaplus",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_account_list_search_verified",
+        "identityEvidenceUrl": "https://asiaplus.news/2026/02/25/vsegda-ryadom-vse-platformy-aziya-plyus-dlya-chitatelej-v-rossii/",
+        "identityEvidence": "媒体自有网站账号说明页的检索结果明确列出；本次直接打开官网返回403，未绕过",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "tj-social-telegram-14",
+      "country": "tj",
+      "family": "Asia-Plus",
+      "kind": "social",
+      "platform": "Telegram",
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://t.me/asiaplustj",
+          "role": "home",
+          "language": "tg",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_account_list_search_verified",
+        "identityEvidenceUrl": "https://asiaplus.news/2026/02/25/vsegda-ryadom-vse-platformy-aziya-plyus-dlya-chitatelej-v-rossii/",
+        "identityEvidence": "媒体自有网站账号说明页的检索结果明确列出；本次直接打开官网返回403，未绕过",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "tj-social-instagram-15",
+      "country": "tj",
+      "family": "Asia-Plus",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://www.instagram.com/asiaplustj/",
+          "role": "home",
+          "language": "ru",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_account_list_search_verified",
+        "identityEvidenceUrl": "https://asiaplus.news/2026/02/25/vsegda-ryadom-vse-platformy-aziya-plyus-dlya-chitatelej-v-rossii/",
+        "identityEvidence": "媒体自有网站账号说明页的检索结果明确列出；本次直接打开官网返回403，未绕过",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    },
+    {
+      "id": "tj-social-instagram-16",
+      "country": "tj",
+      "family": "Asia-Plus",
+      "kind": "social",
+      "platform": "Instagram",
+      "allowedHosts": [
+        "instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "entrypoints": [
+        {
+          "url": "https://instagram.com/asiaplustoj/",
+          "role": "home",
+          "language": "tg",
+          "accessStatus": "identity_verified_post_access_not_confirmed"
+        }
+      ],
+      "identityEvidence": {
+        "identityStatus": "publisher_account_list_search_verified",
+        "identityEvidenceUrl": "https://asiaplus.news/2026/02/25/vsegda-ryadom-vse-platformy-aziya-plyus-dlya-chitatelej-v-rossii/",
+        "identityEvidence": "媒体自有网站账号说明页的检索结果明确列出；本次直接打开官网返回403，未绕过",
+        "identityCheckedAt": "2026-11-13T02:26:25.904080+00:00"
+      },
+      "requiresPublicOriginalPost": true,
+      "notes": [
+        "Website and its social account are one publisher family; an account URL or login page is not a verified news post. Record refusal/login and use other public original sources without bypass."
+      ]
+    }
+  ],
+  "limitations": [
+    "This is access preflight, not a completed daily harvest or proof of sufficient current news.",
+    "All 401/403/paywall/login restrictions recorded without bypass; 200 HTML availability does not establish editorial reliability.",
+    "Unprobed DOM URLs retained in sections/paginationObserved with accessStatus=not_probed; executable entrypoints require real evidence.",
+    "Timezone is current jurisdiction default only for explicitly local timestamps lacking offsets; calendar dates crossing deadline require article-level verification.",
+    "No pagination URL is fabricated. Further pages must be discovered from each fetched page, or a separately reviewed verified pagination pattern.",
+    "HTTP transport failures and parser-validation failures are distinguished. Some UTF8 pages reveal a v13 decoding weakness; encoding_review sources excluded from available until parser fixed and reverified.",
+    "Full per-page metadata/date evidence and all unprobed DOM pagination links are retained in detailedEvidenceManifest. No full-text source family is certified by this preflight."
+  ],
+  "languageRefresh": {
+    "reparsedFromExistingBytes": true,
+    "correctedUnknownEntrypoints": 13,
+    "parserVersion": "source-html-v14"
+  },
+  "socialScope": "16 previously identity-verified accounts; access to current full posts remains separately unverified"
+}
