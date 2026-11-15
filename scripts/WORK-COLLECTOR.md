@@ -20,8 +20,11 @@ image inspection/captions or a concrete image gap are required.
 With Python 3, Pillow and lxml installed, run
 `python3 -m unittest discover -s scripts -p 'test_work_*.py' -v`.
 Tests use synthetic HTML and mocked transport, never real news or publication.
-The 15 regressions cover decompression, corrupt HTTP 200 responses, SVG titles,
-cache expiry, bounded retries, denials, handoff identity and premature cutoff.
+The 19 regressions cover decompression, corrupt HTTP 200 responses, SVG titles,
+cache expiry, bounded retries, denials, handoff identity, premature cutoff and
+private-service startup readiness. The image stager waits at most three minutes
+for a transient cold start before uploading; authentication denials and nonprivate
+storage fail immediately. Readiness failures are saved without creating drafts.
 
 The first-image thumbnail material ID is persisted before draft creation and
 compared with the actual draft readback. Missing or different IDs cannot be
