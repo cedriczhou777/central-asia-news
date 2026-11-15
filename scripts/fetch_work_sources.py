@@ -6,7 +6,7 @@ from urllib.parse import urljoin,urlparse
 import urllib.request,urllib.error
 from lxml import html
 P=Path(__file__).parent;S=P/'sources';S.mkdir(exist_ok=True)
-PARSER_VERSION='source-html-v12'
+PARSER_VERSION='source-html-v13'
 TRANSIENT={500,502,503,504}
 def decode_transport(raw,encoding=''):
     encoding=encoding.lower().strip()
@@ -40,9 +40,18 @@ def parse_response(url,final_url,raw,headers):
     listing=path in ('','ru','rus','uz','en','kg') or any(x in path.split('/') for x in ('category','tag','categories','archive','archives'))
     article=(not listing) and (meta.get('og:type')=='article' or bool(meta.get('article:published_time')) or any('"NewsArticle"' in (s or '') or '"Article"' in (s or '') for s in linked_data))
     return {'meta':meta,'title':title,'time_tags':times,'linked_data':linked_data,'links':links,'images':images,'text':text,'source_sha256':hashlib.sha256(text.encode()).hexdigest(),'source_kind':'article' if article else 'listing','parser_version':PARSER_VERSION,'contentValidated':True,'transport_sha256':hashlib.sha256(raw).hexdigest()}
-def fetch(url):
+def listing_minimum(value,now):
+    if value is None:return None
+    if not isinstance(value,str) or not value.strip():raise ValueError('listing-not-before requires a timezone-aware ISO timestamp')
+    try:minimum=datetime.fromisoformat(value.replace('Z','+00:00'))
+    except ValueError:raise ValueError('listing-not-before requires a timezone-aware ISO timestamp') from None
+    if minimum.tzinfo is None or minimum.utcoffset() is None:raise ValueError('listing-not-before requires a timezone-aware ISO timestamp')
+    if minimum>now:raise ValueError('listing-not-before cannot be in the future')
+    return minimum
+def fetch(url,listing_not_before=None):
     key=hashlib.sha256(url.encode()).hexdigest()[:18];dest=S/(key+'.json');archive=S/(key+'.html.gz')
     now=datetime.now(timezone.utc)
+    minimum=listing_minimum(listing_not_before,now)
     if dest.exists():
         old=json.loads(dest.read_text());status=old.get('status')
         if status in (401,403,404,410):return old
@@ -54,9 +63,11 @@ def fetch(url):
         if status==200 and old.get('contentValidated'):
             # Article evidence is immutable for this run; listings must advance after midnight.
             if old.get('source_kind')=='article':return old
-            try:age=(now-datetime.fromisoformat(old['fetchedAt'])).total_seconds()
-            except (KeyError,ValueError):age=10**9
-            if age<900:return old
+            try:
+                fetched=datetime.fromisoformat(old['fetchedAt'])
+                age=(now-fetched).total_seconds()
+            except (KeyError,ValueError,TypeError):age=10**9;fetched=None
+            if 0<=age<900 and (minimum is None or fetched>=minimum):return old
     result={'url':url,'fetchedAt':now.isoformat(),'key':key,'contentValidated':False,'parser_version':PARSER_VERSION}
     for attempt in range(3):
         try:
@@ -79,12 +90,14 @@ def fetch(url):
     if result.get('contentValidated'):result.pop('error',None)
     dest.write_text(json.dumps(result,ensure_ascii=False,indent=2));return result
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--audit',type=Path);args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--audit',type=Path);parser.add_argument('--listing-not-before',help='Require a real listing fetch at or after this timezone-aware ISO timestamp; must not be future');args=parser.parse_args()
+    try:listing_minimum(args.listing_not_before,datetime.now(timezone.utc))
+    except ValueError as error:parser.error(str(error))
     urls=json.load(sys.stdin)
     if not isinstance(urls,list) or not all(isinstance(u,str) and urlparse(u).scheme in ('http','https') for u in urls):raise SystemExit('expected_public_URL_array')
     records=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        for r in pool.map(fetch,dict.fromkeys(urls)):
+        for r in pool.map(lambda url:fetch(url,args.listing_not_before),dict.fromkeys(urls)):
             records.append({'url':r.get('url'),'fetchedAt':r.get('fetchedAt'),'status':r.get('status'),'contentValidated':r.get('contentValidated',False),'kind':r.get('source_kind','unknown'),'error':r.get('error')})
             print(json.dumps({k:r.get(k) for k in ['url','key','fetchedAt','source_kind','status','contentValidated','title','error','attempts']},ensure_ascii=False),flush=True)
     if args.audit:args.audit.write_text(json.dumps(records,ensure_ascii=False,indent=2))

@@ -1,6 +1,7 @@
 import { getSupabaseClient, getSupabaseServiceRoleKey } from '../storage/database/supabase-client';
 import { imageHash, validateOriginalImage, MAX_IMAGE_BYTES } from './reviewed-image-bytes';
 import type { ReviewedImageAsset } from './reviewed-package';
+import { SUPABASE_REQUEST_TIMEOUT_MS } from './deadline-fetch';
 
 export const PRIVATE_IMAGE_BUCKET = 'reviewed-originals';
 export const PRIVATE_IMAGE_PROTOCOL = 'private-original-v1';
@@ -24,8 +25,8 @@ async function bucket(create: boolean) {
   return sb.storage.from(PRIVATE_IMAGE_BUCKET);
 }
 export async function privateImageHealth() {
-  try { await bucket(false); return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:true, private:true }; }
-  catch (e) { return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:false, private:false, reason:e instanceof Error?e.message:'原图存储不可用' }; }
+  try { await bucket(false); return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:true, private:true, requestTimeoutMs:SUPABASE_REQUEST_TIMEOUT_MS }; }
+  catch (e) { return { protocol:PRIVATE_IMAGE_PROTOCOL, ready:false, private:false, requestTimeoutMs:SUPABASE_REQUEST_TIMEOUT_MS, reason:e instanceof Error?e.message:'原图存储不可用' }; }
 }
 export async function readPrivateImage(asset: ReviewedImageAsset, fresh=false) {
   objectPath(asset.sha256);
