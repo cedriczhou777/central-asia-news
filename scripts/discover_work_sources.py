@@ -54,6 +54,10 @@ def lead_route(url, source, known_listings=()):
     if parts and parts[-1] == 'guide':
         return 'listing', 'guide_index_not_specific_article'
     sid = source['id']
+    if sid == 'kg-24-kg' and re.fullmatch(r'/(?:[a-z]{2}/)?plot(?:/\d+)?/?', path):
+        return 'listing', 'publisher_plot_topic_collection_not_article'
+    if sid == 'kz-tengrinews' and path.rstrip('/') in ('/tengri-education', '/tengritravel'):
+        return 'listing', 'publisher_verified_section_landing'
     if sid == 'kz-kazakhstan-stock-exchange' and any(p in ('issuers', 'instruments', 'members') for p in parts):
         return 'listing', 'exchange_entity_directory_not_news'
     if sid == 'az-central-bank-azerbaijan' and any(re.fullmatch(r'page-\d+', p) for p in parts):

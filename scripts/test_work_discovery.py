@@ -481,6 +481,16 @@ class DiscoveryTests(unittest.TestCase):
         ranked = rank_leads(leads, s)
         self.assertTrue(all(l['articlePriority'] >= 145 for l in ranked))
 
+    def test_observed_24kg_plot_and_tengri_sections_route_without_hiding_child_stories(self):
+        kg = source('kg-24-kg', '24.kg', '24.kg')
+        tengri = source('kz-tengrinews', 'Tengrinews', 'tengrinews.kz')
+        self.assertEqual(lead_route('https://24.kg/plot/114', kg)[0], 'listing')
+        self.assertEqual(lead_route('https://24.kg/article/small-construction-franchise', kg)[0], 'article_candidate')
+        self.assertEqual(lead_route('https://24.kg/plot/114/article/small-construction-franchise', kg)[0], 'article_candidate')
+        self.assertEqual(lead_route('https://tengrinews.kz/tengri-education/', tengri)[0], 'listing')
+        self.assertEqual(lead_route('https://tengrinews.kz/tengritravel/', tengri)[0], 'listing')
+        self.assertEqual(lead_route('https://tengrinews.kz/tengri-education/small-business-staff-training-123456/', tengri)[0], 'article_candidate')
+
     def test_body_identity_failure_remains_pending_with_actual_attempt_evidence(self):
         home, article = 'https://news.test/', 'https://news.test/news/body-identity-problem'
         record = page(article, kind='article')

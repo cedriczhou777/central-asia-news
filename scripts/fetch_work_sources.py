@@ -6,7 +6,7 @@ from urllib.parse import urljoin,urlparse,urlsplit,urlunsplit
 import urllib.request,urllib.error
 from lxml import html
 P=Path(__file__).parent;S=P/'sources';S.mkdir(exist_ok=True)
-PARSER_VERSION='source-html-v15'
+PARSER_VERSION='source-html-v16'
 TRANSIENT={500,502,503,504}
 class HTMLValidationError(ValueError):
     def __init__(self,message,encoding,evidence):
@@ -283,19 +283,74 @@ def article_headline_aliases(linked_data,final_url,canonical_url):
         except (TypeError,ValueError):pass
     return list(dict.fromkeys(aliases))
 
-def select_article_body(tree,title,alternative_titles=None):
+def publisher_article_template(tree,final_url,canonical_url,meta,title,alternative_titles):
+    """Observed publisher templates, guarded by host, article route and DOM.
+
+    These selectors identify bodies, not relevance, freshness or first public
+    disclosure. They cannot turn a generic main/listing into an article.
+    """
+    parsed=urlparse(final_url);host=parsed.hostname or '';path=parsed.path
+    allowed=[title]+(alternative_titles or []);profile=None
+    def has_class(node,name):return name in (node.get('class') or '').split()
+    def headings_match(nodes):return any(any(title_matches(' '.join(n.text_content().split()),x) for x in allowed) for n in nodes)
+    def make(name,bodies,headings=None,extra=None,editorial=False):
+        if len(bodies)!=1:return None
+        return {'name':name,'bodies':bodies,'headings':headings,'identityBindings':['publisher_host_and_article_route','unique_publisher_body_selector']+(extra or []),'editorialCoverHeading':editorial}
+    if (host=='apa.az' or host.endswith('.apa.az')) and re.search(r'-\d+/?$',path):
+        scopes=[n for n in tree.xpath('//div[@class]') if has_class(n,'content_main')]
+        for scope in scopes:
+            heads=[n for n in scope.xpath('.//h2[@class]') if has_class(n,'title_news')]
+            bodies=[n for n in scope.xpath('.//*[@itemprop]') if 'articleBody' in (n.get('itemprop') or '').split()]
+            if headings_match(heads):profile=make('apa_content_main_title_news_articleBody',bodies,heads,['news_h2_matches_current_title']);break
+    elif host=='report.az' or host.endswith('.report.az'):
+        identities={normalized_url(final_url,final_url),normalized_url(canonical_url,final_url)}
+        for scope in tree.xpath('//*[@data-url][@data-title]'):
+            if not has_class(scope,'news-detail__item') or not has_class(scope,'post-detail-area'):continue
+            if normalized_url(scope.get('data-url'),final_url) not in identities or not any(title_matches(scope.get('data-title'),x) for x in allowed):continue
+            heads=scope.xpath('.//h1')
+            bodies=[n for n in scope.xpath('.//*[@class]') if has_class(n,'news-detail__desc')]
+            if headings_match(heads):profile=make('report_current_data_url_title_news_detail_desc',bodies,heads,['data_url_matches_response_identity','data_title_and_h1_match_current_title']);break
+    elif host=='inbusiness.kz' or host.endswith('.inbusiness.kz'):
+        if re.match(r'^/ru/(?:last|news|specprojects)/[^/]+/?$',path):
+            bodies=[n for n in tree.xpath('//div[@class]') if has_class(n,'text') and n.xpath('.//p') and not n.xpath('ancestor::nav|ancestor::aside|ancestor::footer')]
+            if headings_match(tree.xpath('//h1')):profile=make('inbusiness_current_news_text',bodies,extra=['current_h1_matches_title'])
+    elif host=='24.kg' or host.endswith('.24.kg'):
+        if re.match(r'^/article/[^/]+/?$',path):
+            bodies=[n for n in tree.xpath('//*[@id="article-content"]') if has_class(n,'article-viewer-content')]
+            if headings_match(tree.xpath('//h1')):profile=make('24kg_current_article_viewer_content',bodies,extra=['current_h1_matches_title'])
+    elif host=='khovar.tj' or host.endswith('.khovar.tj'):
+        if re.match(r'^/(?:rus/)?\d{4}/\d{2}/[^/]+/?$',path):
+            scopes=[n for n in tree.xpath('//div[@class]') if has_class(n,'block-content') and has_class(n,'type-post') and has_class(n,'status-publish') and any(re.fullmatch(r'post-\d+',c) for c in (n.get('class') or '').split())]
+            bodies=[n for scope in scopes for n in scope.xpath('.//div[@class]') if has_class(n,'shortcode-content')]
+            if headings_match(tree.xpath('//h1')):profile=make('khovar_published_post_shortcode_content',bodies,extra=['wordpress_published_post_identity','current_h1_matches_title'])
+    elif host=='tengrinews.kz' or host.endswith('.tengrinews.kz'):
+        # Tilda longreads use an editorial cover H1 which can differ from the
+        # SEO/OG headline. Both belong to one explicitly identified article URL.
+        identities={normalized_url(final_url,final_url),normalized_url(canonical_url,final_url)}
+        own_url=normalized_url(meta.get('og:url'),final_url)
+        bodies=tree.xpath('//*[@id="allrecords"][@data-tilda-page-id][@data-tilda-project-id]')
+        if re.match(r'^/article/[^/]+-\d+/?$',path) and own_url in identities and meta.get('og:type','').lower()=='article' and len(bodies)==1:
+            heads=bodies[0].xpath('.//h1')
+            if len(heads)==1 and len(' '.join(heads[0].text_content().split()))>=15:profile=make('tengri_url_bound_tilda_longread',bodies,heads,['og_article_url_matches_response','unique_tilda_article_page','unique_editorial_cover_h1'],True)
+    return profile
+
+def select_article_body(tree,title,alternative_titles=None,publisher_template=None):
     """Bind the current heading to a prose container, never the longest card.
 
     Alau places its H1 in a header before main.content > .content-inner, while
     its recommendation snippets use <article>. Semantic body containers and a
     matching page headline take precedence over generic article elements.
     """
-    headings=[n for n in tree.xpath('//h1') if n.text_content().strip() and not n.xpath('ancestor::svg|ancestor::nav|ancestor::aside|ancestor::footer')]
+    template=publisher_template or {}
+    heading_nodes=template.get('headings') or tree.xpath('//h1')
+    headings=[n for n in heading_nodes if n.text_content().strip() and not n.xpath('ancestor::svg|ancestor::nav|ancestor::aside|ancestor::footer')]
     allowed_titles=[title]+(alternative_titles or [])
-    matches=[n for n in headings if any(title_matches(' '.join(n.text_content().split()),allowed) for allowed in allowed_titles)]
-    heading_basis='og_or_page_title' if any(title_matches(' '.join(n.text_content().split()),title) for n in matches) else 'current_article_jsonld_headline'
+    matches=headings if template.get('editorialCoverHeading') else [n for n in headings if any(title_matches(' '.join(n.text_content().split()),allowed) for allowed in allowed_titles)]
+    heading_basis='publisher_url_bound_editorial_cover' if template.get('editorialCoverHeading') else 'og_or_page_title' if any(title_matches(' '.join(n.text_content().split()),title) for n in matches) else 'current_article_jsonld_headline'
     if headings and not matches:return None,{'status':'heading_title_conflict','headingTexts':[' '.join(n.text_content().split()) for n in headings]},None
     if not matches:return None,{'status':'current_article_heading_missing'},None
+    if template and not any(len(clean_content(n,True))>=80 for n in template['bodies']):
+        return None,{'status':'publisher_body_has_no_substantive_text','publisherTemplate':template['name'],'headingTexts':[' '.join(n.text_content().split()) for n in matches]},None
     def bound(node):
         if node.xpath('ancestor::nav|ancestor::aside|ancestor::footer') or recommendation_card(node):return False
         local_headings=node.xpath('.//h1')
@@ -311,14 +366,18 @@ def select_article_body(tree,title,alternative_titles=None):
     for n in tree.xpath('//*[@itemprop]|//*[@class]'):
         if 'articleBody' in (n.get('itemprop') or '').split() or re.search(body_class,n.get('class') or '',re.I):
             if bound(n):explicit.append(n)
-    groups=[('explicit_article_body',explicit),('article_with_current_heading',[n for n in tree.xpath('//article') if bound(n) and any(h in matches for h in n.xpath('.//h1'))]),('main_with_current_heading',[n for n in tree.xpath('//main') if bound(n) and any(h in matches for h in n.xpath('.//h1'))])]
+    groups=[]
+    if template:groups.append(('publisher_template:'+template['name'],[n for n in template['bodies'] if bound(n)]))
+    groups.extend([('explicit_article_body',explicit),('article_with_current_heading',[n for n in tree.xpath('//article') if bound(n) and any(h in matches for h in n.xpath('.//h1'))]),('main_with_current_heading',[n for n in tree.xpath('//main') if bound(n) and any(h in matches for h in n.xpath('.//h1'))])])
     for basis,nodes in groups:
         candidates=[(n,clean_content(n,True)) for n in nodes]
         candidates=[(n,text) for n,text in candidates if len(text)>=80]
         if candidates:
             n,text=max(candidates,key=lambda pair:len(pair[1]))
             enclosing=n if n.tag=='article' else next(iter(n.xpath('ancestor::article')[::-1]),None)
-            return n,{'status':'bound','basis':basis,'headingIdentityBasis':heading_basis,'headingTexts':[' '.join(h.text_content().split()) for h in matches],'bodyChars':len(text)},enclosing
+            proof={'status':'bound','basis':basis,'headingIdentityBasis':heading_basis,'headingTexts':[' '.join(h.text_content().split()) for h in matches],'bodyChars':len(text)}
+            if basis.startswith('publisher_template:'):proof['publisherIdentityBindings']=template['identityBindings']
+            return n,proof,enclosing
     return None,{'status':'article_body_not_identified','headingTexts':[' '.join(n.text_content().split()) for n in matches]},None
 
 def parse_response(url,final_url,raw,headers):
@@ -339,7 +398,11 @@ def parse_response(url,final_url,raw,headers):
     page_links=[{'rel':n.get('rel'),'href':n.get('href'),'url':urljoin(final_url,n.get('href'))} for n in tree.xpath('//link[@href][@rel]') if {'canonical','next'} & set(n.get('rel').lower().split())]
     canonical=next((n['url'] for n in page_links if 'canonical' in n['rel'].lower().split()),None)
     source_kind,source_kind_evidence,primary_article=classify_source(tree,final_url,canonical,meta,linked_data)
-    selected_body,body_evidence,bound_article=select_article_body(tree,title,article_headline_aliases(linked_data,final_url,canonical))
+    aliases=article_headline_aliases(linked_data,final_url,canonical)
+    publisher_template=publisher_article_template(tree,final_url,canonical,meta,title,aliases)
+    selected_body,body_evidence,bound_article=select_article_body(tree,title,aliases,publisher_template)
+    if publisher_template and selected_body is not None and body_evidence.get('basis','').startswith('publisher_template:') and source_kind=='unknown':
+        source_kind='article';source_kind_evidence.append({'basis':'publisher_article_template','template':publisher_template['name'],'identityBindings':publisher_template['identityBindings']})
     full_text_validated=source_kind=='article' and selected_body is not None
     if source_kind=='article':primary_article=bound_article
     publications,excluded_publications=publication_evidence(tree,linked_data,final_url,canonical,primary_article)
@@ -372,9 +435,12 @@ def fetch(url,listing_not_before=None,source_role='auto'):
         if status in (401,403,404,410):return old
         if status==200 and archive.exists() and old.get('parser_version')!=PARSER_VERSION:
             try:
-                raw=gzip.open(archive,'rb').read();old.update(parse_response(url,old.get('final_url',url),raw,old.get('response_headers',{})));old.pop('error',None);dest.write_text(json.dumps(old,ensure_ascii=False,indent=2))
+                raw=gzip.open(archive,'rb').read();parsed=parse_response(url,old.get('final_url',url),raw,old.get('response_headers',{}));old.update(parsed)
+                if parsed.get('contentValidated'):old.pop('error',None)
+                dest.write_text(json.dumps(old,ensure_ascii=False,indent=2))
             except Exception as error:
                 old['contentValidated']=False;old['error']='cached_parse_'+str(error);old.update(parse_error_evidence(error));dest.write_text(json.dumps(old,ensure_ascii=False,indent=2));return old
+        if status==200 and old.get('parser_version')==PARSER_VERSION and str(old.get('error','')).startswith('current_article_body_unverified_'):return old
         if status==200 and old.get('contentValidated'):
             # Article and unresolved body evidence are immutable for this run.
             # Explicit registry listing jobs may refresh an unknown listing,

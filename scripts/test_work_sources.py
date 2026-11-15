@@ -162,7 +162,7 @@ class PublicationEvidenceRegressions(unittest.TestCase):
         self.assertEqual(request.call_count,0)
         self.assertEqual(r['fetchedAt'],old['fetchedAt'])
         self.assertEqual(r['publicationEvidence'][0]['raw'],'2026-11-14T11:00:00+05:00')
-        self.assertEqual(r['parser_version'],'source-html-v15')
+        self.assertEqual(r['parser_version'],'source-html-v16')
 
 class CharacterEncodingRegressions(unittest.TestCase):
     title='Суғд: иқтисод ва соҳибкорӣ'
@@ -362,14 +362,25 @@ class CurrentArticleBodyRegressions(unittest.TestCase):
         raw=('<!doctype html><html><head><meta property="og:type" content="article"><meta property="og:title" content="Current notice"></head><body><h1>Current notice</h1><aside><article><h2><a href="/other">Other headline</a></h2><div class="entry-content">'+('Other article prose. '*30)+'</div></article></aside></body></html>').encode()
         r=self.parse(raw)
         self.assertFalse(r['contentValidated']);self.assertFalse(r['fullTextValidated'])
-    def test_v14_wrong_body_cache_is_reparsed_without_refetch_or_new_fetch_time(self):
+    def test_v15_wrong_body_cache_is_reparsed_without_refetch_or_new_fetch_time(self):
         url='https://example.com/tax-story';key=hashlib.sha256(url.encode()).hexdigest()[:18]
-        old={'url':url,'status':200,'final_url':url,'parser_version':'source-html-v14','source_kind':'article','contentValidated':True,'text':'Wrong unrelated recommendation','fetchedAt':'2026-11-15T13:22:37+00:00'}
+        old={'url':url,'status':200,'final_url':url,'parser_version':'source-html-v15','source_kind':'article','contentValidated':True,'text':'Wrong unrelated recommendation','fetchedAt':'2026-11-15T13:22:37+00:00'}
         with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f.urllib.request,'urlopen') as request:
             (f.S/(key+'.json')).write_text(json.dumps(old));(f.S/(key+'.html.gz')).write_bytes(gzip.compress(self.alau_structure()))
             r=f.fetch(url)
-        self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt']);self.assertEqual(r['parser_version'],'source-html-v15')
+        self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt']);self.assertEqual(r['parser_version'],'source-html-v16')
         self.assertTrue(r['fullTextValidated']);self.assertIn('300 fixture businesses',r['text']);self.assertNotEqual(r['text'],old['text'])
+    def test_semantic_body_failure_survives_cache_reparse_without_network_retry(self):
+        url='https://example.com/tax-story';key=hashlib.sha256(url.encode()).hexdigest()[:18]
+        old={'url':url,'status':200,'final_url':url,'parser_version':'source-html-v15','source_kind':'article','contentValidated':True,'text':'Wrong cached body','fetchedAt':'2026-11-15T13:22:37+00:00'}
+        raw=self.alau_structure().replace(('<h1 class="post-title">'+self.title+'</h1>').encode(),b'<h1 class="post-title">Conflicting current headline</h1>')
+        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f.urllib.request,'urlopen') as request:
+            (f.S/(key+'.json')).write_text(json.dumps(old));(f.S/(key+'.html.gz')).write_bytes(gzip.compress(raw))
+            first=f.fetch(url);second=f.fetch(url)
+        self.assertEqual(request.call_count,0)
+        self.assertFalse(first['contentValidated']);self.assertFalse(second['contentValidated'])
+        self.assertIn('heading_title_conflict',first['error']);self.assertEqual(second['error'],first['error'])
+        self.assertEqual(second['fetchedAt'],old['fetchedAt'])
     def test_sputnik_basic_iso_keeps_actual_precision_and_explicit_offset(self):
         from datetime import datetime
         for raw in ['20261115T1222+0500','20261115T1745+0500','20261115T1522+0500']:
@@ -384,5 +395,70 @@ class CurrentArticleBodyRegressions(unittest.TestCase):
         self.assertTrue(links['menu']['inNavigation'])
         self.assertFalse(links['story']['inNavigation']);self.assertTrue(links['story']['inHeading']);self.assertTrue(links['story']['articleCard'])
         self.assertFalse(links['citation']['inNavigation'])
+
+class PublisherTemplateRegressions(unittest.TestCase):
+    prose='Synthetic publisher prose for a reproducible DOM fixture; this is not a real news report. '*5
+    def parse(self,url,body,title='Current business notice',head=''):
+        raw=('<!doctype html><html><head><meta property="og:type" content="article"><meta property="og:title" content="'+title+'">'+head+'</head><body>'+body+'</body></html>').encode()
+        return f.parse_response(url,url,raw,{})
+    def test_apa_category_h1_does_not_replace_actual_article_h2(self):
+        body='<h1>Amerika</h1><div class="content_main"><h2 class="title_news mb-site">Current business notice</h2><div class="news_content"><div class="texts mb-site" itemprop="articleBody"><p>'+self.prose+'</p><ul><li>Fixture item 528</li></ul></div></div></div>'
+        r=self.parse('https://apa.az/amerika/current-business-notice-1013949',body)
+        self.assertTrue(r['fullTextValidated']);self.assertIn('apa_content_main',r['articleBodyEvidence']['basis'])
+        self.assertEqual(r['articleBodyEvidence']['headingTexts'],['Current business notice']);self.assertIn('Fixture item 528',r['text'])
+    def test_apa_selector_requires_publisher_host_and_matching_news_title(self):
+        body='<h1>Amerika</h1><div class="content_main"><h2 class="title_news">Current business notice</h2><div itemprop="articleBody"><p>'+self.prose+'</p></div></div>'
+        r=self.parse('https://unrecognized.example/amerika/story-1013949',body)
+        self.assertFalse(r['fullTextValidated'])
+        r=self.parse('https://apa.az/amerika/story-1013949',body.replace('Current business notice','Different article headline'))
+        self.assertFalse(r['fullTextValidated'])
+    def report_item(self,url,title,prose):
+        return '<div class="news-detail__item post-detail-area" data-url="'+url+'" data-title="'+title+'"><h1 class="section-title">'+title+'</h1><div class="news-detail__desc"><p>'+prose+'</p><table><tr><th>Fixture</th><td>2026</td></tr></table><footer>Article footnote retained.</footer></div></div>'
+    def test_report_selects_current_data_url_and_preserves_table_and_footnote(self):
+        url='https://report.az/ru/economy/current-notice'
+        current=self.report_item(url,'Current business notice',self.prose)
+        other=self.report_item('https://report.az/ru/economy/other-notice','Other business notice','Unrelated article prose. '*50)
+        r=self.parse(url,current+other)
+        self.assertTrue(r['fullTextValidated']);self.assertIn('data_url',r['articleBodyEvidence']['basis'])
+        self.assertIn('2026',r['text']);self.assertIn('Article footnote retained.',r['text']);self.assertNotIn('Unrelated article prose',r['text'])
+    def test_report_data_url_mismatch_cannot_bind_another_article(self):
+        r=self.parse('https://report.az/ru/economy/current-notice',self.report_item('https://report.az/ru/economy/other-notice','Current business notice',self.prose))
+        self.assertFalse(r['fullTextValidated'])
+    def test_inbusiness_text_template_requires_unique_body_and_article_route(self):
+        body='<h1>Current business notice</h1><div class="text"><p>'+self.prose+'</p></div>'
+        r=self.parse('https://inbusiness.kz/ru/last/current-notice',body)
+        self.assertTrue(r['fullTextValidated']);self.assertIn('inbusiness_current_news_text',r['articleBodyEvidence']['basis'])
+        r=self.parse('https://inbusiness.kz/ru/last/current-notice',body+'<div class="text"><p>'+self.prose+'</p></div>')
+        self.assertFalse(r['fullTextValidated'],'ambiguous publisher bodies require manual verification')
+    def test_24kg_viewer_retains_complete_address_lists_and_table(self):
+        body='<h1>Current business notice</h1><div id="article-content" class="article-viewer-content cont"><p>'+self.prose+'</p><ul><li>District A, 9:00-17:00</li><li>District B, 10:00-16:00</li></ul><table><tr><td>Site 35</td></tr></table></div>'
+        r=self.parse('https://24.kg/article/current-notice',body)
+        self.assertTrue(r['fullTextValidated']);self.assertIn('24kg_current',r['articleBodyEvidence']['basis'])
+        self.assertIn('District B, 10:00-16:00',r['text']);self.assertIn('Site 35',r['text'])
+        r=self.parse('https://24.kg/plot/10',body)
+        self.assertFalse(r['fullTextValidated'],'a plot collection is not upgraded using an article selector')
+    def khovar_body(self,prose):
+        return '<h1>Current business notice</h1><div class="block-content post-422940 post type-post status-publish"><div class="shortcode-content"><p>'+prose+'</p></div></div><div class="entry-content">Unrelated social footer. '+self.prose*3+'</div>'
+    def test_khovar_published_post_body_precedes_unrelated_entry_content(self):
+        # The observed site declares a publisher string rather than og:type=article.
+        raw=('<!doctype html><html><head><meta property="og:type" content="Publisher"><meta property="og:title" content="Current business notice"></head><body>'+self.khovar_body(self.prose)+'</body></html>').encode()
+        url='https://khovar.tj/rus/2026/11/current-business-notice/'
+        r=f.parse_response(url,url,raw,{})
+        self.assertEqual(r['source_kind'],'article');self.assertTrue(r['fullTextValidated']);self.assertIn('khovar_published_post',r['articleBodyEvidence']['basis'])
+        self.assertNotIn('Unrelated social footer',r['text'])
+    def test_khovar_image_only_body_does_not_fall_back_to_unrelated_footer(self):
+        r=self.parse('https://khovar.tj/rus/2024/04/image-quote/',self.khovar_body('Print page. Send. 20 April 2024.'))
+        self.assertFalse(r['fullTextValidated']);self.assertEqual(r['articleBodyEvidence']['status'],'publisher_body_has_no_substantive_text')
+    def tilda_body(self):
+        return '<div id="allrecords" class="t-records" data-tilda-page-id="345011103" data-tilda-project-id="11749581"><div class="t-rec"><h1 class="tn-atom">An editorial cover headline for this same longread</h1><p>'+self.prose+'</p><ol><li>Manufacturing step 1</li><li>Manufacturing step 2</li></ol></div></div>'
+    def test_tengri_tilda_editorial_cover_is_bound_to_exact_current_article_url(self):
+        url='https://tengrinews.kz/article/current-manufacturing-notice-4711/'
+        r=self.parse(url,self.tilda_body(),head='<meta property="og:url" content="'+url+'">')
+        self.assertTrue(r['fullTextValidated']);self.assertEqual(r['articleBodyEvidence']['headingIdentityBasis'],'publisher_url_bound_editorial_cover')
+        self.assertIn('Manufacturing step 2',r['text'])
+    def test_tengri_tilda_does_not_override_headline_conflict_without_url_identity(self):
+        url='https://tengrinews.kz/article/current-manufacturing-notice-4711/'
+        r=self.parse(url,self.tilda_body(),head='<meta property="og:url" content="https://tengrinews.kz/article/other-story-999/">')
+        self.assertFalse(r['fullTextValidated'])
 
 if __name__=='__main__':unittest.main()
