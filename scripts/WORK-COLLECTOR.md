@@ -9,6 +9,12 @@ It validates HTML after gzip/deflate decoding, prefers the article metadata titl
 refreshes listing evidence after 15 minutes, reuses unchanged article evidence,
 and retries transient failures at most three times. Access denials are recorded
 and never retried or bypassed. Its private evidence cache is git-ignored.
+For an actual post-cutoff sweep, pass `--listing-not-before` with the issue's
+timezone-aware 06:00 cutoff. A younger cached listing from before cutoff is then
+refetched rather than returned by the 15-minute cache. Fresh post-cutoff listings
+may still be reused. The option never rewrites timestamps, refreshes frozen
+article evidence, retries cached access denials, or falls back to old success
+after a failed fetch. Future or timezone-free cutoffs fail before any fetch.
 
 `finalize_writer_handoff.py` accepts `--draft`, `--source-audit`, and `--output`.
 It validates the real publication window and adopted image bytes, requires actual
@@ -20,7 +26,7 @@ image inspection/captions or a concrete image gap are required.
 With Python 3, Pillow and lxml installed, run
 `python3 -m unittest discover -s scripts -p 'test_work_*.py' -v`.
 Tests use synthetic HTML and mocked transport, never real news or publication.
-The 19 regressions cover decompression, corrupt HTTP 200 responses, SVG titles,
+The 26 regressions cover decompression, corrupt HTTP 200 responses, SVG titles,
 cache expiry, bounded retries, denials, handoff identity, premature cutoff and
 private-service startup readiness. The image stager waits at most three minutes
 for a transient cold start before uploading; authentication denials and nonprivate
@@ -48,3 +54,9 @@ The authenticated health check exposes `recovery.registered` and the same live
 progress. Database ownership remains authoritative across processes. Migration
 `20261115103632_reviewed_delivery_allow_updating.sql` adds `updating` to the
 existing state constraint without changing receipts or the daily-country lock.
+
+Recovery v9 bounds Supabase fetch requests at 60 seconds, including storage
+metadata, uploads, downloads and response-body consumption. Caller cancellation
+signals and the existing 10-second PostgREST timeout remain effective. A stalled
+storage request can fail and release the recovery loop instead of holding it
+forever. The authenticated health result reports `images.requestTimeoutMs`.

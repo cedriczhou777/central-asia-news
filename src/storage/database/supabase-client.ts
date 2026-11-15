@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createDeadlineFetch } from '../../lib/deadline-fetch';
 
 interface SupabaseCredentials {
   url: string;
@@ -53,6 +54,9 @@ function getSupabaseClient(token?: string): SupabaseClient {
   }
 
   return createClient(url, key, {
+    // db.timeout covers PostgREST only. Storage metadata, uploads, downloads
+    // and their response bodies also need an abortable request deadline.
+    global: { fetch: createDeadlineFetch(fetch) },
     db: {
       timeout: 10000,
     },

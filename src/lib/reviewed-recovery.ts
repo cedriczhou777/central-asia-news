@@ -7,7 +7,7 @@ import { probeReviewedImage } from './reviewed-wechat';
 import { persistPushRun } from './push-run-store';
 import { getReviewedRecoveryState } from './reviewed-recovery-state';
 
-export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v8';
+export const REVIEWED_RECOVERY_VERSION = '2026-11-15-v9';
 type Row = { version:string; country:string; state:string; media_id?:string | null;updated_at?:string;detail?:Record<string,unknown> };
 type Dependencies = {
   packages:(date:string)=>Promise<string[]>;
