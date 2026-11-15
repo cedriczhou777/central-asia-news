@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { Script } from 'node:vm';
+import ts from 'typescript';
 import { recoverReviewedIssue, queueReviewedRecovery } from '../src/lib/reviewed-recovery';
 import { PACKAGE_COUNTRIES, type ReviewedPackage } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, type deliveryAdapters } from '../src/lib/reviewed-delivery';
@@ -6,6 +9,51 @@ import { database } from './lib/reviewed-test-db';
 
 const date='2026-11-12';
 const payload={version:date,countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{title:c,summary:'test',bodyHtml:'<p>test</p><img src="https://example.com/image.jpg">',sourceName:'test',sourceUrl:'',coverUrl:'https://example.com/image.jpg'}]))} as ReviewedPackage;
+async function checkSeparateBundleState(){
+  const compile=(file:string)=>ts.transpileModule(readFileSync(file,'utf8'),{
+    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true},
+  }).outputText;
+  const stateCode=compile('src/lib/reviewed-recovery-state.ts');
+  const recoveryCode=compile('src/lib/reviewed-recovery.ts');
+  const sharedGlobal={};let registrations=0,databaseCalls=0;
+  function loadCopy(processGlobal:object){
+    const stateModule={} as typeof import('../src/lib/reviewed-recovery-state');
+    new Script(stateCode,{filename:'independent-state-copy.js'}).runInNewContext({exports:stateModule,globalThis:processGlobal});
+    const recoveryModule={} as typeof import('../src/lib/reviewed-recovery');
+    const imports:Record<string,unknown>={
+      'node-cron':{schedule(){registrations++;}},
+      '../storage/database/supabase-client':{getSupabaseClient(){databaseCalls++;throw new Error('VM smoke test must not access a database');}},
+      './utils':{beijingDate:()=>date},
+      './reviewed-package':{issueCutoffElapsed:()=>false},
+      './reviewed-delivery':{},'./reviewed-wechat':{},'./push-run-store':{},
+      './reviewed-recovery-state':stateModule,
+    };
+    new Script(recoveryCode,{filename:'independent-recovery-copy.js'}).runInNewContext({
+      exports:recoveryModule,globalThis:processGlobal,console:{log(){}},
+      require:(name:string)=>{if(!(name in imports))throw new Error('Unexpected VM import: '+name);return imports[name];},
+    });
+    return {state:stateModule.getReviewedRecoveryState(),recovery:recoveryModule};
+  }
+  const instrumentation=loadCopy(sharedGlobal),route=loadCopy(sharedGlobal);
+  assert.equal(instrumentation.state,route.state,'separate bundled state modules must use one process object');
+  instrumentation.recovery.startReviewedRecovery();route.recovery.startReviewedRecovery();
+  assert.equal(registrations,1,'two bundle copies must register only one scheduler');
+  assert.equal(route.recovery.reviewedRecoveryStatus().registered,true,'route health must see instrumentation registration');
+  instrumentation.state.running=true;
+  assert.equal(route.recovery.reviewedRecoveryStatus().running,true);
+  assert.equal((await route.recovery.runReviewedRecovery()).stage,'already_running','the other bundle must honor the same execution lock');
+  const progress={stage:'fixture_progress',country:'kz'};
+  instrumentation.state.lastRecovery=progress;
+  assert.equal(route.recovery.reviewedRecoveryStatus().lastRun,progress,'route health must show instrumentation progress');
+  route.state.acceptedOrigin='https://example.invalid/';
+  assert.equal(instrumentation.state.acceptedOrigin,'https://example.invalid/','accepted origin must survive crossing a bundle boundary');
+  route.state.running=false;
+  assert.equal(instrumentation.recovery.reviewedRecoveryStatus().running,false);
+  const otherProcess=loadCopy({});
+  assert.notEqual(otherProcess.state,route.state);
+  assert.equal(otherProcess.state.registered,false);assert.equal(otherProcess.state.lastRecovery,null);
+  assert.equal(databaseCalls,0,'shared-state tests must not call the database');
+}
 async function scenario(rows:Array<{version:string;country:string;state:string;media_id?:string}>, options:{versions?:string[];badImage?:boolean;badUrl?:string}={}) {
   const calls:Array<{version:string;countries:readonly string[]}>=[];
   let probes=0,pendingHooks=0;
@@ -18,6 +66,7 @@ async function scenario(rows:Array<{version:string;country:string;state:string;m
   return {result,calls,probes,pendingHooks};
 }
 async function main(){
+  await checkSeparateBundleState();
   assert.equal(queueReviewedRecovery('2026-11-11',date),false,'Historical ingest must not wake current-day delivery');
   assert.equal(queueReviewedRecovery('2026-11-13',date),false,'Future pre-collection must never be delivered');
   let x=await scenario([],{versions:[]});assert.equal(x.result.stage,'awaiting_package');assert.equal(x.calls.length,0);assert.equal(x.pendingHooks,0);
@@ -76,6 +125,6 @@ async function main(){
   const order:string[]=[];
   await recoverReviewedIssue(date,{packages:async()=>[date],deliveries:async()=>[],read:async()=>payload,probe:async()=>{order.push('probe');return {accessible:true as const};},deliver:async(_p,c)=>{order.push('deliver:'+c[0]);return {ok:true};}});
   assert.deepEqual(order.slice(0,4),['probe','deliver:kz','probe','deliver:uz'],'a ready country must deliver before probing the next country');
-  console.log('reviewed recovery: missing package, image gate, exact-version continuation, interrupted update read-only reconciliation, selective retry and duplicate guards passed');
+  console.log('reviewed recovery: separate-bundle scheduler state, missing package, image gate, exact-version continuation, interrupted update read-only reconciliation, selective retry and duplicate guards passed');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
