@@ -2,6 +2,10 @@
 import copy
 import json
 import unittest
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from datetime import datetime, timedelta
 import validate_work_package as gate
 from test_work_quantity import fixture as supply_fixture
@@ -39,13 +43,17 @@ class PackageQuantity(unittest.TestCase):
     def test_fifteen_real_coverage_passes_normal_gate(self):
         data=full_fixture();self.assertFalse(gate.validate(data,now=self.now))
         self.assertTrue(all(r['quantityReady'] for r in gate.quantity_report(data,self.now).values()))
+    def test_full_five_country_hundred_story_package_is_not_truncated(self):
+        data=full_fixture(20);self.assertFalse(gate.validate(data,now=self.now))
+        self.assertEqual(sum(len(r['articles']) for r in data['reviews'].values()),100)
+        self.assertTrue(all(r['quantityReady'] for r in gate.quantity_report(data,self.now).values()))
     def test_six_with_arbitrary_explanation_cannot_complete(self):
         data=full_fixture(6)
         for review in data['reviews'].values():review['coverageShortfallExplanation']='All checked, no news today'
         errors=gate.validate(data,now=self.now)
         self.assertEqual(sum('quantity/coverage/selection incomplete' in e for e in errors),5)
     def test_deadline_fallback_keeps_quantity_failure_and_open_issue(self):
-        data=full_fixture(6);issue={'kind':'quantity_shortfall','closed':False,'detail':'Six real articles; expansion continues'}
+        data=full_fixture(10);issue={'kind':'quantity_shortfall','closed':False,'detail':'Ten real articles; coverage and expansion remain open'}
         data['reviews']['kg']['issues']=[issue]
         original=copy.deepcopy(data)
         self.assertFalse(gate.validate(data,now=self.now,delivery_mode='deadline_under_delivery'))
@@ -72,6 +80,69 @@ class PackageQuantity(unittest.TestCase):
         entry.update(image_url='https://source0.example/photo.jpg',image_caption='Synthetic fixture',cloudImageProbe={'accessible':False})
         data['reviews']['kg']['finalBodyHash']=gate.digest(data['reviews']['kg']['articles'])
         self.assertTrue(any('cloud image' in e for e in gate.validate(data,now=self.now,delivery_mode='deadline_under_delivery')))
+
+class CountryTransport(unittest.TestCase):
+    now=datetime.fromisoformat('2026-11-16T08:00:00+08:00')
+    @staticmethod
+    def scoped(data,countries=('kz',)):
+        data=copy.deepcopy(data)
+        for key in ('drafts','reviews'):data[key]={c:data[key][c] for c in countries}
+        data['package']['countries']={c:data['package']['countries'][c] for c in countries}
+        data['package']['readyCountries']=list(countries)
+        return data
+    def test_ready_country_can_pass_without_unwritten_other_countries(self):
+        data=self.scoped(full_fixture())
+        self.assertFalse(gate.validate(data,now=self.now,countries=['kz']))
+        self.assertEqual(set(gate.quantity_report(data,self.now,countries=['kz'])),{'kz'})
+        self.assertTrue(gate.quantity_report(data,self.now,countries=['kz'])['kz']['quantityReady'])
+        self.assertTrue(gate.validate(data,now=self.now))
+    def test_scope_must_match_package_and_all_evidence_mappings(self):
+        full=full_fixture();full['package']['readyCountries']=None
+        self.assertTrue(gate.validate(full,now=self.now))
+        for ready in (None,[],['uz'],['kz','kz'],['kz','xx']):
+            data=self.scoped(full_fixture());data['package']['readyCountries']=ready
+            self.assertTrue(gate.validate(data,now=self.now,countries=['kz']),ready)
+        data=self.scoped(full_fixture());data['drafts']['uz']=full_fixture()['drafts']['uz']
+        self.assertTrue(gate.validate(data,now=self.now,countries=['kz']))
+        for scope in ([],['kz','kz'],['xx'],'kz'):
+            self.assertTrue(gate.validate(self.scoped(full_fixture()),now=self.now,countries=scope))
+    def test_partial_transport_preserves_quantity_and_safety_gates(self):
+        short=self.scoped(full_fixture(6))
+        self.assertTrue(any('quantity/coverage' in e for e in gate.validate(short,now=self.now,countries=['kz'])))
+        self.assertTrue(any('at least ten' in e for e in gate.validate(short,now=self.now,countries=['kz'],delivery_mode='deadline_under_delivery')))
+        self.assertFalse(gate.validate(self.scoped(full_fixture(10)),now=self.now,countries=['kz'],delivery_mode='deadline_under_delivery'))
+        self.assertTrue(any('07:30' in e for e in gate.validate(short,now=datetime.fromisoformat('2026-11-16T07:29:00+08:00'),countries=['kz'],delivery_mode='deadline_under_delivery')))
+        for mutate in (lambda d:d['reviews']['kz'].update(reviewer=d['drafts']['kz']['writerRun']),lambda d:d['reviews']['kz'].update(titleFactReviewCompleted=False),lambda d:d['reviews']['kz'].update(issues=[{'kind':'fact','closed':False}]),lambda d:d['drafts']['kz'].update(coverageEnd='2026-11-16T05:55:00+08:00')):
+            data=self.scoped(full_fixture());mutate(data)
+            self.assertTrue(gate.validate(data,now=self.now,countries=['kz']))
+    def test_partial_cli_never_claims_five_country_completion(self):
+        data=self.scoped(gate.fixture())
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'aggregate.json';path.write_text(json.dumps(data))
+            result=subprocess.run([sys.executable,str(Path(gate.__file__)),str(path),'--countries','kz'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr+result.stdout)
+        receipt=json.loads(result.stdout)
+        self.assertTrue(receipt['transportAllowed']);self.assertTrue(receipt['partialDelivery']);self.assertTrue(receipt['selectedQuantityReady'])
+        self.assertFalse(receipt['qualityDeliveryComplete']);self.assertFalse(receipt['quantityReady']);self.assertTrue(receipt['continueExpansion'])
+        self.assertEqual(receipt['missingCountries'],['uz','kg','tj','az'])
+    def test_revision_matches_cloud_contract(self):
+        data=self.scoped(full_fixture());data['package']['version']='2026-11-16-r1'
+        self.assertTrue(any('package issue/version mismatch' in e for e in gate.validate(data,now=self.now,countries=['kz'])))
+        data['package']['version']='2026-11-16-r2'
+        self.assertFalse(gate.validate(data,now=self.now,countries=['kz']))
+    def test_deadline_does_not_waive_ten_story_minimum(self):
+        for count in (3,6,9):
+            data=self.scoped(full_fixture(count))
+            self.assertTrue(any('at least ten' in e for e in gate.validate(data,now=self.now,countries=['kz'],delivery_mode='deadline_under_delivery')))
+    def test_deadline_cannot_count_duplicate_reviewed_stories_as_ten(self):
+        data=self.scoped(full_fixture(10));data['reviews']['kz']['articles']=[copy.deepcopy(data['reviews']['kz']['articles'][0]) for _ in range(10)]
+        data['reviews']['kz']['finalBodyHash']=gate.digest(data['reviews']['kz']['articles'])
+        errors=gate.validate(data,now=self.now,countries=['kz'],delivery_mode='deadline_under_delivery')
+        self.assertTrue(any('duplicate adopted article IDs' in e for e in errors));self.assertTrue(any('duplicate adopted source URLs' in e for e in errors))
+    def test_tracking_parameters_cannot_turn_same_source_into_two_stories(self):
+        data=self.scoped(full_fixture());entries=data['reviews']['kz']['articles'];entries[1]['source_url']=entries[0]['source_url']+'?utm_source=second#headline'
+        data['reviews']['kz']['finalBodyHash']=gate.digest(entries)
+        self.assertTrue(any('duplicate adopted source URLs' in e for e in gate.validate(data,now=self.now,countries=['kz'],delivery_mode='deadline_under_delivery')))
 
 
 if __name__=='__main__':unittest.main()

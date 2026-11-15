@@ -53,6 +53,42 @@ recomputes coverage and ledger closure; arbitrary free-text explanations do not
 qualify. The default aggregate gate requires quantity readiness as well as all
 existing fact, source, image, layout and independent-review checks.
 
+## Hand over and transport each ready country
+
+After restoring an original-image archive in a fresh workspace, pass its
+extracted root to `finalize_writer_handoff.py --image-root`. Locate the adopted
+bytes using the recorded URL, SHA-256 and length, not an obsolete absolute path.
+Path rebinding must preserve all editorial and image identity fields and must
+not certify a visual review. Preserve old/new handoff hashes and obtain the
+matching independent review before transport.
+
+Do not wait for all five countries to finish before staging or submitting a
+country that has already passed final review. Partial transport is explicit:
+`build_work_package.py --countries kz,uz` emits `readyCountries` and exactly
+those entries in `countries`. The scoped aggregate must contain only the same
+drafts and reviews. Run `validate_work_package.py --countries kz,uz` for both
+ingest and deliver; all existing checks still apply to every selected country.
+The image manifest must contain the adopted images for that scope. Without an
+explicit scope, building and validation continue to require all five countries.
+
+Use partial transport only when the first necessary in-window health response
+reports `capabilities.partialCountries=true` and the expected runtime. An older
+deployment retains the existing full-package contract; record its version and
+do not repeatedly POST unsupported partial payloads. Do not wake the service
+outside its existing reservation to check a deployment.
+
+Accepted versions are immutable. Persist a pending submission and its scope
+before POST; an unknown result is checked using the same version before any
+retry. A changed package uses the next real issue revision (`-r2` onward).
+Automatic recovery chooses the newest accepted package containing each missing
+country, while an active receipt pins its original version. Already succeeded
+countries are not recreated when another country's package arrives.
+
+A partial receipt is never five-country completion. Read issue-level state
+across versions, then diagnose each country's actual receipt version. Only
+five distinct successful countries with full image/layout/cover readback and
+their quantity/quality requirements may close the daily issue.
+
 ## Preserve punctual transport without claiming quality completion
 
 The 07:25 review run first tries the normal gate and continues actual expansion;
@@ -60,7 +96,10 @@ it must keep working until the real 07:30 threshold if the fallback is needed.
 From real 07:30 Beijing time, a deadline fallback can transport the existing
 independently verified drafts if quantity alone remains short. Run the same
 aggregate gate with `--delivery-mode deadline_under_delivery`; this cannot
-bypass fact/source/time/image/author checks. Keep `underDelivery=true`,
+bypass fact/source/time/image/author checks. From the 2026-11-16 issue, every
+transported country still needs at least ten real reviewed stories, including
+deadline fallback. A 3–6 story manuscript remains in expansion/pre-review and
+does not block another country that is ready. Keep `underDelivery=true`,
 `shortfallOpen=true`, `continueExpansion=true`, and `qualityDeliveryComplete=false`
 for shortages. Never label a 3–6 story issue completed. Keep a typed open
 `kind=quantity_shortfall` issue; do not replace it with a generic closed review.

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { PACKAGE_COUNTRIES, validatePackage, latestVersion, replaceImageSources, contentHash, makeSourceUrlsVisible, sourceUrls } from '../src/lib/reviewed-package';
+import { PACKAGE_COUNTRIES, validatePackage, latestVersion, replaceImageSources, contentHash, makeSourceUrlsVisible, sourceUrls, packageCountries, requirePrivateImages, type CompleteReviewedPackage } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, deliveryAdapters } from '../src/lib/reviewed-delivery';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
 import { summarizeDraftReadback } from '../src/lib/reviewed-diagnostics';
@@ -8,13 +8,26 @@ import { probeReviewedImage, prepareReviewedDraft } from '../src/lib/reviewed-we
 const input = { version:'2026-11-09', countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c, {
  title:c, summary:'审定摘要', bodyHtml:'<section style="color:#112233"><p>审定正文 &amp; 来源</p></section>', sourceName:'原始公告', sourceUrl:'https://example.org/news', coverUrl:''
 }])) };
-const payload = validatePackage(input);
+const complete=(input:unknown)=>validatePackage(input) as CompleteReviewedPackage;
+const payload = complete(input);
 assert.equal(latestVersion(['2026-11-08-r99','2026-11-09-r2','2026-11-09-r10'], '2026-11-09'),'2026-11-09-r10');
 assert.equal(latestVersion(['2026-11-08'], '2026-11-09'), undefined);
 assert.throws(()=>validatePackage({...input, countries:{kz:input.countries.kz}}));
 assert.throws(()=>validatePackage({...input,version:'2026-02-30'}));
 assert.throws(()=>validatePackage({...input,version:'2026-99-99'}));
 assert.notEqual(contentHash(payload),contentHash({...payload,version:'2026-11-09-r2'}));
+assert.equal(contentHash(payload),contentHash(input),'legacy complete package normalization must preserve its exact old hash shape');
+assert.equal(Object.hasOwn(payload,'readyCountries'),false);
+const partial=validatePackage({...input,readyCountries:['uz','kz'],countries:{uz:input.countries.uz,kz:input.countries.kz}});
+assert.deepEqual(packageCountries(partial),['kz','uz']);
+assert.deepEqual(Object.keys(partial.countries),['kz','uz']);
+assert.equal(contentHash(partial),contentHash(validatePackage({...input,readyCountries:['kz','uz'],countries:{kz:input.countries.kz,uz:input.countries.uz}})),'scope and country key order must not change a partial package hash');
+for(const readyCountries of [[],['kz','kz'],['invalid'],null,'kz'])assert.throws(()=>validatePackage({...input,readyCountries,countries:{kz:input.countries.kz}}));
+assert.throws(()=>validatePackage({...input,readyCountries:['kz']}),'undeclared country entries are not accepted');
+assert.throws(()=>validatePackage({...input,readyCountries:['kz','uz'],countries:{kz:input.countries.kz}}),'declared missing country is not accepted');
+assert.throws(()=>validatePackage({...input,readyCountries:['kz'],countries:{kz:{...input.countries.kz,summary:''}}}),'partial packages retain original country validation');
+const unpinned=validatePackage({version:'2026-11-15',readyCountries:['kz'],countries:{kz:{...input.countries.kz,bodyHtml:'<p>原图</p><img src="https://example.org/image.jpg">'}}});
+assert.throws(()=>requirePrivateImages(unpinned),/全部采用原图/,'partial countries retain the original-byte image gate');
 assert.equal(replaceImageSources('<img data-src="unused" src="https://example.org/x">',new Map([['https://example.org/x','https://mmbiz.qpic.cn/x']])), '<img data-src="unused" src="https://mmbiz.qpic.cn/x">');
 const html = '<section style="color:gold"><img src="https://example.org/a?a=1&amp;b=2"><p>图注、来源</p></section>';
 assert.equal(replaceImageSources(html,new Map([['https://example.org/a?a=1&b=2','https://mmbiz.qpic.cn/pic']])),html.replace('https://example.org/a?a=1&amp;b=2','https://mmbiz.qpic.cn/pic'));
@@ -56,6 +69,14 @@ async function main(){
   async read(id){if(id==='kg'&&failedRead){throw new Error('回读超时');}return {title:id,digest:'审定摘要',content:payload.countries.kz.bodyHtml,thumb_media_id:'thumb'};}
  };
  const sb=db as unknown as ReturnType<typeof getSupabaseClient>;
+ const scopeDb=database(),beforePartialCreates=creates;
+ await assert.rejects(()=>deliverReviewedPackage(partial,scopeDb as any,adapters,['kz','az']),/未包含已审国家/);
+ assert.equal(scopeDb.rows.size,0,'an unlisted country fails before any country claim, even when mixed with a listed country');
+ assert.equal(creates,beforePartialCreates);
+ const deliveredPartial=await deliverReviewedPackage(partial,scopeDb as any,{...adapters,async prepare(d){const prepared=await adapters.prepare({...d,title:'kz'});return {...prepared,article:{...prepared.article,title:d.title}};},async read(id){return {title:id,digest:'审定摘要',content:payload.countries.kz.bodyHtml,thumb_media_id:'thumb'};}});
+ assert.equal(deliveredPartial.ok,true);assert.deepEqual([...scopeDb.rows.values()].map(r=>r.country),['kz','uz']);
+ assert.equal(deliveredPartial.partialDelivery,true);assert.deepEqual(deliveredPartial.countries,['kz','uz']);assert.deepEqual(deliveredPartial.missingCountries,['kg','tj','az']);
+ creates=beforePartialCreates;
  const first=await deliverReviewedPackage(payload,sb,adapters);
  assert.equal(first.ok,false);assert.equal(creates,4);
  assert.equal(db.rows.get('2026-11-09/kg')?.state,'uncertain');
@@ -112,7 +133,7 @@ async function main(){
  const mediaCreates=creates;const mediaRetry=await deliverReviewedPackage(payload,mediaDb as any,adapters,['kz']);
  assert.equal(mediaRetry.ok,false);assert.equal(creates,mediaCreates,'any known media_id prevents re-creation even in an inconsistent failed state');
 
- const sourcePayload=validatePackage({version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
+ const sourcePayload=complete({version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
   title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
  }]))});
  const repairDb=database();let repairedContent=makeSourceUrlsVisible(sourcePayload.countries.kz.bodyHtml);let repairCreates=0;let repairUpdates=0;
@@ -132,7 +153,7 @@ async function main(){
  const reasonAdapters:typeof deliveryAdapters={...repairAdapters,async read(){return {title:'kz',digest:'审定摘要',content:makeSourceUrlsVisible(sourcePayload.countries.kz.bodyHtml)};},async prepare(){throw new Error('图片读取失败 https://example.org/private?token=secret');}};
  const reasonResult=await deliverReviewedPackage(sourcePayload,reasonDb as any,reasonAdapters,['kz']);
  assert.equal(reasonResult.ok,false);assert.equal((reasonResult.failures[0] as any).reason,'图片读取失败 [链接]');assert.equal(reasonDb.rows.get('2026-11-09/kz')?.state,'uncertain');
- const missingImagePayload=validatePackage({version:'2026-11-09-r2',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
+ const missingImagePayload=complete({version:'2026-11-09-r2',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{
   title:String(c),summary:'审定摘要',bodyHtml:'<p>原文内容</p><img src="https://example.org/a.jpg"><p>来源：<a href="https://example.org/news">Example</a></p>',sourceName:'Example',sourceUrl:'https://example.org/news',coverUrl:''
  }]))});
  const imageDb=database();let imageContent=makeSourceUrlsVisible(missingImagePayload.countries.kg.bodyHtml).replace('<img src="https://example.org/a.jpg">','');let imageUpdates=0;

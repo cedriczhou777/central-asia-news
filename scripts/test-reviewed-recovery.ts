@@ -3,12 +3,12 @@ import { readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
 import ts from 'typescript';
 import { recoverReviewedIssue, queueReviewedRecovery, reviewedRecoveryWindow, automaticRecoveryAdapters } from '../src/lib/reviewed-recovery';
-import { PACKAGE_COUNTRIES, type ReviewedPackage } from '../src/lib/reviewed-package';
+import { PACKAGE_COUNTRIES, validatePackage, packageCountries, type ReviewedPackage, type CompleteReviewedPackage } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, type deliveryAdapters } from '../src/lib/reviewed-delivery';
 import { database } from './lib/reviewed-test-db';
 
 const date='2026-11-12';
-const payload={version:date,countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{title:c,summary:'test',bodyHtml:'<p>test</p><img src="https://example.com/image.jpg">',sourceName:'test',sourceUrl:'',coverUrl:'https://example.com/image.jpg'}]))} as ReviewedPackage;
+const payload={version:date,countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{title:c,summary:'test',bodyHtml:'<p>test</p><img src="https://example.com/image.jpg">',sourceName:'test',sourceUrl:'',coverUrl:'https://example.com/image.jpg'}]))} as CompleteReviewedPackage;
 async function checkSeparateBundleState(){
   const compile=(file:string)=>ts.transpileModule(readFileSync(file,'utf8'),{
     compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true},
@@ -76,7 +76,7 @@ async function checkAutomaticWindowEntrypoints(){
       from(){return {select(){return {eq:async()=>({data:[{version:date}],error:null}),in:async()=>({data:[],error:null})};}};},
     };}},
     './utils':{beijingDate:()=>date},
-    './reviewed-package':{issueDate:(value:string)=>value.slice(0,10),issueCutoffElapsed:()=>true,PACKAGE_COUNTRIES,latestVersion:(versions:string[])=>versions[0]},
+    './reviewed-package':{issueDate:(value:string)=>value.slice(0,10),issueCutoffElapsed:()=>true,PACKAGE_COUNTRIES,latestVersion:(versions:string[])=>versions[0],validatePackage,packageCountries},
     './reviewed-delivery':{deliverReviewedPackage(){counts.create++;},deliveryAdapters:{}},
     './reviewed-wechat':{probeReviewedImage(){counts.fetch++;}},
     './push-run-store':{persistPushRun(){persisted++;}},
@@ -124,6 +124,7 @@ async function checkBatchAndDeliveryBoundaries(){
   result=await recoverReviewedIssue(date,dependencies);
   assert.equal(result.stage,'window_closed');assert.equal(calls.read,0);assert.equal(calls.probe,0,'09:20 closes new expensive work');
   const four=structuredClone(payload);four.countries.kz.bodyHtml='<p>test</p>'+[1,2,3,4].map(i=>`<img src="https://example.com/${i}.jpg">`).join('');
+  four.countries.kz.coverUrl='https://example.com/1.jpg';
   let probes=0,deliveries=0;hardOpen=true;admit=true;
   result=await recoverReviewedIssue(date,{...dependencies,read:async()=>four,
     probe:async()=>{probes++;admit=false;return {accessible:false as const,reason:'HTTP 503'};},
@@ -198,6 +199,21 @@ async function main(){
   await checkSeparateBundleState();
   await checkAutomaticWindowEntrypoints();
   await checkBatchAndDeliveryBoundaries();
+  const scoped=(version:string,readyCountries:typeof PACKAGE_COUNTRIES[number][])=>validatePackage({version,readyCountries,countries:Object.fromEntries(readyCountries.map(c=>[c,payload.countries[c]]))});
+  const scopedPackages=new Map<string,ReviewedPackage>([[date,scoped(date,['kz','uz'])],[date+'-r2',scoped(date+'-r2',['kg','tj'])],[date+'-r3',scoped(date+'-r3',['az'])],[date+'-r4',scoped(date+'-r4',['kz'])]]);
+  const scopedCalls:Array<{version:string;countries:readonly string[]}>=[],scopedProbes:string[]=[];
+  const scopedDependencies={packages:async()=>[...scopedPackages.keys()],deliveries:async()=>[],read:async(v:string)=>scopedPackages.get(v)!,probe:async(url:string)=>{scopedProbes.push(url);return {accessible:true as const};},deliver:async(p:ReviewedPackage,countries:readonly typeof PACKAGE_COUNTRIES[number][])=>{scopedCalls.push({version:p.version,countries});return {ok:true};}};
+  let scopeResult=await recoverReviewedIssue(date,scopedDependencies);
+  assert.deepEqual(scopedCalls,[{version:date+'-r4',countries:['kz']},{version:date,countries:['uz']},{version:date+'-r2',countries:['kg']},{version:date+'-r2',countries:['tj']},{version:date+'-r3',countries:['az']}],'each country chooses its newest containing package, not the global newest revision');
+  assert.equal(scopeResult.partialDelivery,false);assert.equal(scopeResult.stage,'delivery_attempted','attempts are not five verified successes');
+  scopedCalls.length=0;scopedProbes.length=0;
+  scopeResult=await recoverReviewedIssue(date,{...scopedDependencies,packages:async()=>[date]});
+  assert.deepEqual(scopedCalls.map(c=>c.countries),[['kz'],['uz']]);assert.equal(scopedProbes.length,2);assert.deepEqual(scopeResult.missingCountries,['kg','tj','az']);assert.equal(scopeResult.partialDelivery,true);
+  scopeResult=await recoverReviewedIssue(date,{...scopedDependencies,packages:async()=>[date],deliveries:async()=>['kz','uz'].map(country=>({version:date,country,state:'succeeded',media_id:'known-'+country})),deliver:async()=>{throw new Error('must not deliver unlisted countries');},probe:async()=>{throw new Error('must not probe unlisted countries');}});
+  assert.equal(scopeResult.stage,'awaiting_ready_countries','a completed two-country package never marks the five-country issue complete');
+  scopedCalls.length=0;scopedProbes.length=0;
+  await recoverReviewedIssue(date,{...scopedDependencies,deliveries:async()=>[{version:date,country:'kz',state:'uncertain',media_id:'original-known'}]});
+  assert.deepEqual(scopedCalls[0],{version:date,countries:['kz']},'known-media receipt pins its original partial revision');assert.equal(scopedProbes.length,4,'pinned known-media reconciliation does not re-probe original images');
   assert.equal(queueReviewedRecovery('2026-11-11',date),false,'Historical ingest must not wake current-day delivery');
   assert.equal(queueReviewedRecovery('2026-11-13',date),false,'Future pre-collection must never be delivered');
   let x=await scenario([],{versions:[]});assert.equal(x.result.stage,'awaiting_package');assert.equal(x.calls.length,0);assert.equal(x.pendingHooks,0);
@@ -250,6 +266,7 @@ async function main(){
   x=await scenario(mixed.map(r=>r.country==='kg'?{...r,state:'failed',media_id:undefined}:r),{versions:[date,date+'-r2',date+'-r3',date+'-r4']});assert.deepEqual(x.calls,[{version:date+'-r4',countries:['kg']}]);
   const countryImages=structuredClone(payload);
   countryImages.countries.az.bodyHtml='<p>test</p><img src="https://example.com/blocked.jpg">';
+  countryImages.countries.az.coverUrl='https://example.com/blocked.jpg';
   const selected:string[][]=[];
   const isolated=await recoverReviewedIssue(date,{packages:async()=>[date],deliveries:async()=>rows.map(r=>['kz','kg','az'].includes(r.country)?{...r,state:'failed',media_id:undefined}:r),read:async()=>countryImages,probe:async url=>url.endsWith('blocked.jpg')?{accessible:false as const,reason:'HTTP 403'}:{accessible:true as const},deliver:async(_p,countries)=>{selected.push([...countries]);return {ok:true};}});
   assert.equal(isolated.stage,'delivery_attempted');assert.deepEqual(selected,[['kz'],['kg']]);assert.equal(isolated.failures?.length,1,'one country image failure must remain visible without blocking other countries');

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { PACKAGE_COUNTRIES, contentHash, issueDate, issueCutoffElapsed, validatePackage, requirePrivateImages } from '@/lib/reviewed-package';
+import { PACKAGE_COUNTRIES, packageCountries, contentHash, issueDate, issueCutoffElapsed, validatePackage, requirePrivateImages } from '@/lib/reviewed-package';
 import { queueReviewedRecovery } from '@/lib/reviewed-recovery';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,9 +28,11 @@ export async function POST(req: Request): Promise<Response> {
       if (existing.data.content_hash !== hash) return NextResponse.json({ ok:false, version:payload.version, error:'同版本内容不同；修订稿须使用新的修订版本' }, { status:409 });
     }
     const recoveryQueued=queueReviewedRecovery(payload.version,undefined,req.url);
+    const ready=packageCountries(payload),missingCountries=PACKAGE_COUNTRIES.filter(c=>!ready.includes(c));
     return NextResponse.json({ ok:true, version:payload.version, contentHash:hash, duplicate:!!error,recoveryQueued,
-      inserted:error ? 0 : 5, skipped:error ? 5 : 0,
-      byCountry:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,1])), failed:[],
+      inserted:error ? 0 : ready.length, skipped:error ? ready.length : 0,
+      readyCountries:ready,partialDelivery:missingCountries.length>0,missingCountries,
+      byCountry:Object.fromEntries(ready.map(c=>[c,1])), failed:[],
       stage:'package_received', imagesTransferred:false, draftsCreated:false });
   } catch {
     return NextResponse.json({ ok:false, version:payload.version, error:'存稿失败，请检查数据库迁移及服务角色权限；可按同版本同内容重试' }, { status:503 });

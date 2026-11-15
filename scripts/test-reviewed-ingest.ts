@@ -30,6 +30,15 @@ async function main(){
  const changed=structuredClone(payload);changed.countries.kz.title='修订';
  assert.equal((await POST(request(changed))).status,409);assert.equal(rows.size,1);
  changed.version+='-r2';assert.equal((await POST(request(changed))).status,200);assert.equal(rows.size,2);
- console.log('reviewed-ingest: authentication, readiness probe, atomic five-country acceptance, identical retry and revision collision passed');
+ const partial={version:payload.version+'-r3',readyCountries:['uz','kz'],countries:{uz:payload.countries.uz,kz:payload.countries.kz}};
+ const partialAccepted=await(await POST(request(partial))).json();
+ assert.equal(partialAccepted.inserted,2);assert.equal(partialAccepted.partialDelivery,true);assert.deepEqual(partialAccepted.readyCountries,['kz','uz']);assert.deepEqual(partialAccepted.missingCountries,['kg','tj','az']);assert.deepEqual(partialAccepted.byCountry,{kz:1,uz:1});
+ const partialRepeat=await(await POST(request({...partial,readyCountries:['kz','uz']}))).json();assert.equal(partialRepeat.duplicate,true);assert.equal(partialRepeat.skipped,2);
+ assert.equal((await POST(request({...partial,countries:payload.countries}))).status,400);
+ assert.equal((await POST(request({...partial,readyCountries:['kz','uz','az']}))).status,400);
+ assert.equal(rows.size,3,'invalid partial scopes do not enter accepted storage');
+ const imagePartial={version:'2026-11-15',readyCountries:['kz'],countries:{kz:{...payload.countries.kz,bodyHtml:'<p>正文</p><img src="https://example.org/original.jpg">'}}};
+ assert.equal((await POST(request(imagePartial))).status,400,'explicit partial transport cannot bypass private original-image pins');assert.equal(rows.size,3);
+ console.log('reviewed-ingest: authentication, complete-five compatibility, explicit partial scope, stable retry/hash, image gate and revision collision passed');
 }
 main().finally(()=>{globalThis.fetch=originalFetch;}).catch(e=>{console.error(e);process.exitCode=1;});

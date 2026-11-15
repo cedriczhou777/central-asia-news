@@ -5,7 +5,7 @@ import { GET, POST } from '../src/app/api/reviewed-images/route';
 import { POST as ingest } from '../src/app/api/word-package/route';
 import { privateImageHealth, readPrivateImage } from '../src/lib/reviewed-private-images';
 import { prepareReviewedDraft, probeReviewedImage } from '../src/lib/reviewed-wechat';
-import { PACKAGE_COUNTRIES, validatePackage, requirePrivateImages, contentHash } from '../src/lib/reviewed-package';
+import { PACKAGE_COUNTRIES, validatePackage, requirePrivateImages, contentHash, type CompleteReviewedPackage } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, readPackage } from '../src/lib/reviewed-delivery';
 import { recoverReviewedIssue } from '../src/lib/reviewed-recovery';
 import { database } from './lib/reviewed-test-db';
@@ -92,7 +92,7 @@ async function main(){
   await assert.rejects(readPrivateImage({...asset,bytes:asset.bytes+1}),/哈希|长度/);
   bucketPublic=true;health=await privateImageHealth();assert.equal(health.ready,false);assert.equal(health.retryable,false);assert.equal(health.failureKind,'public_bucket');await assert.rejects(readPrivateImage(asset),/公开/);bucketPublic=false;
   const old={version:'2026-11-09',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{title:c,summary:'摘要',bodyHtml:'<p>旧包正文</p>',sourceName:'来源',sourceUrl:'',coverUrl:''}]))};assert.equal(contentHash(validatePackage(old)),contentHash(old),'legacy accepted package hashes remain unchanged');
-  const input={version:'2026-11-15',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{...d,title:c}]))};const payload=validatePackage(input);requirePrivateImages(payload);
+  const input={version:'2026-11-15',countries:Object.fromEntries(PACKAGE_COUNTRIES.map(c=>[c,{...d,title:c}]))};const payload=validatePackage(input) as CompleteReviewedPackage;requirePrivateImages(payload);
   const missing=structuredClone(payload);delete missing.countries.kz.imageAssets;assert.throws(()=>requirePrivateImages(missing),/先上传/);
   const mismatch=structuredClone(payload);mismatch.countries.kz.imageAssets={'https://unrelated.invalid/':asset};assert.throws(()=>validatePackage(mismatch),/清单/);
   // End-to-end future issue rehearsal through real ingest, private image reads,

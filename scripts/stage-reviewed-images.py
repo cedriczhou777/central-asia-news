@@ -19,6 +19,16 @@ class ImageServiceError(ValueError):
 class CloudWindowClosed(ValueError):
     pass
 
+def validate_staging_scope(package):
+    """Partial packages contain exactly their explicitly reviewed countries."""
+    if not isinstance(package,dict) or not isinstance(package.get('countries'),dict):
+        raise ValueError('Package countries must be an object')
+    if 'readyCountries' not in package and set(package['countries'])!=set(('kz','uz','kg','tj','az')):
+        raise ValueError('Default package requires all five countries; partial scope needs readyCountries')
+    ready=package.get('readyCountries')
+    if 'readyCountries' in package and (not isinstance(ready,list) or not ready or any(not isinstance(c,str) or c not in ('kz','uz','kg','tj','az') for c in ready) or len(set(ready))!=len(ready) or set(ready)!=set(package['countries'])):
+        raise ValueError('Package countries must exactly match unique readyCountries')
+
 def cloud_request_budget(request_timeout,manual=False,now=None):
     """Scheduled uploads never wake the service before its paid warm window.
 
@@ -79,6 +89,8 @@ def main():
     raw=json.loads(a.manifest.read_text());items=raw.get('images',[])
     if not isinstance(items,list) or len(items)>200:raise ValueError('Expected at most 200 reviewed images')
     if len({e['url'] for e in items})!=len(items):raise ValueError('Duplicate source URL in manifest')
+    package=json.loads(a.package.read_text()) if a.package else None
+    if package is not None:validate_staging_scope(package)
     if not 1<=a.ready_timeout<=600:raise ValueError('ready-timeout must be between 1 and 600 seconds')
     def api(method,path,data=None,extra=None,request_timeout=60,attempts=3):
         headers={'X-Ingest-Secret':secret,**(extra or {})}
@@ -128,7 +140,7 @@ def main():
             def __init__(self):super().__init__();self.urls=[]
             def handle_starttag(self,tag,attrs):
                 if tag=='img':self.urls.append(dict(attrs).get('src'))
-        package=json.loads(a.package.read_text());mapping={e['url']:{'sha256':e['sha256'],'bytes':e['bytes']} for e in results}
+        mapping={e['url']:{'sha256':e['sha256'],'bytes':e['bytes']} for e in results}
         for country in package['countries'].values():
             html=Images();html.feed(country['bodyHtml'])
             if any(url not in mapping for url in html.urls):raise ValueError('Package references an unstaged image')

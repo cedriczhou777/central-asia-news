@@ -11,7 +11,26 @@ export interface ReviewedCountry {
 }
 export interface ReviewedPackage {
   version: string;
+  countries: Partial<Record<PackageCountry, ReviewedCountry>>;
+  /** Omitted means the original complete-five contract. Explicit scope is the
+   * only way to submit fewer countries; absent countries are never placeholders. */
+  readyCountries?: PackageCountry[];
+}
+export interface CompleteReviewedPackage extends ReviewedPackage {
   countries: Record<PackageCountry, ReviewedCountry>;
+}
+function normalizeReadyCountries(value: unknown): PackageCountry[] {
+  if(!Array.isArray(value)||!value.length||value.some(c=>!PACKAGE_COUNTRIES.includes(c))||new Set(value).size!==value.length)
+    throw new Error('readyCountries 必须为非空、无重复的五国代码子集');
+  return PACKAGE_COUNTRIES.filter(c=>value.includes(c));
+}
+export function packageCountries(payload: ReviewedPackage): readonly PackageCountry[] {
+  return payload.readyCountries===undefined?PACKAGE_COUNTRIES:normalizeReadyCountries(payload.readyCountries);
+}
+export function reviewedCountry(payload: ReviewedPackage, country: PackageCountry): ReviewedCountry {
+  const item=payload.countries[country];
+  if(!packageCountries(payload).includes(country)||!item)throw new Error(`当前稿包未包含已审国家 ${country}`);
+  return item;
 }
 export function issueDate(version: string): string {
   const match = /^(\d{4}-\d{2}-\d{2})(?:-r([2-9]|[1-9]\d+))?$/.exec(version);
@@ -44,9 +63,13 @@ export function validatePackage(input: unknown): ReviewedPackage {
   const body = input as Record<string, unknown>;
   if (typeof body.version !== 'string' || !body.version) throw new Error('缺少 version');
   issueDate(body.version);
+  const explicit=body.readyCountries!==undefined;
+  const ready=explicit?normalizeReadyCountries(body.readyCountries):[...PACKAGE_COUNTRIES];
   const entries = body.countries as Record<string, unknown> | undefined;
+  if(explicit&&(!entries||typeof entries!=='object'||Array.isArray(entries)||Object.keys(entries).length!==ready.length||Object.keys(entries).some(c=>!ready.includes(c as PackageCountry))))
+    throw new Error('countries 必须与显式 readyCountries 严格一致，不接受未声明国家或占位稿');
   const countries = {} as ReviewedPackage['countries'];
-  for (const code of PACKAGE_COUNTRIES) {
+  for (const code of ready) {
     const item = entries?.[code];
     if (!item || typeof item !== 'object') throw new Error(`五国未齐，缺 ${code}`);
     const d = item as Record<string, unknown>;
@@ -81,14 +104,16 @@ export function validatePackage(input: unknown): ReviewedPackage {
       countries[code].imageAssets = assets;
     }
   }
-  return { version: body.version, countries };
+  // Preserve old complete-package bytes/hash: never add readyCountries unless
+  // the caller explicitly supplied it. New explicit scopes are canonical order.
+  return { version: body.version, countries, ...(explicit?{readyCountries:ready}:{}) };
 }
 /** New issues pin every adopted image to durable, private original bytes. Old
  * accepted payloads retain their exact shape/hash and are never rewritten. */
 export function requirePrivateImages(payload: ReviewedPackage) {
   if (issueDate(payload.version) < '2026-11-15') return;
-  for (const country of PACKAGE_COUNTRIES) {
-    const d = payload.countries[country];
+  for (const country of packageCountries(payload)) {
+    const d = reviewedCountry(payload,country);
     if (imageUrls(d.bodyHtml).some(url => !d.imageAssets?.[url])) throw new Error(`${country} 须先上传全部采用原图并附 imageAssets`);
   }
 }
