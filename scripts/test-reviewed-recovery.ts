@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
 import ts from 'typescript';
-import { recoverReviewedIssue, queueReviewedRecovery } from '../src/lib/reviewed-recovery';
+import { recoverReviewedIssue, queueReviewedRecovery, reviewedRecoveryWindow, automaticRecoveryAdapters } from '../src/lib/reviewed-recovery';
 import { PACKAGE_COUNTRIES, type ReviewedPackage } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, type deliveryAdapters } from '../src/lib/reviewed-delivery';
 import { database } from './lib/reviewed-test-db';
@@ -54,6 +54,135 @@ async function checkSeparateBundleState(){
   assert.equal(otherProcess.state.registered,false);assert.equal(otherProcess.state.lastRecovery,null);
   assert.equal(databaseCalls,0,'shared-state tests must not call the database');
 }
+async function checkAutomaticWindowEntrypoints(){
+  const time=(value:string)=>Date.parse('2026-11-12T'+value+'+08:00');
+  assert.equal(reviewedRecoveryWindow(time('05:49:59.999')).open,false);
+  assert.equal(reviewedRecoveryWindow(time('05:50:00')).open,true);
+  assert.equal(reviewedRecoveryWindow(time('09:19:59.999')).newWorkAllowed,true);
+  assert.equal(reviewedRecoveryWindow(time('09:20:00')).newWorkAllowed,false);
+  assert.equal(reviewedRecoveryWindow(time('09:29:59.999')).open,true);
+  assert.equal(reviewedRecoveryWindow(time('09:30:00')).open,false);
+  const clock={now:time('23:00:00')},counts={db:0,fetch:0,create:0,timeout:0,interval:0};
+  let allowPlan=false,persisted=0;
+  class ClockDate extends Date {constructor(value?:string|number){super(value===undefined?clock.now:value);}static now(){return clock.now;}}
+  const compile=(file:string)=>ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true}}).outputText;
+  const stateModule={} as typeof import('../src/lib/reviewed-recovery-state');
+  const processGlobal={};
+  new Script(compile('src/lib/reviewed-recovery-state.ts')).runInNewContext({exports:stateModule,globalThis:processGlobal});
+  const entries:Array<{expression:string;run:()=>void}>=[];
+  const imports:Record<string,unknown>={
+    'node-cron':{schedule(expression:string,run:()=>void){entries.push({expression,run});}},
+    '../storage/database/supabase-client':{getSupabaseClient(){counts.db++;if(!allowPlan)throw new Error('No actual database in window test');return {
+      from(){return {select(){return {eq:async()=>({data:[{version:date}],error:null}),in:async()=>({data:[],error:null})};}};},
+    };}},
+    './utils':{beijingDate:()=>date},
+    './reviewed-package':{issueDate:(value:string)=>value.slice(0,10),issueCutoffElapsed:()=>true,PACKAGE_COUNTRIES,latestVersion:(versions:string[])=>versions[0]},
+    './reviewed-delivery':{deliverReviewedPackage(){counts.create++;},deliveryAdapters:{}},
+    './reviewed-wechat':{probeReviewedImage(){counts.fetch++;}},
+    './push-run-store':{persistPushRun(){persisted++;}},
+    './reviewed-recovery-state':stateModule,
+  };
+  const recovery={} as typeof import('../src/lib/reviewed-recovery');
+  new Script(compile('src/lib/reviewed-recovery.ts')).runInNewContext({
+    exports:recovery,globalThis:processGlobal,Date:ClockDate,URL,console:{log(){}},
+    require:(name:string)=>{if(!(name in imports))throw new Error('Unexpected import: '+name);return imports[name];},
+    setTimeout(){counts.timeout++;},setInterval(){counts.interval++;throw new Error('Automatic recovery must not schedule self-pings');},
+    fetch(){counts.fetch++;throw new Error('Automatic recovery must not self-ping');},
+  });
+  recovery.startReviewedRecovery();
+  assert.equal(entries.length,1,'reuse the single existing scheduler');
+  assert.equal(entries[0].expression,'*/10 6-9 * * *');
+  for(const stamp of ['03:00:00','05:49:59.999','09:30:00','09:40:00','09:50:00','23:00:00']){
+    clock.now=time(stamp);
+    assert.equal((await recovery.runReviewedRecovery()).stage,'window_closed');
+    assert.equal(recovery.queueReviewedRecovery(date,date,'https://example.invalid/accepted'),false);
+    entries[0].run();
+  }
+  assert.deepEqual(counts,{db:0,fetch:0,create:0,timeout:0,interval:0},'outside-window startup/cron/accepted queues do no DB, HTTP, timer or WeChat work');
+  assert.equal(recovery.reviewedRecoveryStatus().lastRun?.stage,'window_closed');
+  clock.now=time('09:20:00');entries[0].run();await Promise.resolve();
+  assert.equal(counts.db,1,'09:20 remains the final allowed status/reconciliation tick');
+  assert.equal(counts.fetch,0);assert.equal(counts.interval,0);
+  allowPlan=true;
+  assert.equal((await recovery.runReviewedRecovery()).stage,'window_closed');
+  assert.equal(persisted,0,'a pure 09:20 planning pause must not overwrite a parallel manual push latest status');
+}
+async function checkBatchAndDeliveryBoundaries(){
+  let hardOpen=false,admit=false;
+  const calls={packages:0,deliveries:0,read:0,probe:0,deliver:0};
+  const dependencies={
+    packages:async()=>{calls.packages++;return [date];},deliveries:async()=>{calls.deliveries++;return [];},
+    read:async()=>{calls.read++;return payload;},probe:async()=>{calls.probe++;return {accessible:true as const};},
+    deliver:async()=>{calls.deliver++;return {ok:true};},canContinue:()=>hardOpen,canStartWork:()=>admit,
+  };
+  let result=await recoverReviewedIssue(date,dependencies);
+  assert.equal(result.stage,'window_closed');assert.deepEqual(calls,{packages:0,deliveries:0,read:0,probe:0,deliver:0});
+  hardOpen=true;admit=true;
+  result=await recoverReviewedIssue(date,{...dependencies,packages:async()=>{calls.packages++;hardOpen=false;return [date];}});
+  assert.equal(result.stage,'window_closed');assert.equal(calls.deliveries,0,'a query finishing after close cannot start another query/country');
+  hardOpen=true;admit=false;
+  result=await recoverReviewedIssue(date,dependencies);
+  assert.equal(result.stage,'window_closed');assert.equal(calls.read,0);assert.equal(calls.probe,0,'09:20 closes new expensive work');
+  const four=structuredClone(payload);four.countries.kz.bodyHtml='<p>test</p>'+[1,2,3,4].map(i=>`<img src="https://example.com/${i}.jpg">`).join('');
+  let probes=0,deliveries=0;hardOpen=true;admit=true;
+  result=await recoverReviewedIssue(date,{...dependencies,read:async()=>four,
+    probe:async()=>{probes++;admit=false;return {accessible:false as const,reason:'HTTP 503'};},
+    deliver:async()=>{deliveries++;return {ok:true};}});
+  assert.equal(result.stage,'window_closed');assert.equal(probes,3,'finish only the admitted three-image batch; no retry or fourth image');assert.equal(deliveries,0);
+  const db=database();let mayStart=true,closeAfterImage=true;
+  const counts={images:0,create:0,read:0};
+  let preparedHtml='';
+  const base:typeof deliveryAdapters={
+    async prepare(d,progress){
+      await progress?.();counts.images++;
+      if(closeAfterImage)mayStart=false;
+      await progress?.();
+      preparedHtml=d.bodyHtml.replace('https://example.com/image.jpg','https://mmbiz.qpic.cn/mmbiz_jpg/window-fixture/0');
+      return {article:{title:d.title,digest:d.summary,content:preparedHtml,author:'fixture',thumb_media_id:'thumb',content_source_url:'',need_open_comment:0,only_fans_can_comment:0},images:1,cover:'first_body_image',html:preparedHtml,imageProbes:[]};
+    },
+    async create(){counts.create++;return 'created-window-fixture';},
+    async read(){counts.read++;return {title:'kz',digest:'test',content:preparedHtml,thumb_media_id:'thumb'};},
+  };
+  let sent=await deliverReviewedPackage(payload,db as unknown as Parameters<typeof deliverReviewedPackage>[1],automaticRecoveryAdapters(()=>mayStart,base),['kz']);
+  assert.equal(sent.ok,false);assert.equal(db.rows.get(`${date}/kz`)?.state,'failed');assert.equal(db.rows.get(`${date}/kz`)?.media_id,null);
+  assert.match(String(db.rows.get(`${date}/kz`)?.detail?.error),/automatic_recovery_window_closed/);
+  assert.deepEqual(counts,{images:1,create:0,read:0},'completed image checkpoint stops before a new send; it must not become uncertain');
+  mayStart=true;closeAfterImage=false;
+  sent=await deliverReviewedPackage(payload,db as unknown as Parameters<typeof deliverReviewedPackage>[1],automaticRecoveryAdapters(()=>mayStart,base),['kz']);
+  assert.equal(sent.ok,true);assert.equal(counts.create,1,'a stopped pre-send preparation can safely continue later');
+  const lateDb=database();let open=true;const lateCounts={images:0,create:0,read:0};
+  const lateBase:typeof deliveryAdapters={...base,
+    async prepare(d,progress){lateCounts.images++;return base.prepare(d,progress);},
+    async create(){lateCounts.create++;open=false;return 'late-known-media';},
+    async read(){lateCounts.read++;return {title:'kz',digest:'test',content:preparedHtml,thumb_media_id:'thumb'};},
+  };
+  result=await recoverReviewedIssue(date,{packages:async()=>[date],deliveries:async()=>[],read:async()=>payload,
+    probe:async()=>({accessible:true as const}),canContinue:()=>open,canStartWork:()=>open,
+    deliver:(p,countries)=>deliverReviewedPackage(p,lateDb as unknown as Parameters<typeof deliverReviewedPackage>[1],automaticRecoveryAdapters(()=>open,lateBase),countries)});
+  assert.equal(result.stage,'window_closed');assert.equal(lateDb.rows.get(`${date}/kz`)?.state,'succeeded');
+  assert.equal(lateDb.rows.get(`${date}/kz`)?.media_id,'late-known-media');assert.deepEqual(lateCounts,{images:1,create:1,read:1});
+  assert.equal(lateDb.rows.size,1,'already-created media/readback may settle after close; the next country must not start');
+  const manualDb=database();
+  const manual=await deliverReviewedPackage(payload,manualDb as unknown as Parameters<typeof deliverReviewedPackage>[1],base,['kz']);
+  assert.equal(manual.ok,true,'direct manual delivery retains existing semantics without automatic adapters');
+  let beforePhoto=true,photoStarts=0;
+  const heartbeatGuard=automaticRecoveryAdapters(()=>beforePhoto,{...base,async prepare(d,progress){await progress?.();photoStarts++;return base.prepare(d,progress);}});
+  await assert.rejects(()=>heartbeatGuard.prepare(payload.countries.kz,async()=>{beforePhoto=false;}),/automatic_recovery_window_closed/);
+  assert.equal(photoStarts,0,'a heartbeat await crossing the admission cutoff cannot start an image');
+  const readOnlyDb=database();
+  const expected='https://mmbiz.qpic.cn/mmbiz_jpg/window-fixture/0';
+  const readOnlyRows=PACKAGE_COUNTRIES.map(country=>({version:date,country,state:country==='kz'?'updating':'succeeded',media_id:'known',updated_at:new Date().toISOString(),detail:{imageUrls:[expected],expectedThumbMediaId:'thumb'}}));
+  for(const row of readOnlyRows)readOnlyDb.rows.set(`${date}/${row.country}`,row);
+  let knownReads=0;
+  result=await recoverReviewedIssue(date,{packages:async()=>[date],deliveries:async()=>readOnlyRows,read:async()=>payload,
+    canContinue:()=>true,canStartWork:()=>false,probe:async()=>{throw new Error('Late reconciliation cannot probe');},
+    deliver:(p,countries)=>deliverReviewedPackage(p,readOnlyDb as unknown as Parameters<typeof deliverReviewedPackage>[1],automaticRecoveryAdapters(()=>false,{...base,
+      async prepare(){throw new Error('Late reconciliation cannot prepare');},async create(){throw new Error('Late reconciliation cannot create');},
+      async read(){knownReads++;return {title:'kz',digest:'test',content:payload.countries.kz.bodyHtml.replace('https://example.com/image.jpg',expected),thumb_media_id:'thumb'};},
+    }),countries)});
+  assert.equal(result.stage,'delivery_attempted');assert.equal(knownReads,1);
+  assert.equal(readOnlyDb.rows.get(`${date}/kz`)?.state,'succeeded','09:20 tail may finish read-only known-media reconciliation');
+}
 async function scenario(rows:Array<{version:string;country:string;state:string;media_id?:string}>, options:{versions?:string[];badImage?:boolean;badUrl?:string}={}) {
   const calls:Array<{version:string;countries:readonly string[]}>=[];
   let probes=0,pendingHooks=0;
@@ -67,6 +196,8 @@ async function scenario(rows:Array<{version:string;country:string;state:string;m
 }
 async function main(){
   await checkSeparateBundleState();
+  await checkAutomaticWindowEntrypoints();
+  await checkBatchAndDeliveryBoundaries();
   assert.equal(queueReviewedRecovery('2026-11-11',date),false,'Historical ingest must not wake current-day delivery');
   assert.equal(queueReviewedRecovery('2026-11-13',date),false,'Future pre-collection must never be delivered');
   let x=await scenario([],{versions:[]});assert.equal(x.result.stage,'awaiting_package');assert.equal(x.calls.length,0);assert.equal(x.pendingHooks,0);
