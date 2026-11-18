@@ -165,7 +165,7 @@ export async function reviewedPush(request: NextRequest) {
 export async function reviewedStatus(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ ok:false, error:'鉴权失败' }, { status:401 });
   try {
-    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v3',capabilities:{partialCountries:true,synchronousDelivery:true,activePreparationWait:true,imagePreparationConcurrency:REVIEWED_IMAGE_UPLOAD_CONCURRENCY,nativeMemoryAllocatorConfigured:process.env.MALLOC_ARENA_MAX==='2'&&process.env.MALLOC_TRIM_THRESHOLD_==='65536'},diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,recovery:reviewedRecoveryStatus(),images:await privateImageHealth(),
+    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v3',capabilities:{partialCountries:true,synchronousDelivery:true,activePreparationWait:true,imagePreparationConcurrency:REVIEWED_IMAGE_UPLOAD_CONCURRENCY,nativeMemoryAllocatorConfigured:process.env.MALLOC_ARENA_MAX==='2'&&['65536','131072'].includes(process.env.MALLOC_TRIM_THRESHOLD_||''),nativeMemoryAllocator:{arenaMax:process.env.MALLOC_ARENA_MAX||null,trimThreshold:process.env.MALLOC_TRIM_THRESHOLD_||null}},diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,recovery:reviewedRecoveryStatus(),images:await privateImageHealth(),
       ...(request.nextUrl.searchParams.get('selftest')==='cover' ? {coverSelfTest:coverReadbackSelfTest()} : {})});
     const sb = getSupabaseClient();
     const version = request.nextUrl.searchParams.get('version');
