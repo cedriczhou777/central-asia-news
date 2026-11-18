@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { setTimeout as delay } from 'node:timers/promises';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { beijingDate } from './utils';
 import { issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, packageCountries, reviewedCountry, imageUrls, type ReviewedPackage } from './reviewed-package';
-import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
+import { canResumePreparation, deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { loadPersistedPushRun, persistPushRun } from './push-run-store';
 import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
 import { summarizeDraftReadback, REVIEWED_DIAGNOSTICS_VERSION, coverReadbackSelfTest } from './reviewed-diagnostics';
@@ -12,6 +13,56 @@ import { privateImageHealth } from './reviewed-private-images';
 function authorized(request: NextRequest) {
   return !!process.env.INGEST_SECRET && request.headers.get('x-ingest-secret') === process.env.INGEST_SECRET;
 }
+
+type DeliveryReceipt = Parameters<typeof canResumePreparation>[0] & { country:string };
+type PackageCountry = (typeof PACKAGE_COUNTRIES)[number];
+
+async function waitForExistingPreparation(
+  version: string,
+  countries: readonly PackageCountry[],
+  readyCountries: readonly PackageCountry[],
+  rows: DeliveryReceipt[],
+  readReceipts: (signal: AbortSignal) => PromiseLike<{data: DeliveryReceipt[] | null; error: unknown}>,
+) {
+  const signal = AbortSignal.timeout(45_000);
+  let readFailed = false;
+  while (rows.some(row => ['preparing','sending','updating'].includes(row.state)) && !signal.aborted) {
+    try {
+      await delay(1_500, undefined, { signal });
+      const result = await readReceipts(signal);
+      if (signal.aborted) break;
+      if (result.error || !result.data) {
+        readFailed = true;
+        break;
+      }
+      rows = result.data;
+    } catch {
+      readFailed = !signal.aborted;
+      break;
+    }
+  }
+
+  const drafts: object[] = [], failures: object[] = [], pendingCountries: PackageCountry[] = [];
+  for (const country of countries) {
+    const row = rows.find(receipt => receipt.country === country);
+    if (row?.state === 'succeeded' && row.media_id) {
+      drafts.push({...row.detail,country_code:country,media_id:row.media_id});
+    } else if (row && ['preparing','sending','updating'].includes(row.state)) {
+      pendingCountries.push(country);
+    } else {
+      const error = row?.detail?.error;
+      failures.push({country,state:row?.state ?? 'not_started',media_id:row?.media_id ?? null,
+        error:typeof error === 'string' ? error : '未查到已核验草稿回执'});
+    }
+  }
+  const pending = pendingCountries.length > 0;
+  const ok = drafts.length === countries.length;
+  const summary = {ok,version,drafts,failures,countries,readyCountries,partialDelivery:countries.length<5,
+    missingCountries:PACKAGE_COUNTRIES.filter(country=>!countries.includes(country))};
+  return NextResponse.json({ok,success:ok,running:pending,pending,pendingCountries,version,countries,summary,
+    ...(readFailed ? {error:'读取现有投递状态失败'} : {})}, {status:readFailed ? 503 : pending ? 202 : 200});
+}
+
 export async function reviewedPush(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ ok:false, error:'鉴权失败' }, { status:401 });
   try {
@@ -54,8 +105,20 @@ export async function reviewedPush(request: NextRequest) {
     const ready=packageCountries(payload);
     const countries = requestedScope ?? ready;
     if(countries.some(country=>!ready.includes(country)))return NextResponse.json({ok:false,error:'请求国家未列入该版本 readyCountries，未启动任何投递',version,readyCountries:ready},{status:409});
-    const probe = await getSupabaseClient().from('reviewed_deliveries').select('country').eq('version',version);
-    if (probe.error) return NextResponse.json({ok:false,error:'投递状态表未就绪'}, {status:503});
+    if (body.waitForCompletion === true) {
+      const selectedVersion = version;
+      const readReceipts = () => getSupabaseClient().from('reviewed_deliveries')
+        .select('country,state,media_id,updated_at,detail').eq('version',selectedVersion).in('country',countries);
+      const probe = await readReceipts();
+      if (probe.error) return NextResponse.json({ok:false,error:'投递状态表未就绪'}, {status:503});
+      const rows: DeliveryReceipt[] = probe.data ?? [];
+      if (rows.some(row => row.state === 'preparing' && !row.media_id && !canResumePreparation(row))) {
+        return await waitForExistingPreparation(version,countries,ready,rows,signal=>readReceipts().abortSignal(signal));
+      }
+    } else {
+      const probe = await getSupabaseClient().from('reviewed_deliveries').select('country').eq('version',version);
+      if (probe.error) return NextResponse.json({ok:false,error:'投递状态表未就绪'}, {status:503});
+    }
     const startedAt = new Date().toISOString();
     // Record a start for scheduler polling. Per-country records remain the authoritative receipt.
     const start = await getSupabaseClient().from('push_runs').upsert({id:'latest', running:true,
