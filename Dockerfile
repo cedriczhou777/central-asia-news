@@ -8,7 +8,8 @@ RUN (pnpm install --frozen-lockfile || pnpm install --frozen-lockfile --registry
 
 FROM node:20-slim AS runtime
 WORKDIR /app
-ENV NODE_ENV=production REVIEWED_RUNTIME_ONLY=1 NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production REVIEWED_RUNTIME_ONLY=1 NEXT_TELEMETRY_DISABLED=1 \
+    MALLOC_ARENA_MAX=2 MALLOC_TRIM_THRESHOLD_=65536
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
