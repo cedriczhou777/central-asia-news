@@ -5,6 +5,8 @@ import { readArchivedImage } from './reviewed-image-archive';
 import { readPrivateImage } from './reviewed-private-images';
 import { validateOriginalImage } from './reviewed-image-bytes';
 
+export const REVIEWED_IMAGE_UPLOAD_CONCURRENCY = 2;
+
 let token: { value: string; until: number } | undefined;
 // Preflight and delivery must use the same verified bytes. A second origin
 // fetch used to fail after a successful preflight (and re-download shared images).
@@ -170,20 +172,45 @@ export async function probeReviewedImage(url: string, referer: string, asset?: R
 }
 export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>Promise<void>) {
   const images = imageUrls(d.bodyHtml);
-  const replacements = new Map<string,string>();
+  const uniqueImages = [...new Set(images)];
+  const uploadedUrls: string[] = [];
   const imageProbes: Array<{url:string;accessible:true;sha256?:string;bytes?:number;transport:string}> = [];
+  const failures: Array<{index:number;error:unknown}> = [];
   let thumb = '';
-  for (const url of [...new Set(images)]) {
-    await onProgress?.();
-    const asset = d.imageAssets?.[url];
-    let bytes: Buffer;
-    try { bytes = await download(url, d.sourceUrl, undefined, asset); }
-    catch(e) { throw new Error(`正文第${images.indexOf(url)+1}张图片：${e instanceof Error?e.message:'读取失败'}`); }
-    imageProbes.push({url,accessible:true,...asset,transport:asset?'private-original':'legacy-https'});
-    if (!thumb) thumb = (await material(bytes)).mediaId;
-    replacements.set(url, await articleImage(bytes));
-    await onProgress?.();
+  let nextIndex = 0;
+  let heartbeat = Promise.resolve();
+  const reportProgress = () => {
+    // Keep the receipt's CAS heartbeats ordered even when images finish out of order.
+    if (onProgress) heartbeat = heartbeat.then(onProgress);
+    return heartbeat;
+  };
+  async function prepareImages() {
+    while (!failures.length && nextIndex < uniqueImages.length) {
+      const index = nextIndex++;
+      const url = uniqueImages[index];
+      try {
+        await reportProgress();
+        if (failures.length) return;
+        const asset = d.imageAssets?.[url];
+        let bytes: Buffer;
+        try { bytes = await download(url, d.sourceUrl, undefined, asset); }
+        catch(e) { throw new Error(`正文第${images.indexOf(url)+1}张图片：${e instanceof Error?e.message:'读取失败'}`); }
+        if (failures.length) return;
+        imageProbes[index] = {url,accessible:true,...asset,transport:asset?'private-original':'legacy-https'};
+        if (index === 0) thumb = (await material(bytes)).mediaId;
+        if (failures.length) return;
+        uploadedUrls[index] = await articleImage(bytes);
+        await reportProgress();
+      } catch (error) {
+        failures.push({index,error});
+      }
+    }
   }
+  // Let both lanes stop before returning an error, with no orphan image tasks.
+  const workerCount = Math.min(REVIEWED_IMAGE_UPLOAD_CONCURRENCY,uniqueImages.length);
+  await Promise.all(Array.from({length:workerCount},()=>prepareImages()));
+  if (failures.length) throw failures.sort((a,b)=>a.index-b.index)[0].error;
+  const replacements = new Map(uniqueImages.map((url,index)=>[url,uploadedUrls[index]] as const));
   if (!thumb) thumb = (await material(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64'))).mediaId;
   const html = replaceImageSources(d.bodyHtml, replacements);
   if (imageUrls(html).some(url => ![...replacements.values()].includes(url))) throw new Error('正文图片替换不完整');
