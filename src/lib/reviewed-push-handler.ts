@@ -5,7 +5,7 @@ import { beijingDate } from './utils';
 import { issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, packageCountries, reviewedCountry, imageUrls, type ReviewedPackage } from './reviewed-package';
 import { canResumePreparation, deliverReviewedPackage, readPackage } from './reviewed-delivery';
 import { loadPersistedPushRun, persistPushRun } from './push-run-store';
-import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
+import { probeReviewedImage, readReviewedDraft, REVIEWED_IMAGE_UPLOAD_CONCURRENCY } from './reviewed-wechat';
 import { summarizeDraftReadback, REVIEWED_DIAGNOSTICS_VERSION, coverReadbackSelfTest } from './reviewed-diagnostics';
 import { reviewedRecoveryStatus } from './reviewed-recovery';
 import { privateImageHealth } from './reviewed-private-images';
@@ -165,7 +165,7 @@ export async function reviewedPush(request: NextRequest) {
 export async function reviewedStatus(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ ok:false, error:'鉴权失败' }, { status:401 });
   try {
-    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v3',capabilities:{partialCountries:true,synchronousDelivery:true},diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,recovery:reviewedRecoveryStatus(),images:await privateImageHealth(),
+    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v3',capabilities:{partialCountries:true,synchronousDelivery:true,activePreparationWait:true,imagePreparationConcurrency:REVIEWED_IMAGE_UPLOAD_CONCURRENCY},diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,recovery:reviewedRecoveryStatus(),images:await privateImageHealth(),
       ...(request.nextUrl.searchParams.get('selftest')==='cover' ? {coverSelfTest:coverReadbackSelfTest()} : {})});
     const sb = getSupabaseClient();
     const version = request.nextUrl.searchParams.get('version');
