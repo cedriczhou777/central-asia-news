@@ -3,7 +3,7 @@ import { getSupabaseClient } from '../storage/database/supabase-client';
 import { beijingDate } from './utils';
 import { issueDate, issueCutoffElapsed, latestVersion, PACKAGE_COUNTRIES, packageCountries, reviewedCountry, imageUrls, type ReviewedPackage } from './reviewed-package';
 import { deliverReviewedPackage, readPackage } from './reviewed-delivery';
-import { persistPushRun } from './push-run-store';
+import { loadPersistedPushRun, persistPushRun } from './push-run-store';
 import { probeReviewedImage, readReviewedDraft } from './reviewed-wechat';
 import { summarizeDraftReadback, REVIEWED_DIAGNOSTICS_VERSION, coverReadbackSelfTest } from './reviewed-diagnostics';
 import { reviewedRecoveryStatus } from './reviewed-recovery';
@@ -61,6 +61,30 @@ export async function reviewedPush(request: NextRequest) {
     const start = await getSupabaseClient().from('push_runs').upsert({id:'latest', running:true,
       started_at:startedAt, finished_at:null, duration_ms:null, error:null, summary:{version,countries}, updated_at:startedAt}, {onConflict:'id'});
     if (start.error) return NextResponse.json({ok:false,error:'任务状态无法持久化，未启动投递'}, {status:503});
+    if (body.waitForCompletion === true) {
+      let summary: Awaited<ReturnType<typeof deliverReviewedPackage>> | { version:string; countries:typeof countries } = { version, countries };
+      let error: string | null;
+      let status = 200;
+      try {
+        const delivered = await deliverReviewedPackage(payload, undefined, undefined, countries);
+        summary = delivered;
+        error = delivered.ok ? null : '部分国家待处理';
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+        status = 500;
+      }
+      const finishedAt = new Date().toISOString();
+      await persistPushRun({ running:false, startedAt, finishedAt,
+        durationMs:Date.parse(finishedAt)-Date.parse(startedAt), error, summary });
+      const result = { running:false, version, countries, startedAt, finishedAt, summary };
+      // The shared store suppresses write errors; confirm this run before reporting completion.
+      const persisted = await loadPersistedPushRun();
+      if (!persisted?.started_at || !persisted.finished_at || persisted.running || persisted.error !== error ||
+        Date.parse(persisted.started_at) !== Date.parse(startedAt) || Date.parse(persisted.finished_at) !== Date.parse(finishedAt)) {
+        return NextResponse.json({ ...result, ok:false, success:false, error:'无法确认投递结果已持久化，请查询分国回执', deliveryError:error }, { status:503 });
+      }
+      return NextResponse.json({ ...result, ok:error === null, success:error === null, error }, { status });
+    }
     void deliverReviewedPackage(payload, undefined, undefined, countries).then(async summary => {
       await persistPushRun({ running:false, startedAt, finishedAt:new Date().toISOString(),
         durationMs:Date.now()-Date.parse(startedAt), error:summary.ok ? null : '部分国家待处理', summary });
@@ -78,7 +102,7 @@ export async function reviewedPush(request: NextRequest) {
 export async function reviewedStatus(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ ok:false, error:'鉴权失败' }, { status:401 });
   try {
-    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v3',capabilities:{partialCountries:true},diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,recovery:reviewedRecoveryStatus(),images:await privateImageHealth(),
+    if (request.nextUrl.searchParams.get('health') === '1') return NextResponse.json({ok:true,transportVersion:'reviewed-package-v3',capabilities:{partialCountries:true,synchronousDelivery:true},diagnosticsVersion:REVIEWED_DIAGNOSTICS_VERSION,recovery:reviewedRecoveryStatus(),images:await privateImageHealth(),
       ...(request.nextUrl.searchParams.get('selftest')==='cover' ? {coverSelfTest:coverReadbackSelfTest()} : {})});
     const sb = getSupabaseClient();
     const version = request.nextUrl.searchParams.get('version');
