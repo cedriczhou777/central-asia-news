@@ -27,7 +27,8 @@ async function main() {
   const originalFetch = globalThis.fetch;
   const originalNow = Date.now;
   const before = process.env;
-  process.env = { ...before, REVIEWED_PLAN_B: '1', PLAN_B_INGEST_SECRET: 'fixture-key-only',
+  process.env = { ...before, REVIEWED_PLAN_B: '1', REVIEWED_PLAN_B_FIRST_ISSUE: issue,
+    PLAN_B_INGEST_SECRET: '', INGEST_SECRET: 'fixture-key-only',
     SUPABASE_URL: 'https://db.unit-test.example', SUPABASE_ANON_KEY: 'fixture-anon', SUPABASE_SERVICE_ROLE_KEY: 'fixture-role' };
   let rows: object[] = [checkpoint('ready','preview',{ snapshot: preview, metrics: {} })];
   let now = Date.parse(at('05:30:00'));
@@ -40,6 +41,11 @@ async function main() {
   };
   try {
     assert.equal((await GET(new Request(root))).status,401);
+    process.env.REVIEWED_PLAN_B_FIRST_ISSUE = '';
+    process.env.REVIEWED_PLAN_B_CHECKS = '1';
+    assert.equal((await run('manifest', 'preview')).status, 404, 'preflight cannot enter the publication pipeline');
+    assert.equal((await GET(new Request(`${root}?health=1`, { headers }))).status, 200);
+    process.env.REVIEWED_PLAN_B_FIRST_ISSUE = issue;
     const early = await run('manifest', 'preview');
     assert.equal(early.status, 200);
     assert.deepEqual((await early.json()).snapshot.candidates.map((row: Candidate) => row.id), ['early-cache']);
@@ -62,7 +68,7 @@ async function main() {
     Date.now = originalNow;
     globalThis.fetch = originalFetch;
   }
-  console.log('Plan B endpoint: authenticated preview, pending after freeze, recoverable 503 and exact delta passed.');
+  console.log('Plan B endpoint: existing-key preflight, activation gate, authenticated preview and exact freeze delta passed.');
 }
 
 void main().catch(error => { console.error(error); process.exitCode = 1; });

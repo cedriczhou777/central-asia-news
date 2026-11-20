@@ -4,10 +4,10 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 from hashlib import sha256
+from http.client import HTTPSConnection
 import ipaddress
 import io
 import json
-import os
 from pathlib import Path
 import re
 import socket
@@ -16,7 +16,7 @@ import sys
 from tempfile import NamedTemporaryFile
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener, getproxies, proxy_bypass
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from PIL import Image
 
@@ -26,13 +26,9 @@ EFFECTIVE_ISSUE = '2026-11-20'
 SUPPORTED_FORMATS = {'JPEG', 'PNG', 'WEBP', 'GIF', 'AVIF', 'HEIF', 'TIFF'}
 
 
-def managed_proxy_for(host):
-    # In Work the configured egress proxy resolves public hosts. Local DNS
-    # is disabled and must not prevent the approved HTTPS request.
-    proxy = urlsplit(getproxies().get('https', ''))
-    return (os.environ.get('CODEX_NETWORK_PROXY_ACTIVE') == '1'
-            and proxy.hostname in ('127.0.0.1', '::1', 'localhost')
-            and not proxy_bypass(host))
+def public_address(value):
+    address = ipaddress.ip_address(value)
+    return address.is_global and not address.is_multicast and not getattr(address, 'is_site_local', False)
 
 
 def public_url(url):
@@ -45,18 +41,42 @@ def public_url(url):
         literal = ipaddress.ip_address(host)
     except ValueError:
         literal = None
-    if literal is not None and not literal.is_global:
+    if literal is not None and not public_address(host):
         raise ValueError('nonpublic_image_address')
     if literal is None and ('.' not in host or host.endswith(('.local', '.localhost', '.internal', '.home.arpa'))):
         raise ValueError('nonpublic_image_address')
-    try:
-        addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        if managed_proxy_for(host):
-            return
-        raise
-    if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
+
+
+def connect_public(address, timeout, source_address=None):
+    host, port = address
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addresses or any(not public_address(row[4][0]) for row in addresses):
         raise ValueError('nonpublic_image_address')
+    last_error = None
+    for family, kind, protocol, _, target in addresses:
+        connection = socket.socket(family, kind, protocol)
+        try:
+            connection.settimeout(timeout)
+            if source_address is not None:
+                connection.bind(source_address)
+            # Connect to the checked address. TLS still verifies the origin hostname.
+            connection.connect(target)
+            return connection
+        except OSError as error:
+            last_error = error
+            connection.close()
+    raise last_error or OSError('public_connection_unavailable')
+
+
+class PublicConnection(HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = connect_public
+
+
+class PublicHTTPSHandler(HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(PublicConnection, request, context=self._context)
 
 
 class PublicRedirect(HTTPRedirectHandler):
@@ -67,11 +87,15 @@ class PublicRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def public_opener():
+    return build_opener(ProxyHandler({}), PublicRedirect(), PublicHTTPSHandler())
+
+
 def download(url, page):
     public_url(url)
     request = Request(url, headers={'Referer': page, 'User-Agent': 'Mozilla/5.0',
                                     'Accept': 'image/*'})
-    with build_opener(PublicRedirect()).open(request, timeout=10) as response:
+    with public_opener().open(request, timeout=10) as response:
         data = response.read(MAX_BYTES + 1)
     if not 0 < len(data) <= MAX_BYTES:
         raise ValueError('invalid_image_length')
@@ -102,7 +126,8 @@ def collect(article, root, cached=None):
     if len(plan) == 1:
         plan.append(plan[0])
     for index, url in enumerate(plan):
-        if index and url == plan[index - 1] and attempts[-1]['result'] not in ('TimeoutExpired', 'URLError'):
+        if index and url == plan[index - 1] and attempts[-1]['result'] not in (
+                'TimeoutExpired', 'URLError', 'HTTP 502', 'HTTP 503', 'HTTP 504'):
             break
         known = (cached or {}).get(url, {})
         key = known.get('sha256')

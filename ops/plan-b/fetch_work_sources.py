@@ -1,5 +1,5 @@
 """Batch fetch public source HTML with validated decoding and bounded retries."""
-import argparse,codecs,concurrent.futures,gzip,hashlib,json,math,re,subprocess,sys,time,unicodedata,zlib
+import argparse,codecs,concurrent.futures,gzip,hashlib,io,json,math,re,subprocess,sys,time,unicodedata,zlib
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from urllib.parse import urljoin,urlparse,urlsplit,urlunsplit
@@ -16,12 +16,17 @@ class HTMLValidationError(ValueError):
 
 def decode_transport(raw,encoding=''):
     encoding=encoding.lower().strip()
-    if raw.startswith(b'\x1f\x8b') or encoding=='gzip':return gzip.decompress(raw)
-    if encoding=='deflate':
-        try:return zlib.decompress(raw)
-        except zlib.error:return zlib.decompress(raw,-zlib.MAX_WBITS)
-    if encoding not in ('','identity'):raise ValueError('unsupported_content_encoding_'+encoding)
-    return raw
+    if raw.startswith(b'\x1f\x8b') or encoding=='gzip':
+        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as zipped:
+            decoded=zipped.read(MAX_TRANSPORT_BYTES+1)
+    elif encoding=='deflate':
+        try: decoder=zlib.decompressobj();decoded=decoder.decompress(raw,MAX_TRANSPORT_BYTES+1)
+        except zlib.error: decoder=zlib.decompressobj(-zlib.MAX_WBITS);decoded=decoder.decompress(raw,MAX_TRANSPORT_BYTES+1)
+        if len(decoded)<=MAX_TRANSPORT_BYTES and not decoder.eof:raise ValueError('incomplete_deflate_response')
+    elif encoding in ('','identity'):decoded=raw
+    else:raise ValueError('unsupported_content_encoding_'+encoding)
+    if len(decoded)>MAX_TRANSPORT_BYTES:raise ValueError('decoded_source_too_large')
+    return decoded
 
 def decode_html(raw,headers):
     """BOM > HTTP charset > HTML charset > strict UTF-8 > Windows-1252.
@@ -619,9 +624,9 @@ def network_worker(url, socket_timeout):
     """Read one response in an isolated process without touching the cache."""
     body = b''
     try:
-        from source_article_images import PublicRedirect, public_url
+        from source_article_images import public_opener, public_url
         public_url(url)
-        with urllib.request.build_opener(PublicRedirect()).open(url, timeout=socket_timeout) as response:
+        with public_opener().open(url, timeout=socket_timeout) as response:
             body = response.read(MAX_TRANSPORT_BYTES + 1)
             result = {'status': response.status, 'final_url': response.url, 'response_headers': {
                 k.lower(): v for k,v in response.headers.items()

@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -16,9 +17,11 @@ from zipfile import ZipFile
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
-from cloud_handoff import backup, coverage, inventory_entries, read, restore, write
+from cloud_handoff import backup, coverage, inventory_entries, originals, read, restore, write
 import cloud_release
+from fetch_work_sources import decode_transport
 import prepare_country_release
+from source_article_images import collect, connect_public
 from test_work_quantity import fixture
 from validate_work_package import digest
 from verify_rendered_package import verify_rendered_package
@@ -121,6 +124,33 @@ class CloudReleaseTest(unittest.TestCase):
                                          'status': 503, 'fetchRetryable': True}]}
         pending, _ = coverage(registry, 'kg', inventory, datetime.fromisoformat(STAMP))
         self.assertEqual(pending, ['missing', 'retrying'])
+
+    def test_cached_originals_and_bounded_fetch(self):
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            inputs(directory)
+            cache = directory / 'cache'
+            restore(cache, directory / 'input.gz', editorial_only=True)
+            self.assertEqual(originals(cache, ISSUE, 'kg', ['article0']),
+                             originals(cache, ISSUE, 'kg', ['article0']))
+        with patch('fetch_work_sources.MAX_TRANSPORT_BYTES', 8):
+            with self.assertRaisesRegex(ValueError, 'decoded_source_too_large'):
+                decode_transport(gzip.compress(b'0123456789'), 'gzip')
+        with patch('source_article_images.socket.getaddrinfo', return_value=[(2, 1, 6, '', ('127.0.0.1', 443))]):
+            with self.assertRaisesRegex(ValueError, 'nonpublic'):
+                connect_public(('test.example', 443), 1)
+
+    def test_image_retry_is_bounded_and_classifies_permanent_errors(self):
+        original = {'id': 'fixture', 'source_url': 'https://source.example/article',
+                    'articleImages': {'candidates': [{'url': 'https://source.example/image.jpg'}]}}
+        with tempfile.TemporaryDirectory() as td:
+            for status, calls in (('HTTP 404', 1), ('HTTP 403', 1), ('HTTP 503', 2), ('HTTP 429', 1)):
+                failure = SimpleNamespace(returncode=1, stderr=status.encode())
+                with patch('source_article_images.subprocess.run', return_value=failure) as download:
+                    result = collect(original, Path(td))
+                    self.assertEqual(download.call_count, calls)
+                    self.assertEqual(result['sourceImage']['status'], 'unavailable')
+                    self.assertIn(status, result['imageUnavailableReason'])
 
 
 if __name__ == '__main__':

@@ -68,7 +68,7 @@ def load_reviewed_release(root):
         data = image.read_bytes()
         if len(data) != row['bytes'] or sha(data) != row['sha256']:
             raise ValueError('local image bytes differ from the signed image identity')
-        pictures[url] = data
+        pictures[url] = image
     return state, package['countries'][country], articles, pictures, review_hash
 
 
@@ -79,12 +79,13 @@ def image_for_word(data):
         if (image.format in ('JPEG', 'PNG') and image.getexif().get(274, 1) == 1
                 and max(image.size) <= 1600 and len(data) <= 1_000_000):
             return data, image.format.lower(), image.size
-        # Convert the same verified original when native Word rendering is not
-        # portable. Word receives the displayed first frame of animated images.
-        image = ImageOps.exif_transpose(image)
+        # Downsize before orientation and color conversion to avoid full-size
+        # intermediate copies. JPEG also downsamples inside its decoder.
+        if image.format == 'JPEG':
+            image.draft('RGB', (1600, 1600))
+        image.thumbnail((1600, 1600), reducing_gap=2.0)
         alpha = 'A' in image.getbands() or 'transparency' in image.info
-        image = image.convert('RGBA' if alpha else 'RGB')
-        image.thumbnail((1600, 1600))
+        image = ImageOps.exif_transpose(image).convert('RGBA' if alpha else 'RGB')
         output = BytesIO()
         if alpha:
             image.save(output, format='PNG')
@@ -150,7 +151,7 @@ def word_parts(country, articles, pictures):
         url = article.get('image_url')
         if url:
             if url not in image_map:
-                data, suffix, size = image_for_word(pictures[url])
+                data, suffix, size = image_for_word(pictures[url].read_bytes())
                 index = len(image_map) + 1
                 name = f'media/image-{index}.{suffix}'
                 rel_id = f'rPhoto{index}'

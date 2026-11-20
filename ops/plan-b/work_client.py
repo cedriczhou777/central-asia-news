@@ -1,7 +1,6 @@
 """Mechanical handoff client for the existing Work issue run."""
 
 import argparse
-from datetime import datetime
 import hashlib
 import json
 import os
@@ -20,11 +19,13 @@ class NoRedirect(HTTPRedirectHandler):
 
 def protected_connection():
     base = os.environ.get('CENTRAL_ASIA_PLAN_B_URL', '').rstrip('/')
-    secret = os.environ.get('CENTRAL_ASIA_INGEST_SECRET', '')
+    secret = os.environ.get('CENTRAL_ASIA_INGEST_SECRET') or os.environ.get('INGEST_SECRET', '')
     parts = urlsplit(base)
     if (parts.scheme != 'https' or not parts.hostname or parts.username or parts.password
             or parts.port not in (None, 443) or parts.path or parts.query or parts.fragment):
         raise ValueError('secure_plan_b_connection_missing')
+    if not secret:
+        raise ValueError('protected_ingest_secret_missing')
     return base, secret
 
 
@@ -63,13 +64,15 @@ def main():
     parser.add_argument('--ids', nargs='*')
     parser.add_argument('--hash')
     parser.add_argument('--document', type=Path)
+    parser.add_argument('--verify', action='store_true', help='Run the read-only service prerequisites check with health')
     args = parser.parse_args()
     try:
         base, secret = protected_connection()
         if args.issue and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', args.issue):
             raise ValueError('invalid_issue')
         if args.view == 'health':
-            query, body = {'health': 1}, None
+            query = {'health': 1, **({'verify': 1} if args.verify else {})}
+            body = None
         else:
             query = {'view': args.view, 'phase': 'final' if args.view == 'changes' else args.phase}
             if args.issue:

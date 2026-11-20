@@ -1,10 +1,15 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { Readable, Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { getSupabaseClient, getSupabaseServiceRoleKey } from '../storage/database/supabase-client';
 import type { PlanBCountry, Snapshot } from './plan-b-handoff';
 import { sha256 } from './plan-b-handoff';
 
 const TABLE = 'plan_b_daily';
 const BUCKET = 'plan-b-work';
+const OBJECT_LIMIT = 40 * 1024 * 1024;
 export type Step = 'preview' | 'final' | 'editorial' | 'release' | 'word' | 'wechat' | 'readback';
 export type ClaimStep = Exclude<Step, 'editorial'>;
 
@@ -26,8 +31,9 @@ export async function stagingIsPrivate() {
   return !error && data?.public === false;
 }
 
-export async function getState(issue: string): Promise<StateRow[]> {
-  const { data, error } = await client().from(TABLE).select('issue_date,country,step,state,attempt,receipt,updated_at,lease_until,retry_after').eq('issue_date', issue);
+export async function getState(issue: string, country?: PlanBCountry): Promise<StateRow[]> {
+  const query = client().from(TABLE).select('issue_date,country,step,state,attempt,receipt,updated_at,lease_until,retry_after').eq('issue_date', issue);
+  const { data, error } = await (country ? query.eq('country', country) : query);
   if (error) throw new Error('plan_b_state_read_failed');
   return (data ?? []) as StateRow[];
 }
@@ -68,26 +74,52 @@ export async function knownLiveReceipts(issue: string) {
   return (data ?? []) as {version: string; country: PlanBCountry}[];
 }
 
-export async function saveObject(issue: string, country: PlanBCountry, suffix: 'gz' | 'docx', bytes: Buffer): Promise<ObjectReceipt> {
-  if (!bytes.length || bytes.length > 40 * 1024 * 1024) throw new Error('plan_b_object_size');
-  const hash = sha256(bytes);
+async function uploadObject(issue: string, country: PlanBCountry, suffix: 'gz' | 'docx', hash: string,
+    bytes: number, body: Buffer | ReturnType<typeof createReadStream>): Promise<ObjectReceipt> {
   const path = `${issue}/${country}/${hash}.${suffix}`;
-  const { error } = await client().storage.from(BUCKET).upload(path, bytes, { upsert: false,
+  const { error } = await client().storage.from(BUCKET).upload(path, body, { upsert: false, duplex: 'half',
     contentType: suffix === 'gz' ? 'application/gzip' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-  const receipt = { path, sha256: hash, bytes: bytes.length };
-  if (error) {
-    // Retry only the read on an unknown upload result. The object is content-addressed.
-    await readObject(receipt);
-  }
+  const receipt = { path, sha256: hash, bytes };
+  // An unknown upload result is settled by an exact read, never an overwrite.
+  if (error) await verifyObject(receipt);
   return receipt;
 }
 
-export async function readObject(receipt: ObjectReceipt) {
-  const { data, error } = await client().storage.from(BUCKET).download(receipt.path);
-  if (error || !data || data.size !== receipt.bytes || data.size > 40 * 1024 * 1024) throw new Error('plan_b_object_unavailable');
-  const bytes = Buffer.from(await data.arrayBuffer());
-  if (sha256(bytes) !== receipt.sha256) throw new Error('plan_b_object_hash_mismatch');
-  return bytes;
+export async function saveObject(issue: string, country: PlanBCountry, suffix: 'gz', bytes: Buffer) {
+  if (!bytes.length || bytes.length > OBJECT_LIMIT) throw new Error('plan_b_object_size');
+  return uploadObject(issue, country, suffix, sha256(bytes), bytes.length, bytes);
+}
+
+export async function saveFile(issue: string, country: PlanBCountry, suffix: 'gz' | 'docx', filename: string) {
+  const { size } = await stat(filename);
+  if (!size || size > OBJECT_LIMIT) throw new Error('plan_b_object_size');
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filename)) hash.update(chunk);
+  const stream = createReadStream(filename);
+  try { return await uploadObject(issue, country, suffix, hash.digest('hex'), size, stream); }
+  finally { stream.destroy(); }
+}
+
+export async function verifyObject(receipt: ObjectReceipt, filename?: string) {
+  if (!Number.isSafeInteger(receipt.bytes) || receipt.bytes < 1 || receipt.bytes > OBJECT_LIMIT) {
+    throw new Error('plan_b_object_size');
+  }
+  const { data, error } = await client().storage.from(BUCKET).download(receipt.path).asStream();
+  if (error || !data) throw new Error('plan_b_object_unavailable');
+  const hash = createHash('sha256');
+  const body = Readable.fromWeb(data as Parameters<typeof Readable.fromWeb>[0]);
+  async function* verify(chunks: AsyncIterable<Buffer>) {
+    let bytes = 0;
+    for await (const chunk of chunks) {
+      bytes += chunk.length;
+      if (bytes > receipt.bytes) throw new Error('plan_b_object_size');
+      hash.update(chunk);
+      yield chunk;
+    }
+    if (bytes !== receipt.bytes || hash.digest('hex') !== receipt.sha256) throw new Error('plan_b_object_hash_mismatch');
+  }
+  await pipeline(body, verify, filename ? createWriteStream(filename, { flags:'wx', mode:0o600 })
+    : new Writable({ write(_chunk, _encoding, callback) { callback(); } }));
 }
 
 export async function wordLink(receipt: ObjectReceipt) {

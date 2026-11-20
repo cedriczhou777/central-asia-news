@@ -14,8 +14,14 @@ export function planBEnabled() {
   return process.env.REVIEWED_PLAN_B === '1';
 }
 
+export function planBIngestSecret() {
+  return process.env.PLAN_B_INGEST_SECRET || process.env.INGEST_SECRET || '';
+}
+
 export function planBAdmitted() {
-  return planBEnabled() && Boolean(process.env.PLAN_B_INGEST_SECRET);
+  const firstIssue = process.env.REVIEWED_PLAN_B_FIRST_ISSUE;
+  if (!firstIssue || !planBEnabled() || !planBIngestSecret() || !planBHandlesIssue(firstIssue)) return false;
+  try { issueWindow(firstIssue); return true; } catch { return false; }
 }
 
 export function planBHandlesIssue(issue: string) {

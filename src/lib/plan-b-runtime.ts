@@ -6,17 +6,20 @@ import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 
 export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-1';
-const active = new Map<string, ClaimStep>();
-let registered = false;
-let reading = false;
-let report: Record<string, unknown> | null = null;
-let previewSettled = '';
-let completedIssue = '';
-const emitted = new Set<string>();
-const workerLimit = { preview: 2, final: 2, release: 2, word: 2, wechat: 2, readback: 2 };
+const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
+type RuntimeState = {
+  active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
+  report: Record<string, unknown> | null; previewSettled: string; completedIssue: string; emitted: Set<string>;
+};
+const shared = globalThis as typeof globalThis & { [key: symbol]: RuntimeState | undefined };
+const runtime = shared[stateKey] ??= { active: new Map(), registered:false, reading:false,
+  report:null, previewSettled:'', completedIssue:'', emitted:new Set() };
+const { active, emitted } = runtime;
+const workerLimit = { preview: 2, final: 2, release: 2, word: 1, wechat: 2, readback: 2 };
+const cpuSteps = new Set<ClaimStep>(['preview','final','release','word']);
 
 export function planBRegistration() {
-  return { registered, activeSteps: active.size, report };
+  return { registered:runtime.registered, activeSteps: active.size, report:runtime.report };
 }
 
 function eligible(row: StateRow | undefined, now: number) {
@@ -44,7 +47,9 @@ function schedule(issue: string, country: PlanBCountry, step: ClaimStep, row: St
   const key = `${issue}/${country}/${step}`;
   if (!eligible(row, Date.now()) || active.has(key)) return;
   const lane = step === 'preview' ? 'final' : step;
-  if ([...active.values()].filter(value => (value === 'preview' ? 'final' : value) === lane).length >= workerLimit[lane]) return;
+  const current = [...active.values()];
+  if (current.filter(value => (value === 'preview' ? 'final' : value) === lane).length >= workerLimit[lane]) return;
+  if (cpuSteps.has(step) && current.filter(value => cpuSteps.has(value)).length >= 2) return;
   active.set(key, step);
   void (async () => {
     const lease = await claim(issue, country, step);
@@ -62,10 +67,10 @@ function schedule(issue: string, country: PlanBCountry, step: ClaimStep, row: St
 
 async function tick() {
   const clock = planBClock();
-  if (reading || !(clock.previewAllowed || clock.reconcileAllowed)) return;
-  if (completedIssue === clock.issue || (clock.previewAllowed && previewSettled === clock.issue)
+  if (runtime.reading || !(clock.previewAllowed || clock.reconcileAllowed)) return;
+  if (runtime.completedIssue === clock.issue || (clock.previewAllowed && runtime.previewSettled === clock.issue)
       || (!clock.finalizationAllowed && !clock.previewAllowed && clock.minute % 5 !== 0)) return;
-  reading = true;
+  runtime.reading = true;
   try {
     const issue = clock.issue;
     const rows = await getState(issue);
@@ -75,13 +80,13 @@ async function tick() {
       editorial: complete(country, ['editorial']), word: complete(country, ['word']),
       wechat: complete(country, ['wechat','readback']) }));
     if (clock.previewAllowed && scope.every(item => item.preview)) {
-      previewSettled = issue;
+      runtime.previewSettled = issue;
       return;
     }
     if (scope.every(item => item.word && item.wechat)) {
-      completedIssue = issue;
-      report = { issue, finishedAt: new Date().toISOString(), status: 'complete', countries: scope };
-      console.info(JSON.stringify({ event: 'plan_b_delivered', ...report }));
+      runtime.completedIssue = issue;
+      runtime.report = { issue, finishedAt: new Date().toISOString(), status: 'complete', countries: scope };
+      console.info(JSON.stringify({ event: 'plan_b_delivered', ...runtime.report }));
       return;
     }
     if ([450,470,480,540].includes(clock.minute)) {
@@ -137,15 +142,15 @@ async function tick() {
         });
       }
     }
-    report = { issue, checkedAt: new Date().toISOString(), status: 'running' };
+    runtime.report = { issue, checkedAt: new Date().toISOString(), status: 'running' };
   } catch {
-    report = { issue: clock.issue, checkedAt: new Date().toISOString(), status: 'state_unavailable' };
-  } finally { reading = false; }
+    runtime.report = { issue: clock.issue, checkedAt: new Date().toISOString(), status: 'state_unavailable' };
+  } finally { runtime.reading = false; }
 }
 
 export function startPlanB() {
-  if (registered || !planBAdmitted()) return;
-  registered = true;
+  if (runtime.registered || !planBAdmitted()) return;
+  runtime.registered = true;
   // Catch up when a reserved instance starts late. State is shared across
   // revision restarts and instances and the database admits each job once.
   void tick();

@@ -4,7 +4,7 @@ import { changes, idPattern, isCountry, type PlanBCountry } from '@/lib/plan-b-h
 import { verifyEditorial } from '@/lib/plan-b-editorial';
 import { getState, saveEditorial, stagingIsPrivate, type SnapshotReceipt, type StateRow } from '@/lib/plan-b-store';
 import { archiveEditorial, runCloudScript, sourceOriginals } from '@/lib/plan-b-worker';
-import { planBAdmitted, planBClock, planBHandlesIssue } from '@/lib/plan-b-window';
+import { planBAdmitted, planBClock, planBHandlesIssue, planBIngestSecret } from '@/lib/plan-b-window';
 import { PLAN_B_RUNTIME_VERSION, planBRegistration } from '@/lib/plan-b-runtime';
 import { getCountryWord, type WordReceipt } from '@/lib/plan-b-release';
 
@@ -15,7 +15,7 @@ const json = (value: unknown, status = 200) => NextResponse.json(value, {
 });
 
 function authorized(req: Request) {
-  const secret = Buffer.from(process.env.PLAN_B_INGEST_SECRET || '');
+  const secret = Buffer.from(planBIngestSecret());
   const supplied = Buffer.from(req.headers.get('x-ingest-secret') || '');
   return secret.length > 0 && secret.length === supplied.length && timingSafeEqual(secret, supplied);
 }
@@ -68,10 +68,10 @@ export async function GET(req: Request) {
   if (!planBHandlesIssue(issue) || (!archiveView && issue !== clock.issue) || !Number.isInteger(archiveAge)
         || archiveAge < 0 || archiveAge > 7) return json({ ok: false, reason: 'issue_outside_cutover' }, 409);
   try {
-    const rows = await getState(issue);
-    if (view === 'status') return json({ ok: true, issue, rows: report(rows) });
+    if (view === 'status') return json({ ok: true, issue, rows: report(await getState(issue)) });
     const country = params.get('country') || '';
     if (!isCountry(country)) return json({ ok: false, reason: 'invalid_country' }, 400);
+    const rows = await getState(issue, country);
     if (view === 'word') {
       const word = rows.find(row => row.country === country && row.step === 'word' && row.state === 'ready');
       if (!word?.receipt) return json({ ok: true, state: 'waiting', issue, country }, 202);
@@ -140,7 +140,7 @@ export async function POST(req: Request) {
   let value: unknown;
   try { value = await boundedJson(req); } catch { return json({ ok: false, reason: 'invalid_body' }, 400); }
   try {
-    const rows = await getState(issue);
+    const rows = await getState(issue, country);
     const frozen = receipt(rows, country, 'final');
     if (!frozen) return json({ ok: false, reason: 'freeze_incomplete' }, 409);
     let editorial;

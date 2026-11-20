@@ -4,10 +4,10 @@
 
 ## 部署顺序
 
-1. 保留当前云托管版本、旧 Work 时间和任务配置。检查生产库在途微信写入计数为零，再指定候选提交构建镜像。在镜像构建参数写入准确的 BUILD_GIT_SHA，以线上回读为准。
-2. 在候选镜像先设 REVIEWED_PLAN_B=0 和 REVIEWED_PLAN_B_CHECKS=1，沿用现有 06:10 Work 和旧恢复任务。将新的专用鉴权绑定到云托管的 PLAN_B_INGEST_SECRET。凭据进入环境的密钥配置。
-3. 从同一 Work 运行环境经 HTTPS 请求 /api/plan-b?health=1&verify=1。回读应返回候选提交、状态表可访问、私有存储桶和 Python 渲染模块可用。用品质代表性的少量来源分别验证普通网页、原图 CDN 和重要社会媒体的云端可达性。验证可达性只需要读请求。
-4. 在控制台 central-asia-news → 服务设置 → 定时扩缩容编辑现有每日规则，设为北京时间 04:45–09:30，扩容至 1 个实例。以窗口外最小实例数 0 为目标，核对实际端口、实例上限及 CPU 和内存。端口继续与 DEPLOY_RUN_PORT 或 PORT 一致。
+1. 保留当前云托管版本、旧 Work 时间和任务配置。确认生产库无在途微信写入后，将审查过的提交合并到 main，使用现有流水线和根目录 Dockerfile 构建。在构建参数写入该次 main 的 BUILD_GIT_SHA，并以线上回读核对。
+2. 发布预检版本时设 REVIEWED_PLAN_B=0 和 REVIEWED_PLAN_B_CHECKS=1，沿用现有 06:10 Work 和旧恢复任务。云端复用 INGEST_SECRET，已设置专用 PLAN_B_INGEST_SECRET 时采用专用密钥。Work 侧用受保护的 CENTRAL_ASIA_INGEST_SECRET 或 INGEST_SECRET。
+3. 从同一 Work 执行环境运行 work_client.py health --verify。核对最终提交、状态表、私有存储桶和 Python 渲染模块。用品质代表性的少量来源分别验证普通网页、原图 CDN 和重要社会媒体的云端可达性。保持预检为只读。
+4. 核对现有规则为北京时间 04:45–09:30，扩容至 1 个实例，最小 0，最大 1，规格 0.25 核与 0.5 GB，端口 3000。保留已符合要求的设置。
 5. 确认当天无在途写入后启用 REVIEWED_PLAN_B=1，把 REVIEWED_PLAN_B_FIRST_ISSUE 设为下一期。同时将现有唯一日报改为 05:30。校对两套设置的生效状态、实际镜像 SHA、调度注册和下次运行时间。
 
 ## 单次 Work 交接

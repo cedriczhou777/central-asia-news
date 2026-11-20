@@ -3,7 +3,6 @@
 import argparse
 from datetime import datetime, timezone
 import hashlib
-import io
 import json
 from pathlib import Path
 import re
@@ -52,7 +51,7 @@ def backup(root, destination):
                 tar.addfile(info, source)
 
 
-def restore(root, source):
+def restore(root, source, editorial_only=False):
     root.mkdir(mode=0o700, exist_ok=True)
     total = 0
     with tarfile.open(source, 'r|gz') as tar:
@@ -60,6 +59,9 @@ def restore(root, source):
             total += entry.size
             if not archive_name(entry.name) or not entry.isfile() or total > LIMIT:
                 raise ValueError('invalid_archive_member')
+            if editorial_only and entry.name not in {'candidate_ledger.json', 'source_scan_audit.json'} and (
+                    not entry.name.startswith('evidence/') or not entry.name.endswith('.json')):
+                continue
             file = root / entry.name
             file.parent.mkdir(exist_ok=True)
             with file.open('xb') as out, tar.extractfile(entry) as data:
@@ -126,7 +128,7 @@ def scan(root, directory, issue, country, phase, seconds):
     if known.is_file():
         restore(root, known)
     audit = discover(registry, country, issue, root, cutoff.isoformat() if phase == 'final' else None,
-                     workers=4, max_seconds=seconds)
+                     workers=2, max_seconds=seconds)
     pending, metrics = coverage(registry, country, audit, cutoff)
     # Deferred pagination is retained as evidence. An outstanding article job
     # discovered by this scan prevents silently closing the increment.
@@ -140,8 +142,7 @@ def scan(root, directory, issue, country, phase, seconds):
     backup(root, directory / 'output.gz')
 
 
-def originals(root, source, issue, country, ids):
-    restore(root, source)
+def originals(root, issue, country, ids):
     result = candidate_originals(discovery_index(root, issue, country), ids)
     for row in result['articles']:
         row.pop('sourceJSON', None)
@@ -152,7 +153,7 @@ def originals(root, source, issue, country, ids):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['scan', 'originals'])
+    parser.add_argument('command', choices=['scan', 'extract-originals', 'originals'])
     parser.add_argument('directory', type=Path)
     parser.add_argument('issue')
     parser.add_argument('country', choices=['kz', 'uz', 'kg', 'tj', 'az'])
@@ -162,9 +163,12 @@ def main():
     if args.command == 'scan':
         phase, seconds = args.args
         scan(root, args.directory, args.issue, args.country, phase, float(seconds))
+    elif args.command == 'extract-originals':
+        restore(root, args.directory / 'input.gz', editorial_only=True)
     else:
+        cache, *ids = args.args
         write(args.directory / 'originals.json',
-              originals(root, args.directory / 'input.gz', args.issue, args.country, args.args))
+              originals(Path(cache) / 'source', args.issue, args.country, ids))
 
 
 if __name__ == '__main__':
