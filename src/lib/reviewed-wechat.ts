@@ -234,3 +234,17 @@ export async function readReviewedDraft(mediaId: string) {
   if (!article || data.news_item.length !== 1) throw new Error('草稿回读结构异常');
   return article as { title: string; digest: string; content: string; content_source_url?:string; thumb_media_id?:string; thumb_url?:string };
 }
+
+/** Read one page only when draft/add had an unknown result with no media ID. */
+export async function findRecentReviewedDrafts(title: string, digest: string, since: number) {
+  const data = await api('draft/batchget', { offset: 0, count: 20, no_content: 0 });
+  if (!Array.isArray(data.item)) throw new Error('reviewed_draft_list_unavailable');
+  return [...new Set<string>(data.item.flatMap((row: {
+    media_id?: unknown; update_time?: number; content?: { news_item?: { title?: string; digest?: string }[] };
+  }) => {
+    const articles = row?.content?.news_item;
+    return typeof row?.media_id === 'string' && row.media_id && typeof row.update_time === 'number'
+      && row.update_time * 1_000 >= since && articles?.length === 1
+      && articles[0].title === title && articles[0].digest === digest ? [row.media_id] : [];
+  }))];
+}

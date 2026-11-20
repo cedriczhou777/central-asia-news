@@ -1,0 +1,2804 @@
+{
+  "registryVersion": "SOURCE-REGISTRY-20261119-v9",
+  "sources": [
+    {
+      "allowedHosts": [
+        "www.inform.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://www.inform.kz/"
+        }
+      ],
+      "family": "Kazinform",
+      "id": "kz-kazinform",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "en.tengrinews.kz",
+        "tengrinews.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://tengrinews.kz/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://tengrinews.kz/economic/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://tengrinews.kz/page/corrections/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://tengrinews.kz/economic/page/2/"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://en.tengrinews.kz/"
+        }
+      ],
+      "family": "Tengrinews",
+      "id": "kz-tengrinews",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "kz.kursiv.media"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://kz.kursiv.media/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://kz.kursiv.media/guide/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://kz.kursiv.media/newspaper/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://kz.kursiv.media/guide/page/2/"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://kz.kursiv.media/en/"
+        }
+      ],
+      "family": "Kursiv Kazakhstan",
+      "id": "kz-kursiv-kazakhstan",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "kapital.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://kapital.kz/"
+        }
+      ],
+      "family": "Kapital.kz",
+      "id": "kz-kapital-kz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "inbusiness.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://inbusiness.kz/ru/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://inbusiness.kz/ru/cat/biznes"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://inbusiness.kz/ru/cat/biznes/industriya"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://inbusiness.kz/ru/cat/biznes/?page=2"
+        }
+      ],
+      "family": "Inbusiness.kz",
+      "id": "kz-inbusiness-kz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "astanatimes.com"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://astanatimes.com/"
+        }
+      ],
+      "family": "The Astana Times",
+      "id": "kz-the-astana-times",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "lsm.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://lsm.kz/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://lsm.kz/banks"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://lsm.kz/markets"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://lsm.kz/latest"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://lsm.kz/banks?page=2"
+        }
+      ],
+      "family": "LS",
+      "id": "kz-ls",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "forbes.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://forbes.kz/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://forbes.kz/category/economy"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://forbes.kz/category/agriculture"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://forbes.kz/announce"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://forbes.kz/category/economy?page=2"
+        }
+      ],
+      "family": "Forbes Kazakhstan",
+      "id": "kz-forbes-kazakhstan",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "informburo.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://informburo.kz/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://informburo.kz/page/politika-konfidencialnosti-i-obrabotki-personalnyx-dannyx"
+        }
+      ],
+      "family": "Informburo",
+      "id": "kz-informburo",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "total.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://total.kz/ru"
+        }
+      ],
+      "family": "Total.kz",
+      "id": "kz-total-kz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "www.gazeta.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.gazeta.uz/ru/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.gazeta.uz/ru/politics/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.gazeta.uz/ru/economy/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://www.gazeta.uz/ru/archive/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://www.gazeta.uz/ru/politics?page=2"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://www.gazeta.uz/en/"
+        }
+      ],
+      "family": "Gazeta.uz",
+      "id": "uz-gazeta-uz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "kun.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://kun.uz/ru"
+        }
+      ],
+      "family": "Kun.uz",
+      "id": "uz-kun-uz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "www.spot.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.spot.uz/ru/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.spot.uz/ru/fintech/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.spot.uz/ru/transport/"
+        }
+      ],
+      "family": "Spot.uz",
+      "id": "uz-spot-uz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "www.uzdaily.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.uzdaily.uz/ru/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.uzdaily.uz/ru/section/economy/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://www.uzdaily.uz/ru/news/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://www.uzdaily.uz/ru/section/economy/page/2/"
+        },
+        {
+          "language": "und",
+          "role": "language",
+          "url": "https://www.uzdaily.uz/en/"
+        }
+      ],
+      "family": "UzDaily",
+      "id": "uz-uzdaily",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "review.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://review.uz/ru"
+        },
+        {
+          "language": "und",
+          "role": "section",
+          "url": "https://review.uz/rinki"
+        },
+        {
+          "language": "und",
+          "role": "section",
+          "url": "https://review.uz/biznes"
+        },
+        {
+          "language": "und",
+          "role": "section",
+          "url": "https://review.uz/regioni"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://review.uz/en"
+        }
+      ],
+      "family": "Review.uz",
+      "id": "uz-review-uz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "uz.kursiv.media"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://uz.kursiv.media/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://uz.kursiv.media/category/banks/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://uz.kursiv.media/archive/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://uz.kursiv.media/category/banks/page/2/"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://uz.kursiv.media/en/"
+        }
+      ],
+      "family": "Kursiv Uzbekistan",
+      "id": "uz-kursiv-uzbekistan",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "uznews.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://uznews.uz/"
+        }
+      ],
+      "family": "Uznews",
+      "id": "uz-uznews",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "nuz.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://nuz.uz/"
+        }
+      ],
+      "family": "NUZ",
+      "id": "uz-nuz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "podrobno.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://podrobno.uz/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://podrobno.uz/cat/politic/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://podrobno.uz/cat/economic/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://podrobno.uz/all_news/"
+        }
+      ],
+      "family": "Podrobno.uz",
+      "id": "uz-podrobno-uz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "daryo.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://daryo.uz/ru"
+        }
+      ],
+      "family": "Daryo",
+      "id": "uz-daryo",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "ru.kabar.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://ru.kabar.kg/"
+        }
+      ],
+      "family": "Kabar",
+      "id": "kg-kabar",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "24.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://24.kg/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://24.kg/obshestvo"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://24.kg/ekonomika"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://24.kg/obshestvo/page/2"
+        }
+      ],
+      "family": "24.kg",
+      "id": "kg-24-kg",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "kaktus.media"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://kaktus.media/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://kaktus.media/?lable=8"
+        },
+        {
+          "language": "ru",
+          "role": "date_archive",
+          "url": "https://kaktus.media/?lable=8&date=2026-11-02&order=time"
+        }
+      ],
+      "family": "Kaktus.media",
+      "id": "kg-kaktus-media",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "akipress.org",
+        "analitika.akipress.org",
+        "bilim.akipress.org",
+        "culture.akipress.org",
+        "kg.akipress.org"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://akipress.org/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://kg.akipress.org/cat:1?from=portal&place=menu"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://analitika.akipress.org/archive:2?from=portal&place=menu"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://kg.akipress.org/page:2/cat:1"
+        }
+      ],
+      "family": "AKIpress media group",
+      "id": "kg-akipress",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "tazabek.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://tazabek.kg/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://tazabek.kg/cat:business"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://tazabek.kg/cat:agro"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://tazabek.kg/page:2/cat:business"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://tazabek.kg/page:2/"
+        }
+      ],
+      "family": "AKIpress media group",
+      "id": "kg-tazabek",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "economist.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://economist.kg/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://economist.kg/kursy-valyut/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://economist.kg/archive/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://economist.kg/tag/society/"
+        }
+      ],
+      "family": "Economist.kg",
+      "id": "kg-economist-kg",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "turmush.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://turmush.kg/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://turmush.kg/cat:society"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://turmush.kg/cat:agro"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://turmush.kg/cat:economy"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://turmush.kg/page:2/cat:society"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://turmush.kg/page:2/"
+        }
+      ],
+      "family": "AKIpress media group",
+      "id": "kg-turmush",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "vesti.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://vesti.kg/"
+        }
+      ],
+      "family": "Vesti.kg",
+      "id": "kg-vesti-kg",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "rus.azattyk.org",
+        "www.azattyk.org",
+        "www.azattyqasia.org"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ky",
+          "role": "home",
+          "url": "https://www.azattyk.org/"
+        },
+        {
+          "language": "ky",
+          "role": "section",
+          "url": "https://www.azattyk.org/politics"
+        },
+        {
+          "language": "ky",
+          "role": "section",
+          "url": "https://www.azattyk.org/economics"
+        },
+        {
+          "language": "ru",
+          "role": "language",
+          "url": "https://rus.azattyk.org"
+        }
+      ],
+      "family": "Azattyk",
+      "id": "kg-azattyk",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "sputnik.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://sputnik.kg/"
+        }
+      ],
+      "family": "Sputnik Kyrgyzstan",
+      "id": "kg-sputnik-kyrgyzstan",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "eng.khovar.tj",
+        "khovar.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://khovar.tj/rus/"
+        },
+        {
+          "language": "tg",
+          "role": "home",
+          "url": "https://khovar.tj/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://khovar.tj/rus/category/economic/"
+        },
+        {
+          "language": "tg",
+          "role": "section",
+          "url": "https://khovar.tj/category/economic/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://khovar.tj/rus/category/society/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://khovar.tj/rus/category/25year/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://khovar.tj/rus/category/economic/page/2/"
+        },
+        {
+          "language": "ru",
+          "role": "date_archive",
+          "url": "https://khovar.tj/rus/2026/11/02/"
+        },
+        {
+          "language": "ru",
+          "role": "language",
+          "url": "https://eng.khovar.tj:443/"
+        }
+      ],
+      "family": "Khovar",
+      "id": "tj-khovar",
+      "institutionType": "news_media",
+      "kind": "media",
+      "knownMislabeledHtmlLanguages": [
+        {
+          "contentLanguage": "tg",
+          "declaredLanguage": "ru-RU",
+          "evidence": [
+            {
+              "description": "Read the actual archived listing navigation, Tajik headings and article excerpts; HTML declares ru-RU. This identifies this listing template mismatch only, not a new article body.",
+              "observedAt": "2026-11-16T02:12:45.158052+00:00",
+              "sha256": "8a55dc11115c471cb6d190de20e8b4ffd08ca1ee3a2e35a588f1314dbe4e63be",
+              "url": "https://khovar.tj/"
+            },
+            {
+              "description": "Read the actual archived listing navigation, Tajik headings and article excerpts; HTML declares ru-RU. This identifies this listing template mismatch only, not a new article body.",
+              "observedAt": "2026-11-16T02:12:45.158727+00:00",
+              "sha256": "adae17d7d02d884e3b869e0578e7ba4c5855902c9d6fdb4f281c097686a54fcb",
+              "url": "https://khovar.tj/category/economic/"
+            }
+          ],
+          "excludedPathPrefixes": [
+            "/rus/",
+            "/eng/"
+          ],
+          "host": "khovar.tj",
+          "pathPrefixes": [
+            "/"
+          ],
+          "reviewedAt": "2026-11-16T02:25:04.682072+00:00",
+          "reviewer": "/root/incident_causality_audit::khovar-listing-language-20261116",
+          "status": "verified"
+        }
+      ],
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "asiaplus.news"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://asiaplus.news/ru"
+        }
+      ],
+      "family": "Asia-Plus",
+      "id": "tj-asia-plus",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "avesta.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://avesta.tj/"
+        }
+      ],
+      "family": "Avesta",
+      "id": "tj-avesta",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "www.ozodi.org"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "tg",
+          "role": "home",
+          "url": "https://www.ozodi.org/"
+        }
+      ],
+      "family": "Radio Ozodi",
+      "id": "tj-radio-ozodi",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "your.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://your.tj/"
+        }
+      ],
+      "family": "Your.tj",
+      "id": "tj-your-tj",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "pressa.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://pressa.tj/"
+        }
+      ],
+      "family": "Pressa.tj",
+      "id": "tj-pressa-tj",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "sugdpressa.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://sugdpressa.tj/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://sugdpressa.tj/category/business/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://sugdpressa.tj/category/business/page/2/"
+        }
+      ],
+      "family": "SugdPressa",
+      "id": "tj-sugdpressa",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "sputnik.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "tg",
+          "role": "home",
+          "url": "https://sputnik.tj/"
+        },
+        {
+          "language": "tg",
+          "role": "archive",
+          "url": "https://sputnik.tj/news/"
+        },
+        {
+          "language": "tg",
+          "role": "section",
+          "url": "https://sputnik.tj/politics/"
+        },
+        {
+          "language": "tg",
+          "role": "section",
+          "url": "https://sputnik.tj/economy/"
+        }
+      ],
+      "family": "Sputnik Tajikistan",
+      "id": "tj-sputnik-tajikistan",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "www.toptj.com"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.toptj.com/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.toptj.com/news/NewsFolder-5"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.toptj.com/news/NewsFolder-12"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://www.toptj.com/news/obshchestvo?page=2"
+        }
+      ],
+      "family": "TopTJ",
+      "id": "tj-toptj",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "azertag.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://azertag.az/ru"
+        }
+      ],
+      "family": "AZERTAC",
+      "id": "az-azertac",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "apa.az",
+        "en.apa.az",
+        "ru.apa.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://apa.az/ru"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://ru.apa.az/economy/energy-and-industry"
+        },
+        {
+          "language": "az",
+          "role": "archive",
+          "url": "https://apa.az/all-news"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://apa.az/politic"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://apa.az/economy"
+        },
+        {
+          "language": "az",
+          "role": "pagination",
+          "url": "https://apa.az/all-news?page=2"
+        },
+        {
+          "language": "ru",
+          "role": "language",
+          "url": "https://ru.apa.az/"
+        },
+        {
+          "language": "az",
+          "role": "language",
+          "url": "https://en.apa.az/"
+        },
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://ru.apa.az/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://ru.apa.az/all-news"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://ru.apa.az/politic"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://ru.apa.az/economy"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://ru.apa.az/all-news?page=2"
+        }
+      ],
+      "family": "APA",
+      "id": "az-apa",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "report.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://report.az/ru"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://report.az/ru/energetika"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://report.az/ru/posledniye-novosti"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://report.az/ru/politika"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://report.az/ru/ekonomika"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://report.az/en"
+        }
+      ],
+      "family": "Report.az",
+      "id": "az-report-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "trend.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://trend.az/"
+        }
+      ],
+      "family": "Trend",
+      "id": "az-trend",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "news.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://news.az/"
+        }
+      ],
+      "family": "News.az",
+      "id": "az-news-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "caliber.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://caliber.az/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://caliber.az/category/politics"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://caliber.az/category/economics"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://caliber.az/en"
+        }
+      ],
+      "family": "Caliber.az",
+      "id": "az-caliber-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "marja.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://marja.az/"
+        }
+      ],
+      "family": "Marja.az",
+      "id": "az-marja-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "abc.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://abc.az/"
+        }
+      ],
+      "family": "ABC.az",
+      "id": "az-abc-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "vergiler.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://vergiler.az/"
+        }
+      ],
+      "family": "Vergiler.az",
+      "id": "az-vergiler-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "banker.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://banker.az/"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://banker.az/category/x%c9%99b%c9%99rl%c9%99r/"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://banker.az/category/c%c9%99miyy%c9%99t/"
+        },
+        {
+          "language": "az",
+          "role": "pagination",
+          "url": "https://banker.az/category/x%C9%99b%C9%99rl%C9%99r/page/2/"
+        }
+      ],
+      "family": "Banker.az",
+      "id": "az-banker-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "fins.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://fins.az/"
+        }
+      ],
+      "family": "Fins.az",
+      "id": "az-fins-az",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "nationalbank.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "kk",
+          "role": "home",
+          "url": "https://nationalbank.kz/"
+        },
+        {
+          "language": "kk",
+          "role": "section",
+          "url": "https://nationalbank.kz/kz"
+        }
+      ],
+      "family": "National Bank of Kazakhstan",
+      "id": "kz-national-bank-of-kazakhstan",
+      "institutionType": "central_bank",
+      "kind": "institution",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "primeminister.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://primeminister.kz/ru"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://primeminister.kz/ru/archive"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://primeminister.kz/ru/hrpolitic/appointments/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://primeminister.kz/ru/hrpolitic/appointments?page=1"
+        }
+      ],
+      "family": "Prime Minister Kazakhstan",
+      "id": "kz-prime-minister-kazakhstan",
+      "institutionType": "government",
+      "kind": "institution",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "atameken.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://atameken.kz/ru"
+        }
+      ],
+      "family": "Atameken",
+      "id": "kz-atameken",
+      "institutionType": "business_association",
+      "kind": "institution",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "kase.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "en",
+          "role": "home",
+          "url": "https://kase.kz/"
+        },
+        {
+          "language": "en",
+          "role": "archive",
+          "url": "https://kase.kz/en/information/news"
+        },
+        {
+          "language": "en",
+          "role": "section",
+          "url": "https://kase.kz/en/investors/instruments/shares"
+        },
+        {
+          "language": "en",
+          "role": "section",
+          "url": "https://kase.kz/en/information/trades"
+        }
+      ],
+      "family": "Kazakhstan Stock Exchange",
+      "id": "kz-kazakhstan-stock-exchange",
+      "institutionType": "exchange",
+      "kind": "institution",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "cbu.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://cbu.uz/ru/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://cbu.uz/ru/financial-stability/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://cbu.uz/ru/payment-systems/tariffs-for-payment-services/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://cbu.uz/ru/press_center/forums-and-conferences/silk-road-forum-2026/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://cbu.uz/ru/arkhiv-kursov-valyut/index.php"
+        }
+      ],
+      "family": "Central Bank Uzbekistan",
+      "id": "uz-central-bank-uzbekistan",
+      "institutionType": "central_bank",
+      "kind": "institution",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "gov.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://gov.uz/ru/soliq"
+        }
+      ],
+      "family": "Tax Committee Uzbekistan",
+      "id": "uz-tax-committee-uzbekistan",
+      "institutionType": "tax_authority",
+      "kind": "institution",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "president.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://president.uz/ru"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://president.uz/ru/lists/news"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://president.uz/ru/site/regions?menu_id=12"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://president.uz/ru/lists/news?page=1&per-page=15"
+        }
+      ],
+      "family": "President Uzbekistan",
+      "id": "uz-president-uzbekistan",
+      "institutionType": "government",
+      "kind": "institution",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "old.uzex.uz",
+        "uzex.uz"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "uz",
+          "role": "home",
+          "url": "https://uzex.uz/"
+        },
+        {
+          "language": "uz",
+          "role": "section",
+          "url": "https://uzex.uz/fr/pages/online-exchange-trades-tariff"
+        },
+        {
+          "language": "uz",
+          "role": "section",
+          "url": "https://uzex.uz/fr/pages/public-financial-statements"
+        },
+        {
+          "language": "uz",
+          "role": "section",
+          "url": "https://uzex.uz/fr/News/uzex-cotton-section"
+        },
+        {
+          "language": "uz",
+          "role": "language",
+          "url": "https://uzex.uz/Home/ChangeLang?culture=ru&returnUrl=%2F"
+        }
+      ],
+      "family": "Uzbek Commodity Exchange",
+      "id": "uz-uzbek-commodity-exchange",
+      "institutionType": "exchange",
+      "kind": "institution",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "www.nbkr.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ky",
+          "role": "home",
+          "url": "https://www.nbkr.kg/"
+        },
+        {
+          "language": "ky",
+          "role": "archive",
+          "url": "https://www.nbkr.kg/all_news.jsp?lang=KGZ&news_type=news-main"
+        }
+      ],
+      "family": "National Bank Kyrgyzstan",
+      "id": "kg-national-bank-kyrgyzstan",
+      "institutionType": "central_bank",
+      "kind": "institution",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "www.gov.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.gov.kg/ru"
+        }
+      ],
+      "family": "Cabinet Kyrgyzstan",
+      "id": "kg-cabinet-kyrgyzstan",
+      "institutionType": "government",
+      "kind": "institution",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "sti.gov.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://sti.gov.kg/"
+        }
+      ],
+      "family": "State Tax Service Kyrgyzstan",
+      "id": "kg-state-tax-service-kyrgyzstan",
+      "institutionType": "tax_authority",
+      "kind": "institution",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "www.kse.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.kse.kg/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.kse.kg/ru/Finmarket"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.kse.kg/ru/TradeResults"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://www.kse.kg/ru/TradeArchive"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://www.kse.kg/ru/FinMarket/2"
+        },
+        {
+          "language": "ru",
+          "role": "language",
+          "url": "https://www.kse.kg/ru/MainPage"
+        }
+      ],
+      "family": "Kyrgyz Stock Exchange",
+      "id": "kg-kyrgyz-stock-exchange",
+      "institutionType": "exchange",
+      "kind": "institution",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "nbt.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://nbt.tj/ru/"
+        }
+      ],
+      "family": "National Bank Tajikistan",
+      "id": "tj-national-bank-tajikistan",
+      "institutionType": "central_bank",
+      "kind": "institution",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "andoz.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://andoz.tj/"
+        }
+      ],
+      "family": "Tax Committee Tajikistan",
+      "id": "tj-tax-committee-tajikistan",
+      "institutionType": "tax_authority",
+      "kind": "institution",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "moliya.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://moliya.tj/"
+        }
+      ],
+      "family": "Ministry Finance Tajikistan",
+      "id": "tj-ministry-finance-tajikistan",
+      "institutionType": "finance_ministry",
+      "kind": "institution",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "www.sugd.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.sugd.tj/ru/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://www.sugd.tj/ru/novosty/archive"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://www.sugd.tj/ru/novosty/archive?start=10"
+        }
+      ],
+      "family": "Sugd Regional Government",
+      "id": "tj-sugd-regional-government",
+      "institutionType": "regional_government",
+      "kind": "institution",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "cbar.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://cbar.az/"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://cbar.az/page-195/banks"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://cbar.az/page-214/laws"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://cbar.az/page-60/corporate-social-responsibility"
+        },
+        {
+          "language": "az",
+          "role": "language",
+          "url": "https://cbar.az/home?language=en"
+        }
+      ],
+      "family": "Central Bank Azerbaijan",
+      "id": "az-central-bank-azerbaijan",
+      "institutionType": "central_bank",
+      "kind": "institution",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "economy.gov.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://economy.gov.az/"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://economy.gov.az/az"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://economy.gov.az/en"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://economy.gov.az/az/page/beynelxalq-elaqeler/maliyye-institutlari-ile-emekdasliq"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://economy.gov.az/az/page/regionlarin-inkisafi/strateji-senedler"
+        },
+        {
+          "language": "az",
+          "role": "language",
+          "url": "https://economy.gov.az/en"
+        }
+      ],
+      "family": "Ministry Economy Azerbaijan",
+      "id": "az-ministry-economy-azerbaijan",
+      "institutionType": "economy_ministry",
+      "kind": "institution",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "customs.gov.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://customs.gov.az/"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://customs.gov.az/en"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://customs.gov.az/az/ferdler-ucun/dovlet-serhedinden-buraxilis-menteqeleri"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://customs.gov.az/az/sahibkarlar-ucun/biznesle-emekdasliq"
+        },
+        {
+          "language": "az",
+          "role": "language",
+          "url": "https://customs.gov.az/en"
+        }
+      ],
+      "family": "State Customs Committee Azerbaijan",
+      "id": "az-state-customs-committee-azerbaijan",
+      "institutionType": "customs_authority",
+      "kind": "institution",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "www.bfb.az"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://www.bfb.az/"
+        }
+      ],
+      "family": "Baku Stock Exchange",
+      "id": "az-baku-stock-exchange",
+      "institutionType": "exchange",
+      "kind": "institution",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "finprom.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://finprom.kz/ru/"
+        },
+        {
+          "language": "und",
+          "role": "section",
+          "url": "https://finprom.kz/tagmix/obzory/finansy"
+        },
+        {
+          "language": "und",
+          "role": "section",
+          "url": "https://finprom.kz/tagmix/analytics/trudovye-resursy-predpiyatij"
+        },
+        {
+          "language": "und",
+          "role": "pagination",
+          "url": "https://finprom.kz/tagmix/obzory/finansy?page=2"
+        },
+        {
+          "language": "und",
+          "role": "language",
+          "url": "https://finprom.kz/en"
+        }
+      ],
+      "family": "Finprom",
+      "id": "kz-finprom",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "newtimes.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://newtimes.kz/ekonomika"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://newtimes.kz/politika"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://newtimes.kz/politika?page=2"
+        }
+      ],
+      "family": "NewTimes",
+      "id": "kz-newtimes",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "alau.kz"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://alau.kz/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://alau.kz/category/economics/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://alau.kz/category/society/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://alau.kz/category/arhiv/"
+        },
+        {
+          "language": "ru",
+          "role": "pagination",
+          "url": "https://alau.kz/category/economics/page/2/"
+        }
+      ],
+      "family": "Alau",
+      "id": "kz-alau",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Almaty"
+    },
+    {
+      "allowedHosts": [
+        "vecherka.tj"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://vecherka.tj/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://vecherka.tj/archives/author/vecherka"
+        }
+      ],
+      "family": "Vecherka",
+      "id": "tj-vecherka",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "www.vb.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.vb.kg/"
+        },
+        {
+          "language": "ru",
+          "role": "archive",
+          "url": "https://www.vb.kg/?lable=8"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.vb.kg/?lable=1"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.vb.kg/?lable=2"
+        }
+      ],
+      "family": "Vecherniy Bishkek",
+      "id": "kg-vecherniy-bishkek",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://www.instagram.com/tengrinewskz/"
+        }
+      ],
+      "family": "Tengrinews",
+      "id": "kz-social-instagram-1",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "telegram.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "kz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://telegram.me/tengrinews/"
+        }
+      ],
+      "family": "Tengrinews",
+      "id": "kz-social-telegram-2",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "telegram.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://telegram.me/gazetauz"
+        }
+      ],
+      "family": "Gazeta.uz",
+      "id": "uz-social-telegram-3",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://instagram.com/gazetauzb/"
+        }
+      ],
+      "family": "Gazeta.uz",
+      "id": "uz-social-instagram-4",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "telegram.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://telegram.me/spotuz/"
+        }
+      ],
+      "family": "Spot.uz",
+      "id": "uz-social-telegram-5",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://instagram.com/spot.uz/"
+        }
+      ],
+      "family": "Spot.uz",
+      "id": "uz-social-instagram-6",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://www.instagram.com/kaktus__media/"
+        }
+      ],
+      "family": "Kaktus.media",
+      "id": "kg-social-instagram-7",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://t.me/kaktus_mediakg"
+        }
+      ],
+      "family": "Kaktus.media",
+      "id": "kg-social-telegram-8",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://www.instagram.com/report.az_ru"
+        }
+      ],
+      "family": "Report.az",
+      "id": "az-social-instagram-9",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://t.me/reportazru"
+        }
+      ],
+      "family": "Report.az",
+      "id": "az-social-telegram-10",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://www.instagram.com/apaazerbaijan/"
+        }
+      ],
+      "family": "APA",
+      "id": "az-social-instagram-11",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://t.me/apa_az"
+        }
+      ],
+      "family": "APA",
+      "id": "az-social-telegram-12",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://t.me/asiaplus"
+        }
+      ],
+      "family": "Asia-Plus",
+      "id": "tj-social-telegram-13",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "t.me",
+        "t.me",
+        "telegram.me"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "tg",
+          "role": "home",
+          "url": "https://t.me/asiaplustj"
+        }
+      ],
+      "family": "Asia-Plus",
+      "id": "tj-social-telegram-14",
+      "kind": "social",
+      "platform": "Telegram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "www.instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://www.instagram.com/asiaplustj/"
+        }
+      ],
+      "family": "Asia-Plus",
+      "id": "tj-social-instagram-15",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "instagram.com",
+        "www.instagram.com",
+        "instagram.com"
+      ],
+      "available": true,
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "tg",
+          "role": "home",
+          "url": "https://instagram.com/asiaplustoj/"
+        }
+      ],
+      "family": "Asia-Plus",
+      "id": "tj-social-instagram-16",
+      "kind": "social",
+      "platform": "Instagram",
+      "requiresPublicOriginalPost": true
+    },
+    {
+      "allowedHosts": [
+        "www.super.kg",
+        "super.kg"
+      ],
+      "available": true,
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ky",
+          "role": "home",
+          "url": "https://www.super.kg/"
+        },
+        {
+          "language": "ky",
+          "role": "section",
+          "url": "https://www.super.kg/kabar"
+        }
+      ],
+      "family": "Super.kg",
+      "id": "kg-superkg",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "www.fm.gov.om",
+        "fm.gov.om"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "und",
+          "role": "home",
+          "url": "https://www.fm.gov.om/"
+        }
+      ],
+      "family": "Oman Foreign Ministry",
+      "id": "uz-oman-foreign-ministry",
+      "institutionType": "foreign_ministry",
+      "kind": "institution",
+      "timezone": "Asia/Muscat"
+    },
+    {
+      "allowedHosts": [
+        "dunyo.info",
+        "www.dunyo.info"
+      ],
+      "available": true,
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://dunyo.info/ru"
+        }
+      ],
+      "family": "Dunyo",
+      "id": "uz-dunyo",
+      "institutionType": "foreign_ministry",
+      "kind": "institution",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "yurd.media",
+        "www.yurd.media"
+      ],
+      "available": true,
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://yurd.media/"
+        }
+      ],
+      "family": "Yurd.Media",
+      "id": "az-yurd-media",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "invest.gov.kg"
+      ],
+      "articleExamples": [
+        {
+          "articleIdentityVerified": true,
+          "url": "https://invest.gov.kg/ru/news/21202"
+        },
+        {
+          "articleIdentityVerified": true,
+          "url": "https://invest.gov.kg/ru/news/19437"
+        }
+      ],
+      "available": true,
+      "confirmedArticlePathPattern": "/ru/news/[0-9]+/?",
+      "country": "kg",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://invest.gov.kg/ru/news"
+        }
+      ],
+      "family": "吉尔吉斯斯坦国家投资局",
+      "id": "kg-national-investment-agency",
+      "institutionType": "investment_agency",
+      "kind": "institution",
+      "timezone": "Asia/Bishkek"
+    },
+    {
+      "allowedHosts": [
+        "yuz.uz"
+      ],
+      "articleExamples": [
+        {
+          "articleIdentityVerified": true,
+          "url": "https://yuz.uz/ru/news/news-GlOADm"
+        }
+      ],
+      "available": true,
+      "confirmedArticlePathPattern": "/ru/news/[^/]+/?",
+      "country": "uz",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://yuz.uz/ru/news"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://yuz.uz/ru/news?category_slug=Economics"
+        }
+      ],
+      "family": "Yangi Oʻzbekiston (Yuz.uz)",
+      "id": "uz-yuz",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Tashkent"
+    },
+    {
+      "allowedHosts": [
+        "navonews.tj"
+      ],
+      "articleExamples": [
+        {
+          "articleIdentityVerified": true,
+          "url": "https://navonews.tj/article/tamozhennaya-sluzhba-soobschila-o-kontrabande-bolee-35-kg-zolotykh-izdeliy-iz-za-granitsy"
+        },
+        {
+          "articleIdentityVerified": true,
+          "url": "https://navonews.tj/article/abr-vydelit-20-mln-na-proekty-v-sfere-transporta"
+        }
+      ],
+      "available": true,
+      "confirmedArticlePathPattern": "/article/[^/]+/?",
+      "country": "tj",
+      "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://navonews.tj/"
+        }
+      ],
+      "family": "NAVO",
+      "id": "tj-navo",
+      "institutionType": "news_media",
+      "kind": "media",
+      "timezone": "Asia/Dushanbe"
+    },
+    {
+      "allowedHosts": [
+        "socar.az",
+        "www.socar.az"
+      ],
+      "articleExamples": [
+        {
+          "articleIdentityVerified": true,
+          "url": "https://socar.az/az/post/socar-ile-sinopec-corp-arasinda-strateji-emekdasliga-dair-anlasma-memorandumu-imzalanib"
+        },
+        {
+          "articleIdentityVerified": true,
+          "url": "https://socar.az/az/post/socar-ve-honeywell-technologies-enerji-sektorunda-reqemsal-transformasiya-ve-avtomatlasdirmanin-inkisafina-destek-meqsedile-qlobal-cercive-sazisi-imzalayiblar"
+        },
+        {
+          "articleIdentityVerified": true,
+          "url": "https://socar.az/az/post/socar-ile-comstock-sirketi-arasinda-yekun-alqi-satqi-muqavilesi-imzalanib"
+        }
+      ],
+      "available": true,
+      "confirmedArticlePathPattern": "/az/post/[a-z0-9-]+/?",
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "az",
+          "role": "home",
+          "url": "https://socar.az/az/page/press-relizler"
+        }
+      ],
+      "family": "SOCAR",
+      "id": "az-socar",
+      "institutionType": "energy_company",
+      "kind": "institution",
+      "timezone": "Asia/Baku"
+    }
+  ]
+}
