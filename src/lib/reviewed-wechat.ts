@@ -50,9 +50,18 @@ async function api(path: string, body: object) {
   if (!response.ok || data.errcode) throw new Error(`微信接口失败，错误码 ${data.errcode ?? response.status}`);
   return data;
 }
-async function material(buffer: Buffer) {
+async function normalizedJpeg(buffer: Buffer, edge?: number) {
   const { default: sharp } = await import('sharp');
-  const bytes = await sharp(buffer, { limitInputPixels: 40000000 }).rotate().flatten({ background: '#fff' }).jpeg({ quality: 88 }).toBuffer();
+  if (edge) {
+    sharp.concurrency(1);
+    sharp.cache({ memory: 8, files: 0, items: 8 });
+  }
+  const image = sharp(buffer, { limitInputPixels: 40000000 }).rotate().flatten({ background: '#fff' });
+  if (edge) image.resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true });
+  return image.jpeg({ quality: 88 }).toBuffer();
+}
+async function material(buffer: Buffer, alreadyNormalized = false) {
+  const bytes = alreadyNormalized ? buffer : await normalizedJpeg(buffer);
   const form = new FormData();
   form.append('media', new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), 'news.jpg');
   const response = await fetch(await apiUrl('material/add_material?type=image'), {
@@ -64,9 +73,8 @@ async function material(buffer: Buffer) {
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('微信图片返回地址无效');
   return { mediaId: String(data.media_id), url: String(data.url) };
 }
-async function articleImage(buffer: Buffer) {
-  const { default: sharp } = await import('sharp');
-  const bytes = await sharp(buffer, { limitInputPixels: 40000000 }).rotate().flatten({ background: '#fff' }).jpeg({ quality: 88 }).toBuffer();
+async function articleImage(buffer: Buffer, alreadyNormalized = false) {
+  const bytes = alreadyNormalized ? buffer : await normalizedJpeg(buffer);
   const form = new FormData();
   form.append('media', new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), 'news.jpg');
   const response = await fetch(await apiUrl('media/uploadimg'), { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
@@ -170,7 +178,7 @@ export async function probeReviewedImage(url: string, referer: string, asset?: R
     if (timer) clearTimeout(timer);
   }
 }
-export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>Promise<void>) {
+export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>Promise<void>, smallContainer = false) {
   const images = imageUrls(d.bodyHtml);
   const uniqueImages = [...new Set(images)];
   const uploadedUrls: string[] = [];
@@ -197,9 +205,10 @@ export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>P
         catch(e) { throw new Error(`正文第${images.indexOf(url)+1}张图片：${e instanceof Error?e.message:'读取失败'}`); }
         if (failures.length) return;
         imageProbes[index] = {url,accessible:true,...asset,transport:asset?'private-original':'legacy-https'};
-        if (index === 0) thumb = (await material(bytes)).mediaId;
+        const image = smallContainer ? await normalizedJpeg(bytes, 1600) : bytes;
+        if (index === 0) thumb = (await material(image, smallContainer)).mediaId;
         if (failures.length) return;
-        uploadedUrls[index] = await articleImage(bytes);
+        uploadedUrls[index] = await articleImage(image, smallContainer);
         await reportProgress();
       } catch (error) {
         failures.push({index,error});
@@ -207,7 +216,7 @@ export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>P
     }
   }
   // Let both lanes stop before returning an error, with no orphan image tasks.
-  const workerCount = Math.min(REVIEWED_IMAGE_UPLOAD_CONCURRENCY,uniqueImages.length);
+  const workerCount = Math.min(smallContainer ? 1 : REVIEWED_IMAGE_UPLOAD_CONCURRENCY,uniqueImages.length);
   await Promise.all(Array.from({length:workerCount},()=>prepareImages()));
   if (failures.length) throw failures.sort((a,b)=>a.index-b.index)[0].error;
   const replacements = new Map(uniqueImages.map((url,index)=>[url,uploadedUrls[index]] as const));
@@ -233,4 +242,18 @@ export async function readReviewedDraft(mediaId: string) {
   const article = data.news_item?.[0];
   if (!article || data.news_item.length !== 1) throw new Error('草稿回读结构异常');
   return article as { title: string; digest: string; content: string; content_source_url?:string; thumb_media_id?:string; thumb_url?:string };
+}
+
+/** Read one page only when draft/add had an unknown result with no media ID. */
+export async function findRecentReviewedDrafts(title: string, digest: string, since: number) {
+  const data = await api('draft/batchget', { offset: 0, count: 20, no_content: 0 });
+  if (!Array.isArray(data.item)) throw new Error('reviewed_draft_list_unavailable');
+  return [...new Set<string>(data.item.flatMap((row: {
+    media_id?: unknown; update_time?: number; content?: { news_item?: { title?: string; digest?: string }[] };
+  }) => {
+    const articles = row?.content?.news_item;
+    return typeof row?.media_id === 'string' && row.media_id && typeof row.update_time === 'number'
+      && row.update_time * 1_000 >= since && articles?.length === 1
+      && articles[0].title === title && articles[0].digest === digest ? [row.media_id] : [];
+  }))];
 }

@@ -95,3 +95,17 @@ export async function stagePrivateImage(bytes: Buffer, sha256: string) {
   if (imageHash(persisted) !== sha256) throw new Error('原图转存回读不一致');
   return { ...asset, format:meta.format, width:meta.width, height:meta.height, ready:true, private:true, protocol:PRIVATE_IMAGE_PROTOCOL };
 }
+
+/** Avoid overwriting an already verified original when reusing a release. */
+export async function ensurePrivateImage(bytes: Buffer, sha256: string) {
+  const path = objectPath(sha256);
+  const store = await bucket(false);
+  const existing = await store.download(path);
+  if (existing.data && !existing.error) {
+    await validateOriginalImage(Buffer.from(await existing.data.arrayBuffer()), { sha256, bytes: bytes.length });
+    return 'reused';
+  }
+  if (!existing.error || Number(existing.error.status) !== 404) throw storageFailure(existing.error);
+  await stagePrivateImage(bytes, sha256);
+  return 'staged';
+}

@@ -1,6 +1,6 @@
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { PACKAGE_COUNTRIES, packageCountries, reviewedCountry, contentHash, imageUrls, makeSourceUrlsVisible, sourceUrls, validatePackage, type ReviewedPackage, type ReviewedCountry } from './reviewed-package';
-import { prepareReviewedDraft, createReviewedDraft, updateReviewedDraft, readReviewedDraft } from './reviewed-wechat';
+import { prepareReviewedDraft, createReviewedDraft, updateReviewedDraft, readReviewedDraft, findRecentReviewedDrafts } from './reviewed-wechat';
 import { load } from 'cheerio';
 import { randomUUID } from 'node:crypto';
 import { compareReviewedCover } from './reviewed-diagnostics';
@@ -15,6 +15,7 @@ type DeliveryAdapters = {
   create: typeof createReviewedDraft;
   update?: typeof updateReviewedDraft;
   read: typeof readReviewedDraft;
+  beforeWrite?: () => void;
 };
 export const deliveryAdapters: DeliveryAdapters = { prepare: prepareReviewedDraft, create: createReviewedDraft, update: updateReviewedDraft, read: readReviewedDraft };
 function verifyReadback(d: ReviewedCountry, readback: Awaited<ReturnType<typeof readReviewedDraft>>, expectedImages: string[], expectedThumbId?:string) {
@@ -31,6 +32,40 @@ function verifyReadback(d: ReviewedCountry, readback: Awaited<ReturnType<typeof 
   const cover=compareReviewedCover(readback,expectedImages[0],expectedThumbId);
   const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && imageMatch && cover.thumbnailMatchesPrepared !== false;
   return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch, expectedTextMatch:actualText === expectedText, imageMatch, ...cover, verified:passed };
+}
+
+/** Safe settlement with a previously persisted media ID. Does not prepare,
+ * upload, add or update a WeChat draft, even if readback does not match. */
+export async function reconcileKnownReviewedDraft(payload: ReviewedPackage, country: import('./reviewed-package').PackageCountry,
+    sb = getSupabaseClient(), read = readReviewedDraft, find: typeof findRecentReviewedDrafts = findRecentReviewedDrafts) {
+  const key = { version: payload.version, country };
+  const receipt = await sb.from('reviewed_deliveries').select('media_id,state,detail,updated_at').match(key).maybeSingle();
+  if (receipt.error) throw new Error('reviewed_receipt_read_failed');
+  const row = receipt.data;
+  if (!row || !['sending','updating','uncertain','succeeded'].includes(row.state)) return null;
+  if (row.state === 'succeeded') return row.media_id ? { mediaId: row.media_id, readbackAt: row.updated_at, ...row.detail } : null;
+  const draft = reviewedCountry(payload,country);
+  const proof = row.detail || {};
+  let mediaId: string | null = row.media_id;
+  if (!mediaId) {
+    const at = Date.parse(row.updated_at);
+    if (row.state === 'updating' || !Number.isFinite(at) || !Array.isArray(proof.imageUrls)
+        || !proof.expectedThumbMediaId || proof.inputHash !== contentHash(draft.bodyHtml)) return null;
+    const candidates = await find(draft.title, draft.summary, at - 120_000);
+    // Avoid any mutation when multiple drafts fit. Only a unique recent item
+    // with title, summary, full text, exact image order and thumbnail can bind.
+    if (candidates.length !== 1) return null;
+    mediaId = candidates[0];
+  }
+  const verified = verifyReadback(draft, await read(mediaId), proof.imageUrls || [], proof.expectedThumbMediaId);
+  if (!verified.verified) return null;
+  const detail = { ...row.detail, ...verified, error: null, readbackAt: new Date().toISOString() };
+  let update = sb.from('reviewed_deliveries').update({ state: 'succeeded', media_id: mediaId, detail, updated_at: new Date().toISOString() })
+    .match(key).eq('updated_at', row.updated_at);
+  update = row.media_id ? update.eq('media_id', row.media_id) : update.is('media_id', null);
+  const saved = await update.select('media_id');
+  if (saved.error || saved.data?.length !== 1) throw new Error('reviewed_receipt_changed');
+  return { mediaId, ...detail };
 }
 export async function deliverReviewedPackage(
   payload: ReviewedPackage,
@@ -84,6 +119,7 @@ export async function deliverReviewedPackage(
             const plannedDetail={...existing.data.detail,imageUrls:imageUrls(prepared.html),transportedHash:contentHash(prepared.html),
               expectedThumbMediaId:prepared.article.thumb_media_id,
               repairFrom:{imageUrls:repairable.images,expectedThumbMediaId:current.thumb_media_id}};
+            adapters.beforeWrite?.();
             const lock = await sb.from('reviewed_deliveries').update({ state:'updating', detail:plannedDetail, updated_at:new Date().toISOString() })
               .match(key).eq('state',existing.data.state).eq('media_id',existing.data.media_id)
               .eq('updated_at',existing.data.updated_at).select('country');
@@ -126,6 +162,7 @@ export async function deliverReviewedPackage(
       detail = { ...ownership,inputHash: contentHash(d.bodyHtml), transportedHash: contentHash(prepared.html),
         inputImages: prepared.images, transferredImages: prepared.images, imageUrls:imageUrls(prepared.html), cover: prepared.cover,
         imageProbes: prepared.imageProbes, expectedThumbMediaId:prepared.article.thumb_media_id };
+      adapters.beforeWrite?.();
       const armed = await sb.from('reviewed_deliveries').update({ state:'sending', detail, updated_at: new Date().toISOString() }).match(key).eq('state','preparing').contains('detail',{preparationToken}).select('country');
       if (armed.error || armed.data?.length !== 1) throw new Error('发送前持久化失败');
       sending = true;
@@ -136,7 +173,7 @@ export async function deliverReviewedPackage(
       const readback = await adapters.read(mediaId);
       const verified = verifyReadback(d, readback, imageUrls(prepared.html), prepared.article.thumb_media_id);
       const passed = verified.verified;
-      detail = { ...detail, ...verified };
+      detail = { ...detail, ...verified, ...(adapters.beforeWrite ? { readbackAt: new Date().toISOString() } : {}) };
       if (!passed) throw new Error('草稿回读与审定稿不一致，保留现有草稿待检查');
       const done = await sb.from('reviewed_deliveries').update({ state:'succeeded', media_id:mediaId, detail, updated_at:new Date().toISOString() }).match(key).contains('detail',{preparationToken}).select('country');
       if (done.error || done.data?.length !== 1) throw new Error('成功状态保存失败');

@@ -3,6 +3,7 @@ import { parse } from 'url';
 import next from 'next';
 import { startScheduler } from './lib/scheduler';
 import { resolvePort } from './lib/runtime';
+import { planBAdmitted } from './lib/plan-b-window';
 
 // HTTPS 使用系统信任链；不得全局关闭证书校验。
 
@@ -29,7 +30,11 @@ const handle = app.getRequestHandler();
 app.prepare().then(() => {
   // 启动定时任务（仅在生产环境）
   if (!dev) {
-    startScheduler();
+    if (planBAdmitted()) {
+      void import('./lib/plan-b-runtime').then(({ startPlanB }) => startPlanB());
+    } else {
+      startScheduler();
+    }
   }
   
   const server = createServer(async (req, res) => {

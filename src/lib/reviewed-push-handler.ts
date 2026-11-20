@@ -9,6 +9,7 @@ import { probeReviewedImage, readReviewedDraft, REVIEWED_IMAGE_UPLOAD_CONCURRENC
 import { summarizeDraftReadback, REVIEWED_DIAGNOSTICS_VERSION, coverReadbackSelfTest } from './reviewed-diagnostics';
 import { reviewedRecoveryStatus } from './reviewed-recovery';
 import { privateImageHealth } from './reviewed-private-images';
+import { planBAdmitted, planBHandlesIssue } from './plan-b-window';
 
 function authorized(request: NextRequest) {
   return !!process.env.INGEST_SECRET && request.headers.get('x-ingest-secret') === process.env.INGEST_SECRET;
@@ -77,6 +78,10 @@ export async function reviewedPush(request: NextRequest) {
     const rawVersion = body.version ?? request.nextUrl.searchParams.get('version');
     const date = body.date ?? request.nextUrl.searchParams.get('date') ?? beijingDate();
     if (typeof date !== 'string' || issueDate(date) !== date) throw new Error('date 必须为 YYYY-MM-DD');
+    const requestedIssue = typeof rawVersion === 'string' ? issueDate(rawVersion) : date;
+    if (planBAdmitted() && planBHandlesIssue(requestedIssue)) {
+      return NextResponse.json({ ok:false, error:'此刊期由分国交付调度管理' }, {status:409});
+    }
     let version: string | undefined;
     let payload:ReviewedPackage|null|undefined;
     if (rawVersion != null) {
