@@ -18,10 +18,10 @@ export async function scratch<T>(run: (directory: string) => Promise<T>) {
   finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-export async function runCloudScript(script: 'cloud_handoff.py' | 'cloud_release.py', args: string[], timeout: number) {
+export async function runCloudScript(script: 'cloud_handoff.py' | 'cloud_release.py' | 'fetch_work_sources.py', args: string[], timeout: number) {
   // The child has no model or database credentials. Python public-source
   // operations use only these runtime settings and the task's own arguments.
-  await worker('python3', [join(scripts, script), ...args], {
+  return worker('python3', [join(scripts, script), ...args], {
     env: { PATH: process.env.PATH, NODE_ENV: 'production', LANG: 'C.UTF-8', PYTHONDONTWRITEBYTECODE: '1' },
     timeout, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
   });

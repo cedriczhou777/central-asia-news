@@ -13,6 +13,16 @@ export const dynamic = 'force-dynamic';
 const json = (value: unknown, status = 200) => NextResponse.json(value, {
   status, headers: { 'Cache-Control': 'private, no-store' },
 });
+let sourceProbe: { startedAt: number; report: Promise<unknown> } | undefined;
+
+function probeSources() {
+  const now = Date.now();
+  if (!sourceProbe || now - sourceProbe.startedAt >= 60_000) {
+    sourceProbe = { startedAt: now, report: runCloudScript('fetch_work_sources.py', ['--probe-plan-b-sources'], 21_000)
+      .then(({ stdout }) => JSON.parse(stdout) as unknown) };
+  }
+  return sourceProbe.report;
+}
 
 function authorized(req: Request) {
   const secret = Buffer.from(planBIngestSecret());
@@ -48,6 +58,14 @@ export async function GET(req: Request) {
     if (!planBAdmitted() && process.env.REVIEWED_PLAN_B_CHECKS !== '1') {
       return json({ ok: false, reason: 'plan_b_disabled' }, 404);
     }
+    if (params.get('sources') === '1') {
+      if (process.env.REVIEWED_PLAN_B_CHECKS !== '1') return json({ ok: false, reason: 'source_probe_disabled' }, 404);
+      try {
+        return json({ ok: true, runtime: PLAN_B_RUNTIME_VERSION, sourceProbe: await probeSources() });
+      } catch {
+        return json({ ok: false, reason: 'source_probe_failed' }, 503);
+      }
+    }
     let prerequisites;
     if (params.get('verify') === '1') {
       const [table, bucket, renderer] = await Promise.allSettled([getState(clock.issue), stagingIsPrivate(),
@@ -57,7 +75,8 @@ export async function GET(req: Request) {
     }
     const verified = !prerequisites || Object.values(prerequisites).every(Boolean);
     return json({ ok: verified, runtime: PLAN_B_RUNTIME_VERSION, commit: process.env.BUILD_GIT_SHA || null,
-      registration: planBRegistration(), clock, aiApiUsed: false, prerequisites }, verified ? 200 : 503);
+      registration: planBRegistration(), clock, aiApiUsed: false, prerequisites,
+      sourceProbeAvailable: process.env.REVIEWED_PLAN_B_CHECKS === '1' }, verified ? 200 : 503);
   }
   const denied = admitted(req);
   if (denied) return denied;
