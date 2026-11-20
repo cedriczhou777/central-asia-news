@@ -163,6 +163,7 @@ PROBE_SOURCES = {
 
 def probe_sources(directory, country):
     import io
+    import ssl
     import time
     from urllib.parse import urlsplit
     from PIL import Image
@@ -246,6 +247,7 @@ def probe_sources(directory, country):
     write(directory / 'probe.json', {
         'country': country, 'checkedAt': datetime.now(timezone.utc).isoformat(),
         'runtime': 'plan-b-source-probe-1', 'readOnly': True, 'aiApiUsed': False,
+        'certificateStore': ssl.create_default_context().cert_store_stats(),
         'maxRequests': 6 if country == 'kz' else 4,
         'elapsedMs': round((time.monotonic() - started) * 1000), 'results': rows,
     })
