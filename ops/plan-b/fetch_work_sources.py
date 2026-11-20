@@ -620,14 +620,14 @@ def listing_minimum(value,now):
     if minimum.tzinfo is None or minimum.utcoffset() is None:raise ValueError('listing-not-before requires a timezone-aware ISO timestamp')
     if minimum>now:raise ValueError('listing-not-before cannot be in the future')
     return minimum
-def network_worker(url, socket_timeout):
+def network_worker(url, socket_timeout, byte_limit=MAX_TRANSPORT_BYTES + 1):
     """Read one response in an isolated process without touching the cache."""
     body = b''
     try:
         from source_article_images import public_opener, public_url
         public_url(url)
         with public_opener().open(url, timeout=socket_timeout) as response:
-            body = response.read(MAX_TRANSPORT_BYTES + 1)
+            body = response.read(byte_limit)
             result = {'status': response.status, 'final_url': response.url, 'response_headers': {
                 k.lower(): v for k,v in response.headers.items()
                 if k.lower() in ('content-encoding', 'content-type', 'etag', 'last-modified')}}
@@ -646,21 +646,77 @@ def network_worker(url, socket_timeout):
     sys.stdout.buffer.write(json.dumps(result).encode() + b'\n' + body)
 
 
-def bounded_response(url, deadline):
+def bounded_response(url, deadline, *, byte_limit=None):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError('source network deadline exceeded')
     try:
         # Socket timeouts cover inactivity only. The subprocess deadline also
         # covers DNS, redirects, and bodies that keep sending a trickle of data.
-        worker = subprocess.run([sys.executable, str(Path(__file__).resolve()), '--network-worker', url,
-                                 str(min(25, remaining))], capture_output=True, timeout=remaining, check=True)
+        args = [sys.executable, str(Path(__file__).resolve()), '--network-worker', url, str(min(25, remaining))]
+        if byte_limit is not None:
+            args.append(str(byte_limit))
+        worker = subprocess.run(args, capture_output=True, timeout=remaining, check=True)
     except subprocess.TimeoutExpired as error:
         raise TimeoutError('source network deadline exceeded') from error
     metadata, separator, body = worker.stdout.partition(b'\n')
     if not separator:
         raise ValueError('source network worker returned no response')
     return json.loads(metadata), body
+
+
+def probe_plan_b_sources():
+    """One bounded, uncached sample per country, with a disjoint fallback on failure."""
+    targets = {
+        'kz': ('https://tengrinews.kz/economic/', 'https://www.inform.kz/'),
+        'uz': ('https://www.uzdaily.uz/ru/', 'https://www.gazeta.uz/ru/archive/'),
+        'kg': ('https://ru.kabar.kg/', 'https://24.kg/ekonomika'),
+        'tj': ('https://khovar.tj/rus/', 'https://asiaplus.news/ru'),
+        'az': ('https://azertag.az/ru', 'https://report.az/ru'),
+        'telegram': ('https://t.me/s/tengrinews',),
+    }
+    byte_limit = 64 * 1024
+
+    def probe(group):
+        scope, urls = group
+        attempts = []
+        for url in urls:
+            started = time.monotonic()
+            report = {'host': urlsplit(url).hostname, 'status': None, 'error': None}
+            try:
+                meta, raw = bounded_response(url, started + 4, byte_limit=byte_limit)
+                report['status'] = meta.get('status')
+                if meta.get('final_url'):
+                    report['finalHost'] = urlsplit(meta['final_url']).hostname
+                if meta.get('error'):
+                    report['error'] = meta['error']
+                elif report['status'] == 200:
+                    encoding = meta['response_headers'].get('content-encoding', '').lower()
+                    sample = raw.lower()
+                    if encoding == 'gzip' or raw.startswith(b'\x1f\x8b'):
+                        sample = zlib.decompressobj(31).decompress(raw, byte_limit).lower()
+                    content_type = meta['response_headers'].get('content-type', '')
+                    if not sample or ('html' not in content_type.lower() and b'<html' not in sample):
+                        report['error'] = 'no_html_sample'
+                    elif b'<title>just a moment' in sample or b'/cdn-cgi/challenge-platform' in sample:
+                        report['error'] = 'challenge_page'
+                    elif scope == 'telegram' and b'tgme_widget_message' not in sample:
+                        report['error'] = 'channel_posts_not_observed'
+                else:
+                    report['error'] = 'unexpected_status'
+            except TimeoutError:
+                report['error'] = 'source_network_deadline_exceeded'
+            except (OSError, subprocess.SubprocessError, ValueError, zlib.error):
+                report['error'] = 'source_probe_transport_error'
+            report['durationMs'] = round((time.monotonic() - started) * 1000)
+            attempts.append(report)
+            if report['status'] == 200 and not report['error']:
+                return {'scope': scope, 'available': True, 'attempts': attempts}
+        return {'scope': scope, 'available': False, 'attempts': attempts}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(probe, targets.items()))
+    return {'checkedAt': datetime.now(timezone.utc).isoformat(), 'results': results}
 
 
 def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NETWORK_SECONDS,*,fetch_metrics=None):
@@ -753,8 +809,11 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
     if result.get('contentValidated'):result.pop('error',None)
     dest.write_text(json.dumps(result,ensure_ascii=False,indent=2));return result
 if __name__=='__main__':
-    if len(sys.argv) == 4 and sys.argv[1] == '--network-worker':
-        network_worker(sys.argv[2], float(sys.argv[3]));sys.exit(0)
+    if sys.argv[1:] == ['--probe-plan-b-sources']:
+        print(json.dumps(probe_plan_b_sources(), ensure_ascii=False));sys.exit(0)
+    if len(sys.argv) in (4, 5) and sys.argv[1] == '--network-worker':
+        limit = int(sys.argv[4]) if len(sys.argv) == 5 else MAX_TRANSPORT_BYTES + 1
+        network_worker(sys.argv[2], float(sys.argv[3]), limit);sys.exit(0)
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--audit',type=Path);parser.add_argument('--listing-not-before',help='Require a real listing fetch at or after this timezone-aware ISO timestamp; must not be future');parser.add_argument('--source-role',choices=('auto','article','listing'),default='auto',help='Registry job role for cache freshness only; does not establish article/listing identity');args=parser.parse_args()
     try:listing_minimum(args.listing_not_before,datetime.now(timezone.utc))
     except ValueError as error:parser.error(str(error))
