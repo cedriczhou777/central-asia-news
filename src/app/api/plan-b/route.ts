@@ -1,9 +1,11 @@
 import { timingSafeEqual } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { NextResponse } from 'next/server';
 import { changes, idPattern, isCountry, type PlanBCountry } from '@/lib/plan-b-handoff';
 import { verifyEditorial } from '@/lib/plan-b-editorial';
 import { getState, saveEditorial, stagingIsPrivate, type SnapshotReceipt, type StateRow } from '@/lib/plan-b-store';
-import { archiveEditorial, runCloudScript, sourceOriginals } from '@/lib/plan-b-worker';
+import { archiveEditorial, runCloudScript, scratch, sourceOriginals } from '@/lib/plan-b-worker';
 import { planBAdmitted, planBClock, planBHandlesIssue, planBIngestSecret } from '@/lib/plan-b-window';
 import { PLAN_B_RUNTIME_VERSION, planBRegistration } from '@/lib/plan-b-runtime';
 import { getCountryWord, type WordReceipt } from '@/lib/plan-b-release';
@@ -47,6 +49,19 @@ export async function GET(req: Request) {
     if (!authorized(req)) return json({ ok: false, reason: 'unauthorized' }, 401);
     if (!planBAdmitted() && process.env.REVIEWED_PLAN_B_CHECKS !== '1') {
       return json({ ok: false, reason: 'plan_b_disabled' }, 404);
+    }
+    if (params.get('sourceProbe') === '1') {
+      const country = params.get('country') || '';
+      if (!isCountry(country)) return json({ ok: false, reason: 'invalid_country' }, 400);
+      try {
+        const result = await scratch(async directory => {
+          await runCloudScript('cloud_handoff.py', ['probe', directory, clock.issue, country], 70_000);
+          return JSON.parse(await readFile(join(directory, 'probe.json'), 'utf8')) as unknown;
+        });
+        return json({ ok: true, probe: result });
+      } catch {
+        return json({ ok: false, reason: 'source_probe_unavailable' }, 503);
+      }
     }
     let prerequisites;
     if (params.get('verify') === '1') {
