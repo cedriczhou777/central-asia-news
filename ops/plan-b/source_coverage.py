@@ -81,7 +81,7 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
                 block(sid, 'increment' if any(row.get('contentValidated') for _, row in records) else 'source',
                       None, 'final_window_observation_required')
         if failures:
-            gap(sid, 'source_unavailable' if terminal else 'entrypoint_unavailable',
+            gap(sid, 'source_unavailable' if terminal and not fresh else 'entrypoint_unavailable',
                 [{'url': row['url'], 'status': row.get('status'), 'error': row.get('error'),
                                        'failureType': 'http_refusal' if row.get('status') in (401, 403, 404, 410)
                                            else 'unusable_response' if row.get('status') == 200

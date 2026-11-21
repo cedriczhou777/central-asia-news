@@ -144,6 +144,17 @@ class CoverageClosure(unittest.TestCase):
         values[0]['sourceRegistry']['sources'][3]['entrypoints'].append({'url': 'https://source3.example/other'})
         self.assertIn('source3', [w['sourceId'] for w in self.assess(values)['pendingWork']])
 
+    def test_readable_alternative_is_not_publisher_unavailable(self):
+        values = sample()
+        alternate = dict(values[1][3], url='https://source3.example/legal-rss', status=200,
+                         contentValidated=True, fetchRetryable=False, error=None)
+        values[1].append(alternate)
+        proof = self.assess(values)
+        self.assertIn('source3', proof['readableSources'])
+        self.assertEqual(next(g for g in proof['gaps'] if g['sourceId'] == 'source3')['reason'],
+                         'entrypoint_unavailable')
+        self.assertEqual(proof['pendingWork'], [])
+
     def test_newer_transient_failure_is_not_hidden_by_old_403(self):
         values = sample()
         row = copy.deepcopy(values[1][3])

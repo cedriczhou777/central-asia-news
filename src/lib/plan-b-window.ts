@@ -1,5 +1,5 @@
 const BJT_OFFSET_MS = 8 * 60 * 60 * 1000;
-const FIRST_SUPPORTED_ISSUE = '2026-11-21';
+const FIRST_SUPPORTED_ISSUE = '2026-11-22';
 
 export const PLAN_B_CLOCK = {
   collectAt: 4 * 60 + 45,

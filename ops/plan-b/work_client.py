@@ -17,14 +17,20 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def protected_connection():
-    base = os.environ.get('CENTRAL_ASIA_PLAN_B_URL', '').rstrip('/')
-    secret = os.environ.get('CENTRAL_ASIA_INGEST_SECRET') or os.environ.get('INGEST_SECRET', '')
+def protected_connection(contract=None):
+    saved = {}
+    if contract:
+        if contract.stat().st_mode & 0o077:
+            raise ValueError('private_contract_permissions')
+        saved = json.loads(contract.read_bytes())
+    base = (os.environ.get('CENTRAL_ASIA_PLAN_B_URL') or saved.get('base_url', '')).rstrip('/')
+    secret = (os.environ.get('CENTRAL_ASIA_INGEST_SECRET') or os.environ.get('INGEST_SECRET')
+              or saved.get('ingest_secret', ''))
     parts = urlsplit(base)
     if (parts.scheme != 'https' or not parts.hostname or parts.username or parts.password
             or parts.port not in (None, 443) or parts.path or parts.query or parts.fragment):
         raise ValueError('secure_plan_b_connection_missing')
-    if not secret:
+    if not isinstance(secret, str) or not secret:
         raise ValueError('protected_ingest_secret_missing')
     return base, secret
 
@@ -57,7 +63,9 @@ def checksum(value):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('view', choices=['health', 'manifest', 'changes', 'originals', 'submit', 'status', 'word'])
+    parser.add_argument('view', choices=['health', 'manifest', 'changes', 'originals', 'submit', 'status', 'word', 'checkpoint'])
+    parser.add_argument('--contract', type=Path, help='Existing owner-only private connection file')
+    parser.add_argument('--stage', choices=['draft', 'review'], default='draft')
     parser.add_argument('--issue', required=False)
     parser.add_argument('--country', choices=['kz', 'uz', 'kg', 'tj', 'az'])
     parser.add_argument('--phase', choices=['preview', 'final'], default='preview')
@@ -67,7 +75,7 @@ def main():
     parser.add_argument('--verify', action='store_true', help='Run the read-only service prerequisites check with health')
     args = parser.parse_args()
     try:
-        base, secret = protected_connection()
+        base, secret = protected_connection(args.contract)
         if args.issue and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', args.issue):
             raise ValueError('invalid_issue')
         if args.view == 'health':
@@ -91,6 +99,10 @@ def main():
                 if (body['review']['originalHash'] != checksum(body['draft']['articles'])
                         or body['review']['finalBodyHash'] != checksum(body['review']['articles'])):
                     raise ValueError('signed_content_changed')
+            elif args.view == 'checkpoint' and args.document:
+                document = json.loads(args.document.read_bytes())
+                body = {'snapshotHash': args.hash, 'checkpointHash': checksum(document),
+                        'stage': args.stage, 'document': document}
         result = handshake(base, secret, query, body)
         print(json.dumps(result, ensure_ascii=False))
         sys.exit(0 if result.get('ok') else 1)

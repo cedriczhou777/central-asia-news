@@ -3,7 +3,7 @@ import { GET } from '../src/app/api/plan-b/route';
 import { snapshot, sha256, type Candidate } from '../src/lib/plan-b-handoff';
 import { coverageFixture } from './plan-b-fixtures';
 
-const issue = '2026-11-21';
+const issue = '2026-11-22';
 const country = 'kg';
 const root = 'https://unit-test.example/api/plan-b';
 const headers = { 'X-Ingest-Secret': 'fixture-key-only' };

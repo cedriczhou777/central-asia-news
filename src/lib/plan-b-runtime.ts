@@ -4,8 +4,9 @@ import { planBAdmitted, planBClock } from './plan-b-window';
 import { claim, getState, knownLiveReceipts, saveClaim, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
+import { planBBusinessStatus } from './plan-b-status';
 
-export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-2-coverage';
+export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-3-production-state';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
@@ -90,11 +91,22 @@ async function tick() {
       runtime.previewSettled = issue;
       return;
     }
-    if (scope.every(item => item.word && item.wechat)) {
+    const business = planBBusinessStatus(issue, rows);
+    runtime.report = business;
+    if (business.businessSucceeded) {
       runtime.completedIssue = issue;
-      runtime.report = { issue, finishedAt: new Date().toISOString(), status: 'complete', countries: scope };
-      console.info(JSON.stringify({ event: 'plan_b_delivered', ...runtime.report }));
+      console.info(JSON.stringify({ event: 'plan_b_delivered', ...business }));
       return;
+    }
+    // A late/restarted container also reports missed delivery; exact-minute
+    // checks alone would silently miss the same failure as a late Work run.
+    if (business.alert) {
+      const key = `${issue}/undelivered/${Math.floor(clock.minute / 5)}`;
+      if (!emitted.has(key)) {
+        emitted.add(key);
+        for (const previous of emitted) if (!previous.startsWith(issue + '/')) emitted.delete(previous);
+        console.warn(JSON.stringify({ event:'plan_b_undelivered', ...business }));
+      }
     }
     if ([450,470,480,540].includes(clock.minute)) {
       const key = `${issue}/${clock.minute}`;
@@ -146,9 +158,14 @@ async function tick() {
         });
       }
     }
-    runtime.report = { issue, checkedAt: new Date().toISOString(), status: 'running' };
   } catch {
-    runtime.report = { issue: clock.issue, checkedAt: new Date().toISOString(), status: 'state_unavailable' };
+    runtime.report = { issue: clock.issue, checkedAt: new Date().toISOString(),
+      businessSucceeded:false, state:'state_unavailable' };
+    const key = `${clock.issue}/state-unavailable/${Math.floor(clock.minute / 5)}`;
+    if (clock.minute >= 480 && !emitted.has(key)) {
+      emitted.add(key);
+      console.warn(JSON.stringify({ event:'plan_b_business_state_unavailable', ...runtime.report }));
+    }
   } finally { runtime.reading = false; }
 }
 
