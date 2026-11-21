@@ -4,6 +4,25 @@ import { issueWindow } from './plan-b-window';
 export const PLAN_B_COUNTRIES = ['kz', 'uz', 'kg', 'tj', 'az'] as const;
 export type PlanBCountry = typeof PLAN_B_COUNTRIES[number];
 export type Phase = 'preview' | 'final';
+export const COVERAGE_VERSION = 'plan-b-coverage-1';
+
+export interface SourceCoverage {
+  version: string;
+  country: PlanBCountry;
+  windowEnd: string;
+  observedAt: string;
+  state: 'blocked' | 'review_required' | 'observed';
+  readableSources: string[];
+  gaps: { sourceId: string; reason: string; evidence: {
+    url: string; status: number | null; error?: string | null; observedAt: string;
+    retryBudgetExhausted: boolean; transportAttemptsTotal?: number | null;
+    failureType?: string; contentValidated?: boolean;
+  }[] }[];
+  pendingWork: { sourceId: string; kind: string; url: string | null; reason: string }[];
+  reviewWork: { sourceId: string; kind: string; url: string | null; reason: string }[];
+  queues: { listing: number; article: number; lead: number };
+  closedQueueWork: { sourceId: string; kind: string; url: string; reason: string }[];
+}
 
 export interface Candidate {
   id: string;
@@ -14,6 +33,8 @@ export interface Candidate {
   publishedAt: string | null;
   timeEvidence?: string;
   needsTimeReview: boolean;
+  sourceId?: string;
+  family?: string;
 }
 
 export interface Snapshot {
@@ -23,6 +44,7 @@ export interface Snapshot {
   observedAt: string;
   provisional: boolean;
   pendingSources: string[];
+  coverage: SourceCoverage;
   candidates: Candidate[];
   hash: string;
 }
@@ -96,11 +118,29 @@ export function changes(before: Snapshot | null, after: Snapshot) {
     retained: after.candidates.filter(c => preview.get(c.id)?.revision === c.revision).map(c => c.id),
     removed: [...preview.keys()].filter(id => !final.has(id)),
     pendingSources: after.pendingSources,
+    coverage: after.coverage,
   };
 }
 
+export function freezeBlockReason(state: Snapshot | null) {
+  if (state?.phase !== 'final' || state.provisional) return 'freeze_incomplete';
+  const coverage = state.coverage;
+  if (!coverage || coverage.version !== COVERAGE_VERSION || coverage.country !== state.country
+      || Date.parse(coverage.windowEnd) !== issueWindow(state.issue).end
+      || Date.parse(coverage.observedAt) !== Date.parse(state.observedAt)) return 'coverage_evidence_invalid';
+  if (state.pendingSources.length || coverage.pendingWork.length || coverage.state === 'blocked'
+      || coverage.queues.article !== 0 || coverage.queues.lead !== 0
+      || coverage.queues.listing !== coverage.closedQueueWork.length
+        + coverage.reviewWork.filter(row => row.kind === 'listing').length) return 'freeze_incomplete';
+  if (coverage.reviewWork.some(row => !coverage.gaps.some(gap => gap.sourceId === row.sourceId))) return 'coverage_evidence_invalid';
+  if (coverage.gaps.length && coverage.state !== 'review_required'
+      || !coverage.gaps.length && coverage.state !== 'observed') return 'coverage_evidence_invalid';
+  return null;
+}
+
 export function requireFrozenVersion(state: Snapshot | null, hash: string, inspected: string[], selected: string[]) {
-  if (state?.phase !== 'final' || state.provisional || state.pendingSources.length) throw new Error('freeze_incomplete');
+  const blocked = freezeBlockReason(state);
+  if (blocked || !state) throw new Error(blocked || 'freeze_incomplete');
   if (state.hash !== hash) throw new Error('frozen_revision_mismatch');
   const current = new Set(state.candidates.map(c => c.id));
   if (inspected.length !== current.size || new Set(inspected).size !== current.size || inspected.some(id => !current.has(id))) {

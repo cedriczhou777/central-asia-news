@@ -14,6 +14,20 @@ LISTING_ROLES = {"listing", "section", "archive", "feed", "home", "date_archive"
 TERMINAL_UNAVAILABLE_STATUSES = {401, 403, 404, 410}
 
 
+def terminal_source_failure(row):
+    """An evidenced refusal, nonretryable unusable response, or actual retry exhaustion."""
+    return (row.get('status') in TERMINAL_UNAVAILABLE_STATUSES
+            or row.get('error') == 'source_public_https_only' and bool(row.get('attemptedAt'))
+            and row.get('fetchRetryable') is not True
+            or row.get('status') == 200 and row.get('contentValidated') is False
+            and bool(row.get('error')) and bool(row.get('parserVersion'))
+            and row.get('fetchRetryable') is not True
+            or row.get('retryBudgetExhausted') is True
+            and type(row.get('transportAttemptsTotal')) is int
+            and row['transportAttemptsTotal'] >= 3 and bool(row.get('error'))
+            and row.get('fetchRetryable') is not True)
+
+
 def _dt(value):
     if not isinstance(value, str) or not value:
         raise ValueError("timezone-aware timestamp required")
@@ -275,10 +289,12 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
     """Return quantity/coverage/ledger status without suppressing draft handoff.
 
     A failed source request is a real attempt, never a successful full-text family.
-    All declared available sources need an actual final-window listing attempt,
+    Declared sources normally need an actual final-window listing attempt,
     unless every declared entrypoint is proven terminally unavailable this issue
     and no readable alternative listing exists. Never retry a cached refusal just
     to manufacture a later fetchedAt; transient failures still need a final try.
+    Plan B may instead bind an independent, archived gap/discovery review;
+    actual media/institution attempts and successful full-text minima remain.
     Unfetched candidates may be rejected using the matching failure/listing evidence.
     Every successfully fetched article and every adopted article needs a ledger row.
     """
@@ -323,7 +339,8 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             coverage_errors.append(label + ": institution type mismatch")
             continue
         try:
-            fetched = _dt(row.get("fetchedAt"))
+            fetched = _dt(row.get("fetchedAt") or (
+                row.get("attemptedAt") if terminal_source_failure(row) else None))
             if not start <= fetched <= now:
                 raise ValueError("outside actual scan period")
         except (ValueError, TypeError):
@@ -443,19 +460,42 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             # Use the latest real request, not a stale refusal followed by a 5xx
             # or a now-readable replacement. Unavailable means all entrypoints.
             latest = max(matching, key=lambda r: r["time"])
-            if latest["row"].get("status") not in TERMINAL_UNAVAILABLE_STATUSES:
+            if not terminal_source_failure(latest["row"]):
                 break
             failures[entrypoint] = latest
         if len(failures) == len(entrypoints):
             unavailable_evidence[sid] = [
                 {"url": url, "status": r["row"]["status"], "fetchedAt": r["time"].isoformat(),
                  "sourceId": sid, "role": r["row"].get("role"),
-                 "description": "Actual issue-window terminal HTTP refusal; not retried or counted as success"}
+                 "retryBudgetExhausted": r['row'].get('retryBudgetExhausted', False),
+                 "transportAttemptsTotal": r['row'].get('transportAttemptsTotal'),
+                 "description": "Actual issue-window refusal or exhausted transport budget; never counted as success"}
                 for url, r in sorted(failures.items())
             ]
     unavailable = set(unavailable_evidence)
     unavailable_excluded = available.intersection(unavailable) - after_cutoff
-    missing_cutoff = sorted(available - after_cutoff - unavailable)
+    reviewed_gaps = set()
+    proof = draft.get('planBCoverage')
+    if proof is not None:
+        # This contract is attached by cloud_release after recomputing the
+        # frozen assessment from its immutable source archive. The independent
+        # gap signature is rechecked here; count alone never waives coverage.
+        try:
+            from source_coverage import require_coverage_review
+            if (proof.get('country') != country or _dt(proof.get('windowEnd')) != end
+                    or _dt(proof.get('observedAt')) > now
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(draft.get('planBFinalHash', '')))):
+                raise ValueError('coverage_scope_or_hash_invalid')
+            require_coverage_review(proof, draft,
+                {'reviewer': draft.get('planBReviewerRun'), 'coverageReview': draft.get('planBCoverageReview')},
+                draft['planBFinalHash'], raw_ledger)
+            reviewed_gaps = {row['sourceId'] for row in proof.get('gaps', [])}
+            if not reviewed_gaps.issubset(available):
+                raise ValueError('coverage_gap_source_unregistered')
+        except (ValueError, TypeError, KeyError) as error:
+            coverage_errors.append('independent Plan B coverage: ' + str(error))
+            reviewed_gaps = set()
+    missing_cutoff = sorted(available - after_cutoff - unavailable - reviewed_gaps)
     if len(media_attempts) < 8:
         coverage_errors.append("need attempts across at least 8 distinct media families")
     if len(fulltext_families) < 3:
@@ -477,6 +517,8 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
         "unavailableSourceIds": sorted(unavailable),
         "unavailableExcluded": sorted(unavailable_excluded),
         "unavailableEvidence": unavailable_evidence,
+        "independentlyReviewedGapSourceIds": sorted(reviewed_gaps),
+        "unfinishedDiscoveryReviewed": proof.get('reviewWork', []) if isinstance(proof, dict) else [],
         "languagePending": language_pending,
         "articleIdentityPending": identity_pending,
         "articleIdentityReviewed": reviewed_identities,

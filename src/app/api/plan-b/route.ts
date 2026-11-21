@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { NextResponse } from 'next/server';
-import { changes, idPattern, isCountry, type PlanBCountry } from '@/lib/plan-b-handoff';
+import { changes, COVERAGE_VERSION, idPattern, isCountry, type PlanBCountry } from '@/lib/plan-b-handoff';
 import { verifyEditorial } from '@/lib/plan-b-editorial';
 import { getState, saveEditorial, stagingIsPrivate, type SnapshotReceipt, type StateRow } from '@/lib/plan-b-store';
 import { archiveEditorial, runCloudScript, scratch, sourceOriginals } from '@/lib/plan-b-worker';
@@ -37,6 +37,7 @@ function report(rows: StateRow[]) {
     const result = { country, step, state, attempt, updatedAt: updated_at };
     if (step === 'preview' || step === 'final') return { ...result, metrics: value?.metrics, reason: value?.reason,
       hash: (value as SnapshotReceipt | null)?.snapshot?.hash,
+      coverage: (value as SnapshotReceipt | null)?.snapshot?.coverage,
       candidateCount: (value as SnapshotReceipt | null)?.snapshot?.candidates.length };
     return { ...result, receipt: value };
   });
@@ -64,15 +65,22 @@ export async function GET(req: Request) {
       }
     }
     let prerequisites;
+    let coverageVerification;
     if (params.get('verify') === '1') {
-      const [table, bucket, renderer] = await Promise.allSettled([getState(clock.issue), stagingIsPrivate(),
-        runCloudScript('cloud_release.py', ['--help'], 15_000)]);
+      const [table, bucket, renderer, coverage] = await Promise.allSettled([getState(clock.issue), stagingIsPrivate(),
+        runCloudScript('cloud_release.py', ['--help'], 15_000), scratch(async directory => {
+          await runCloudScript('cloud_handoff.py', ['coverage-self-test', directory, clock.issue, 'kg'], 15_000);
+          return JSON.parse(await readFile(join(directory, 'coverage-check.json'), 'utf8')) as { passed: boolean; version: string };
+        })]);
+      coverageVerification = coverage.status === 'fulfilled' ? coverage.value : { passed:false };
       prerequisites = { table: table.status === 'fulfilled', privateBucket: bucket.status === 'fulfilled' && bucket.value,
-        renderer: renderer.status === 'fulfilled' };
+        renderer: renderer.status === 'fulfilled',
+        coveragePolicy: coverage.status === 'fulfilled' && coverage.value.passed && coverage.value.version === COVERAGE_VERSION };
     }
     const verified = !prerequisites || Object.values(prerequisites).every(Boolean);
     return json({ ok: verified, runtime: PLAN_B_RUNTIME_VERSION, commit: process.env.BUILD_GIT_SHA || null,
-      registration: planBRegistration(), clock, aiApiUsed: false, prerequisites }, verified ? 200 : 503);
+      registration: planBRegistration(), clock, aiApiUsed: false, prerequisites,
+      coveragePolicyVersion: COVERAGE_VERSION, coverageVerification }, verified ? 200 : 503);
   }
   const denied = admitted(req);
   if (denied) return denied;
@@ -101,6 +109,7 @@ export async function GET(req: Request) {
       const waiting = rows.find(row => row.country === country && row.step === (final ? 'final' : 'preview'));
       return json({ ok: true, issue, country, state: waiting?.state === 'blocked' ? 'blocked' : 'waiting',
         observed: false, pending: waiting?.receipt?.pendingSources ?? [], phase: final ? 'final' : 'preview',
+        coverage: (waiting?.receipt as SnapshotReceipt | null)?.snapshot?.coverage,
         clock, availablePreviewHash: preview?.snapshot.hash || null }, waiting?.state === 'blocked' ? 409 : 202);
     }
     if (view === 'manifest') return json({ ok: true, state: 'ready', snapshot: selected.snapshot, metrics: selected.metrics });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { GET } from '../src/app/api/plan-b/route';
 import { snapshot, sha256, type Candidate } from '../src/lib/plan-b-handoff';
+import { coverageFixture } from './plan-b-fixtures';
 
 const issue = '2026-11-21';
 const country = 'kg';
@@ -15,8 +16,10 @@ const source = (id: string, stamp: string): Candidate => ({
 });
 const entries = [source('early-cache', '05:20:00'), source('increment', '05:59:59')];
 const scope = { country: 'kg' as const, issue, pendingSources: [] };
-const preview = snapshot({ ...scope, phase:'preview', observedAt: at('05:25:00'), candidates: entries.slice(0, 1) });
-const final = snapshot({ ...scope, phase:'final', observedAt: at('06:02:00'), candidates: entries });
+const preview = snapshot({ ...scope, coverage:coverageFixture('kg', at('05:25:00')),
+  phase:'preview', observedAt: at('05:25:00'), candidates: entries.slice(0, 1) });
+const final = snapshot({ ...scope, coverage:coverageFixture('kg', at('06:02:00')),
+  phase:'final', observedAt: at('06:02:00'), candidates: entries });
 const checkpoint = (state: string, phase: string, value: object) => ({
   state, step: phase, issue_date: issue, country, receipt: value,
 });
@@ -30,7 +33,7 @@ async function main() {
   process.env = { ...before, REVIEWED_PLAN_B: '1', REVIEWED_PLAN_B_FIRST_ISSUE: issue,
     PLAN_B_INGEST_SECRET: '', INGEST_SECRET: 'fixture-key-only',
     SUPABASE_URL: 'https://db.unit-test.example', SUPABASE_ANON_KEY: 'fixture-anon', SUPABASE_SERVICE_ROLE_KEY: 'fixture-role' };
-  let rows: object[] = [checkpoint('ready','preview',{ snapshot: preview, metrics: {} })];
+  const rows: object[] = [checkpoint('ready','preview',{ snapshot: preview, metrics: {} })];
   let now = Date.parse(at('05:30:00'));
   Date.now = () => now;
   globalThis.fetch = async (input) => {

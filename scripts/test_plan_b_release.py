@@ -18,6 +18,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
 from cloud_handoff import backup, coverage, inventory_entries, originals, read, restore, write
+from source_coverage import assess_coverage
 import cloud_release
 from fetch_work_sources import decode_transport
 import prepare_country_release
@@ -71,8 +72,17 @@ def inputs(directory):
     review = {**region, 'reviewer': 'independent-test', 'stage': 'verified', 'issues': [],
               'articles': rows, 'originalHash': digest(draft['articles']), 'finalBodyHash': digest(rows),
               'fullSourceReviewCompleted': True, 'titleFactReviewCompleted': True, 'bodyFactReviewCompleted': True}
+    proof = assess_coverage(read(registry), 'kg', read(source / 'source_scan_audit.json'),
+                            datetime.fromisoformat(ISSUE + 'T06:00:00+08:00'),
+                            draft['candidateLedger'], observed_at=STAMP)
+    final_hash = 'f' * 64
+    review['coverageReview'] = {'status': 'verified', 'reviewer': review['reviewer'], 'finalHash': final_hash,
+                               'reviewedAt': STAMP, 'criticalTopicsReviewed': ['policy', 'energy', 'investment', 'business'],
+                               'sourceIdsReviewed': proof['readableSources'] + [g['sourceId'] for g in proof['gaps']],
+                               'gapResolutions': [{'sourceId': g['sourceId'], 'reason': 'Synthetic independent coverage of all four critical news topics',
+                                                   'alternativeCandidateIds': ['article0']} for g in proof['gaps']]}
     with gzip.open(directory / 'editorial.gz', 'wt') as out:
-        json.dump({'draft': draft, 'review': review}, out)
+        json.dump({'draft': draft, 'review': review, 'coverage': proof, 'finalHash': final_hash}, out)
     return source, registry
 
 
@@ -98,11 +108,13 @@ class CloudReleaseTest(unittest.TestCase):
             restore(restored, directory / 'input.gz')
             self.assertEqual(len(inventory_entries(restored, ISSUE, 'kg')), 15)
             scan = read(source / 'source_scan_audit.json')
-            missing, observed = coverage(read(registry), 'kg', scan, datetime.fromisoformat(STAMP))
+            missing, observed = coverage(read(registry), 'kg', scan, datetime.fromisoformat(STAMP), observed_at=STAMP)
             self.assertEqual(missing, [])
             self.assertEqual(len(observed['freshReadableSources']), 3)
             gate = partial(verify_rendered_package, now=datetime.fromisoformat(ISSUE + 'T07:00:00+08:00'))
-            with patch.object(cloud_release, 'REGISTRY', registry), patch.object(prepare_country_release, 'verify_rendered_package', gate):
+            with patch.object(cloud_release, 'REGISTRY', registry), patch.object(prepare_country_release, 'verify_rendered_package', gate), \
+                    patch('source_coverage.datetime') as clock:
+                clock.now.return_value = datetime.fromisoformat(ISSUE + 'T07:00:00+08:00')
                 cloud_release.prepare_from_handoff(directory, ISSUE, 'kg', ISSUE + '-r104', fetch_photo=photo)
             output = directory / 'output'
             cloud_release.open_release(output, directory / 'prepared.gz')

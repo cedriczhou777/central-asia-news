@@ -1,11 +1,11 @@
 import cron from 'node-cron';
-import { PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
+import { freezeBlockReason, PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
 import { planBAdmitted, planBClock } from './plan-b-window';
 import { claim, getState, knownLiveReceipts, saveClaim, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 
-export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-1';
+export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-2-coverage';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
@@ -31,6 +31,13 @@ function eligible(row: StateRow | undefined, now: number) {
 
 type Outcome = { state: 'ready' | 'retry' | 'blocked'; receipt: object; delay?: number };
 const ready = (receipt: object): Outcome => ({ state: 'ready', receipt });
+
+export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number): Outcome {
+  const reason = freezeBlockReason(receipt.snapshot);
+  return reason ? { state: attempt < 1 ? 'retry' : 'blocked', delay:120_000,
+    receipt:{ ...receipt, pendingSources:receipt.snapshot.pendingSources, coverage:receipt.snapshot.coverage, reason } }
+    : ready(receipt);
+}
 
 function boundedFailure(error: unknown, nextAttempt: number, step: ClaimStep): Outcome {
   const message = error instanceof Error ? error.message : '';
@@ -127,10 +134,7 @@ async function tick() {
       const previewStillActive = preview?.state === 'working' && Date.parse(preview.lease_until || '') > Date.now();
       if (!previewStillActive && !final) schedule(issue, country, 'final', row, async () => {
         const snapshot = await collectCountry(issue, country, 'final', prior);
-        const pendingSources = snapshot.snapshot.pendingSources;
-        if (pendingSources.length) return { state: (row?.attempt || 0) < 1 ? 'retry' : 'blocked',
-          receipt: { ...snapshot, pendingSources, reason: 'increment_not_fully_observed' }, delay: 120_000 };
-        return ready(snapshot);
+        return finalCoverageOutcome(snapshot, row?.attempt || 0);
       });
       if (final && editorial) schedule(issue, country, 'release', release, async () => ready(await prepareCountryRelease(final, editorial)));
       if (release?.state === 'ready' && release.receipt) {

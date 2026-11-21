@@ -11,7 +11,7 @@ import tarfile
 
 from discover_work_sources import discover, published_intervals, rebase_discovery_paths
 from prepare_editorial_input import candidate_originals, discovery_index, indexed
-from work_quantity_policy import _listing_attempt
+from source_coverage import assess_coverage, coverage_self_test
 
 
 REGISTRY = Path(__file__).with_name('source_registry.json')
@@ -68,26 +68,14 @@ def restore(root, source, editorial_only=False):
                 shutil.copyfileobj(data, out)
 
 
-def coverage(registry, country, inventory, cutoff):
-    expected = {source['id'] for source in registry['sources']
-                if source['country'].lower() == country and source.get('available') is not False}
-    observed, readable, unavailable = set(), set(), set()
-    for row in inventory.get('sourceScanAuditHistory', []) + inventory.get('sourceScanAudit', []):
-        if not _listing_attempt(row):
-            continue
-        identifier = row.get('sourceId')
-        stamp = row.get('fetchedAt')
-        if row.get('status') in (401, 403, 404, 410):
-            unavailable.add(identifier)
-        if stamp and datetime.fromisoformat(stamp) >= cutoff:
-            if not row.get('fetchRetryable'):
-                observed.add(identifier)
-            if row.get('status') == 200 and row.get('contentValidated') is True:
-                readable.add(identifier)
-    terminal = (unavailable | observed) - readable
-    return sorted(expected - observed - unavailable), {
-        'registeredSources': len(expected), 'freshReadableSources': sorted(expected & readable),
-        'unavailableSources': sorted(expected & terminal),
+def coverage(registry, country, inventory, cutoff, ledger=(), leads=(), observed_at=None):
+    assessment = assess_coverage(registry, country, inventory, cutoff, ledger, leads, observed_at)
+    return sorted({row['sourceId'] for row in assessment['pendingWork']}), {
+        'coverage': assessment,
+        'registeredSources': sum(s['country'].lower() == country and s.get('available') is not False
+                                 for s in registry['sources']),
+        'freshReadableSources': assessment['readableSources'],
+        'unavailableSources': [g['sourceId'] for g in assessment['gaps'] if g['reason'] == 'source_unavailable'],
         'listingQueueRemaining': inventory.get('listingQueueRemaining', 0),
         'articleQueueRemaining': inventory.get('articleQueueRemaining', 0),
         'rawLeadsQueued': inventory.get('rawLeadsQueued', 0),
@@ -116,6 +104,7 @@ def inventory_entries(root, issue, country):
         times = published_intervals(source, country)
         valid = (actual.get('publicationWindowAssessment') == 'in_window' and len({v[0] for v in times}) == 1)
         result.append({'id': entry['id'], 'revision': entry['editorialFingerprint'], 'title': title.strip(),
+                       'sourceId': actual['sourceId'], 'family': actual['family'],
                        'sourceUrl': entry['source_url'], 'sourceHash': entry['sourceHash'],
                        'publishedAt': times[0][0].isoformat() if valid else None, 'needsTimeReview': not valid})
     return result
@@ -129,14 +118,14 @@ def scan(root, directory, issue, country, phase, seconds):
         restore(root, known)
     audit = discover(registry, country, issue, root, cutoff.isoformat() if phase == 'final' else None,
                      workers=2, max_seconds=seconds)
-    pending, metrics = coverage(registry, country, audit, cutoff)
-    # Deferred pagination is retained as evidence. An outstanding article job
-    # discovered by this scan prevents silently closing the increment.
-    if phase == 'final':
-        pending = sorted(set(pending) | {row['sourceId'] for row in audit.get('articleQueue', [])})
+    observed = datetime.now(timezone.utc).isoformat()
+    ledger = read(root / 'candidate_ledger.json')['candidateLedger']
+    leads = read(root / 'lead_queue.json').get('leadLedger', []) if (root / 'lead_queue.json').exists() else []
+    pending, metrics = coverage(registry, country, audit, cutoff, ledger, leads, observed)
     write(directory / 'snapshot.json', {
-        'issue': issue, 'country': country, 'phase': phase, 'observedAt': datetime.now(timezone.utc).isoformat(),
+        'issue': issue, 'country': country, 'phase': phase, 'observedAt': observed,
         'candidates': inventory_entries(root, issue, country),
+        'coverage': metrics['coverage'],
         'pendingSources': pending if phase == 'final' else [], 'metrics': metrics,
     })
     backup(root, directory / 'output.gz')
@@ -255,14 +244,16 @@ def probe_sources(directory, country):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['scan', 'extract-originals', 'originals', 'probe'])
+    parser.add_argument('command', choices=['scan', 'extract-originals', 'originals', 'probe', 'coverage-self-test'])
     parser.add_argument('directory', type=Path)
     parser.add_argument('issue')
     parser.add_argument('country', choices=['kz', 'uz', 'kg', 'tj', 'az'])
     parser.add_argument('args', nargs='*')
     args = parser.parse_args()
     root = args.directory / 'source'
-    if args.command == 'probe':
+    if args.command == 'coverage-self-test':
+        write(args.directory / 'coverage-check.json', coverage_self_test())
+    elif args.command == 'probe':
         probe_sources(args.directory, args.country)
     elif args.command == 'scan':
         phase, seconds = args.args

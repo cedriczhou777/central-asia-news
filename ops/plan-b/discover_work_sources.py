@@ -173,7 +173,8 @@ def source_revision_hash(record, source_hash=None, language_context=None):
     def stable(value):
         if isinstance(value, dict):
             return {key: stable(child) for key, child in value.items()
-                    if key not in ('fetchedAt', 'observedAt', 'checkedAt', 'reparsedAt')}
+                    if key not in ('fetchedAt', 'observedAt', 'checkedAt', 'reparsedAt',
+                                   'attemptedAt', 'transportAttemptsTotal', 'retryBudgetExhausted')}
         if isinstance(value, list):
             return [stable(child) for child in value]
         return value
@@ -1034,6 +1035,9 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                'sourceRevisionHash': source_revision_hash(record, language_context=source.get('knownMislabeledHtmlLanguages') or None),
                'fullTextValidated': record.get('fullTextValidated'), 'articleBodyEvidence': record.get('articleBodyEvidence'),
                'parserVersion': record.get('parser_version'), 'reparsedAt': record.get('reparsedAt')}
+        for key in ('attemptedAt', 'transportAttemptsTotal', 'retryBudgetExhausted'):
+            if key in record:
+                row[key] = record[key]
         if record.get('fetchRetryable'):
             row['fetchRetryable'] = True
         identity = {k: v for k, v in row.items() if k != 'observedAt'}
