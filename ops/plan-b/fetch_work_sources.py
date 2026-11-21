@@ -705,7 +705,15 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
             if 0<=age<900 and (minimum is None or fetched>=minimum):return reuse(old)
     retry=json.loads(retry_path.read_text()) if retry_path.exists() else {}
     if retry and (retry['attempts'] >= 3 or now < datetime.fromisoformat(retry['resumeAt'])):
-        return reuse(retry['result'])
+        result = retry['result']
+        result['transportAttemptsTotal'] = retry['attempts']
+        result['retryBudgetExhausted'] = retry['attempts'] >= 3
+        # Older checkpoints stored the start time plus this exact backoff.
+        # Recover that real attempt time; a cache read is never a new attempt.
+        if not result.get('attemptedAt'):
+            result['attemptedAt'] = (datetime.fromisoformat(retry['resumeAt'])
+                - timedelta(seconds=result.get('retryAfterSeconds', 15))).isoformat()
+        return reuse(result)
     result={'url':url,'fetchedAt':now.isoformat(),'key':key,'contentValidated':False,'parser_version':PARSER_VERSION}
     prior_attempts=retry.get('attempts',0)
     for attempt in range(3-prior_attempts):
@@ -715,6 +723,8 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
             if time.monotonic() >= deadline:
                 raise TimeoutError('source network deadline exceeded')
             metrics['transportAttempts'] += 1
+            result['attemptedAt'] = datetime.now(timezone.utc).isoformat()
+            result['transportAttemptsTotal'] = prior_attempts + metrics['transportAttempts']
             response, raw = bounded_response(url, deadline)
             result.update(response, attempts=attempt + 1)
             if not result.get('error'):

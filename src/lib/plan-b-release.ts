@@ -9,7 +9,8 @@ import { planBClock } from './plan-b-window';
 import { saveFile, verifyObject, wordLink, type ObjectReceipt, type SnapshotReceipt } from './plan-b-store';
 import { restoreCache, runCloudScript, scratch, timeWithin } from './plan-b-worker';
 
-type ReleaseReceipt = { prepared: ObjectReceipt; version: string; images: number; editorialHash: string; transportHash?: string };
+type ReleaseReceipt = { prepared: ObjectReceipt; version: string; images: number; editorialHash: string; transportHash?: string;
+  coverageState?: string; quantityState?: string; coverageGapCount?: number };
 export type WordReceipt = { document: ObjectReceipt; version: string; completedAt: string };
 type ImageRow = { url: string; sha256: string; bytes: number };
 
@@ -33,7 +34,8 @@ export async function prepareCountryRelease(source: SnapshotReceipt, editorial: 
     if (state.version !== version || state.country !== country) throw new Error('plan_b_release_scope_mismatch');
     const { ready } = await readReleaseTransport(join(directory, 'release'), version, country);
     const prepared = await saveFile(issue, country, 'gz', join(directory, 'prepared.gz'));
-    return { prepared, version, images: state.uniqueImages, editorialHash: editorial.editorialHash, transportHash: contentHash(ready) };
+    return { prepared, version, images: state.uniqueImages, editorialHash: editorial.editorialHash, transportHash: contentHash(ready),
+      coverageState:state.coverageState, quantityState:state.quantityState, coverageGapCount:state.coverageGapCount };
   });
 }
 

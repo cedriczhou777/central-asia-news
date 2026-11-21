@@ -6,6 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { getSupabaseClient, getSupabaseServiceRoleKey } from '../storage/database/supabase-client';
 import type { PlanBCountry, Snapshot } from './plan-b-handoff';
 import { sha256 } from './plan-b-handoff';
+import type { WorkCheckpoint } from './plan-b-checkpoint';
 
 const TABLE = 'plan_b_daily';
 const BUCKET = 'plan-b-work';
@@ -65,6 +66,16 @@ export async function saveEditorial(issue: string, country: PlanBCountry, receip
   if (readError) throw new Error('plan_b_editorial_read_failed');
   if (data?.receipt?.editorialHash !== receipt.editorialHash) throw new Error('signed_revision_conflict');
   return 'duplicate';
+}
+
+export async function saveWorkCheckpoint(row: StateRow, checkpoint: WorkCheckpoint) {
+  // Preserve the immutable snapshot/cache and use the row version as a lease.
+  // A partial manuscript never creates an editorial approval or a delivery row.
+  const { data, error } = await client().from(TABLE).update({
+    receipt:{ ...row.receipt, workCheckpoint:checkpoint }, updated_at:checkpoint.savedAt,
+  }).eq('issue_date', row.issue_date).eq('country', row.country).eq('step', row.step)
+    .eq('state', 'ready').eq('updated_at', row.updated_at).select('step');
+  if (error || data?.length !== 1) throw new Error('checkpoint_conflict');
 }
 
 export async function knownLiveReceipts(issue: string) {

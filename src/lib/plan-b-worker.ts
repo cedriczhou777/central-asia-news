@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { canonicalJson, snapshot, type Phase, type PlanBCountry, type Snapshot } from './plan-b-handoff';
 import { saveFile, saveObject, verifyObject, type ObjectReceipt, type SnapshotReceipt } from './plan-b-store';
+import type { WorkCheckpoint } from './plan-b-checkpoint';
+import { sha256 } from './plan-b-handoff';
 
 const worker = promisify(execFile);
 const scripts = join(process.cwd(), 'ops/plan-b');
@@ -104,4 +106,16 @@ export async function sourceOriginals(scope: SnapshotReceipt, ids: string[]) {
 export async function archiveEditorial(issue: string, country: PlanBCountry, value: object) {
   const { gzip } = await import('node:zlib');
   return saveObject(issue, country, 'gz', await promisify(gzip)(canonicalJson(value)));
+}
+
+export async function readWorkCheckpoint(checkpoint: WorkCheckpoint) {
+  const { gunzip } = await import('node:zlib');
+  return scratch(async directory => {
+    const file = join(directory, 'checkpoint.gz');
+    await verifyObject(checkpoint.archived, file);
+    const plain = await promisify(gunzip)(await readFile(file), { maxOutputLength:2 * 1024 * 1024 });
+    const value = JSON.parse(plain.toString('utf8')) as unknown;
+    if (sha256(canonicalJson(value)) !== checkpoint.checkpointHash) throw new Error('checkpoint_hash_mismatch');
+    return value;
+  });
 }

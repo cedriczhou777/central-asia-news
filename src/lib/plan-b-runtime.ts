@@ -1,11 +1,12 @@
 import cron from 'node-cron';
-import { PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
+import { freezeBlockReason, PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
 import { planBAdmitted, planBClock } from './plan-b-window';
 import { claim, getState, knownLiveReceipts, saveClaim, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
+import { planBBusinessStatus } from './plan-b-status';
 
-export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-1';
+export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-3-production-state';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
@@ -31,6 +32,13 @@ function eligible(row: StateRow | undefined, now: number) {
 
 type Outcome = { state: 'ready' | 'retry' | 'blocked'; receipt: object; delay?: number };
 const ready = (receipt: object): Outcome => ({ state: 'ready', receipt });
+
+export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number): Outcome {
+  const reason = freezeBlockReason(receipt.snapshot);
+  return reason ? { state: attempt < 1 ? 'retry' : 'blocked', delay:120_000,
+    receipt:{ ...receipt, pendingSources:receipt.snapshot.pendingSources, coverage:receipt.snapshot.coverage, reason } }
+    : ready(receipt);
+}
 
 function boundedFailure(error: unknown, nextAttempt: number, step: ClaimStep): Outcome {
   const message = error instanceof Error ? error.message : '';
@@ -83,11 +91,22 @@ async function tick() {
       runtime.previewSettled = issue;
       return;
     }
-    if (scope.every(item => item.word && item.wechat)) {
+    const business = planBBusinessStatus(issue, rows);
+    runtime.report = business;
+    if (business.businessSucceeded) {
       runtime.completedIssue = issue;
-      runtime.report = { issue, finishedAt: new Date().toISOString(), status: 'complete', countries: scope };
-      console.info(JSON.stringify({ event: 'plan_b_delivered', ...runtime.report }));
+      console.info(JSON.stringify({ event: 'plan_b_delivered', ...business }));
       return;
+    }
+    // A late/restarted container also reports missed delivery; exact-minute
+    // checks alone would silently miss the same failure as a late Work run.
+    if (business.alert) {
+      const key = `${issue}/undelivered/${Math.floor(clock.minute / 5)}`;
+      if (!emitted.has(key)) {
+        emitted.add(key);
+        for (const previous of emitted) if (!previous.startsWith(issue + '/')) emitted.delete(previous);
+        console.warn(JSON.stringify({ event:'plan_b_undelivered', ...business }));
+      }
     }
     if ([450,470,480,540].includes(clock.minute)) {
       const key = `${issue}/${clock.minute}`;
@@ -127,10 +146,7 @@ async function tick() {
       const previewStillActive = preview?.state === 'working' && Date.parse(preview.lease_until || '') > Date.now();
       if (!previewStillActive && !final) schedule(issue, country, 'final', row, async () => {
         const snapshot = await collectCountry(issue, country, 'final', prior);
-        const pendingSources = snapshot.snapshot.pendingSources;
-        if (pendingSources.length) return { state: (row?.attempt || 0) < 1 ? 'retry' : 'blocked',
-          receipt: { ...snapshot, pendingSources, reason: 'increment_not_fully_observed' }, delay: 120_000 };
-        return ready(snapshot);
+        return finalCoverageOutcome(snapshot, row?.attempt || 0);
       });
       if (final && editorial) schedule(issue, country, 'release', release, async () => ready(await prepareCountryRelease(final, editorial)));
       if (release?.state === 'ready' && release.receipt) {
@@ -142,9 +158,14 @@ async function tick() {
         });
       }
     }
-    runtime.report = { issue, checkedAt: new Date().toISOString(), status: 'running' };
   } catch {
-    runtime.report = { issue: clock.issue, checkedAt: new Date().toISOString(), status: 'state_unavailable' };
+    runtime.report = { issue: clock.issue, checkedAt: new Date().toISOString(),
+      businessSucceeded:false, state:'state_unavailable' };
+    const key = `${clock.issue}/state-unavailable/${Math.floor(clock.minute / 5)}`;
+    if (clock.minute >= 480 && !emitted.has(key)) {
+      emitted.add(key);
+      console.warn(JSON.stringify({ event:'plan_b_business_state_unavailable', ...runtime.report }));
+    }
   } finally { runtime.reading = false; }
 }
 

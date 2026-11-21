@@ -11,6 +11,39 @@ const isSignedRecord = (value: unknown): value is SignedRecord =>
   isRecord(value) && Array.isArray(value.articles) && value.articles.length <= 20 && value.articles.every(isRecord);
 const hash = (value: unknown) => sha256(canonicalJson(value));
 
+function verifyCoverageReview(final: Snapshot, draft: SignedRecord, review: SignedRecord) {
+  if (!final.coverage.gaps.length) return;
+  const check = review.coverageReview;
+  if (!isRecord(check) || check.status !== 'verified' || check.reviewer !== review.reviewer
+      || check.reviewer === draft.writerRun || check.finalHash !== final.hash
+      || !strings(check.criticalTopicsReviewed) || [...new Set(check.criticalTopicsReviewed)].sort().join(',')
+        !== 'business,energy,investment,policy') throw new Error('independent_coverage_review_required');
+  const reviewed = Date.parse(String(check.reviewedAt));
+  if (!Number.isFinite(reviewed) || reviewed < Date.parse(final.observedAt) || reviewed > Date.now()) {
+    throw new Error('coverage_review_time_invalid');
+  }
+  const required = new Set([...final.coverage.readableSources, ...final.coverage.gaps.map(row => row.sourceId)]);
+  if (!strings(check.sourceIdsReviewed) || [...required].some(id => !(check.sourceIdsReviewed as string[]).includes(id))) {
+    throw new Error('coverage_source_review_incomplete');
+  }
+  const resolutions = check.gapResolutions;
+  const gaps = new Set(final.coverage.gaps.map(row => row.sourceId));
+  if (!Array.isArray(resolutions) || resolutions.length !== gaps.size || !resolutions.every(isRecord)
+      || new Set(resolutions.map(row => row.sourceId)).size !== gaps.size
+      || resolutions.some(row => !gaps.has(String(row.sourceId)))) throw new Error('coverage_gap_resolution_incomplete');
+  const candidates = new Map(final.candidates.map(row => [row.id, row]));
+  for (const row of resolutions) {
+    const deferred = final.coverage.reviewWork.filter(work => work.sourceId === row.sourceId && work.url).map(work => work.url);
+    const resolved = strings(row.deferredUrlsReviewed) ? row.deferredUrlsReviewed : [];
+    if (deferred.some(url => !resolved.includes(String(url)))) throw new Error('coverage_deferred_discovery_review_incomplete');
+    if (typeof row.reason !== 'string' || row.reason.trim().length < 16 || !strings(row.alternativeCandidateIds)
+        || !row.alternativeCandidateIds.length || row.alternativeCandidateIds.some(id => {
+          const candidate = candidates.get(id);
+          return !candidate?.sourceId || candidate.sourceId === row.sourceId;
+        })) throw new Error('coverage_gap_alternative_evidence_required');
+  }
+}
+
 export function verifyEditorial(input: unknown, final: Snapshot) {
   if (!isRecord(input) || typeof input.finalHash !== 'string' || !strings(input.inspected)
       || !isSignedRecord(input.draft) || !isSignedRecord(input.review)) throw new Error('invalid_editorial_shape');
@@ -32,6 +65,13 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
   if (review.originalHash !== hash(draft.articles) || review.finalBodyHash !== hash(review.articles)) {
     throw new Error('editorial_hash_mismatch');
   }
+  verifyCoverageReview(final, draft, review);
+  if (ids.length >= 10 && ids.length < 15) {
+    const exception = draft.quantityExceptionReview;
+    if (!isRecord(exception) || exception.status !== 'approved' || typeof exception.reviewer !== 'string'
+        || !exception.reviewer || exception.reviewer === draft.writerRun || !Array.isArray(exception.evidence)
+        || !exception.evidence.length) throw new Error('quantity_exception_review_required');
+  }
   const sources = new Map(final.candidates.map(row => [row.id, row]));
   for (const row of [...draft.articles, ...review.articles]) {
     const source = sources.get(String(row.id));
@@ -49,7 +89,7 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
       || published >= window.end || !Number.isFinite(published)
       || (source.publishedAt && published !== Date.parse(source.publishedAt))) throw new Error('story_publication_mismatch');
   }
-  const value = { finalHash: final.hash, draft, review };
+  const value = { finalHash: final.hash, coverage: final.coverage, draft, review };
   return { value, editorialHash: hash(value), articleCount: ids.length,
     writerRun: draft.writerRun, reviewerRun: review.reviewer };
 }

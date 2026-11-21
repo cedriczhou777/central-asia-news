@@ -9,11 +9,13 @@ import shutil
 import tarfile
 
 from build_reviewed_word import build_word
-from cloud_handoff import LIMIT, REGISTRY, read, restore, write
+from cloud_handoff import LIMIT, REGISTRY, inventory_entries, read, restore, write
 from prepare_country_release import prepare
 from prepare_editorial_input import candidate_originals, discovery_index
 from source_article_images import collect, save_manifest
 from validate_work_package import digest
+from source_coverage import assess_coverage, require_coverage_review
+from work_quantity_policy import _dt, terminal_source_failure
 
 
 def release_path(name):
@@ -76,7 +78,8 @@ def attach_audit(source, issue, country, draft, review):
     registry = read(REGISTRY)
     audit = read(source / 'source_scan_audit.json')
     events = {row['eventId']: row for row in audit['sourceScanAuditHistory'] + audit['sourceScanAudit']
-              if row.get('fetchedAt') and not row.get('fetchRetryable')}
+              if (row.get('fetchedAt') or terminal_source_failure(row) and row.get('attemptedAt'))
+              and not row.get('fetchRetryable')}
     conclusion = review.pop('candidateDecisions', draft.pop('candidateDecisions', {}))
     ledger = read(source / 'candidate_ledger.json')['candidateLedger']
     adopted = {article['id'] for article in review['articles']}
@@ -97,6 +100,13 @@ def attach_audit(source, issue, country, draft, review):
         role.pop('sourceRegistry', None)
     draft.update(sourceRegistry={'sources': [row for row in registry['sources'] if row['country'].lower() == country]},
                  sourceScanAudit=list(events.values()), candidateLedger=ledger)
+    # Keep the actual queue/budget state for the existing 10-14 scarcity gate.
+    draft['discoveryState'] = {**audit, 'country': country, 'issueDate': issue,
+                              'listingQueueRemaining': audit.get('listingQueueRemaining', len(audit.get('listingQueue', []))),
+                              'articleQueueRemaining': audit.get('articleQueueRemaining', len(audit.get('articleQueue', []))),
+                              'observedAt': audit.get('observedAt', draft['planBCoverage']['observedAt']),
+                              'complete': audit.get('complete', not draft['planBCoverage']['pendingWork']),
+                              'needs_expansion': audit.get('needs_expansion', bool(draft['planBCoverage']['pendingWork']))}
 
 
 def source_photo(original, image_root):
@@ -120,6 +130,21 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     draft, review = supplied['draft'], supplied['review']
     if digest(draft['articles']) != review['originalHash'] or digest(review['articles']) != review['finalBodyHash']:
         raise ValueError('manual_handoff_hash_mismatch')
+    audit = read(source / 'source_scan_audit.json')
+    ledger = read(source / 'candidate_ledger.json')['candidateLedger']
+    leads = read(source / 'lead_queue.json').get('leadLedger', []) if (source / 'lead_queue.json').exists() else []
+    proof = supplied.get('coverage') or {}
+    if not proof.get('observedAt'):
+        raise ValueError('coverage_evidence_required')
+    actual = assess_coverage(read(REGISTRY), country, audit, _dt(issue + 'T06:00:00+08:00'),
+                             ledger, leads, proof['observedAt'])
+    if digest(actual) != digest(proof):
+        raise ValueError('coverage_archive_binding_mismatch')
+    require_coverage_review(actual, draft, review, supplied.get('finalHash'), inventory_entries(source, issue, country))
+    draft['planBCoverage'] = actual
+    draft['planBCoverageReview'] = review.get('coverageReview')
+    draft['planBReviewerRun'] = review.get('reviewer')
+    draft['planBFinalHash'] = supplied.get('finalHash')
     originals = read_originals(source, issue, country, draft, review)
     attach_audit(source, issue, country, draft, review)
     for role in (draft, review):
@@ -141,6 +166,9 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     review['originalHash'], review['finalBodyHash'] = digest(draft['articles']), digest(final)
     release = directory / 'release'
     result = prepare(release, draft, review, issue, country, version, 'normal', saved / 'manifest.json')
+    result.update(coverageState='checked_with_gaps' if actual['gaps'] else 'checked',
+                  quantityState='target_met' if len(final) >= 15 else 'scarcity_approved',
+                  coverageGapCount=len(actual['gaps']))
     write(directory / 'release-status.json', result)
     save_release(release, directory / 'prepared.gz')
 
