@@ -105,7 +105,8 @@ export async function ensurePrivateImage(bytes: Buffer, sha256: string) {
     await validateOriginalImage(Buffer.from(await existing.data.arrayBuffer()), { sha256, bytes: bytes.length });
     return 'reused';
   }
-  if (!existing.error || Number(existing.error.status) !== 404) throw storageFailure(existing.error);
+  const failure = storageFailure(existing.error);
+  if (failure.failureKind !== 'not_found' || failure.status !== 404) throw failure;
   await stagePrivateImage(bytes, sha256);
   return 'staged';
 }

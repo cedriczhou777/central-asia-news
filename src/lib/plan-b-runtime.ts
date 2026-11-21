@@ -6,7 +6,7 @@ import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
 
-export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-3-production-state';
+export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-4-storage-recovery';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
