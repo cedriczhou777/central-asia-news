@@ -42,3 +42,9 @@ pendingWork 是硬阻断，包含未完成的最终增量、正文队列、待�
 作者与独审在同一次Work中按国接续。每批形成真实进展后，用`work_client.py checkpoint --contract PRIVATE --issue D --country C --hash SNAPSHOT_HASH --stage draft|review --document FILE`保存检查点。检查点位于现有私有桶、以SHA命名，指针通过CAS附在原来源行，原候选快照及缓存不改动；它不创建editorial签审或交付记录。恢复时用同一命令去掉`--document`读取，随后通过changes对账新冻结版本，仅重审新增/改变内容。完整独审通过即用submit单国交接，云端独立推进Word和微信，其他国家不等待。
 
 只读health暴露activation三项实际值、运行策略版本、覆盖策略及验证结果。Work连接只使用受控变量或已有0600私有契约，不在命令参数、代码、稿件、子智能体或公开日志中放密钥。实际模型与Work Credits无平台证据时为unknown。
+
+## 首次生产的提交与图片缺口
+
+发现器的候选默认仍需语义及首披审核。正式提交前，独审稿须以`review.candidateDecisions`逐个记录冻结候选的采用/排除、具体理由、真实审核身份/时间及来源哈希、修订；采用稿另须真实首披确认和证据。仅接口受理成功不能证明后续原文复验、数量闸、封包及Word已完成。
+
+原文仅有图片元数据线索、尚不能确认实际展示时，记录`sourceImage.status=unavailable`及`candidateEvidence=metadata_only_unconfirmed`，保留具体原因和页面证据检查记录；不使用该图片、不称原文无图，也不因此丢弃已签审正文。已确认原图继续走原有字节、哈希及私有存储校验。线上`health --verify`的`coverageVerification.releaseImplementationSha256`用于回读实际封包实现。
