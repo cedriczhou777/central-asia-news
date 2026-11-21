@@ -114,9 +114,15 @@ def source_photo(original, image_root):
     image = result['sourceImage']
     if image['status'] == 'page_check_needed':
         if result.get('metadataHints'):
-            # An OG hint without a displayed photo is ambiguous. Refuse to
-            # silently convert a parser miss into an assertion of no photo.
-            raise ValueError('original_image_needs_evidence')
+            # Metadata alone never authorizes using an image. Preserve the
+            # unresolved page evidence as an image gap, not a country failure
+            # or a false assertion that the publisher had no photo.
+            image.update(status='unavailable', candidateUrls=result['metadataHints'],
+                         candidateEvidence='metadata_only_unconfirmed',
+                         attempts=[{'kind': 'page_evidence_check', 'url': original['source_url'],
+                                    'result': 'displayed_original_image_not_identified'}])
+            result['imageUnavailableReason'] = '原报道有图片元数据线索，但未确认页面实际展示的本篇原图；未采用图片，不认定原文无图'
+            return result
         image['status'] = 'none'
         result['imageUnavailableReason'] = '原文正文未识别到本篇配图'
     return result

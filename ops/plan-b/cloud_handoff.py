@@ -252,7 +252,9 @@ def main():
     args = parser.parse_args()
     root = args.directory / 'source'
     if args.command == 'coverage-self-test':
-        write(args.directory / 'coverage-check.json', coverage_self_test())
+        proof = coverage_self_test()
+        proof['releaseImplementationSha256'] = hashlib.sha256(Path(__file__).with_name('cloud_release.py').read_bytes()).hexdigest()
+        write(args.directory / 'coverage-check.json', proof)
     elif args.command == 'probe':
         probe_sources(args.directory, args.country)
     elif args.command == 'scan':
