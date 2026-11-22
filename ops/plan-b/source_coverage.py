@@ -7,9 +7,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from work_quantity_policy import _dt, _listing_attempt, _url, terminal_source_failure
+from news_queue_policy import partition_coverage, validate_queue_accounting
 
 
-COVERAGE_VERSION = 'plan-b-coverage-1'
+COVERAGE_VERSION = 'plan-b-coverage-2'
 CRITICAL_TOPICS = {'policy', 'energy', 'investment', 'business'}
 
 
@@ -141,7 +142,7 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
                   None, 'unresolved_discovery_budget')
 
     pending.sort(key=lambda r: (r['sourceId'], r['kind'], r['url'] or '', r['reason']))
-    return {'version': COVERAGE_VERSION, 'country': country, 'windowEnd': cutoff.isoformat(),
+    proof = {'version': COVERAGE_VERSION, 'country': country, 'windowEnd': cutoff.isoformat(),
             'observedAt': observed.isoformat(),
             'state': 'blocked' if pending else 'review_required' if gaps else 'observed',
             'readableSources': sorted(readable), 'gaps': gaps, 'pendingWork': pending,
@@ -149,12 +150,22 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
             'scanBudget': {'bounded': bounded_scan, 'maxSeconds': inventory.get('maxSeconds'),
                            'observedAt': inventory.get('observedAt')},
             'coverageChecked': False, 'normalTarget': [15, 20], 'scarcityRange': [10, 14]}
+    metadata = {}
+    for row in leads:
+        metadata.setdefault((row.get('sourceId'), _url(row.get('source_url'))), {})['lead'] = row
+    for row in ledger:
+        metadata.setdefault((row.get('sourceId'), _url(row.get('source_url'))), {})['candidate'] = row
+    for row in inventory.get('budgetEvents', []):
+        if row.get('reason') == 'article_budget':
+            metadata.setdefault((row.get('sourceId'), None), {})['budget'] = row
+    return partition_coverage(proof, sources, metadata)
 
 
 def require_coverage_review(coverage, draft, review, final_hash, candidates):
     """Gaps need the same independent reviewer, actual alternatives, and topic checks."""
     if coverage.get('version') != COVERAGE_VERSION or coverage.get('pendingWork') or coverage.get('state') == 'blocked':
         raise ValueError('freeze_incomplete')
+    validate_queue_accounting(coverage)
     if not coverage.get('gaps'):
         return
     check = review.get('coverageReview') or {}
@@ -179,8 +190,14 @@ def require_coverage_review(coverage, draft, review, final_hash, candidates):
         alternatives = row.get('alternativeCandidateIds', [])
         deferred_urls = {w['url'] for w in coverage.get('reviewWork', [])
                          if w['sourceId'] == row.get('sourceId') and w.get('url')}
+        deferred_urls.update(url for work in coverage.get('reviewWork', [])
+                             if work['sourceId'] == row.get('sourceId') for url in work.get('examples', []))
         if not deferred_urls.issubset(set(row.get('deferredUrlsReviewed', []))):
             raise ValueError('coverage_deferred_discovery_review_incomplete')
+        hashes = {w['queueHash'] for w in coverage.get('reviewWork', [])
+                  if w['sourceId'] == row.get('sourceId') and w.get('queueHash')}
+        if not hashes.issubset(set(row.get('deferredWorkHashesReviewed', []))):
+            raise ValueError('coverage_deferred_work_hash_review_incomplete')
         if (not isinstance(row.get('reason'), str) or len(row['reason'].strip()) < 16 or not alternatives
                 or any(cid not in by_id or not by_id[cid].get('sourceId')
                        or by_id[cid]['sourceId'] == row['sourceId'] for cid in alternatives)):

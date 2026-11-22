@@ -95,6 +95,8 @@ export async function GET(req: Request) {
     if (view === 'checkpoint') {
       const saved = latestWorkCheckpoint(rows);
       return saved ? json({ ok:true, state:'ready', issue, country, checkpoint:saved.checkpoint,
+        sourceSnapshotChanged:saved.checkpoint.snapshotHash!==(saved.row.receipt as SnapshotReceipt)?.snapshot?.hash,
+        currentSnapshotHash:(saved.row.receipt as SnapshotReceipt)?.snapshot?.hash,
         document:await readWorkCheckpoint(saved.checkpoint) })
         : json({ ok:true, state:'waiting', issue, country }, 202);
     }
@@ -107,7 +109,10 @@ export async function GET(req: Request) {
     const preview = receipt(rows, country, 'preview');
     const frozen = receipt(rows, country, 'final');
     const final = params.get('phase') === 'final';
-    const selected = final ? frozen : preview;
+    const unresolved=rows.find(row=>row.country===country && row.step==='final' && row.state!=='working' && row.receipt?.snapshot && row.receipt?.cache);
+    const authorOnly=final && !frozen && params.get('allowBlocked')==='1'
+      ? unresolved?.receipt as SnapshotReceipt|undefined : undefined;
+    const selected = final ? frozen || authorOnly : preview;
     if (!selected) {
       const waiting = rows.find(row => row.country === country && row.step === (final ? 'final' : 'preview'));
       return json({ ok: true, issue, country, state: waiting?.state === 'blocked' ? 'blocked' : 'waiting',
@@ -115,7 +120,9 @@ export async function GET(req: Request) {
         coverage: (waiting?.receipt as SnapshotReceipt | null)?.snapshot?.coverage,
         clock, availablePreviewHash: preview?.snapshot.hash || null }, waiting?.state === 'blocked' ? 409 : 202);
     }
-    if (view === 'manifest') return json({ ok: true, state: 'ready', snapshot: selected.snapshot, metrics: selected.metrics });
+    if (view === 'manifest') return json({ ok: true, state:authorOnly?'blocked':'ready',
+      authorCheckpointAllowed:true,formalSubmissionAllowed:!authorOnly,
+      snapshot: selected.snapshot, metrics: selected.metrics });
     if (view === 'changes' && final && frozen) {
       return json({ ok: true, state: 'ready', issue, country, delta: changes(preview?.snapshot || null, frozen.snapshot),
         frozenIds: frozen.snapshot.candidates.map(candidate => candidate.id) });
@@ -127,7 +134,8 @@ export async function GET(req: Request) {
       if (ids.length > 5 || new Set(ids).size !== ids.length || ids.some(id => !idPattern.test(id) || !allowed.has(id))) {
         return json({ ok: false, reason: 'original_selection_invalid' }, 400);
       }
-      return json({ ok: true, snapshotHash: selected.snapshot.hash, originals: await sourceOriginals(selected, ids) });
+      return json({ ok: true, snapshotHash: selected.snapshot.hash,formalSubmissionAllowed:!authorOnly,
+        originals: await sourceOriginals(selected, ids) });
     }
     return json({ ok: false, reason: 'unknown_view' }, 400);
   } catch {

@@ -19,6 +19,7 @@ from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
+from news_queue_policy import VERSION as QUEUE_POLICY_VERSION, MAX_ACTIVE_ARTICLES, importance
 
 VERSION = 'work-discovery-v6'
 OFFSETS = {'kz': 5, 'uz': 5, 'kg': 6, 'tj': 5, 'az': 4}
@@ -72,7 +73,8 @@ def lead_route(url, source, known_listings=()):
         if marker in parts and len(parts) - parts.index(marker) - 1 <= 1:
             return 'listing', 'explicit_collection_not_article'
     static = {'privacy', 'privacy-policy', 'privacy_policy', 'terms', 'terms-of-use',
-              'about', 'about-us', 'about_us', 'contacts', 'contact', 'cookies', 'disclaimer'}
+              'about', 'about-us', 'about_us', 'contacts', 'contact', 'cookies', 'disclaimer',
+              'redakcionnaia-politika', 'redaktsionnaya-politika', 'editorial-policy', 'reklama-na-saite'}
     if any(part in static for part in parts):
         return 'static_page', 'explicit_permanent_information_page'
     if parts and parts[-1] in ('advertising', 'advertise'):
@@ -754,7 +756,7 @@ def links_from(record):
     return links
 
 
-def pagination_links(record):
+def pagination_links(record, next_only=False):
     found = []
     for entry in record.get('nextLinks', record.get('next_links', [])):
         value = entry.get('url') if isinstance(entry, dict) else entry
@@ -770,10 +772,21 @@ def pagination_links(record):
         if ('next' in rel or re.fullmatch(r'\d{1,4}|[›»→]+', label)
                 or re.search(r'^(next|older|далее|следующ|предыдущ|архив|archive)', label)):
             found.append(entry['url'])
-    return list(dict.fromkeys(normal_url(u) for u in found))
+    found=list(dict.fromkeys(normal_url(u) for u in found))
+    if not next_only:return found
+    # Follow one observed adjacent/next link, never all archive page numbers.
+    current=record.get('final_url') or record.get('url') or ''
+    at=re.search(r'(?:[?&]page=|/page/)(\d+)',current)
+    current_page=int(at[1]) if at else 1
+    safe=[]
+    for url in found:
+        page=re.search(r'(?:[?&]page=|/page/)(\d+)',url)
+        if page and int(page[1])!=current_page+1:continue
+        safe.append(url)
+    return safe[:1]
 
 
-def article_links(record, source, known_listings):
+def article_links(record, source, known_listings, structural_filter=False):
     pages = set(pagination_links(record)) | known_listings
     result = []
     for entry in links_from(record):
@@ -781,6 +794,9 @@ def article_links(record, source, known_listings):
         path = urlparse(url).path
         label = entry.get('text', '').strip()
         if not allowed_url(url, source) or url in pages:
+            continue
+        if structural_filter and (urlparse(url).scheme != 'https'
+                or lead_route(url,source,known_listings)[0] in ('listing','static_page')):
             continue
         pattern = source.get('confirmedArticlePathPattern')
         if pattern and not re.fullmatch(pattern, path):
@@ -858,7 +874,7 @@ def load_fetcher(output):
 
 def discover(registry, country, issue_date, output, listing_not_before=None,
              max_pages_per_source=4, max_articles_per_source=30, workers=6,
-             max_seconds=600, fetcher=None, clock=time.monotonic, only_source_ids=None):
+             max_seconds=600, fetcher=None, clock=time.monotonic, only_source_ids=None, news_budget=False):
     if not math.isfinite(max_seconds) or max_seconds <= 0:
         raise ValueError('max-seconds must be finite and positive')
     output = Path(output)
@@ -882,7 +898,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
     fetcher_parameters = inspect.signature(fetcher).parameters
     start_clock = clock()
     deadline = start_clock + max_seconds
-    listing_deadline = start_clock + max_seconds * .55
+    listing_deadline = start_clock + max_seconds * (.25 if news_budget else .55)
     bjt = timezone(timedelta(hours=8))
     end = datetime.fromisoformat(issue_date).replace(hour=6, tzinfo=bjt)
     start = end - timedelta(days=1)
@@ -1072,7 +1088,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                 if not valid:
                     continue
                 source = by_id[job[0]]
-                links = article_links(record, source, known_listings)
+                links = article_links(record, source, known_listings, structural_filter=news_budget)
                 page_candidates[job[0]].append(links)
                 anchors_by_url = defaultdict(list)
                 for anchor in links_from(record):
@@ -1098,8 +1114,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                         item.update(listingURL=row['final_url'], fetchedAt=row.get('fetchedAt'))
                         if item not in anchors:
                             anchors.append(item)
-                for url in pagination_links(record):
-                    if allowed_url(url, source) and (job[0], url) not in seen_listing:
+                for url in pagination_links(record, next_only=news_budget):
+                    if allowed_url(url, source) and (not news_budget or urlparse(url).scheme=='https') and (job[0], url) not in seen_listing:
                         known_listings.add(url)
                         listing_queue.append((job[0], url, 'pagination', job[3]))
         # Full-text evidence retains its own time budget even if a listing stalls.
@@ -1110,8 +1126,12 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
         for source in sources:
             source_leads = [lead for lead in leads.values() if lead['sourceId'] == source['id']]
             ranked = rank_leads(source_leads, source, (start, end))
+            if news_budget:
+                for lead in ranked:
+                    lead['queueAssessment']={'version':QUEUE_POLICY_VERSION,**importance(lead,end.isoformat())}
+                ranked.sort(key=lambda lead:-(lead['articlePriority']+70*lead['queueAssessment']['important']))
             for lead in ranked:
-                if lead['leadType'] in ('listing', 'static_page'):
+                if lead['leadType']=='listing' or not news_budget and lead['leadType']=='static_page':
                     if (source['id'], lead['source_url']) not in seen_listing:
                         deferred_listing.append((source['id'], lead['source_url'], 'section', next((e.get('language') for e in source_entries(source) if e.get('language')), None)))
             urls = list(dict.fromkeys(round_robin(page_candidates[source['id']])))
@@ -1126,7 +1146,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             urls = [u for u in urls if u in eligible]
             # Spend the next batch on previously omitted/new evidence before reusing
             # already fetched pages. Repeated small runs must make forward progress.
-            priority_by_url = {lead['source_url']: lead['articlePriority'] for lead in ranked}
+            priority_by_url = {lead['source_url']: lead['articlePriority'] + (70 * lead.get('queueAssessment',{}).get('important',False) if news_budget else 0) for lead in ranked}
             urls.sort(key=lambda u: (bool(old_by_url.get(u, {}).get('sourceJSON')) or old_by_url.get(u, {}).get('decision') in TERMINAL,
                                      -priority_by_url.get(u, 0)))
             for lead in ranked:
@@ -1143,6 +1163,10 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             article_groups.append([(source['id'], u, 'article', expected) for u in selected_urls])
         article_queue = deque(round_robin(article_groups))
         deferred_article = []
+        if news_budget and len(article_queue)>MAX_ACTIVE_ARTICLES:
+            all_jobs=list(article_queue)
+            article_queue=deque(all_jobs[:MAX_ACTIVE_ARTICLES])
+            deferred_article.extend(all_jobs[MAX_ACTIVE_ARTICLES:])
         processed = set()
         while article_queue and clock() < deadline:
             batch = [article_queue.popleft() for _ in range(min(workers, len(article_queue)))]
@@ -1231,6 +1255,11 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                         'sourceHTML': str(html_path.resolve()) if html_path else None,
                         'sourceHTMLSha256': html_sha,
                         'evidence': evidence, 'firstDisclosureVerified': False}
+                if news_budget:
+                    lead=leads.get(key,{})
+                    item['title']=record.get('title')
+                    item['queueAssessment']={'version':QUEUE_POLICY_VERSION,
+                        **importance({**lead,'title':record.get('title'),'source_url':url},end.isoformat())}
                 if prior:
                     item['discoveredAt'] = prior.get('discoveredAt', item['discoveredAt'])
                     item['previousDecisions'] = prior.get('previousDecisions', [])
@@ -1386,6 +1415,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
               'listingQueue': listing_jobs, 'articleQueue': article_jobs,
               'maxPagesPerSource': max_pages_per_source, 'maxArticlesPerSource': max_articles_per_source,
               'maxSeconds': max_seconds, 'pageFetchCounts': dict(page_counts),
+              'newsBudget': {'version':QUEUE_POLICY_VERSION,'maxActiveArticles':MAX_ACTIVE_ARTICLES,
+                             'listingFraction':.25} if news_budget else None,
               'retryableFetchesThisRun': retryable_fetches,
               'fetchMetrics': fetch_metrics, 'evidenceReadMetrics': evidence_metrics,
               'elapsedSeconds': round(clock() - start_clock, 3), 'complete': not incomplete,

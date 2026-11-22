@@ -17,6 +17,7 @@ export function planBProgressRows(rows: StateRow[]) {
     const coverage = saved?.snapshot?.coverage;
     const metrics = saved?.metrics ?? {};
     return {...result,reason:value?.reason,hash:saved?.snapshot?.hash,
+      recovery:value?.recovery ?? null,lastUsefulProgressAt:value?.lastUsefulProgressAt ?? saved?.snapshot?.observedAt ?? null,
       candidateCount:saved?.snapshot?.candidates?.length ?? 0,
       workCheckpoint:value?.workCheckpoint ?? null,
       metrics:{registeredSources:metrics.registeredSources,listingQueueRemaining:metrics.listingQueueRemaining,
@@ -79,6 +80,13 @@ export function planBBusinessStatus(issue: string, rows: StateRow[], now = Date.
       quantityState: release?.quantityState ?? null, wordReady, wechatReady, missing,
       mediaId:draft?.media_id || draft?.mediaId || null,
       workCheckpoint: checkpoints[0] ?? null,
+      progress:rows.filter(r=>r.country===country && r.issue_date===issue).map(r=>({
+        step:r.step,state:r.state,attempt:r.attempt,reason:r.receipt?.reason ?? null,
+        updatedAt:r.updated_at,retryAfter:r.retry_after,leaseUntil:r.lease_until,
+        lastUsefulProgressAt:r.receipt?.lastUsefulProgressAt ??
+          (r.receipt?.snapshot as {observedAt?:string}|undefined)?.observedAt ?? r.updated_at,
+        recovery:r.receipt?.recovery ?? null,
+      })),
       blockedSteps: rows.filter(r => r.country === country && r.state === 'blocked')
         .map(r => ({ step:r.step, reason:r.receipt?.reason ?? null })),
     };
@@ -99,6 +107,7 @@ export function planBBusinessStatus(issue: string, rows: StateRow[], now = Date.
     countries, remainingCountries:pending.map(c => c.country),
     alert:overdue ? { code:minute >= PLAN_B_CLOCK.deadlineAt ? 'delivery_deadline_missed' : 'delivery_target_missed',
       severity:minute >= PLAN_B_CLOCK.deadlineAt ? 'error' : 'warning',
-      countries:pending.map(c => ({ country:c.country, missing:c.missing })), modelApiUsed:false } : null,
+      countries:pending.map(c => ({ country:c.country, missing:c.missing })), modelApiUsed:false,
+      notification:{channel:'cloud_log',userNotified:false} } : null,
   };
 }

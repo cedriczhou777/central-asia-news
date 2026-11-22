@@ -40,12 +40,14 @@ export function timeWithin(issue: string, hms: '06:00:00' | '09:00:00', maximum:
 }
 
 export async function collectCountry(issue: string, country: PlanBCountry,
-    phase: Phase, prior: ObjectReceipt | undefined): Promise<SnapshotReceipt> {
+    phase: Phase, prior: ObjectReceipt | undefined, focus?: string[]): Promise<SnapshotReceipt> {
   return scratch(async directory => {
     await restoreCache(directory, prior);
-    const timeout = timeWithin(issue, phase === 'preview' ? '06:00:00' : '09:00:00', 520_000);
-    await runCloudScript('cloud_handoff.py', ['scan', directory, issue, country, phase,
-      String(Math.min(480, Math.max(1, (timeout - 20_000) / 1_000)))], timeout);
+    const timeout = timeWithin(issue, phase === 'preview' ? '06:00:00' : '09:00:00', focus?160_000:520_000);
+    const args=focus && !focus.length ? ['reassess',directory,issue,country]
+      : ['scan', directory, issue, country, phase,
+        String(Math.min(focus?120:480, Math.max(1, (timeout - 20_000) / 1_000))),...(focus ?? [])];
+    await runCloudScript('cloud_handoff.py',args,timeout);
     const { metrics, ...input } = JSON.parse(await readFile(join(directory, 'snapshot.json'), 'utf8')) as
       Omit<Snapshot, 'hash' | 'provisional'> & { metrics: Record<string, unknown> };
     const frozen = snapshot(input);

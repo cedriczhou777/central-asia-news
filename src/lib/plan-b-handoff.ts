@@ -4,7 +4,7 @@ import { issueWindow } from './plan-b-window';
 export const PLAN_B_COUNTRIES = ['kz', 'uz', 'kg', 'tj', 'az'] as const;
 export type PlanBCountry = typeof PLAN_B_COUNTRIES[number];
 export type Phase = 'preview' | 'final';
-export const COVERAGE_VERSION = 'plan-b-coverage-1';
+export const COVERAGE_VERSION = 'plan-b-coverage-2';
 
 export interface SourceCoverage {
   version: string;
@@ -19,9 +19,14 @@ export interface SourceCoverage {
     failureType?: string; contentValidated?: boolean;
   }[] }[];
   pendingWork: { sourceId: string; kind: string; url: string | null; reason: string }[];
-  reviewWork: { sourceId: string; kind: string; url: string | null; reason: string }[];
+  reviewWork: { sourceId: string; kind: string; url: string | null; reason: string;
+    count?: number; queueHash?: string; examples?: string[] }[];
   queues: { listing: number; article: number; lead: number };
   closedQueueWork: { sourceId: string; kind: string; url: string; reason: string }[];
+  queueAccounting?: Record<'listing' | 'article' | 'lead', {
+    total:number; pending:number; review:number; closed:number; identityHash:string;
+  }>;
+  deferredCandidates?: {id:string;sourceId:string;sourceUrl:string;sourceHash:string;sourceJSONSha256:string}[];
 }
 
 export interface Candidate {
@@ -128,10 +133,17 @@ export function freezeBlockReason(state: Snapshot | null) {
   if (!coverage || coverage.version !== COVERAGE_VERSION || coverage.country !== state.country
       || Date.parse(coverage.windowEnd) !== issueWindow(state.issue).end
       || Date.parse(coverage.observedAt) !== Date.parse(state.observedAt)) return 'coverage_evidence_invalid';
-  if (state.pendingSources.length || coverage.pendingWork.length || coverage.state === 'blocked'
-      || coverage.queues.article !== 0 || coverage.queues.lead !== 0
-      || coverage.queues.listing !== coverage.closedQueueWork.length
-        + coverage.reviewWork.filter(row => row.kind === 'listing').length) return 'freeze_incomplete';
+  if (state.pendingSources.length || coverage.pendingWork.length || coverage.state === 'blocked') return 'freeze_incomplete';
+  for (const kind of ['listing','article','lead'] as const) {
+    const counts=coverage.queueAccounting?.[kind];
+    const reviewed=coverage.reviewWork.filter(row=>row.kind===kind).reduce((n,row)=>n+(row.count ?? 1),0);
+    const closed=coverage.closedQueueWork.filter(row=>row.kind===kind).length;
+    if (!counts || ![counts.total,counts.pending,counts.review,counts.closed].every(n=>Number.isSafeInteger(n)&&n>=0)
+        || !shaPattern.test(counts.identityHash) || counts.total!==coverage.queues[kind] || counts.pending!==0
+        || counts.review!==reviewed || counts.closed!==closed || counts.total!==reviewed+closed) return 'coverage_evidence_invalid';
+  }
+  if (coverage.reviewWork.some(row=>!Number.isSafeInteger(row.count ?? 1) || (row.count ?? 1)<1
+      || !row.queueHash || !shaPattern.test(row.queueHash))) return 'coverage_evidence_invalid';
   if (coverage.reviewWork.some(row => !coverage.gaps.some(gap => gap.sourceId === row.sourceId))) return 'coverage_evidence_invalid';
   if (coverage.gaps.length && coverage.state !== 'review_required'
       || !coverage.gaps.length && coverage.state !== 'observed') return 'coverage_evidence_invalid';

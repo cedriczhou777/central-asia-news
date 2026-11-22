@@ -50,7 +50,15 @@ export async function claim(issue: string, country: PlanBCountry, step: ClaimSte
 
 export async function saveClaim(issue: string, country: PlanBCountry, step: ClaimStep, lease: string,
     state: 'ready' | 'retry' | 'blocked', receipt: object, delayMs = 0) {
-  const { data, error } = await client().from(TABLE).update({ state, receipt, lease_id: null, lease_until: null,
+  // Checkpoint writes are forbidden while working. Read the pointer after
+  // claiming, so a checkpoint saved just before the lease cannot be overwritten
+  // by the scheduler's earlier in-memory row.
+  const current=await client().from(TABLE).select('workCheckpoint:receipt->workCheckpoint')
+    .eq('issue_date',issue).eq('country',country).eq('step',step).eq('state','working').eq('lease_id',lease).maybeSingle();
+  if(current.error)throw new Error('plan_b_checkpoint_pointer_read_failed');
+  const checkpoint=(current.data as {workCheckpoint?:WorkCheckpoint}|null)?.workCheckpoint;
+  const kept=checkpoint?{...receipt,workCheckpoint:checkpoint}:receipt;
+  const { data, error } = await client().from(TABLE).update({ state, receipt:kept, lease_id: null, lease_until: null,
     updated_at: new Date().toISOString(), retry_after: delayMs ? new Date(Date.now() + delayMs).toISOString() : null,
   }).eq('issue_date', issue).eq('country', country).eq('step', step).eq('state', 'working')
     .eq('lease_id', lease).gt('lease_until', new Date().toISOString()).select('step');
@@ -74,7 +82,7 @@ export async function saveWorkCheckpoint(row: StateRow, checkpoint: WorkCheckpoi
   const { data, error } = await client().from(TABLE).update({
     receipt:{ ...row.receipt, workCheckpoint:checkpoint }, updated_at:checkpoint.savedAt,
   }).eq('issue_date', row.issue_date).eq('country', row.country).eq('step', row.step)
-    .eq('state', 'ready').eq('updated_at', row.updated_at).select('step');
+    .eq('state', row.state).eq('updated_at', row.updated_at).select('step');
   if (error || data?.length !== 1) throw new Error('checkpoint_conflict');
 }
 

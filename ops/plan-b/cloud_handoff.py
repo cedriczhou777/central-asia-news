@@ -12,6 +12,7 @@ import tarfile
 from discover_work_sources import discover, published_intervals, rebase_discovery_paths
 from prepare_editorial_input import candidate_originals, discovery_index, indexed
 from source_coverage import assess_coverage, coverage_self_test
+from news_queue_policy import MAX_LISTING_PAGES, MAX_ARTICLES_PER_SOURCE
 
 
 REGISTRY = Path(__file__).with_name('source_registry.json')
@@ -110,14 +111,22 @@ def inventory_entries(root, issue, country):
     return result
 
 
-def scan(root, directory, issue, country, phase, seconds):
+def scan(root, directory, issue, country, phase, seconds, source_ids=None):
     registry = read(REGISTRY)
     cutoff = datetime.fromisoformat(issue + 'T06:00:00+08:00')
     known = directory / 'input.gz'
     if known.is_file():
         restore(root, known)
     audit = discover(registry, country, issue, root, cutoff.isoformat() if phase == 'final' else None,
-                     workers=2, max_seconds=seconds)
+                     workers=2, max_seconds=seconds, news_budget=True,
+                     max_pages_per_source=1 if source_ids else MAX_LISTING_PAGES,
+                     max_articles_per_source=MAX_ARTICLES_PER_SOURCE, only_source_ids=source_ids)
+    snapshot_from_cache(root,directory,issue,country,phase,audit)
+
+
+def snapshot_from_cache(root,directory,issue,country,phase,audit):
+    registry=read(REGISTRY)
+    cutoff=datetime.fromisoformat(issue+'T06:00:00+08:00')
     observed = datetime.now(timezone.utc).isoformat()
     ledger = read(root / 'candidate_ledger.json')['candidateLedger']
     leads = read(root / 'lead_queue.json').get('leadLedger', []) if (root / 'lead_queue.json').exists() else []
@@ -244,7 +253,7 @@ def probe_sources(directory, country):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['scan', 'extract-originals', 'originals', 'probe', 'coverage-self-test'])
+    parser.add_argument('command', choices=['scan', 'reassess', 'extract-originals', 'originals', 'probe', 'coverage-self-test'])
     parser.add_argument('directory', type=Path)
     parser.add_argument('issue')
     parser.add_argument('country', choices=['kz', 'uz', 'kg', 'tj', 'az'])
@@ -258,8 +267,12 @@ def main():
     elif args.command == 'probe':
         probe_sources(args.directory, args.country)
     elif args.command == 'scan':
-        phase, seconds = args.args
-        scan(root, args.directory, args.issue, args.country, phase, float(seconds))
+        phase, seconds, *source_ids = args.args
+        scan(root, args.directory, args.issue, args.country, phase, float(seconds), source_ids or None)
+    elif args.command == 'reassess':
+        restore(root,args.directory/'input.gz')
+        rebase_discovery_paths(root)
+        snapshot_from_cache(root,args.directory,args.issue,args.country,'final',read(root/'source_scan_audit.json'))
     elif args.command == 'extract-originals':
         restore(root, args.directory / 'input.gz', editorial_only=True)
     else:

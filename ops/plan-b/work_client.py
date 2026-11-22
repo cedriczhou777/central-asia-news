@@ -69,13 +69,18 @@ def main():
     parser.add_argument('--issue', required=False)
     parser.add_argument('--country', choices=['kz', 'uz', 'kg', 'tj', 'az'])
     parser.add_argument('--phase', choices=['preview', 'final'], default='preview')
+    parser.add_argument('--allow-blocked', action='store_true',
+                        help='Read cached blocked final evidence for author checkpoints only; never authorize submit')
     parser.add_argument('--ids', nargs='*')
     parser.add_argument('--hash')
+    parser.add_argument('--base-checkpoint-hash', help='Hash read before merging the existing author/reviewer checkpoint')
     parser.add_argument('--document', type=Path)
     parser.add_argument('--verify', action='store_true', help='Run the read-only service prerequisites check with health')
     args = parser.parse_args()
     try:
         base, secret = protected_connection(args.contract)
+        if args.allow_blocked and (args.phase!='final' or args.view not in ('manifest','originals')):
+            raise ValueError('blocked_evidence_read_only')
         if args.issue and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', args.issue):
             raise ValueError('invalid_issue')
         if args.view == 'health':
@@ -83,6 +88,8 @@ def main():
             body = None
         else:
             query = {'view': args.view, 'phase': 'final' if args.view == 'changes' else args.phase}
+            if args.allow_blocked:
+                query['allowBlocked']='1'
             if args.issue:
                 query['issue'] = args.issue
             if args.country:
@@ -102,7 +109,7 @@ def main():
             elif args.view == 'checkpoint' and args.document:
                 document = json.loads(args.document.read_bytes())
                 body = {'snapshotHash': args.hash, 'checkpointHash': checksum(document),
-                        'stage': args.stage, 'document': document}
+                        'stage': args.stage, 'document': document, 'baseCheckpointHash':args.base_checkpoint_hash}
         result = handshake(base, secret, query, body)
         print(json.dumps(result, ensure_ascii=False))
         sys.exit(0 if result.get('ok') else 1)

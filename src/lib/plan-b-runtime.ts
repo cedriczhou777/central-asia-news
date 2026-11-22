@@ -6,7 +6,7 @@ import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
 
-export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-4-storage-recovery';
+export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-5-bounded-queues';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
@@ -23,10 +23,12 @@ export function planBRegistration() {
   return { registered:runtime.registered, activeSteps: active.size, report:runtime.report };
 }
 
-function eligible(row: StateRow | undefined, now: number) {
-  return !row || (row.attempt < 2 && (
+export function eligible(row: StateRow | undefined, now: number, step?: ClaimStep) {
+  const recovery=step==='final' && !!row && row.issue_date>='2026-11-23';
+  return !row || (row.attempt < (recovery?3:2) && (
     row.state === 'retry' && Date.parse(row.retry_after || '') <= now
     || row.state === 'working' && Date.parse(row.lease_until || '') <= now
+    || recovery && row.state==='blocked' && row.receipt?.reason==='freeze_incomplete' && !!row.receipt.cache
   ));
 }
 
@@ -35,8 +37,11 @@ const ready = (receipt: object): Outcome => ({ state: 'ready', receipt });
 
 export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number): Outcome {
   const reason = freezeBlockReason(receipt.snapshot);
-  return reason ? { state: attempt < 1 ? 'retry' : 'blocked', delay:120_000,
-    receipt:{ ...receipt, pendingSources:receipt.snapshot.pendingSources, coverage:receipt.snapshot.coverage, reason } }
+  const limit=receipt.snapshot.issue>='2026-11-23'?3:2;
+  return reason ? { state: attempt+1<limit ? 'retry' : 'blocked', delay:120_000,
+    receipt:{ ...receipt, pendingSources:receipt.snapshot.pendingSources, coverage:receipt.snapshot.coverage, reason,
+      recovery:attempt+1<limit ? {mode:attempt>=1?'focused_source_refresh':'bounded_retry',remainingAttempts:limit-attempt-1}
+        : {mode:'important_evidence_required',automaticAttemptsExhausted:true,checkpointsPreserved:true} } }
     : ready(receipt);
 }
 
@@ -53,7 +58,7 @@ function boundedFailure(error: unknown, nextAttempt: number, step: ClaimStep): O
 function schedule(issue: string, country: PlanBCountry, step: ClaimStep, row: StateRow | undefined,
     perform: () => Promise<Outcome>) {
   const key = `${issue}/${country}/${step}`;
-  if (!eligible(row, Date.now()) || active.has(key)) return;
+  if (!eligible(row, Date.now(), step) || active.has(key)) return;
   const lane = step === 'preview' ? 'final' : step;
   const current = [...active.values()];
   if (current.filter(value => (value === 'preview' ? 'final' : value) === lane).length >= workerLimit[lane]) return;
@@ -65,7 +70,13 @@ function schedule(issue: string, country: PlanBCountry, step: ClaimStep, row: St
     const start = Date.now();
     let result: Outcome;
     try { result = await perform(); }
-    catch (error) { result = boundedFailure(error, (row?.attempt || 0) + 1, step); }
+    catch (error) {
+      result = boundedFailure(error, (row?.attempt || 0) + 1, step);
+      // A failed retry must never erase the last useful snapshot/cache or Work
+      // checkpoint. The row remains blocked/retry, never falsely approved.
+      result.receipt={...row?.receipt,...result.receipt,lastUsefulProgressAt:
+        (row?.receipt?.snapshot as {observedAt?:string}|undefined)?.observedAt ?? row?.updated_at ?? null};
+    }
     await saveClaim(issue, country, step, lease, result.state, { ...result.receipt,
       elapsedMs: Date.now() - start }, result.delay);
   })().catch(() => {
@@ -145,7 +156,10 @@ async function tick() {
       const prior = (row?.receipt?.cache || preview?.receipt?.cache) as SnapshotReceipt['cache'] | undefined;
       const previewStillActive = preview?.state === 'working' && Date.parse(preview.lease_until || '') > Date.now();
       if (!previewStillActive && !final) schedule(issue, country, 'final', row, async () => {
-        const snapshot = await collectCountry(issue, country, 'final', prior);
+        const focus=(row?.attempt || 0)>=2
+          ? [...new Set((row?.receipt as SnapshotReceipt|undefined)?.snapshot?.coverage?.pendingWork
+              .map(work=>work.sourceId).filter(id=>id!=='discovery') ?? [])].slice(0,2) : undefined;
+        const snapshot = await collectCountry(issue, country, 'final', prior, focus);
         return finalCoverageOutcome(snapshot, row?.attempt || 0);
       });
       if (final && editorial) schedule(issue, country, 'release', release, async () => ready(await prepareCountryRelease(final, editorial)));
