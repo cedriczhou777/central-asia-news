@@ -5,6 +5,31 @@ import { issueWindow, PLAN_B_CLOCK } from './plan-b-window';
 
 export const PLAN_B_BUSINESS_VERSION = 'plan-b-business-1';
 
+// Status is a progress envelope, not the source/coverage archive. Real crawls
+// can contain thousands of deferred URLs; repeating them here exceeded the
+// protected Work client's 4 MiB limit and prevented checkpoint continuation.
+// Keep exact counts and block states. Full evidence remains in manifest/cache.
+export function planBProgressRows(rows: StateRow[]) {
+  return rows.map(({country,step,state,attempt,receipt:value,updated_at,lease_until,retry_after}) => {
+    const result = {country,step,state,attempt,updatedAt:updated_at,leaseUntil:lease_until,retryAfter:retry_after};
+    if (step !== 'preview' && step !== 'final') return {...result,receipt:value};
+    const saved = value as SnapshotReceipt | null;
+    const coverage = saved?.snapshot?.coverage;
+    const metrics = saved?.metrics ?? {};
+    return {...result,reason:value?.reason,hash:saved?.snapshot?.hash,
+      candidateCount:saved?.snapshot?.candidates?.length ?? 0,
+      workCheckpoint:value?.workCheckpoint ?? null,
+      metrics:{registeredSources:metrics.registeredSources,listingQueueRemaining:metrics.listingQueueRemaining,
+        articleQueueRemaining:metrics.articleQueueRemaining,rawLeadsQueued:metrics.rawLeadsQueued,
+        elapsedSeconds:metrics.elapsedSeconds},
+      coverage:coverage ? {version:coverage.version,state:coverage.state,windowEnd:coverage.windowEnd,
+        observedAt:coverage.observedAt,queues:coverage.queues,
+        pendingWorkCount:coverage.pendingWork.length,reviewWorkCount:coverage.reviewWork?.length ?? 0,
+        gapCount:coverage.gaps.length,readableSourceCount:coverage.readableSources.length,
+        detailsComplete:false,detailsView:'manifest'} : undefined};
+  });
+}
+
 // A platform execution result is deliberately absent from this contract.
 // Only durable, scoped source/signature/document/live-readback evidence counts.
 export function planBBusinessStatus(issue: string, rows: StateRow[], now = Date.now()) {

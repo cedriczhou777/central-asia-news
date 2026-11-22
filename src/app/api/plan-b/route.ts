@@ -9,7 +9,7 @@ import { archiveEditorial, readWorkCheckpoint, runCloudScript, scratch, sourceOr
 import { planBAdmitted, planBClock, planBEnabled, planBHandlesIssue, planBIngestSecret, PLAN_B_CLOCK } from '@/lib/plan-b-window';
 import { PLAN_B_RUNTIME_VERSION, planBRegistration } from '@/lib/plan-b-runtime';
 import { getCountryWord, type WordReceipt } from '@/lib/plan-b-release';
-import { PLAN_B_BUSINESS_VERSION, planBBusinessStatus } from '@/lib/plan-b-status';
+import { PLAN_B_BUSINESS_VERSION, planBBusinessStatus, planBProgressRows } from '@/lib/plan-b-status';
 import { checkpointInput, latestWorkCheckpoint, type WorkCheckpoint } from '@/lib/plan-b-checkpoint';
 
 export const runtime = 'nodejs';
@@ -32,18 +32,6 @@ function admitted(req: Request) {
 function receipt(rows: StateRow[], country: PlanBCountry, phase: 'preview' | 'final') {
   const row = rows.find(row => row.country === country && row.state === 'ready' && row.step === phase);
   return row?.receipt as SnapshotReceipt | undefined;
-}
-
-function report(rows: StateRow[]) {
-  return rows.map(({ country, step, state, attempt, receipt: value, updated_at }) => {
-    const result = { country, step, state, attempt, updatedAt: updated_at };
-    if (step === 'preview' || step === 'final') return { ...result, metrics: value?.metrics, reason: value?.reason,
-      hash: (value as SnapshotReceipt | null)?.snapshot?.hash,
-      coverage: (value as SnapshotReceipt | null)?.snapshot?.coverage,
-      workCheckpoint:value?.workCheckpoint ?? null,
-      candidateCount: (value as SnapshotReceipt | null)?.snapshot?.candidates.length };
-    return { ...result, receipt: value };
-  });
 }
 
 export async function GET(req: Request) {
@@ -99,7 +87,7 @@ export async function GET(req: Request) {
   try {
     if (view === 'status') {
       const rows = await getState(issue);
-      return json({ ok: true, issue, rows:report(rows), business:planBBusinessStatus(issue, rows) });
+      return json({ ok: true, issue, rows:planBProgressRows(rows), business:planBBusinessStatus(issue, rows) });
     }
     const country = params.get('country') || '';
     if (!isCountry(country)) return json({ ok: false, reason: 'invalid_country' }, 400);
