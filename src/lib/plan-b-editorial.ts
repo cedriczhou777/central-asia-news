@@ -34,8 +34,12 @@ function verifyCoverageReview(final: Snapshot, draft: SignedRecord, review: Sign
   const candidates = new Map(final.candidates.map(row => [row.id, row]));
   for (const row of resolutions) {
     const deferred = final.coverage.reviewWork.filter(work => work.sourceId === row.sourceId && work.url).map(work => work.url);
+    deferred.push(...final.coverage.reviewWork.filter(work=>work.sourceId===row.sourceId).flatMap(work=>work.examples ?? []));
     const resolved = strings(row.deferredUrlsReviewed) ? row.deferredUrlsReviewed : [];
     if (deferred.some(url => !resolved.includes(String(url)))) throw new Error('coverage_deferred_discovery_review_incomplete');
+    const workHashes=final.coverage.reviewWork.filter(work=>work.sourceId===row.sourceId).map(work=>work.queueHash);
+    const checkedHashes=strings(row.deferredWorkHashesReviewed)?row.deferredWorkHashesReviewed:[];
+    if (workHashes.some(value=>!value || !checkedHashes.includes(value))) throw new Error('coverage_deferred_work_hash_review_incomplete');
     if (typeof row.reason !== 'string' || row.reason.trim().length < 16 || !strings(row.alternativeCandidateIds)
         || !row.alternativeCandidateIds.length || row.alternativeCandidateIds.some(id => {
           const candidate = candidates.get(id);

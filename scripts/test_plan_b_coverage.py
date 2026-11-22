@@ -120,7 +120,8 @@ class CoverageClosure(unittest.TestCase):
             'sourceIdsReviewed': proof['readableSources'] + [g['sourceId'] for g in proof['gaps']],
             'gapResolutions': [{'sourceId': g['sourceId'], 'reason': 'Synthetic independent review of actual alternative news and critical topics',
                 'alternativeCandidateIds': ['article0', 'article1', 'article2'],
-                'deferredUrlsReviewed': ['https://unobserved.example/'] if g['sourceId'] == 'unobserved' else []}
+                'deferredUrlsReviewed': ['https://unobserved.example/'] if g['sourceId'] == 'unobserved' else [],
+                'deferredWorkHashesReviewed': [w['queueHash'] for w in proof['reviewWork'] if w['sourceId']==g['sourceId']]}
                 for g in proof['gaps']]}
         self.assertTrue(evaluate_quantity(draft, audit, now)['quantityReady'])
         draft['planBCoverageReview']['gapResolutions'][-1]['deferredUrlsReviewed'] = []

@@ -17,7 +17,7 @@ const document = { writerRun:'fixture-author',articles:[{id:'partial',body:'æœªç
 const packed = gzipSync(canonicalJson(document));
 const query = `https://unit-test.example/api/plan-b?issue=${issue}&country=kg&view=checkpoint`;
 const headers = {'X-Ingest-Secret':'fixture-key','Content-Type':'application/json'};
-const body = { snapshotHash:source.hash,stage:'draft',checkpointHash:sha256(canonicalJson(document)),document };
+const body = { snapshotHash:source.hash,stage:'draft',baseCheckpointHash:'',checkpointHash:sha256(canonicalJson(document)),document };
 const originalFetch=globalThis.fetch, originalNow=Date.now, before=process.env;
 let now=Date.parse(at('05:30:00')), uploads=0, writes=0, conflict=false, editorialAccepted=false;
 process.env = {...before,REVIEWED_PLAN_B:'1',REVIEWED_PLAN_B_FIRST_ISSUE:issue,PLAN_B_INGEST_SECRET:'',INGEST_SECRET:'fixture-key',
@@ -56,7 +56,7 @@ async function main() {
     // A new request restores from the persistent pointer/object, not local role memory.
     const restored=await GET(new Request(query,{headers}));assert.equal(restored.status,200);
     assert.deepEqual((await restored.json()).document,document);
-    conflict=true;body.stage='review';
+    conflict=true;body.stage='review';body.baseCheckpointHash=(workCheckpoint as {checkpointHash:string}).checkpointHash;
     const stale=await post();assert.equal(stale.status,409);
     assert.equal((await stale.json()).reason,'checkpoint_conflict');
     assert.equal(row.receipt!.workCheckpoint,workCheckpoint,'a stale writer cannot replace the saved checkpoint');
@@ -67,6 +67,20 @@ async function main() {
     const locked=await post();assert.equal(locked.status,409);
     assert.equal((await locked.json()).reason,'editorial_already_accepted');
     assert.equal(uploads,beforeLock,'signed country cannot be rewritten by a partial checkpoint');
+    editorialAccepted=false;conflict=false;now=Date.parse(at('06:30:00'));
+    const blockedCoverage=coverageFixture('kg',at('06:25:00'));
+    blockedCoverage.state='blocked';blockedCoverage.pendingWork=[{sourceId:'important',kind:'article',
+      url:'https://unit-test.example/energy-policy',reason:'article_body_pending'}];
+    row.step='final';row.state='blocked';row.receipt={...row.receipt,
+      snapshot:snapshot({...source,phase:'final',observedAt:at('06:25:00'),coverage:blockedCoverage,pendingSources:['important']})};
+    const manifest=`https://unit-test.example/api/plan-b?issue=${issue}&country=kg&phase=final&view=manifest`;
+    assert.equal((await GET(new Request(manifest,{headers}))).status,409);
+    const cached=await (await GET(new Request(manifest+'&allowBlocked=1',{headers}))).json();
+    assert.equal(cached.state,'blocked');assert.equal(cached.formalSubmissionAllowed,false);
+    assert.equal(cached.authorCheckpointAllowed,true);
+    const retained=await (await GET(new Request(query,{headers}))).json();
+    assert.deepEqual(retained.document,document);
+    assert.equal(retained.sourceSnapshotChanged,true,'new source revision does not erase saved author and review work');
     now=Date.parse(at('09:00:00'));
     assert.equal((await post()).status,409,'no new handoff at the deadline');
     console.log('Plan B checkpoint: private persistence/recovery, exact hashes, idempotence, CAS conflict and no editorial approval passed.');

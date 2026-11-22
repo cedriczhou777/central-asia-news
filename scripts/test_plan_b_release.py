@@ -100,6 +100,30 @@ def photo(original, image_root):
 
 
 class CloudReleaseTest(unittest.TestCase):
+    def test_deferred_unverified_navigation_is_not_an_adoptable_article(self):
+        with tempfile.TemporaryDirectory() as td:
+            directory=Path(td);source,registry=inputs(directory)
+            supplied=json.loads(gzip.decompress((directory/'editorial.gz').read_bytes()))
+            ledger=read(source/'candidate_ledger.json')
+            row={**ledger['candidateLedger'][0],'id':'navigation','source_url':'https://source0.example/privacy',
+                 'fullTextValidated':False,'fullTextFetchedAt':None,'decision':'pending'}
+            ledger['candidateLedger'].append(row);write(source/'candidate_ledger.json',ledger)
+            deferred={k:row[k] for k in ('id','sourceId','sourceHash','sourceJSONSha256')}
+            deferred['sourceUrl']=row['source_url']
+            supplied['draft']['planBCoverage']={**supplied['coverage'],'deferredCandidates':[deferred]}
+            with patch.object(cloud_release,'REGISTRY',registry):
+                draft=copy.deepcopy(supplied['draft']);review=copy.deepcopy(supplied['review'])
+                cloud_release.attach_audit(source,ISSUE,'kg',draft,review)
+                self.assertEqual(len(draft['candidateLedger']),15)
+                self.assertEqual(draft['deferredCandidateLedger'][0]['id'],'navigation')
+                self.assertEqual(len(read(source/'candidate_ledger.json')['candidateLedger']),16,'original archive stays intact')
+                bad=copy.deepcopy(supplied);bad['draft']['planBCoverage']['deferredCandidates'][0]['sourceHash']='0'*64
+                with self.assertRaisesRegex(ValueError,'deferred_candidate_evidence_invalid'):
+                    cloud_release.attach_audit(source,ISSUE,'kg',bad['draft'],bad['review'])
+                bad=copy.deepcopy(supplied);bad['review']['articles'].append({'id':'navigation'})
+                with self.assertRaisesRegex(ValueError,'deferred_candidate_evidence_invalid'):
+                    cloud_release.attach_audit(source,ISSUE,'kg',bad['draft'],bad['review'])
+
     def test_fifteen_reviewed_items_render_in_word_and_transport(self):
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)

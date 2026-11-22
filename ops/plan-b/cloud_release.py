@@ -83,7 +83,19 @@ def attach_audit(source, issue, country, draft, review):
     conclusion = review.pop('candidateDecisions', draft.pop('candidateDecisions', {}))
     ledger = read(source / 'candidate_ledger.json')['candidateLedger']
     adopted = {article['id'] for article in review['articles']}
+    deferred = {row['id']:row for row in draft.get('planBCoverage',{}).get('deferredCandidates',[])}
+    editorial_ledger=[]
     for entry in ledger:
+        if entry['id'] in deferred:
+            expected=deferred[entry['id']]
+            if (entry['id'] in adopted or entry.get('fullTextValidated') is True
+                    or expected.get('sourceId')!=entry.get('sourceId')
+                    or expected.get('sourceUrl')!=entry.get('source_url')
+                    or expected.get('sourceHash')!=entry.get('sourceHash')
+                    or expected.get('sourceJSONSha256')!=entry.get('sourceJSONSha256')):
+                raise ValueError('deferred_candidate_evidence_invalid')
+            continue
+        editorial_ledger.append(entry)
         decision = conclusion.get(entry['id'])
         if decision:
             for key in ('decision', 'reason', 'languageReview', 'articleIdentityReview', 'firstDisclosureEvidence',
@@ -99,7 +111,8 @@ def attach_audit(source, issue, country, draft, review):
         role.pop('sourceScanAudit', None)
         role.pop('sourceRegistry', None)
     draft.update(sourceRegistry={'sources': [row for row in registry['sources'] if row['country'].lower() == country]},
-                 sourceScanAudit=list(events.values()), candidateLedger=ledger)
+                 sourceScanAudit=list(events.values()), candidateLedger=editorial_ledger,
+                 deferredCandidateLedger=[entry for entry in ledger if entry['id'] in deferred])
     # Keep the actual queue/budget state for the existing 10-14 scarcity gate.
     draft['discoveryState'] = {**audit, 'country': country, 'issueDate': issue,
                               'listingQueueRemaining': audit.get('listingQueueRemaining', len(audit.get('listingQueue', []))),
