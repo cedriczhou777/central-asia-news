@@ -44,7 +44,7 @@ export async function collectCountry(issue: string, country: PlanBCountry,
   return scratch(async directory => {
     await restoreCache(directory, prior);
     const timeout = timeWithin(issue, phase === 'preview' ? '06:00:00' : '09:00:00', focus?160_000:520_000);
-    const args=focus && !focus.length ? ['reassess',directory,issue,country]
+    const args=focus && !focus.length ? ['reassess',directory,issue,country,phase]
       : ['scan', directory, issue, country, phase,
         String(Math.min(focus?120:480, Math.max(1, (timeout - 20_000) / 1_000))),...(focus ?? [])];
     await runCloudScript('cloud_handoff.py',args,timeout);
@@ -53,7 +53,11 @@ export async function collectCountry(issue: string, country: PlanBCountry,
     const frozen = snapshot(input);
     if (frozen.issue !== issue || frozen.country !== country || frozen.phase !== phase) throw new Error('scan_scope_mismatch');
     const cache = await saveFile(issue, country, 'gz', join(directory, 'output.gz'));
-    return { snapshot: frozen, cache, metrics };
+    const receipt={ snapshot: frozen, cache, metrics };
+    const {publishScan}=await import('./plan-b-exchange');
+    try{await publishScan(receipt,join(directory,'originals.jsonl'));}
+    catch{throw Object.assign(new Error('exchange_publish_failed'),{snapshotReceipt:receipt});}
+    return receipt;
   });
 }
 

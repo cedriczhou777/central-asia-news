@@ -137,6 +137,14 @@ def snapshot_from_cache(root,directory,issue,country,phase,audit):
         'coverage': metrics['coverage'],
         'pendingSources': pending if phase == 'final' else [], 'metrics': metrics,
     })
+    # Private database transport receives verified unabridged text and evidence,
+    # streamed one candidate at a time by Node. No model, new fetch or new cache.
+    entries = inventory_entries(root, issue, country)
+    with (directory / 'originals.jsonl').open('w', encoding='utf-8') as stream:
+        for start in range(0,len(entries),5):
+            result = originals(root,issue,country,[row['id'] for row in entries[start:start+5]])
+            for row in result['articles']:
+                stream.write(json.dumps(row,ensure_ascii=False,separators=(',',':'))+'\n')
     backup(root, directory / 'output.gz')
 
 
@@ -272,7 +280,7 @@ def main():
     elif args.command == 'reassess':
         restore(root,args.directory/'input.gz')
         rebase_discovery_paths(root)
-        snapshot_from_cache(root,args.directory,args.issue,args.country,'final',read(root/'source_scan_audit.json'))
+        snapshot_from_cache(root,args.directory,args.issue,args.country,args.args[0] if args.args else 'final',read(root/'source_scan_audit.json'))
     elif args.command == 'extract-originals':
         restore(root, args.directory / 'input.gz', editorial_only=True)
     else:

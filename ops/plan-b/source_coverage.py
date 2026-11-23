@@ -78,6 +78,14 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
                 # The attempted aliases are exhausted; untried alternatives stay
                 # explicit review work, not a claim that every alias failed.
                 gap(sid, 'entrypoint_unavailable_with_unobserved_alternatives')
+            elif bounded_scan:
+                # Exhausted listing observation is a coverage-review gap, not
+                # proof of a missing important article. Concrete queued bodies
+                # and increments are assessed separately below and stay open.
+                gap(sid, 'final_source_observation_budget_ended',
+                    [{'url':row['url'],'status':row.get('status'),
+                      'observedAt':row.get('fetchedAt') or row.get('attemptedAt'),
+                      'contentValidated':row.get('contentValidated',False)} for _,row in records])
             else:
                 block(sid, 'increment' if any(row.get('contentValidated') for _, row in records) else 'source',
                       None, 'final_window_observation_required')

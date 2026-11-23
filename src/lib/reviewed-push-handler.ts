@@ -10,6 +10,8 @@ import { summarizeDraftReadback, REVIEWED_DIAGNOSTICS_VERSION, coverReadbackSelf
 import { reviewedRecoveryStatus } from './reviewed-recovery';
 import { privateImageHealth } from './reviewed-private-images';
 import { planBAdmitted, planBHandlesIssue } from './plan-b-window';
+import {manualAuthorizationAllows} from './reviewed-manual-authorization';
+import {contentHash} from './reviewed-package';
 
 function authorized(request: NextRequest) {
   return !!process.env.INGEST_SECRET && request.headers.get('x-ingest-secret') === process.env.INGEST_SECRET;
@@ -79,7 +81,10 @@ export async function reviewedPush(request: NextRequest) {
     const date = body.date ?? request.nextUrl.searchParams.get('date') ?? beijingDate();
     if (typeof date !== 'string' || issueDate(date) !== date) throw new Error('date 必须为 YYYY-MM-DD');
     const requestedIssue = typeof rawVersion === 'string' ? issueDate(rawVersion) : date;
-    if (planBAdmitted() && planBHandlesIssue(requestedIssue)) {
+    const manualPayload=typeof rawVersion==='string'&&request.headers.has('x-manual-authorization')?await readPackage(rawVersion):null;
+    const manualAllowed=manualPayload?await manualAuthorizationAllows(request,requestedIssue,manualPayload.version,
+      contentHash(manualPayload),requestedScope??packageCountries(manualPayload),'push'):false;
+    if (planBAdmitted() && planBHandlesIssue(requestedIssue) && !manualAllowed) {
       return NextResponse.json({ ok:false, error:'此刊期由分国交付调度管理' }, {status:409});
     }
     let version: string | undefined;

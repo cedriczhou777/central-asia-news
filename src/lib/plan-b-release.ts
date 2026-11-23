@@ -46,6 +46,8 @@ export async function renderCountryWord(issue: string, country: PlanBCountry, re
     const document = await saveFile(issue, country, 'docx', join(directory, 'word.docx'));
     // Publish readiness only after verifying the object that can be delivered.
     await verifyObject(document);
+    const {publishWord}=await import('./plan-b-exchange');
+    await publishWord(issue,country,document,await readFile(join(directory,'word.docx')));
     return { version: release.version, document, completedAt: new Date().toISOString() };
   });
 }
