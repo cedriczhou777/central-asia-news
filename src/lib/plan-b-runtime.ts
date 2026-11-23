@@ -5,8 +5,9 @@ import { claim, getState, knownLiveReceipts, saveClaim, type ClaimStep, type Sna
 import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
+import {processExchange,publishExchangeHealth} from './plan-b-exchange';
 
-export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-5-bounded-queues';
+export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-6-database-exchange';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
@@ -48,7 +49,7 @@ export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number):
 function boundedFailure(error: unknown, nextAttempt: number, step: ClaimStep): Outcome {
   const message = error instanceof Error ? error.message : '';
   const http = message.match(/(?:HTTP|错误码|status)[ :]*(\d{3})/i)?.[1];
-  const status = http ? Number(http) : /timeout|network|temporar|unavailable|ECONN|超时|连接/i.test(message) ? null : 400;
+  const status = http ? Number(http) : /timeout|network|temporar|unavailable|ECONN|exchange_publish_failed|超时|连接/i.test(message) ? null : 400;
   const category = retryableStatus(status);
   const reason = /^[a-z][a-z0-9_]{0,80}$/.test(message) ? message : category === 'stop' ? 'operation_failed' : category;
   return { state: nextAttempt < 2 && category !== 'stop' ? 'retry' : 'blocked',
@@ -74,7 +75,8 @@ function schedule(issue: string, country: PlanBCountry, step: ClaimStep, row: St
       result = boundedFailure(error, (row?.attempt || 0) + 1, step);
       // A failed retry must never erase the last useful snapshot/cache or Work
       // checkpoint. The row remains blocked/retry, never falsely approved.
-      result.receipt={...row?.receipt,...result.receipt,lastUsefulProgressAt:
+      const saved=(error as {snapshotReceipt?:SnapshotReceipt})?.snapshotReceipt;
+      result.receipt={...row?.receipt,...saved,...result.receipt,lastUsefulProgressAt:
         (row?.receipt?.snapshot as {observedAt?:string}|undefined)?.observedAt ?? row?.updated_at ?? null};
     }
     await saveClaim(issue, country, step, lease, result.state, { ...result.receipt,
@@ -87,11 +89,12 @@ function schedule(issue: string, country: PlanBCountry, step: ClaimStep, row: St
 async function tick() {
   const clock = planBClock();
   if (runtime.reading || !(clock.previewAllowed || clock.reconcileAllowed)) return;
-  if (runtime.completedIssue === clock.issue || (clock.previewAllowed && runtime.previewSettled === clock.issue)
+  if (runtime.completedIssue === clock.issue || (clock.previewAllowed && clock.minute<330 && runtime.previewSettled === clock.issue)
       || (!clock.finalizationAllowed && !clock.previewAllowed && clock.minute % 5 !== 0)) return;
   runtime.reading = true;
   try {
     const issue = clock.issue;
+    if(clock.minute>=330&&clock.minute<540)await processExchange(issue);
     const rows = await getState(issue);
     const complete = (country: PlanBCountry, steps: string[]) =>
       rows.some(row => row.country === country && steps.includes(row.step) && row.state === 'ready');
@@ -104,6 +107,9 @@ async function tick() {
     }
     const business = planBBusinessStatus(issue, rows);
     runtime.report = business;
+    await publishExchangeHealth(issue,{runtime:PLAN_B_RUNTIME_VERSION,commit:process.env.BUILD_GIT_SHA||null,
+      activation:{enabled:process.env.REVIEWED_PLAN_B==='1',admitted:planBAdmitted(),firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
+      registration:{registered:runtime.registered},business});
     if (business.businessSucceeded) {
       runtime.completedIssue = issue;
       console.info(JSON.stringify({ event: 'plan_b_delivered', ...business }));
@@ -134,7 +140,9 @@ async function tick() {
       const state = (step: ClaimStep | 'editorial') => rows.find(row => row.country === country && row.step === step);
       const preview = state('preview');
       if (clock.previewAllowed) {
-        schedule(issue, country, 'preview', preview, async () => ready(await collectCountry(issue, country, 'preview', undefined)));
+        const saved=preview?.receipt?.cache as SnapshotReceipt['cache']|undefined;
+        schedule(issue, country, 'preview', preview, async () => ready(await collectCountry(issue, country, 'preview', saved,
+          saved&&preview?.receipt?.reason==='exchange_publish_failed'?[]:undefined)));
         continue;
       }
       const row = state('final');
@@ -156,7 +164,7 @@ async function tick() {
       const prior = (row?.receipt?.cache || preview?.receipt?.cache) as SnapshotReceipt['cache'] | undefined;
       const previewStillActive = preview?.state === 'working' && Date.parse(preview.lease_until || '') > Date.now();
       if (!previewStillActive && !final) schedule(issue, country, 'final', row, async () => {
-        const focus=(row?.attempt || 0)>=2
+        const focus=row?.receipt?.reason==='exchange_publish_failed'?[]:(row?.attempt || 0)>=2
           ? [...new Set((row?.receipt as SnapshotReceipt|undefined)?.snapshot?.coverage?.pendingWork
               .map(work=>work.sourceId).filter(id=>id!=='discovery') ?? [])].slice(0,2) : undefined;
         const snapshot = await collectCountry(issue, country, 'final', prior, focus);
@@ -186,6 +194,10 @@ async function tick() {
 export function startPlanB() {
   if (runtime.registered || !planBAdmitted()) return;
   runtime.registered = true;
+  void publishExchangeHealth(planBClock().issue,{runtime:PLAN_B_RUNTIME_VERSION,commit:process.env.BUILD_GIT_SHA||null,
+    activation:{enabled:true,admitted:planBAdmitted(),firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
+    registration:{registered:true},businessSucceeded:false,startup:true})
+    .catch(()=>console.warn(JSON.stringify({event:'plan_b_exchange_startup_unavailable'})));
   // Catch up when a reserved instance starts late. State is shared across
   // revision restarts and instances and the database admits each job once.
   void tick();

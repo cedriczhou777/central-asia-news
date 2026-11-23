@@ -1,16 +1,16 @@
+import { applyPlanBCommand, PlanBCommandRejected } from '@/lib/plan-b-command';
 import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { NextResponse } from 'next/server';
 import { changes, COVERAGE_VERSION, idPattern, isCountry, type PlanBCountry } from '@/lib/plan-b-handoff';
-import { verifyEditorial } from '@/lib/plan-b-editorial';
-import { getState, saveEditorial, saveWorkCheckpoint, stagingIsPrivate, type SnapshotReceipt, type StateRow } from '@/lib/plan-b-store';
-import { archiveEditorial, readWorkCheckpoint, runCloudScript, scratch, sourceOriginals } from '@/lib/plan-b-worker';
+import { getState, stagingIsPrivate, type SnapshotReceipt, type StateRow } from '@/lib/plan-b-store';
+import { readWorkCheckpoint, runCloudScript, scratch, sourceOriginals } from '@/lib/plan-b-worker';
 import { planBAdmitted, planBClock, planBEnabled, planBHandlesIssue, planBIngestSecret, PLAN_B_CLOCK } from '@/lib/plan-b-window';
 import { PLAN_B_RUNTIME_VERSION, planBRegistration } from '@/lib/plan-b-runtime';
 import { getCountryWord, type WordReceipt } from '@/lib/plan-b-release';
 import { PLAN_B_BUSINESS_VERSION, planBBusinessStatus, planBProgressRows } from '@/lib/plan-b-status';
-import { checkpointInput, latestWorkCheckpoint, type WorkCheckpoint } from '@/lib/plan-b-checkpoint';
+import { latestWorkCheckpoint } from '@/lib/plan-b-checkpoint';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -178,38 +178,10 @@ export async function POST(req: Request) {
   let value: unknown;
   try { value = await boundedJson(req); } catch { return json({ ok: false, reason: 'invalid_body' }, 400); }
   try {
-    const rows = await getState(issue, country);
-    if (checkpoint) {
-      const input = checkpointInput(value, rows);
-      const prior = input.row.receipt?.workCheckpoint as WorkCheckpoint | undefined;
-      if (prior?.checkpointHash === input.checkpointHash && prior.stage === input.stage) {
-        return json({ ok:true, state:'duplicate', issue, country, checkpoint:prior, editorialApproved:false });
-      }
-      if (rows.some(row => row.step === 'editorial' && row.state === 'ready')) {
-        return json({ ok:false, reason:'editorial_already_accepted' }, 409);
-      }
-      const archived = await archiveEditorial(issue, country, input.document);
-      const saved: WorkCheckpoint = { snapshotHash:input.snapshotHash, checkpointHash:input.checkpointHash,
-        stage:input.stage, archived, savedAt:new Date().toISOString() };
-      await saveWorkCheckpoint(input.row, saved);
-      return json({ ok:true, state:'checkpoint_saved', issue, country, checkpoint:saved, editorialApproved:false });
-    }
-    const frozen = receipt(rows, country, 'final');
-    if (!frozen) return json({ ok: false, reason: 'freeze_incomplete' }, 409);
-    let editorial;
-    try { editorial = verifyEditorial(value, frozen.snapshot); }
-    catch (e) { return json({ ok: false, reason: (e as Error).message }, 409); }
-    const { value: content, ...evidence } = editorial;
-    const existing = rows.find(row => row.country === country && row.step === 'editorial');
-    if (existing) return existing.receipt?.editorialHash === evidence.editorialHash
-      ? json({ ok: true, state: 'duplicate', issue, country, ...evidence })
-      : json({ ok: false, reason: 'signed_revision_conflict' }, 409);
-    if (!planBClock().finalizationAllowed) return json({ ok: false, reason: 'handoff_outside_production_window' }, 409);
-    const archived = await archiveEditorial(issue, country, content);
-    const accepted = await saveEditorial(issue, country, { ...evidence, archived,
-      acceptedAt: new Date().toISOString(), actualModel: null, actualReasoning: null, actualSpeed: null, actualCredits: null });
-    return json({ ok: true, state: accepted, issue, country, ...evidence });
+    const result=await applyPlanBCommand(issue,country,checkpoint,value);
+    return json({ok:true,issue,country,...result});
   } catch (e) {
+    if(e instanceof PlanBCommandRejected)return json({ok:false,reason:e.message},409);
     if (checkpoint && ['invalid_checkpoint','checkpoint_source_changed','checkpoint_conflict'].includes((e as Error).message)) {
       return json({ ok:false, reason:(e as Error).message }, 409);
     }

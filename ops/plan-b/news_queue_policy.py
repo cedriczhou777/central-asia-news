@@ -6,7 +6,7 @@ import json
 import re
 from urllib.parse import unquote, urlsplit
 
-VERSION = 'bounded-news-queue-1'
+VERSION = 'bounded-news-queue-2'
 MAX_ACTIVE_ARTICLES = 96
 MAX_ARTICLES_PER_SOURCE = 12
 MAX_LISTING_PAGES = 2
@@ -17,6 +17,35 @@ IMPORTANT = re.compile(
     r'energi|enerhe|gazov|tamozh|export|import|promysh|stroitel|transport|'
     r'энерг|электр|нефт|газов|инвест|кредит|финанс|налог|закон|постановлен|'
     r'санкц|тамож|экспорт|импорт|энерг|能源|政策|投资|经营', re.I)
+
+# These are publisher directories, not particular news stories. Keep them in
+# independent coverage review; a keyword such as "credit" is not a news lead.
+DIRECTORY = re.compile(
+    r'/(?:credit-organizations(?:/(?:banks|auditors|microcredit|microfinance|lombards))?'
+    r'|arkhiv-kursov-valyut(?:/(?:dinamika-kursov-valyut|informer-kursa-valyut))?'
+    r'|page/(?:aciq-melumatlar|elanlar(?:/bankruptcy-announcements)?)'
+    r'|about|contacts|contact|sitemap|privacy|terms)/?$',re.I)
+
+
+def bounded_review_reason(work, info, window_end):
+    """Classify discovery obligations, never mark unread stories completed."""
+    candidate, lead = info.get('candidate') or {}, info.get('lead') or {}
+    row = {**lead, **candidate, 'url': work.get('url')}
+    explicit = any(r.get('important') is True or r.get('mustProcess') is True
+                   or r.get('priority') in ('critical','important') for r in (lead,candidate,work))
+    if explicit or not work.get('url'):
+        return None
+    path = urlsplit(work['url']).path
+    if DIRECTORY.search(path):
+        return 'publisher_directory_requires_coverage_review'
+    priority = importance(row, window_end)
+    if priority['archiveUrlHint']:
+        # A dated URL is only a triage hint. It does not prove an article's
+        # publication date or resolve a genuinely identified current event.
+        return 'archive_url_discovery_requires_coverage_review'
+    if not priority['important'] and work['kind'] in ('lead','article'):
+        return 'ordinary_discovery_requires_coverage_review'
+    return None
 
 
 def digest(value):
@@ -87,6 +116,10 @@ def partition_coverage(proof, sources, metadata=None):
         source = sources.get(sid, {'id':sid,'entrypoints':[]})
         route = lead_route(url,source,{e['url'] for e in source_entries(source)})[0] if url else None
         priority = importance({**lead, **candidate, 'url':url}, proof['windowEnd'])
+        triage = bounded_review_reason(work, info, proof['windowEnd']) if bounded else None
+        if triage:
+            defer(work,triage,'candidate' if work['reason']=='discovered_article_needs_body_or_review' else None)
+            continue
         if not bounded or not url or kind in ('source','increment'):
             # Budget summaries can be reviewed only when the saved source queue
             # actually accounts for their remaining jobs. Anonymous work blocks.

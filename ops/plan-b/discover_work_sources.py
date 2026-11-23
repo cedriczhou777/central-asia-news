@@ -19,7 +19,7 @@ from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
-from news_queue_policy import VERSION as QUEUE_POLICY_VERSION, MAX_ACTIVE_ARTICLES, importance
+from news_queue_policy import VERSION as QUEUE_POLICY_VERSION, MAX_ACTIVE_ARTICLES, importance, bounded_review_reason
 
 VERSION = 'work-discovery-v6'
 OFFSETS = {'kz': 5, 'uz': 5, 'kg': 6, 'tj': 5, 'az': 4}
@@ -1144,6 +1144,16 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             resumable = set(resume) | queued_leads.keys()
             urls = list(dict.fromkeys(old_pending + resume + urls))
             urls = [u for u in urls if u in eligible]
+            if news_budget:
+                by_url={lead['source_url']:lead for lead in ranked}
+                kept=[]
+                for url in urls:
+                    reason=bounded_review_reason({'kind':'article','url':url},
+                        {'lead':by_url.get(url,{})},end.isoformat())
+                    if reason in ('publisher_directory_requires_coverage_review','archive_url_discovery_requires_coverage_review'):
+                        by_url[url]['discoveryDeferral']={'reason':reason,'completed':False}
+                    else:kept.append(url)
+                urls=kept
             # Spend the next batch on previously omitted/new evidence before reusing
             # already fetched pages. Repeated small runs must make forward progress.
             priority_by_url = {lead['source_url']: lead['articlePriority'] + (70 * lead.get('queueAssessment',{}).get('important',False) if news_budget else 0) for lead in ranked}

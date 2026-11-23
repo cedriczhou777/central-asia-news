@@ -18,14 +18,10 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def protected_connection(contract=None):
-    saved = {}
     if contract:
-        if contract.stat().st_mode & 0o077:
-            raise ValueError('private_contract_permissions')
-        saved = json.loads(contract.read_bytes())
-    base = (os.environ.get('CENTRAL_ASIA_PLAN_B_URL') or saved.get('base_url', '')).rstrip('/')
-    secret = (os.environ.get('CENTRAL_ASIA_INGEST_SECRET') or os.environ.get('INGEST_SECRET')
-              or saved.get('ingest_secret', ''))
+        raise ValueError('private_credential_contract_disabled')
+    base = os.environ.get('CENTRAL_ASIA_PLAN_B_URL', '').rstrip('/')
+    secret = os.environ.get('CENTRAL_ASIA_INGEST_SECRET', '')
     parts = urlsplit(base)
     if (parts.scheme != 'https' or not parts.hostname or parts.username or parts.password
             or parts.port not in (None, 443) or parts.path or parts.query or parts.fragment):
