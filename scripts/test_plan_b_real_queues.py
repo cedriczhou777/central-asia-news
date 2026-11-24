@@ -27,6 +27,64 @@ class RealQueueRegression(unittest.TestCase):
         self.assertEqual(count,sum(r['originalPendingCount']for r in saved['rows']if r['issue_date']=='2026-11-23'))
         print(json.dumps({'realQueueRegression':report,'nov23AllPendingChecked':count,'productionFreezeDeclared':False}))
 
+    def test_all_39_nov24_central_bank_reference_routes(self):
+        # Actual official paths extracted from the Nov 24 production freeze.
+        paths=[
+            '/ru/credit-organizations/banks/branches/',
+            '/ru/credit-organizations/banks/exchange-offices/',
+            '/ru/credit-organizations/banks/head-offices/',
+            '/ru/credit-organizations/banks/rating-scores/',
+            '/ru/credit-organizations/bureaus/',
+            '/ru/credit-organizations/factoring/',
+            '/ru/credit-organizations/guarantee/',
+            '/ru/credit-organizations/licensing/',
+            '/ru/credit-organizations/mortgage/',
+            '/ru/credit-organizations/offices-foreign-banks/',
+            '/ru/financial-inclusion/',
+            '/ru/financial-inclusion/indicators/',
+            '/ru/financial-inclusion/reviews/',
+            '/ru/financial-inclusion/strategy/',
+            '/ru/financial-inclusion/womens/',
+            '/ru/financial-stability/banks-list/',
+            '/ru/financial-stability/banks-list/list/',
+            '/ru/financial-stability/banks-list/procedure/',
+            '/ru/financial-stability/enterprises/',
+            '/ru/financial-stability/macroprudential-policy-strategy/',
+            '/ru/financial-stability/macroprudential-policy-tools/',
+            '/ru/financial-stability/macroprudential-policy-tools/buffer-for-systemically-important-banks/',
+            '/ru/financial-stability/macroprudential-policy-tools/capital-conservation-buffer/',
+            '/ru/financial-stability/macroprudential-policy-tools/countercyclical-capital-buffer/',
+            '/ru/financial-stability/macroprudential-policy-tools/debt-service-to-income/',
+            '/ru/financial-stability/macroprudential-policy-tools/debt-to-income/',
+            '/ru/financial-stability/macroprudential-policy-tools/loan-to-value/',
+            '/ru/financial-stability/press-releases/',
+            '/ru/financial-stability/report/',
+            '/ru/financial-stability/research-analysis/',
+            '/ru/financial-stability/votes/debt-burden-survey/',
+            '/ru/financial-stability/votes/systemic-risk-survey/',
+            '/ru/monetary-policy/refinancing-rate/',
+            '/ru/monetary-policy/refinancing-rate/schedule-of-meetings/',
+            '/ru/press_center/forums-and-conferences/samarkand-islamic-finance-forum-2026/',
+            '/ru/services/regulations/',
+            '/ru/services/regulatory-sandbox/',
+            '/ru/statistics/credit/',
+            '/ru/statistics/financing/',
+        ]
+        self.assertEqual(len(paths),39)
+        for path in paths:
+            url='https://cbu.uz'+path
+            with self.subTest(url=url):
+                work={'sourceId':'uz-central-bank-uzbekistan','kind':'article',
+                      'url':url,'reason':'discovered_article_needs_body_or_review'}
+                self.assertEqual(bounded_review_reason(work,{},'2026-11-24T06:00:00+08:00'),
+                                 'publisher_directory_requires_coverage_review')
+                self.assertIsNone(bounded_review_reason({**work,'mustProcess':True},{},
+                                  '2026-11-24T06:00:00+08:00'))
+        unknown='https://cbu.uz/ru/financial-stability/report/2026-investment-policy/'
+        self.assertIsNone(bounded_review_reason(
+            {'kind':'article','url':unknown,'reason':'discovered_article_needs_body_or_review'},
+            {},'2026-11-24T06:00:00+08:00'))
+
     def test_directory_cannot_fake_signed_coverage_or_real_news(self):
         source_id='az-ministry-economy-azerbaijan'
         listing='https://economy.gov.az/az/'
