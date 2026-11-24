@@ -1,13 +1,6 @@
 name: plan-b-offline-regression
 
 on:
-  push:
-    branches:
-      - 'fix/plan-b-*'
-    paths:
-      - 'ops/plan-b/**'
-      - 'scripts/test_plan_b_*.py'
-      - '.github/workflows/plan-b-offline-regression.yml'
   pull_request:
     paths:
       - 'ops/plan-b/**'
