@@ -71,6 +71,18 @@ class RealQueueRegression(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertIsNone(bounded_review_reason(work,{},'2026-11-24T06:00:00+08:00'))
 
+    def test_nov24_dashed_date_archive_hint_never_overrules_important_headline(self):
+        old='https://kz.kursiv.media/2026-05-19/mlmr-samyj-zhivopisnyj-obshhestvennyj-transport-kazahstana-pervye-kadry-rabotayushhego-lrt/'
+        lead={'sourceId':'kz-kursiv-kazakhstan','kind':'lead','url':old,
+              'reason':'unprocessed_original_lead'}
+        self.assertEqual(bounded_review_reason(lead,{},'2026-11-24T06:00:00+08:00'),
+                         'archive_url_discovery_requires_coverage_review')
+        self.assertIsNone(bounded_review_reason(lead,{'lead':{'title':'Major energy investment agreement'}},
+                                              '2026-11-24T06:00:00+08:00'))
+        self.assertIsNone(bounded_review_reason({**lead,'important':True},{},'2026-11-24T06:00:00+08:00'))
+        current='https://kz.kursiv.media/2026-11-23/new-investment-agreement/'
+        self.assertIsNone(bounded_review_reason({**lead,'url':current},{},'2026-11-24T06:00:00+08:00'))
+
     def test_important_current_lead_not_cleared(self):
         work={'sourceId':'tj-khovar','kind':'lead','url':'https://khovar.tj/rus/2026/11/iz-za-prostoya-predpriyatiya-hishti-tadzhikabad-zhiteli-zavozyat-stroitelnye-materialy-iz-dushanbe-i-rajona-vahdat-po-vysokoj-tsene/','reason':'unprocessed_original_lead'}
         self.assertIsNone(bounded_review_reason(work,{},'2026-11-23T06:00:00+08:00'))
