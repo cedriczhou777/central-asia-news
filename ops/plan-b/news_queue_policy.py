@@ -153,7 +153,7 @@ def bounded_review_reason(work, info, window_end):
     if publisher_reference_directory(work['url']):
         return 'publisher_directory_requires_coverage_review'
     priority = importance(row, window_end)
-    if priority.get('listingCardDateHint'):
+    if work.get('kind') in ('article','lead') and priority.get('listingCardDateHint'):
         return 'listing_card_old_date_requires_coverage_review'
     if priority['archiveUrlHint'] and not priority['important']:
         # A dated URL is only a triage hint. It does not prove an article's
