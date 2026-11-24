@@ -32,6 +32,45 @@ class RealQueueRegression(unittest.TestCase):
         specific={**work,'url':'https://economy.gov.az/az/page/elanlar/new-investment-contract'}
         self.assertIsNone(bounded_review_reason(specific,{'candidate':{'title':'New investment contract'}},'2026-11-23T06:00:00+08:00'))
 
+    def test_nov24_static_reference_routes_are_review_not_block(self):
+        # Actual public publisher URL shapes from the Nov 24 frozen queue.
+        # These cases exercise the production bounded_review_reason directly;
+        # they must remain pending independent coverage review, not closed.
+        directories = [
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/credit-organizations/banks/branches/'),
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/credit-organizations/banks/exchange-offices/'),
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/financial-stability/macroprudential-policy-tools/buffer-for-systemically-important-banks/'),
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/monetary-policy/refinancing-rate/'),
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/services/regulations/'),
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/statistics/credit/'),
+            ('az-ministry-economy-azerbaijan','https://economy.gov.az/az/page/iqtisadiyyat/investisiya'),
+            ('az-ministry-economy-azerbaijan','https://economy.gov.az/az/page/itm'),
+            ('az-state-customs-committee-azerbaijan','https://customs.gov.az/az/faydali/Sat%C4%B1nalmalar/tender'),
+            ('uz-tax-committee-uzbekistan','https://gov.uz/ru/soliq/pages/soliq-qo-mitasi-faoliyat-sohasi'),
+            ('uz-uzdaily','https://www.uzdaily.uz/ru/special-projects/islamic-finance-2026/'),
+            ('tj-sputnik-tajikistan','https://sputnik.tj/telegram_export/'),
+        ]
+        for source_id,url in directories:
+            work={'sourceId':source_id,'kind':'article','url':url,'reason':'discovered_article_needs_body_or_review'}
+            with self.subTest(url=url):
+                self.assertEqual(bounded_review_reason(work,{},'2026-11-24T06:00:00+08:00'),
+                                 'publisher_directory_requires_coverage_review')
+                # Explicitly identified important live work cannot be downgraded.
+                self.assertIsNone(bounded_review_reason({**work,'mustProcess':True},{},
+                                  '2026-11-24T06:00:00+08:00'))
+
+    def test_nov24_actual_news_stays_blocking(self):
+        important_stories=[
+            'https://economy.gov.az/az/post/3726/cinde-transxezer-beynelxalq-neqliyyat-dehlizi-uzre-senaye-ve-investisiya-emekdasligi-imkanlari-muzakire-edilib',
+            'https://khovar.tj/rus/2026/11/iz-za-prostoya-predpriyatiya-hishti-tadzhikabad-zhiteli-zavozyat-stroitelnye-materialy-iz-dushanbe-i-rajona-vahdat-po-vysokoj-tsene/',
+            'https://cbu.uz/ru/financial-stability/report/new-energy-policy-announcement/',
+        ]
+        for url in important_stories:
+            work={'sourceId':'observed','kind':'article','url':url,
+                  'reason':'discovered_article_needs_body_or_review','important':True}
+            with self.subTest(url=url):
+                self.assertIsNone(bounded_review_reason(work,{},'2026-11-24T06:00:00+08:00'))
+
     def test_important_current_lead_not_cleared(self):
         work={'sourceId':'tj-khovar','kind':'lead','url':'https://khovar.tj/rus/2026/11/iz-za-prostoya-predpriyatiya-hishti-tadzhikabad-zhiteli-zavozyat-stroitelnye-materialy-iz-dushanbe-i-rajona-vahdat-po-vysokoj-tsene/','reason':'unprocessed_original_lead'}
         self.assertIsNone(bounded_review_reason(work,{},'2026-11-23T06:00:00+08:00'))
