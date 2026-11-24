@@ -37,15 +37,18 @@ function verifyReadback(d: ReviewedCountry, readback: Awaited<ReturnType<typeof 
 /** Safe settlement with a previously persisted media ID. Does not prepare,
  * upload, add or update a WeChat draft, even if readback does not match. */
 export async function reconcileKnownReviewedDraft(payload: ReviewedPackage, country: import('./reviewed-package').PackageCountry,
-    sb = getSupabaseClient(), read = readReviewedDraft, find: typeof findRecentReviewedDrafts = findRecentReviewedDrafts) {
+    sb = getSupabaseClient(), read = readReviewedDraft, find: typeof findRecentReviewedDrafts = findRecentReviewedDrafts,
+    verifyStoredSuccess = false) {
   const key = { version: payload.version, country };
   const receipt = await sb.from('reviewed_deliveries').select('media_id,state,detail,updated_at').match(key).maybeSingle();
   if (receipt.error) throw new Error('reviewed_receipt_read_failed');
   const row = receipt.data;
   if (!row || !['sending','updating','uncertain','succeeded'].includes(row.state)) return null;
-  if (row.state === 'succeeded') return row.media_id ? { mediaId: row.media_id, readbackAt: row.updated_at, ...row.detail } : null;
+  if (row.state === 'succeeded' && !verifyStoredSuccess) return row.media_id ? { mediaId: row.media_id, readbackAt: row.updated_at, ...row.detail } : null;
   const draft = reviewedCountry(payload,country);
   const proof = row.detail || {};
+  if (verifyStoredSuccess && (!Array.isArray(proof.imageUrls) || !proof.expectedThumbMediaId
+      || proof.inputHash !== contentHash(draft.bodyHtml) || (row.state === 'succeeded' && !row.media_id))) return null;
   let mediaId: string | null = row.media_id;
   if (!mediaId) {
     const at = Date.parse(row.updated_at);

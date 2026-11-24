@@ -6,10 +6,12 @@ import type { getSupabaseClient } from '../src/storage/database/supabase-client'
 import { database } from './lib/reviewed-test-db';
 
 const key = '1'.repeat(64);
-const issue = '2026-12-01';
+const issue = '2026-11-24';
 let clock = Date.parse(`${issue}T10:00:00+08:00`);
 const now = Date.now;
 const firstIssue = process.env.REVIEWED_PLAN_B_FIRST_ISSUE;
+const ingest = process.env.INGEST_SECRET;
+const planBIngest = process.env.PLAN_B_INGEST_SECRET;
 const release = validatePackage({ version: issue, readyCountries: ['kz', 'uz', 'kg'],
   countries: Object.fromEntries(['kz', 'uz', 'kg'].map(code => [code, {
     title: `Draft fixture ${code}`, summary: 'Summary', bodyHtml: `<p>${code} body</p>`, sourceName: 'Fixture', sourceUrl: '', coverUrl: '',
@@ -35,11 +37,17 @@ async function main() {
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, '2'.repeat(64), clock), /approval_mismatch/);
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, clock + 61 * 60_000), /approval_mismatch/);
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, Date.parse(`${issue}T09:15:00+08:00`)), /outside_window/);
-  assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, Date.parse('2026-11-30T10:00:00+08:00')), /outside_window/);
+  assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, Date.parse('2026-11-23T10:00:00+08:00')), /outside_window/);
   assert.throws(() => verifyDatabaseDeliveryRequest({ ...kz, country: 'az' }, grant, key, clock), /invalid_reviewed_package/);
-  process.env.REVIEWED_PLAN_B_FIRST_ISSUE = '2026-12-02';
-  assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, clock), /outside_window/);
-  process.env.REVIEWED_PLAN_B_FIRST_ISSUE = '2026-11-25';
+  const neighboringIssue = '2026-11-25';
+  const neighboring = { ...kz, issue_date: neighboringIssue, ...envelope({ authorizationId: id, release: { ...release, version: neighboringIssue } }) };
+  assert.throws(() => verifyDatabaseDeliveryRequest(neighboring, grant, key, clock + 86_400_000), /outside_window/);
+  process.env.INGEST_SECRET = key;
+  assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, clock), /invalid_manual_approval_key/);
+  process.env.INGEST_SECRET = 'fixture-unrelated-ingest';
+  process.env.PLAN_B_INGEST_SECRET = key;
+  assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, clock), /invalid_manual_approval_key/);
+  process.env.PLAN_B_INGEST_SECRET = 'fixture-unrelated-plan-b-ingest';
   const changed = { ...release, countries: { ...release.countries, kz: { ...release.countries.kz!, bodyHtml: '<p>Tampered</p>' } } };
   const uz = { ...request('uz'), ...envelope({ authorizationId: id, release: changed }) };
   const kg = request('kg');
@@ -81,7 +89,8 @@ async function main() {
   } } as unknown as ReturnType<typeof getSupabaseClient>;
 
   const created: string[] = [];
-  let recoverLostReply = false;
+  const reads: string[] = [];
+  let reconciliationCandidates: string[] = [];
   const adapters: NonNullable<Parameters<typeof processDatabaseDeliveries>[2]> = {
     async prepare(draft) {
       return { html: draft.bodyHtml, images: 0, imageProbes: [], cover: 'fallback',
@@ -94,8 +103,9 @@ async function main() {
       if (title === release.countries.kz!.title) throw new Error('simulated reply lost after accepted create');
       return 'media-kg';
     },
-    async find(title) { return recoverLostReply && title === release.countries.kz!.title ? ['media-kz'] : []; },
+    async find(title) { return title === release.countries.kz!.title ? reconciliationCandidates : []; },
     async read(mediaId) {
+      reads.push(mediaId);
       const country = mediaId === 'media-kz' ? 'kz' : 'kg';
       const draft = release.countries[country]!;
       return { title: draft.title, content: draft.bodyHtml, digest: draft.summary, thumb_media_id: 'fixture-thumb' };
@@ -106,11 +116,18 @@ async function main() {
   assert.equal(uz.result.reason, 'manual_approval_mismatch');
   assert.equal(kg.result.mediaId, 'media-kg');
   assert.deepEqual(created, [release.countries.kz!.title, release.countries.kg!.title]);
-  recoverLostReply = true;
+  reconciliationCandidates = ['media-kz', 'ambiguous-match'];
+  clock += 6 * 60_000;
+  await processDatabaseDeliveries(key, sb, adapters);
+  assert.equal(kz.state, 'working');
+  assert.equal(created.length, 2, 'ambiguous matches must not trigger another create');
+  reconciliationCandidates = ['media-kz'];
   clock += 6 * 60_000;
   await processDatabaseDeliveries(key, sb, adapters);
   assert.equal(kz.state, 'accepted');
   assert.equal(kz.result.mediaId, 'media-kz');
+  assert.equal(kz.result.coverMatch, true);
+  assert.deepEqual(reads, ['media-kg', 'media-kz']);
   assert.equal(created.length, 2, 'a lost receipt is reconciled without another draft creation');
   await processDatabaseDeliveries(key, sb, adapters);
   assert.equal(created.length, 2, 'accepted requests are not re-claimed');
@@ -121,4 +138,8 @@ void main().catch(error => { console.error(error); process.exitCode = 1; }).fina
   Date.now = now;
   if (firstIssue === undefined) delete process.env.REVIEWED_PLAN_B_FIRST_ISSUE;
   else process.env.REVIEWED_PLAN_B_FIRST_ISSUE = firstIssue;
+  if (ingest === undefined) delete process.env.INGEST_SECRET;
+  else process.env.INGEST_SECRET = ingest;
+  if (planBIngest === undefined) delete process.env.PLAN_B_INGEST_SECRET;
+  else process.env.PLAN_B_INGEST_SECRET = planBIngest;
 });

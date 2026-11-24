@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync } from 'node:fs';
+import * as timers from 'node:timers/promises';
 import { Script } from 'node:vm';
 import ts from 'typescript';
 import * as packageModule from '../src/lib/reviewed-package';
 import { reviewedStatus } from '../src/lib/reviewed-push-handler';
 import { PACKAGE_COUNTRIES, contentHash, validatePackage } from '../src/lib/reviewed-package';
+import * as planBWindow from '../src/lib/plan-b-window';
 
 process.env.INGEST_SECRET = 'local-test-only';
 process.env.SUPABASE_URL = 'https://database.invalid';
@@ -39,18 +41,21 @@ async function partialEntryChecks(){
   const sent:Array<{version:string;countries:readonly string[]}>=[];
   const imports:Record<string,unknown>={
     'next/server':{NextResponse},
+    'node:timers/promises':timers,
     '../storage/database/supabase-client':{getSupabaseClient:()=>({from:(table:string)=>({
       select:()=>({eq:async()=>({data:table==='reviewed_packages'?[...packages.keys()].map(version=>({version})):receiptRows,error:null})}),
       upsert:async()=>{writes++;return {error:null};},
     })})},
     './reviewed-package':packageModule,
     './reviewed-delivery':{readPackage:async(version:string)=>packages.get(version)||null,deliverReviewedPackage:async(p:typeof partial,_sb:unknown,_adapters:unknown,countries:readonly string[])=>{sent.push({version:p.version,countries});return {ok:true};}},
-    './push-run-store':{persistPushRun:async()=>{}},
+    './push-run-store':{persistPushRun:async()=>{},loadPersistedPushRun:async()=>{throw new Error('unexpected synchronous run read');}},
     './utils':{beijingDate:()=>date},
     './reviewed-wechat':{probeReviewedImage:async()=>{probes++;throw new Error('unlisted probe forbidden');},readReviewedDraft:async()=>{draftReads++;throw new Error('unlisted draft read forbidden');}},
     './reviewed-diagnostics':{REVIEWED_DIAGNOSTICS_VERSION:'test'},
     './reviewed-recovery':{reviewedRecoveryStatus:()=>({version:'2026-11-15-v12'})},
     './reviewed-private-images':{privateImageHealth:async()=>({ok:true})},
+    './plan-b-window':planBWindow,
+    './reviewed-manual-authorization':{manualAuthorizationAllows:async()=>{throw new Error('unexpected manual approval lookup');}},
   };
   const isolated={} as typeof import('../src/lib/reviewed-push-handler');
   const code=ts.transpileModule(readFileSync('src/lib/reviewed-push-handler.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;

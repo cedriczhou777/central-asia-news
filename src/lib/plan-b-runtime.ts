@@ -6,7 +6,7 @@ import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
 import {processExchange,publishExchangeHealth} from './plan-b-exchange';
-import {processDatabaseDeliveries} from './reviewed-database-delivery';
+import {isIndependentDatabaseApprovalKey,processDatabaseDeliveries} from './reviewed-database-delivery';
 
 export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-6-database-exchange';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
@@ -203,7 +203,7 @@ export function startPlanB() {
   // revision restarts and instances and the database admits each job once.
   void tick();
   const manualKey = process.env.REVIEWED_DATABASE_APPROVAL_KEY || '';
-  const manualEnabled = /^[0-9a-f]{64}$/.test(manualKey);
+  const manualEnabled = isIndependentDatabaseApprovalKey(manualKey);
   let manualReading = false;
   const runManual = () => {
     if (!manualEnabled || manualReading) return;
