@@ -28,3 +28,24 @@ jobs:
         run: python -m unittest discover -s scripts -p 'test_plan_b_coverage.py' -v
       - name: Verify discovery classification contracts
         run: python -m unittest discover -s scripts -p 'test_work_discovery.py' -v
+
+  offline-handoff-typescript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Offline freeze and signed-coverage contract
+        run: pnpm exec tsx scripts/test-plan-b-coverage.ts
+      - name: Offline bounded recovery and checkpoint contract
+        run: pnpm exec tsx scripts/test-plan-b-bounded-recovery.ts
+      - name: Offline database exchange and manual authorization contract
+        run: pnpm exec tsx scripts/test-plan-b-database-exchange.ts
