@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'ops/plan-b'))
 from news_queue_policy import bounded_review_reason
+from source_coverage import assess_coverage
+from datetime import datetime
 from db_handoff import sql,verify_original,digest
 from work_client import protected_connection
 from unittest.mock import patch
@@ -24,6 +26,36 @@ class RealQueueRegression(unittest.TestCase):
                 'stillRequiresEvidence':sum(r is None for r in reasons),'closed':0})
         self.assertEqual(count,sum(r['originalPendingCount']for r in saved['rows']if r['issue_date']=='2026-11-23'))
         print(json.dumps({'realQueueRegression':report,'nov23AllPendingChecked':count,'productionFreezeDeclared':False}))
+
+    def test_directory_cannot_fake_signed_coverage_or_real_news(self):
+        source_id='az-ministry-economy-azerbaijan'
+        listing='https://economy.gov.az/az/'
+        directory='https://economy.gov.az/az/page/iqtisadiyyat/investisiya'
+        stamp='2026-11-24T06:02:00+08:00'
+        source={'id':source_id,'country':'az','allowedHosts':['economy.gov.az'],
+                'entrypoints':[{'url':listing,'role':'home'}],'available':True}
+        registry={'sources':[source]}
+        audit={'sourceId':source_id,'url':listing,'status':200,
+               'contentValidated':True,'fetchedAt':stamp,'role':'home'}
+        inventory={'sourceScanAudit':[audit],'observedAt':stamp,'maxSeconds':120}
+        ledger=[{'id':'fixture', 'sourceId':source_id,'source_url':directory,
+                 'decision':'pending','fullTextValidated':False}]
+        cutoff=datetime.fromisoformat('2026-11-24T06:00:00+08:00')
+        proof=assess_coverage(registry,'az',inventory,cutoff,ledger=ledger,observed_at=stamp)
+        self.assertEqual(proof['pendingWork'],[])
+        self.assertEqual(proof['state'],'review_required')
+        self.assertEqual(len(proof['reviewWork']),1)
+        self.assertEqual(proof['reviewWork'][0]['kind'],'candidate')
+        self.assertEqual(proof['reviewWork'][0]['count'],1)
+        self.assertEqual(proof['queueAccounting']['article']['total'],0)
+        self.assertEqual(proof['discoveryEnd']['unfinishedWorkCompleted'],False)
+        self.assertEqual(len(proof['deferredCandidates']),1)
+        # The same URL with documented must-process evidence stays blocking.
+        ledger[0]['mustProcess']=True
+        guarded=assess_coverage(registry,'az',inventory,cutoff,ledger=ledger,observed_at=stamp)
+        self.assertEqual(guarded['state'],'blocked')
+        self.assertEqual(len(guarded['pendingWork']),1)
+        self.assertEqual(guarded['pendingWork'][0]['url'],directory)
 
     def test_real_directory_is_review_not_completion(self):
         work={'sourceId':'uz-central-bank-uzbekistan','kind':'article','url':'https://cbu.uz/ru/credit-organizations/banks/','reason':'discovered_article_needs_body_or_review'}
