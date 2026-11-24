@@ -193,4 +193,32 @@ class RealQueueRegression(unittest.TestCase):
         query=sql('checkpoint','2026-11-24','kz',document=doc)
         self.assertIn('on conflict do nothing',query);self.assertIn('authorDraft',query);self.assertIn('reviewed',query)
 
+    def test_nov24_kz_reference_directories_are_not_articles(self):
+        directories=[
+            ('kz-kazakhstan-stock-exchange','https://kase.kz/en/investors/esg-data-platform/knowledge-hub'),
+            ('kz-kazakhstan-stock-exchange','https://kase.kz/en/markets/dfa'),
+            ('kz-inbusiness-kz','https://inbusiness.kz/ru/cat/biznes/transport-i-logistika'),
+            ('kz-inbusiness-kz','https://inbusiness.kz/ru/cat/ekonomika/nalogi-i-sbory'),
+            ('kz-inbusiness-kz','https://inbusiness.kz/ru/cat/finansy/pravila-igry-finance'),
+        ]
+        for source_id,url in directories:
+            work={'sourceId':source_id,'kind':'article','url':url,
+                  'reason':'discovered_article_needs_body_or_review'}
+            with self.subTest(url=url):
+                self.assertEqual(bounded_review_reason(work,{},'2026-11-24T06:00:00+08:00'),
+                                 'publisher_directory_requires_coverage_review')
+                self.assertIsNone(bounded_review_reason({**work,'mustProcess':True},{},
+                                  '2026-11-24T06:00:00+08:00'))
+
+        # News items beneath the same publishers are never downgraded.
+        live=[
+            ('kz-kazakhstan-stock-exchange','https://kase.kz/en/information/news/show/1580984'),
+            ('kz-inbusiness-kz','https://inbusiness.kz/ru/last/kazakhstan-gotovit-novye-pravila-dlya-promyshlennyh-klasterov'),
+        ]
+        for source_id,url in live:
+            work={'sourceId':source_id,'kind':'article','url':url,
+                  'reason':'discovered_article_needs_body_or_review'}
+            with self.subTest(url=url):
+                self.assertIsNone(bounded_review_reason(work,{},'2026-11-24T06:00:00+08:00'))
+
 if __name__=='__main__':unittest.main()
