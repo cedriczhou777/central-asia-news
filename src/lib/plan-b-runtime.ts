@@ -1,24 +1,47 @@
 import cron from 'node-cron';
 import { freezeBlockReason, PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
-import { planBAdmitted, planBClock } from './plan-b-window';
-import { claim, getState, knownLiveReceipts, saveClaim, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
-import { collectCountry } from './plan-b-worker';
+import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
+import { claim, getState, knownLiveReceipts, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
+import { collectCountry, runCloudScript } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
 import {processExchange,publishExchangeHealth} from './plan-b-exchange';
+import { privateImageHealth } from './reviewed-private-images';
+import { probeReviewedDraftReadiness } from './reviewed-wechat';
 
 export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-6-database-exchange';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
   report: Record<string, unknown> | null; previewSettled: string; completedIssue: string; emitted: Set<string>;
+  checkedIssue: string;
 };
 const shared = globalThis as typeof globalThis & { [key: symbol]: RuntimeState | undefined };
 const runtime = shared[stateKey] ??= { active: new Map(), registered:false, reading:false,
-  report:null, previewSettled:'', completedIssue:'', emitted:new Set() };
+  report:null, previewSettled:'', completedIssue:'', emitted:new Set(), checkedIssue:'' };
 const { active, emitted } = runtime;
 const workerLimit = { preview: 2, final: 2, release: 2, word: 1, wechat: 2, readback: 2 };
 const cpuSteps = new Set<ClaimStep>(['preview','final','release','word']);
+
+function runtimeHealth() {
+  return {runtime:PLAN_B_RUNTIME_VERSION,commit:process.env.BUILD_GIT_SHA||null,
+    activation:{enabled:process.env.REVIEWED_PLAN_B==='1',admitted:planBAdmitted(),
+      checksEnabled:process.env.REVIEWED_PLAN_B_CHECKS==='1',firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
+    registration:{registered:runtime.registered}};
+}
+
+function checkRuntimeOnce(issue: string) {
+  if (runtime.checkedIssue === issue || process.env.REVIEWED_PLAN_B_CHECKS !== '1') return;
+  runtime.checkedIssue = issue;
+  // Keep external readiness checks off the editorial and delivery tick.
+  void Promise.allSettled([stagingIsPrivate(), privateImageHealth(),
+    runCloudScript('cloud_release.py', ['--help'], 15_000), probeReviewedDraftReadiness()])
+    .then(([staging, images, word, wechat]) => publishExchangeHealth(issue, {...runtimeHealth(),
+      prerequisites:{stagingPrivate:staging.status==='fulfilled'&&staging.value,
+        imagesPrivate:images.status==='fulfilled'&&images.value.ready&&images.value.private,
+        wordRenderer:word.status==='fulfilled',wechat:wechat.status==='fulfilled'?wechat.value:null},
+    }, 'runtime_checks')).catch(()=>console.warn(JSON.stringify({event:'plan_b_runtime_checks_unavailable',issue})));
+}
 
 export function planBRegistration() {
   return { registered:runtime.registered, activeSteps: active.size, report:runtime.report };
@@ -88,13 +111,20 @@ function schedule(issue: string, country: PlanBCountry, step: ClaimStep, row: St
 
 async function tick() {
   const clock = planBClock();
-  if (runtime.reading || !(clock.previewAllowed || clock.reconcileAllowed)) return;
+  const inboxOpen = planBHandlesIssue(clock.issue) && clock.minute >= PLAN_B_CLOCK.workAt && clock.minute < PLAN_B_CLOCK.deadlineAt;
+  if (runtime.reading || !(clock.previewAllowed || clock.reconcileAllowed || inboxOpen)) return;
   if (runtime.completedIssue === clock.issue || (clock.previewAllowed && clock.minute<330 && runtime.previewSettled === clock.issue)
-      || (!clock.finalizationAllowed && !clock.previewAllowed && clock.minute % 5 !== 0)) return;
+      || (!inboxOpen && !clock.finalizationAllowed && !clock.previewAllowed && clock.minute % 5 !== 0)) return;
   runtime.reading = true;
   try {
     const issue = clock.issue;
-    if(clock.minute>=330&&clock.minute<540)await processExchange(issue);
+    checkRuntimeOnce(issue);
+    if (inboxOpen) {
+      try { await processExchange(issue); }
+      catch { console.warn(JSON.stringify({event:'plan_b_exchange_inbox_unavailable',issue})); }
+    }
+    // Collection stops at 05:50. Work can still save checkpoints until the 06:00 freeze.
+    if (!clock.previewAllowed && !clock.reconcileAllowed) return;
     const rows = await getState(issue);
     const complete = (country: PlanBCountry, steps: string[]) =>
       rows.some(row => row.country === country && steps.includes(row.step) && row.state === 'ready');
@@ -107,9 +137,8 @@ async function tick() {
     }
     const business = planBBusinessStatus(issue, rows);
     runtime.report = business;
-    await publishExchangeHealth(issue,{runtime:PLAN_B_RUNTIME_VERSION,commit:process.env.BUILD_GIT_SHA||null,
-      activation:{enabled:process.env.REVIEWED_PLAN_B==='1',admitted:planBAdmitted(),firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
-      registration:{registered:runtime.registered},business});
+    await publishExchangeHealth(issue,{...runtimeHealth(),business})
+      .catch(()=>console.warn(JSON.stringify({event:'plan_b_exchange_health_unavailable',issue})));
     if (business.businessSucceeded) {
       runtime.completedIssue = issue;
       console.info(JSON.stringify({ event: 'plan_b_delivered', ...business }));
@@ -194,9 +223,9 @@ async function tick() {
 export function startPlanB() {
   if (runtime.registered || !planBAdmitted()) return;
   runtime.registered = true;
-  void publishExchangeHealth(planBClock().issue,{runtime:PLAN_B_RUNTIME_VERSION,commit:process.env.BUILD_GIT_SHA||null,
-    activation:{enabled:true,admitted:planBAdmitted(),firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
-    registration:{registered:true},businessSucceeded:false,startup:true})
+  const {issue} = planBClock();
+  checkRuntimeOnce(issue);
+  void publishExchangeHealth(issue,{...runtimeHealth(),businessSucceeded:false,startup:true})
     .catch(()=>console.warn(JSON.stringify({event:'plan_b_exchange_startup_unavailable'})));
   // Catch up when a reserved instance starts late. State is shared across
   // revision restarts and instances and the database admits each job once.

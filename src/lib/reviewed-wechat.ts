@@ -41,10 +41,10 @@ async function apiUrl(path: string): Promise<string> {
   }
   return `https://api.weixin.qq.com/cgi-bin/${path}${path.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token.value)}`;
 }
-async function api(path: string, body: object) {
+async function api(path: string, body: object, timeoutMs = 60_000) {
   const response = await fetch(await apiUrl(path), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(60000),
+    body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
   });
   const data = await response.json();
   if (!response.ok || data.errcode) throw new Error(`微信接口失败，错误码 ${data.errcode ?? response.status}`);
@@ -237,11 +237,32 @@ export async function createReviewedDraft(article: object): Promise<string> {
 export async function updateReviewedDraft(mediaId: string, article: object): Promise<void> {
   await api('draft/update', { media_id: mediaId, index: 0, articles: article });
 }
-export async function readReviewedDraft(mediaId: string) {
-  const data = await api('draft/get', { media_id: mediaId });
+export async function readReviewedDraft(mediaId: string, timeoutMs?: number) {
+  const data = await api('draft/get', { media_id: mediaId }, timeoutMs);
   const article = data.news_item?.[0];
   if (!article || data.news_item.length !== 1) throw new Error('草稿回读结构异常');
   return article as { title: string; digest: string; content: string; content_source_url?:string; thumb_media_id?:string; thumb_url?:string };
+}
+
+/** Check the production transport without creating, uploading or changing a draft. */
+export async function probeReviewedDraftReadiness() {
+  const transport = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? 'cloud_call' : 'access_token';
+  const code = (error: unknown) => error instanceof Error ? error.message.match(/错误码 (-?\d+)$/)?.[1] ?? null : null;
+  let listed = false;
+  try {
+    const result = await api('draft/batchget', { offset: 0, count: 1, no_content: 0 }, 10_000);
+    if (!Array.isArray(result.item)) throw new Error('reviewed_draft_list_unavailable');
+    listed = true;
+    const mediaId = result.item[0]?.media_id;
+    if (typeof mediaId !== 'string' || !mediaId) {
+      return { transport, batchget: true, get: null, reason: 'no_readable_existing_draft' };
+    }
+    const draft = await api('draft/get', { media_id: mediaId }, 10_000);
+    if (!Array.isArray(draft.news_item) || !draft.news_item.length) throw new Error('reviewed_draft_unavailable');
+    return { transport, batchget: true, get: true };
+  } catch (error) {
+    return { transport, batchget: listed, get: listed ? false : null, errorCode: code(error) };
+  }
 }
 
 /** Read one page only when draft/add had an unknown result with no media ID. */

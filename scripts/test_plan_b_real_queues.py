@@ -263,4 +263,17 @@ class RealQueueRegression(unittest.TestCase):
                 'nearbyTimes':[{'datetime':'2016-10-20'},{'datetime':'2026-11-23'}]}]}}
         self.assertIsNone(bounded_review_reason(work,mixed,window))
 
+        text_only={'lead':{'anchorEvidence':[{'articleCard':True,
+                   'nearbyTimes':[{'text':'20 Октябрь 2016'}]}]}}
+        self.assertEqual(bounded_review_reason(work,text_only,window),
+                         'listing_card_old_date_requires_coverage_review')
+        for dates in ([{'text':'20 Октябрь 2016 / 23 Ноябрь 2026'}],
+                      [{'datetime':'2016-10-20','text':'23 Ноябрь 2026'}],
+                      [{'datetime':'2016-10-20'},{'text':'Updated today'}]):
+            with self.subTest(dates=dates):
+                conflict={'lead':{'anchorEvidence':[{'articleCard':True,'nearbyTimes':dates}]}}
+                self.assertIsNone(bounded_review_reason(work,conflict,window))
+        self.assertIsNone(bounded_review_reason(work,{**old,'candidate':{
+            'publicationWindowAssessment':'in_window','title':'Current investment in electricity supply'}},window))
+
 if __name__=='__main__':unittest.main()

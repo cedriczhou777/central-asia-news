@@ -87,11 +87,11 @@ def _parse_listing_date_hint(raw):
         return parsed, bool(parsed.tzinfo and parsed.utcoffset() is not None)
     except ValueError:
         pass
-    match=re.search(r'(?<!\\d)(20\\d{2})[-/.](\\d{1,2})[-/.](\\d{1,2})(?!\\d)',value)
+    match=re.fullmatch(r'(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})',value)
     if match:
         try:return datetime(int(match[1]),int(match[2]),int(match[3])),False
         except ValueError:return None,False
-    match=re.search(r'(?<!\\d)(\\d{1,2})[./-](\\d{1,2})[./-](20\\d{2})(?!\\d)',value)
+    match=re.fullmatch(r'(\d{1,2})[./-](\d{1,2})[./-](20\d{2})',value)
     if match:
         try:return datetime(int(match[3]),int(match[2]),int(match[1])),False
         except ValueError:return None,False
@@ -109,7 +109,7 @@ def _parse_listing_date_hint(raw):
         'november':11,'nov':11,'ноябрь':11,'ноября':11,'noyabr':11,
         'december':12,'dec':12,'декабрь':12,'декабря':12,'dekabr':12,
     }
-    match=re.search(r'(?<!\\d)(\\d{1,2})[\\s,]+([A-Za-zА-Яа-яЁё]+)[\\s,]+(20\\d{2})(?!\\d)',value,re.I)
+    match=re.fullmatch(r'(\d{1,2})[\s,]+([A-Za-zА-Яа-яЁё]+)[\s,]+(20\d{2})',value,re.I)
     if match:
         month=months.get(match[2].casefold())
         if month:
@@ -127,10 +127,16 @@ def listing_card_date_is_old(row, window_end):
     for anchor in row.get('anchorEvidence',[]):
         if not isinstance(anchor,dict) or not (anchor.get('articleCard') or anchor.get('inHeading')) or anchor.get('inNavigation'):
             continue
-        for item in anchor.get('nearbyTimes',[]):
+        for item in anchor.get('nearbyTimes') or []:
             raw=(item.get('datetime') or item.get('text')) if isinstance(item,dict) else item
             parsed,has_timezone=_parse_listing_date_hint(raw)
-            if parsed is not None:hints.append((parsed,has_timezone))
+            if parsed is None or has_timezone and window_start.tzinfo is None:
+                return False
+            if isinstance(item,dict) and item.get('datetime') and item.get('text'):
+                label,_=_parse_listing_date_hint(item['text'])
+                if label is not None and label.date()!=parsed.date():
+                    return False
+            hints.append((parsed,has_timezone))
     unique={(value.isoformat(),has_timezone) for value,has_timezone in hints}
     if len(unique)!=1:return False
     raw,has_timezone=next(iter(unique))
@@ -142,13 +148,20 @@ def listing_card_date_is_old(row, window_end):
 
 
 
+def requires_body_evidence(work, info):
+    """Direct in-window or explicit evidence outranks route and archive hints."""
+    return work.get('kind') in ('article', 'lead') and any(
+        row.get('mustProcess') is True or row.get('important') is True
+        or row.get('priority') in ('critical', 'important')
+        or row.get('publicationWindowAssessment') == 'in_window'
+        for row in (work, info.get('lead') or {}, info.get('candidate') or {}))
+
+
 def bounded_review_reason(work, info, window_end):
     """Classify discovery obligations, never mark unread stories completed."""
     candidate, lead = info.get('candidate') or {}, info.get('lead') or {}
     row = {**lead, **candidate, 'url': work.get('url')}
-    explicit = any(r.get('important') is True or r.get('mustProcess') is True
-                   or r.get('priority') in ('critical','important') for r in (lead,candidate,work))
-    if explicit or not work.get('url'):
+    if requires_body_evidence(work, info) or not work.get('url'):
         return None
     if publisher_reference_directory(work['url']):
         return 'publisher_directory_requires_coverage_review'
@@ -237,6 +250,9 @@ def partition_coverage(proof, sources, metadata=None):
     for work in before:
         sid, url, kind = work['sourceId'], work.get('url'), work['kind']
         info = metadata.get((sid,url),{})
+        if requires_body_evidence(work, info):
+            pending.append(work)
+            continue
         candidate = info.get('candidate') or {}
         lead = info.get('lead') or {}
         source = sources.get(sid, {'id':sid,'entrypoints':[]})
