@@ -81,9 +81,10 @@ def bounded_review_reason(work, info, window_end):
     if publisher_reference_directory(work['url']):
         return 'publisher_directory_requires_coverage_review'
     priority = importance(row, window_end)
-    if priority['archiveUrlHint']:
+    if priority['archiveUrlHint'] and not priority['important']:
         # A dated URL is only a triage hint. It does not prove an article's
-        # publication date or resolve a genuinely identified current event.
+        # publication date; a genuinely identified important headline
+        # must still be checked even if the URL has an older date.
         return 'archive_url_discovery_requires_coverage_review'
     # An unread article without a recorded queue assessment is not proven
     # ordinary merely because its URL lacks a priority keyword. Only leads
@@ -108,7 +109,9 @@ def importance(row, window_end=None):
     labels += [str(a.get('text') or '') for a in row.get('anchorEvidence', [])
                if (a.get('inHeading') or a.get('articleCard')) and not a.get('inNavigation')]
     archive_hint = False
-    date = re.search(r'/(20\d{2})/(\d{1,2})/(\d{1,2})/', urlsplit(url).path)
+    # Publishers use both /YYYY/MM/DD/ and /YYYY-MM-DD/ path segments.
+    # Only a complete date segment is a triage hint, never publication proof.
+    date = re.search(r'/(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?:/|$)', urlsplit(url).path)
     if window_end and date:
         try:
             archive_hint = datetime(int(date[1]),int(date[2]),int(date[3])).date() < (datetime.fromisoformat(window_end)-timedelta(days=1)).date()
