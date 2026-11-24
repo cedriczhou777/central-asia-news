@@ -31,3 +31,7 @@ jobs:
         run: python -m unittest discover -s scripts -p 'test_plan_b_bounded_queues.py' -v
       - name: Verify incident real-route regressions
         run: python -m unittest discover -s scripts -p 'test_plan_b_real_queues.py' -v
+      - name: Verify coverage gate contracts
+        run: python -m unittest discover -s scripts -p 'test_plan_b_coverage.py' -v
+      - name: Verify discovery classification contracts
+        run: python -m unittest discover -s scripts -p 'test_work_discovery.py' -v
