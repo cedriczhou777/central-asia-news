@@ -6,6 +6,7 @@ import { collectCountry } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
 import {processExchange,publishExchangeHealth} from './plan-b-exchange';
+import {processDatabaseDeliveries} from './reviewed-database-delivery';
 
 export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-6-database-exchange';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
@@ -201,7 +202,21 @@ export function startPlanB() {
   // Catch up when a reserved instance starts late. State is shared across
   // revision restarts and instances and the database admits each job once.
   void tick();
-  cron.schedule('* 4-9 * * *', () => { void tick(); }, { timezone: 'Asia/Shanghai' });
+  const manualKey = process.env.REVIEWED_DATABASE_APPROVAL_KEY || '';
+  const manualEnabled = /^[0-9a-f]{64}$/.test(manualKey);
+  let manualReading = false;
+  const runManual = () => {
+    if (!manualEnabled || manualReading) return;
+    manualReading = true;
+    void processDatabaseDeliveries(manualKey)
+      .catch(() => console.warn(JSON.stringify({event:'manual_delivery_queue_unavailable'})))
+      .finally(() => { manualReading = false; });
+  };
+  runManual();
+  cron.schedule(manualEnabled ? '* * * * *' : '* 4-9 * * *', () => {
+    void tick();
+    if (planBClock().minute % 5 === 0) runManual();
+  }, { timezone: 'Asia/Shanghai' });
   console.info(JSON.stringify({ event: 'plan_b_registered', version: PLAN_B_RUNTIME_VERSION,
     timeZone: 'Asia/Shanghai', collection: '04:45', freeze: '06:00', deadline: '09:00', close: '09:30' }));
 }
