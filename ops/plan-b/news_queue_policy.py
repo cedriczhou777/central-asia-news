@@ -85,7 +85,11 @@ def bounded_review_reason(work, info, window_end):
         # A dated URL is only a triage hint. It does not prove an article's
         # publication date or resolve a genuinely identified current event.
         return 'archive_url_discovery_requires_coverage_review'
-    if not priority['important'] and work['kind'] in ('lead','article'):
+    # An unread article without a recorded queue assessment is not proven
+    # ordinary merely because its URL lacks a priority keyword. Only leads
+    # can use this broad fallback; article bodies need stronger evidence in
+    # partition_coverage below (or an exact static/directory URL above).
+    if not priority['important'] and work['kind'] == 'lead':
         return 'ordinary_discovery_requires_coverage_review'
     return None
 
