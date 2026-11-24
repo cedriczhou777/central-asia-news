@@ -92,8 +92,18 @@ class BoundedQueuePolicy(unittest.TestCase):
         self.assertEqual(proof['queueAccounting']['article'],dict(total=2,pending=1,review=1,closed=0,
             identityHash=proof['queueAccounting']['article']['identityHash']))
         for lead in leads:lead.pop('queueAssessment')
-        unknown=assess_coverage(registry,'kz',inventory,cutoff,leads=leads,observed_at=stamp)
+        # The current bounded policy may defer an identifiable ordinary URL
+        # for independent review. With no evidenced budget it must still block.
+        bounded=assess_coverage(registry,'kz',inventory,cutoff,leads=leads,observed_at=stamp)
+        self.assertEqual(bounded['state'],'blocked')
+        self.assertTrue(any(w.get('url')==urls[1] and w['kind']=='article' for w in bounded['pendingWork']))
+        self.assertTrue(any(urls[0] in w.get('examples',[]) for w in bounded['reviewWork']))
+        self.assertEqual(bounded['queueAccounting']['article']['closed'],0)
+        unbounded={k:v for k,v in inventory.items() if k!='maxSeconds'}
+        unknown=assess_coverage(registry,'kz',unbounded,cutoff,leads=leads,observed_at=stamp)
         self.assertTrue(any(w.get('url')==urls[0] and w['kind']=='article' for w in unknown['pendingWork']))
+        self.assertEqual(unknown['state'],'blocked')
+        self.assertFalse(unknown['discoveryEnd']['unfinishedWorkCompleted'])
 
     def test_archive_url_is_only_a_priority_hint(self):
         old={'url':'https://news.test/2020/01/01/energy-policy/'}

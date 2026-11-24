@@ -50,3 +50,12 @@ pendingWork 是硬阻断，包含未完成的最终增量、正文队列、待�
 发现器的候选默认仍需语义及首披审核。正式提交前，独审稿须以`review.candidateDecisions`逐个记录冻结候选的采用/排除、具体理由、真实审核身份/时间及来源哈希、修订；采用稿另须真实首披确认和证据。仅接口受理成功不能证明后续原文复验、数量闸、封包及Word已完成。
 
 原文仅有图片元数据线索、尚不能确认实际展示时，记录`sourceImage.status=unavailable`及`candidateEvidence=metadata_only_unconfirmed`，保留具体原因和页面证据检查记录；不使用该图片、不称原文无图，也不因此丢弃已签审正文。已确认原图继续走原有字节、哈希及私有存储校验。线上`health --verify`的`coverageVerification.releaseImplementationSha256`用于回读实际封包实现。
+
+## 数据库受控补交
+
+正常刊期继续沿用原 `submission` 交接、冻结与截止时间。此补交通道仅处理 2026-11-24，并在北京时间 09:30 后才允许该期补交。运营审批绑定真实审定稿包的版本、正文哈希和全部涵盖国，最长 24 小时。保留原有 Word 和独立审稿证据。
+
+- 云端和发行审批方各自从受保护环境注入同一个随机 64 位十六进制 `REVIEWED_DATABASE_APPROVAL_KEY`。Work 日报环境和数据库均不得接收该密钥。密钥缺失时补交工作器停用，常规日报仍按原计划运行。
+- 审批方在自己的受保护环境运行 `node --import tsx scripts/prepare-reviewed-database-delivery.ts 稿包.json 审批人 补交原因`。输出含一条带签名的 `manual_authorization` 和逐国 `manual_use` 请求。在已获准的集成中先保存审批记录，再以主键去重登记请求。只保留审计所需字段与审定稿包，按需读取 `state`、`attempts`、`result`。
+- 云托管只在实例运行时处理补交。原有计划扩容窗口及 Work 定时任务不需要调整。如果晚间没有存活实例，已登记请求可由下个扩容窗口处理，前提是授权尚有效。微信结果未知时按已有回执对账，只有明确核验过的草稿才记录成功。若创建返回丢失且无 `media_id`，对账依赖 `draft/batchget`。
+- 上线验证分别确认受控数据库集成和微信云调用权限；以真实草稿回读验收。停用补交可移除专用审批密钥，已有稿包及回执保留。
