@@ -125,7 +125,7 @@ def listing_card_date_is_old(row, window_end):
     except ValueError:return False
     hints=[]
     for anchor in row.get('anchorEvidence',[]):
-        if not isinstance(anchor,dict) or not anchor.get('articleCard') or anchor.get('inNavigation'):
+        if not isinstance(anchor,dict) or not (anchor.get('articleCard') or anchor.get('inHeading')) or anchor.get('inNavigation'):
             continue
         for item in anchor.get('nearbyTimes',[]):
             raw=(item.get('datetime') or item.get('text')) if isinstance(item,dict) else item
