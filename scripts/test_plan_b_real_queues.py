@@ -200,6 +200,7 @@ class RealQueueRegression(unittest.TestCase):
             ('kz-inbusiness-kz','https://inbusiness.kz/ru/cat/biznes/transport-i-logistika'),
             ('kz-inbusiness-kz','https://inbusiness.kz/ru/cat/ekonomika/nalogi-i-sbory'),
             ('kz-inbusiness-kz','https://inbusiness.kz/ru/cat/finansy/pravila-igry-finance'),
+            ('uz-oman-foreign-ministry','https://www.fm.gov.om/en/royal-decrees/'),
         ]
         for source_id,url in directories:
             work={'sourceId':source_id,'kind':'article','url':url,
@@ -220,5 +221,40 @@ class RealQueueRegression(unittest.TestCase):
                   'reason':'discovered_article_needs_body_or_review'}
             with self.subTest(url=url):
                 self.assertIsNone(bounded_review_reason(work,{},'2026-11-24T06:00:00+08:00'))
+
+    def test_old_listing_card_dates_are_triage_hints_not_publication_proof(self):
+        window='2026-11-24T06:00:00+08:00'
+        work={'sourceId':'kz-finprom','kind':'article',
+              'url':'https://finprom.kz/ru/article/investicii-v-elektroenergetiku',
+              'reason':'discovered_article_needs_body_or_review'}
+        old={'lead':{'anchorEvidence':[{'articleCard':True,'inNavigation':False,
+              'nearbyTimes':[{'datetime':'2016-10-20','text':'20 Октябрь 2016'}]}]}}
+        self.assertEqual(bounded_review_reason(work,old,window),
+                         'listing_card_old_date_requires_coverage_review')
+
+        # Generic investment vocabulary must not turn a verified old card into
+        # a current hard blocker; explicit mustProcess still does.
+        important={'lead':old['lead'],'candidate':{'title':'Investment in electricity supply'}}
+        self.assertEqual(bounded_review_reason(work,important,window),
+                         'listing_card_old_date_requires_coverage_review')
+        self.assertIsNone(bounded_review_reason({**work,'mustProcess':True},old,window))
+
+        # A timezone-bearing timestamp is compared exactly to the window.
+        timed={'lead':{'anchorEvidence':[{'articleCard':True,
+               'nearbyTimes':[{'datetime':'2026-11-22T23:00:00+06:00'}]}]}}
+        self.assertEqual(bounded_review_reason(work,timed,window),
+                         'listing_card_old_date_requires_coverage_review')
+
+        # A date-only label on the immediately preceding local calendar day is
+        # ambiguous; navigation dates and mixed card dates are also ignored.
+        ambiguous={'lead':{'anchorEvidence':[{'articleCard':True,
+                    'nearbyTimes':[{'datetime':'2026-11-22'}]}]}}
+        self.assertIsNone(bounded_review_reason(work,ambiguous,window))
+        nav={'lead':{'anchorEvidence':[{'articleCard':True,'inNavigation':True,
+              'nearbyTimes':[{'datetime':'2016-10-20'}]}]}}
+        self.assertIsNone(bounded_review_reason(work,nav,window))
+        mixed={'lead':{'anchorEvidence':[{'articleCard':True,
+                'nearbyTimes':[{'datetime':'2016-10-20'},{'datetime':'2026-11-23'}]}]}}
+        self.assertIsNone(bounded_review_reason(work,mixed,window))
 
 if __name__=='__main__':unittest.main()
