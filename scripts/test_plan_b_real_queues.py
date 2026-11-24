@@ -231,6 +231,7 @@ class RealQueueRegression(unittest.TestCase):
               'nearbyTimes':[{'datetime':'2016-10-20','text':'20 Октябрь 2016'}]}]}}
         self.assertEqual(bounded_review_reason(work,old,window),
                          'listing_card_old_date_requires_coverage_review')
+        self.assertIsNone(bounded_review_reason({**work,'kind':'listing'},old,window))
 
         heading_card={'lead':{'anchorEvidence':[{'inHeading':True,'articleCard':False,
                         'nearbyTimes':[{'datetime':'2016-10-20'}]}]}}
