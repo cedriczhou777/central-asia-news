@@ -1,0 +1,33 @@
+name: plan-b-offline-regression
+
+on:
+  push:
+    branches:
+      - 'fix/plan-b-*'
+    paths:
+      - 'ops/plan-b/**'
+      - 'scripts/test_plan_b_*.py'
+      - '.github/workflows/plan-b-offline-regression.yml'
+  pull_request:
+    paths:
+      - 'ops/plan-b/**'
+      - 'scripts/test_plan_b_*.py'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install parser dependency
+        run: python -m pip install lxml
+      - name: Verify bounded queue and evidence invariants
+        run: python -m unittest discover -s scripts -p 'test_plan_b_bounded_queues.py' -v
+      - name: Verify incident real-route regressions
+        run: python -m unittest discover -s scripts -p 'test_plan_b_real_queues.py' -v
