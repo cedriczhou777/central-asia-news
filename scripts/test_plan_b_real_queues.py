@@ -232,6 +232,11 @@ class RealQueueRegression(unittest.TestCase):
         self.assertEqual(bounded_review_reason(work,old,window),
                          'listing_card_old_date_requires_coverage_review')
 
+        heading_card={'lead':{'anchorEvidence':[{'inHeading':True,'articleCard':False,
+                        'nearbyTimes':[{'datetime':'2016-10-20'}]}]}}
+        self.assertEqual(bounded_review_reason(work,heading_card,window),
+                         'listing_card_old_date_requires_coverage_review')
+
         # Generic investment vocabulary must not turn a verified old card into
         # a current hard blocker; explicit mustProcess still does.
         important={'lead':old['lead'],'candidate':{'title':'Investment in electricity supply'}}
