@@ -54,6 +54,7 @@ STATIC_DIRECTORY_BY_HOST = {
     'gov.uz': re.compile(r'^/(?:ru|uz|en)/soliq/pages/soliq-qo-mitasi-faoliyat-sohasi/?$', re.I),
     'uzdaily.uz': re.compile(r'^/(?:ru|uz|en)/special-projects/islamic-finance-2026/?$', re.I),
     'sputnik.tj': re.compile(r'^/telegram_export/?$', re.I),
+    'fm.gov.om': re.compile(r'^/en/royal-decrees/?$', re.I),
     # Exact KZ reference/index pages from the 11/24 queue. Actual KASE news
     # items and Inbusiness article URLs remain hard-blocking article work.
     'kase.kz': re.compile(r'^/(?:en/investors/esg-data-platform/knowledge-hub|en/markets/dfa)/?$', re.I),
@@ -75,6 +76,72 @@ def publisher_reference_directory(url):
 
 
 
+
+def _parse_listing_date_hint(raw):
+    """Parse an article-card date for triage only; never treat it as publication proof."""
+    if not isinstance(raw, str) or not raw.strip() or len(raw)>160:
+        return None, False
+    value=raw.strip()
+    try:
+        parsed=datetime.fromisoformat(value.replace('Z','+00:00').replace('z','+00:00'))
+        return parsed, bool(parsed.tzinfo and parsed.utcoffset() is not None)
+    except ValueError:
+        pass
+    match=re.search(r'(?<!\\d)(20\\d{2})[-/.](\\d{1,2})[-/.](\\d{1,2})(?!\\d)',value)
+    if match:
+        try:return datetime(int(match[1]),int(match[2]),int(match[3])),False
+        except ValueError:return None,False
+    match=re.search(r'(?<!\\d)(\\d{1,2})[./-](\\d{1,2})[./-](20\\d{2})(?!\\d)',value)
+    if match:
+        try:return datetime(int(match[3]),int(match[2]),int(match[1])),False
+        except ValueError:return None,False
+    months={
+        'january':1,'jan':1,'январь':1,'января':1,'yanvar':1,
+        'february':2,'feb':2,'февраль':2,'февраля':2,'fevral':2,
+        'march':3,'mar':3,'март':3,'марта':3,'mart':3,
+        'april':4,'apr':4,'апрель':4,'апреля':4,'aprel':4,
+        'may':5,'май':5,'мая':5,
+        'june':6,'jun':6,'июнь':6,'июня':6,'iyun':6,
+        'july':7,'jul':7,'июль':7,'июля':7,'iyul':7,
+        'august':8,'aug':8,'август':8,'августа':8,'avgust':8,
+        'september':9,'sep':9,'сентябрь':9,'сентября':9,'sentyabr':9,
+        'october':10,'oct':10,'октябрь':10,'октября':10,'oktyabr':10,
+        'november':11,'nov':11,'ноябрь':11,'ноября':11,'noyabr':11,
+        'december':12,'dec':12,'декабрь':12,'декабря':12,'dekabr':12,
+    }
+    match=re.search(r'(?<!\\d)(\\d{1,2})[\\s,]+([A-Za-zА-Яа-яЁё]+)[\\s,]+(20\\d{2})(?!\\d)',value,re.I)
+    if match:
+        month=months.get(match[2].casefold())
+        if month:
+            try:return datetime(int(match[3]),month,int(match[1])),False
+            except ValueError:return None,False
+    return None,False
+
+
+def listing_card_date_is_old(row, window_end):
+    """A unique date adjacent to this article card may flag stale discovery for review."""
+    if not window_end:return False
+    try:window_start=datetime.fromisoformat(window_end)-timedelta(days=1)
+    except ValueError:return False
+    hints=[]
+    for anchor in row.get('anchorEvidence',[]):
+        if not isinstance(anchor,dict) or not anchor.get('articleCard') or anchor.get('inNavigation'):
+            continue
+        for item in anchor.get('nearbyTimes',[]):
+            raw=(item.get('datetime') or item.get('text')) if isinstance(item,dict) else item
+            parsed,has_timezone=_parse_listing_date_hint(raw)
+            if parsed is not None:hints.append((parsed,has_timezone))
+    unique={(value.isoformat(),has_timezone) for value,has_timezone in hints}
+    if len(unique)!=1:return False
+    raw,has_timezone=next(iter(unique))
+    parsed=datetime.fromisoformat(raw)
+    if has_timezone:return parsed<window_start
+    # A date-only label may be local to the publisher. Leave the preceding
+    # calendar day ambiguous; only clearly older dates become triage hints.
+    return parsed.date() < (window_start.date()-timedelta(days=1))
+
+
+
 def bounded_review_reason(work, info, window_end):
     """Classify discovery obligations, never mark unread stories completed."""
     candidate, lead = info.get('candidate') or {}, info.get('lead') or {}
@@ -86,6 +153,8 @@ def bounded_review_reason(work, info, window_end):
     if publisher_reference_directory(work['url']):
         return 'publisher_directory_requires_coverage_review'
     priority = importance(row, window_end)
+    if priority.get('listingCardDateHint'):
+        return 'listing_card_old_date_requires_coverage_review'
     if priority['archiveUrlHint'] and not priority['important']:
         # A dated URL is only a triage hint. It does not prove an article's
         # publication date; a genuinely identified important headline
@@ -114,6 +183,7 @@ def importance(row, window_end=None):
     labels += [str(a.get('text') or '') for a in row.get('anchorEvidence', [])
                if (a.get('inHeading') or a.get('articleCard')) and not a.get('inNavigation')]
     archive_hint = False
+    listing_date_hint = listing_card_date_is_old(row, window_end)
     # Publishers use both /YYYY/MM/DD/ and /YYYY-MM-DD/ path segments.
     # Only a complete date segment is a triage hint, never publication proof.
     date = re.search(r'/(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?:/|$)', urlsplit(url).path)
@@ -125,7 +195,9 @@ def importance(row, window_end=None):
     # Explicitly identified important work remains blocking even on a dated URL.
     return {'important': bool(explicit or IMPORTANT.search(' '.join(labels))
                               or not archive_hint and IMPORTANT.search(unquote(url))),
-            'archiveUrlHint': archive_hint, 'basis': 'positive_headline_or_url_priority_not_publication_proof'}
+            'archiveUrlHint': archive_hint, 'listingCardDateHint': listing_date_hint,
+            'explicitImportant': bool(explicit),
+            'basis': 'positive_headline_or_url_priority_not_publication_proof'}
 
 
 def partition_coverage(proof, sources, metadata=None):
