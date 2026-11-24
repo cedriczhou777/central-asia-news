@@ -43,11 +43,12 @@ export async function publishScan(scope:SnapshotReceipt,jsonl:string){
     formalStateAuthority:'plan_b_daily',exchangeVersion:EXCHANGE_VERSION});
 }
 
-export async function publishExchangeHealth(issue:string,payload:object){
-  let identity:unknown=null;
+export async function publishExchangeHealth(issue:string,payload:object,key:'latest'|'runtime_checks'='latest'){
+  let identity:{files?:Record<string,string>}|null=null;
   try{identity=JSON.parse(await readFile(join(process.cwd(),'ops/plan-b/build-identity.json'),'utf8'));}catch{/* local source tests have no image identity */}
   const ingest=process.env.INGEST_SECRET||'',planB=process.env.PLAN_B_INGEST_SECRET||ingest;
-  await publish(issue,'global','health','latest',{...payload,exchangeVersion:EXCHANGE_VERSION,identity,
+  await publish(issue,'global','health',key,{...payload,exchangeVersion:EXCHANGE_VERSION,identity,
+    releaseImplementationSha256:identity?.files?.['ops/plan-b/cloud_release.py']??null,
     credentialConfiguration:{ingestConfigured:!!ingest,planBConfigured:!!planB,planBMatchesIngest:planB===ingest},
     credentialProof:planB?createHmac('sha256',planB).update(`${EXCHANGE_VERSION}/${issue}`).digest('hex'):null,
     notification:{channel:'cloud_log_and_database',userNotified:false},costs:{workCredits:'unknown'},
