@@ -86,6 +86,13 @@ export async function saveWorkCheckpoint(row: StateRow, checkpoint: WorkCheckpoi
   if (error || data?.length !== 1) throw new Error('checkpoint_conflict');
 }
 
+export async function latestVerifiedDraftId() {
+  const {data,error} = await client().from('reviewed_deliveries').select('media_id')
+    .eq('state','succeeded').not('media_id','is',null).order('updated_at',{ascending:false}).limit(1);
+  if (error) throw new Error('plan_b_verified_draft_read_failed');
+  return typeof data?.[0]?.media_id === 'string' ? data[0].media_id : null;
+}
+
 export async function knownLiveReceipts(issue: string) {
   const { data, error } = await client().from('reviewed_deliveries').select('version,country').like('version', `${issue}-r10%`)
     .in('state', ['uncertain', 'sending', 'updating', 'succeeded']);

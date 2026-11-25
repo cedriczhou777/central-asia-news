@@ -276,4 +276,27 @@ class RealQueueRegression(unittest.TestCase):
         self.assertIsNone(bounded_review_reason(work,{**old,'candidate':{
             'publicationWindowAssessment':'in_window','title':'Current investment in electricity supply'}},window))
 
+    def test_dated_archive_and_directory_do_not_admit_unverified_news(self):
+        cutoff='2026-11-26T06:00:00+08:00'
+        archived={'kind':'article','url':'https://economy.gov.az/az/post/3726/cinde-transxezer-beynelxalq-neqliyyat-dehlizi-uzre-senaye-ve-investisiya-emekdasligi-imkanlari-muzakire-edilib'}
+        self.assertEqual(bounded_review_reason(archived,{},cutoff),'archived_publication_requires_coverage_review')
+        self.assertIsNone(bounded_review_reason(archived,{'candidate':{'publicationWindowAssessment':'in_window'}},cutoff))
+        self.assertIsNone(bounded_review_reason(archived,{'lead':{'mustProcess':True}},cutoff))
+        fresh={'anchorEvidence':[{'nearbyTimes':[{'datetime':'2026-11-25T09:00:00+05:00'}]}]}
+        self.assertIsNone(bounded_review_reason(archived,{'lead':fresh},cutoff))
+        directory={'kind':'article','url':'https://cbu.uz/ru/monetary-policy/money-market-operations/interbank-money-market/'}
+        self.assertEqual(bounded_review_reason(directory,{},cutoff),'publisher_directory_requires_coverage_review')
+        self.assertIsNone(bounded_review_reason({**directory,'url':'https://cbu.uz/ru/press_center/news/5261900/'},{},cutoff))
+
+    def test_old_publisher_date_needs_exact_identity_and_no_conflict(self):
+        work={'kind':'article','url':'https://pub.example/article'}
+        evidence={'articleUrl':work['url'],'kind':'published','raw':'2026-10-03'}
+        prior={'machineArticleKind':'article','sourceJSONSha256':'a'*64,'rawPublicationEvidence':[evidence]}
+        cutoff='2026-11-26T06:00:00+08:00'
+        self.assertEqual(bounded_review_reason(work,{'candidate':prior},cutoff),'archived_publication_requires_coverage_review')
+        for raw in ([{**evidence,'articleUrl':'https://pub.example/related'}],
+                    [evidence,{**evidence,'raw':'2026-11-25T15:00:00+05:00'}],
+                    [{**evidence,'kind':'modified'}]):
+            self.assertIsNone(bounded_review_reason(work,{'candidate':{**prior,'rawPublicationEvidence':raw}},cutoff))
+
 if __name__=='__main__':unittest.main()

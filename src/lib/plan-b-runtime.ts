@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { freezeBlockReason, PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
-import { claim, getState, knownLiveReceipts, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
+import { claim, getState, knownLiveReceipts, latestVerifiedDraftId, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry, runCloudScript } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
@@ -35,7 +35,7 @@ function checkRuntimeOnce(issue: string) {
   runtime.checkedIssue = issue;
   // Keep external readiness checks off the editorial and delivery tick.
   void Promise.allSettled([stagingIsPrivate(), privateImageHealth(),
-    runCloudScript('cloud_release.py', ['--help'], 15_000), probeReviewedDraftReadiness()])
+    runCloudScript('cloud_release.py', ['--help'], 15_000), probeReviewedDraftReadiness(latestVerifiedDraftId)])
     .then(([staging, images, word, wechat]) => publishExchangeHealth(issue, {...runtimeHealth(),
       prerequisites:{stagingPrivate:staging.status==='fulfilled'&&staging.value,
         imagesPrivate:images.status==='fulfilled'&&images.value.ready&&images.value.private,
@@ -67,6 +67,13 @@ export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number):
       recovery:attempt+1<limit ? {mode:attempt>=1?'focused_source_refresh':'bounded_retry',remainingAttempts:limit-attempt-1}
         : {mode:'important_evidence_required',automaticAttemptsExhausted:true,checkpointsPreserved:true} } }
     : ready(receipt);
+}
+
+export function recoverySources(coverage: SnapshotReceipt['snapshot']['coverage'] | undefined) {
+  const pending = coverage?.pendingWork ?? [];
+  // Resolve already scheduled bodies before retraversing archival discovery.
+  const body = pending.filter(work=>work.reason==='article_body_pending');
+  return [...new Set([...body,...pending].map(work=>work.sourceId).filter(id=>id!=='discovery'))].slice(0,2);
 }
 
 function boundedFailure(error: unknown, nextAttempt: number, step: ClaimStep): Outcome {
@@ -194,8 +201,7 @@ async function tick() {
       const previewStillActive = preview?.state === 'working' && Date.parse(preview.lease_until || '') > Date.now();
       if (!previewStillActive && !final) schedule(issue, country, 'final', row, async () => {
         const focus=row?.receipt?.reason==='exchange_publish_failed'?[]:(row?.attempt || 0)>=2
-          ? [...new Set((row?.receipt as SnapshotReceipt|undefined)?.snapshot?.coverage?.pendingWork
-              .map(work=>work.sourceId).filter(id=>id!=='discovery') ?? [])].slice(0,2) : undefined;
+          ? recoverySources((row?.receipt as SnapshotReceipt|undefined)?.snapshot?.coverage) : undefined;
         const snapshot = await collectCountry(issue, country, 'final', prior, focus);
         return finalCoverageOutcome(snapshot, row?.attempt || 0);
       });
