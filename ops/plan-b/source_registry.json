@@ -2840,6 +2840,7 @@
       "id": "az-ministry-energy-azerbaijan",
       "institutionType": "energy_ministry",
       "kind": "institution",
+      "preferredInBoundedScan": true,
       "timezone": "Asia/Baku"
     },
     {
@@ -2866,6 +2867,7 @@
       "id": "az-presidency-azerbaijan",
       "institutionType": "presidency",
       "kind": "institution",
+      "preferredInBoundedScan": true,
       "timezone": "Asia/Baku"
     }
   ]

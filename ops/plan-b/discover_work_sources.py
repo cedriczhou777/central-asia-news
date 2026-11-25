@@ -956,7 +956,14 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             pass
     # A short run must not always spend its time on the same alphabetically
     # first families. At cutoff, only real after-minimum fetches clear this tier.
-    sources = fair_sources([s for s in sources if s['id'] not in already_sampled]) + fair_sources([s for s in sources if s['id'] in already_sampled])
+    unobserved = fair_sources([s for s in sources if s['id'] not in already_sampled])
+    observed = fair_sources([s for s in sources if s['id'] in already_sampled])
+    if news_budget:
+        # Keep a short budget from ending before verified primary news feeds are reached.
+        # Unobserved sources still precede revisits to already sampled publishers.
+        for group in (unobserved, observed):
+            group.sort(key=lambda source: source.get('preferredInBoundedScan') is not True)
+    sources = unobserved + observed
     seen_listing, page_counts = set(), defaultdict(int)
     deferred_listing = []
     page_candidates = defaultdict(list)

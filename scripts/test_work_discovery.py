@@ -410,6 +410,22 @@ class DiscoveryTests(unittest.TestCase):
         self.run_scan(records, sources, workers=1, max_seconds=1.5, clock=lambda: len(self.calls) - before)
         self.assertEqual([url for url, _ in self.calls[before:]], ['https://b.test/'])
 
+    def test_preferred_publisher_gets_a_listing_slot_under_short_news_budget(self):
+        ordinary = source('original', 'A', 'early.test')
+        primary = source('institution', 'Z', 'primary.test')
+        primary['preferredInBoundedScan'] = True
+        records = {url: page(url) for url in ['https://early.test/', 'https://primary.test/']}
+        result, _ = self.run_scan(records, [ordinary, primary], news_budget=True,
+                                  workers=1, max_seconds=3, clock=lambda: len(self.calls))
+        self.assertEqual([url for url, _ in self.calls], ['https://primary.test/'])
+        self.assertEqual([job['url'] for job in result['listingQueue']], ['https://early.test/'])
+        self.assertFalse(result['complete'])
+
+        before = len(self.calls)
+        self.run_scan(records, [ordinary, primary], news_budget=True,
+                      workers=1, max_seconds=3, clock=lambda: len(self.calls) - before)
+        self.assertEqual([url for url, _ in self.calls[before:]], ['https://early.test/'])
+
     def test_old_permanent_refusal_does_not_hide_latest_transient_failure(self):
         home = 'https://news.test/'
         first, _ = self.run_scan({home: page(home, status=403)})
