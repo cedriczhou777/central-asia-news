@@ -41,13 +41,26 @@ async function apiUrl(path: string): Promise<string> {
   }
   return `https://api.weixin.qq.com/cgi-bin/${path}${path.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token.value)}`;
 }
+class WechatResponseError extends Error {
+  constructor(readonly kind: 'invalid_json' | 'http_error' | 'wechat_error',
+    readonly httpStatus: number, readonly errorCode: string | null) {
+    super(`微信接口失败，错误码 ${errorCode ?? httpStatus}`);
+  }
+}
+
 async function api(path: string, body: object, timeoutMs = 60_000) {
   const response = await fetch(await apiUrl(path), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
   });
-  const data = await response.json();
-  if (!response.ok || data.errcode) throw new Error(`微信接口失败，错误码 ${data.errcode ?? response.status}`);
+  const data = await response.json().catch(() => {
+    throw new WechatResponseError('invalid_json', response.status, null);
+  });
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new WechatResponseError('invalid_json', response.status, null);
+  const errorCode = /^-?\d{1,9}$/.test(String(data.errcode)) && Number(data.errcode) !== 0 ? String(data.errcode) : null;
+  if (!response.ok || (data.errcode && Number(data.errcode) !== 0)) {
+    throw new WechatResponseError(response.ok ? 'wechat_error' : 'http_error', response.status, errorCode);
+  }
   return data;
 }
 async function normalizedJpeg(buffer: Buffer, edge?: number) {
@@ -244,32 +257,57 @@ export async function readReviewedDraft(mediaId: string, timeoutMs?: number) {
   return article as { title: string; digest: string; content: string; content_source_url?:string; thumb_media_id?:string; thumb_url?:string };
 }
 
+function draftListRows(data: {item?: unknown; item_count?: number; total_count?: number}) {
+  if (Array.isArray(data.item)) return data.item;
+  if (data.item == null && data.item_count === 0 && data.total_count === 0) return [];
+  throw new Error('reviewed_draft_list_unavailable');
+}
+
+function probeFailure(error: unknown) {
+  if (error instanceof WechatResponseError) {
+    return { kind:error.kind, httpStatus:error.httpStatus, errorCode:error.errorCode };
+  }
+  const name = error instanceof Error ? error.name : '';
+  const message = error instanceof Error ? error.message : '';
+  const kind = name === 'TimeoutError' || name === 'AbortError' ? 'timeout'
+    : error instanceof TypeError ? 'transport_error'
+    : message === 'reviewed_draft_list_unavailable' || message === 'reviewed_draft_unavailable' ? 'unexpected_shape'
+    : 'request_failed';
+  return {kind,httpStatus:null,errorCode:null};
+}
+
 /** Check the production transport without creating, uploading or changing a draft. */
-export async function probeReviewedDraftReadiness() {
+export async function probeReviewedDraftReadiness(knownDraft: () => Promise<string | null> = async () => null) {
   const transport = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? 'cloud_call' : 'access_token';
-  const code = (error: unknown) => error instanceof Error ? error.message.match(/错误码 (-?\d+)$/)?.[1] ?? null : null;
-  let listed = false;
+  let batchget = false;
+  let mediaId: string | null = null;
+  let batchgetFailure: ReturnType<typeof probeFailure> | null = null;
   try {
-    const result = await api('draft/batchget', { offset: 0, count: 1, no_content: 0 }, 10_000);
-    if (!Array.isArray(result.item)) throw new Error('reviewed_draft_list_unavailable');
-    listed = true;
-    const mediaId = result.item[0]?.media_id;
-    if (typeof mediaId !== 'string' || !mediaId) {
-      return { transport, batchget: true, get: null, reason: 'no_readable_existing_draft' };
-    }
-    const draft = await api('draft/get', { media_id: mediaId }, 10_000);
-    if (!Array.isArray(draft.news_item) || !draft.news_item.length) throw new Error('reviewed_draft_unavailable');
-    return { transport, batchget: true, get: true };
+    const rows = draftListRows(await api('draft/batchget', { offset: 0, count: 1, no_content: 0 }, 15_000));
+    batchget = true;
+    mediaId = typeof rows[0]?.media_id === 'string' ? rows[0].media_id : null;
   } catch (error) {
-    return { transport, batchget: listed, get: listed ? false : null, errorCode: code(error) };
+    batchgetFailure = probeFailure(error);
+  }
+  const scope = {transport,batchget,batchgetFailure,errorCode:batchgetFailure?.errorCode ?? null};
+  if (!mediaId) {
+    try { mediaId = await knownDraft(); }
+    catch { return {...scope,get:null,reason:'stored_receipt_lookup_failed'}; }
+  }
+  if (!mediaId) return {...scope,get:null,reason:'no_readable_existing_draft'};
+  try {
+    const draft = await api('draft/get', { media_id: mediaId }, 15_000);
+    if (!Array.isArray(draft.news_item) || !draft.news_item.length) throw new Error('reviewed_draft_unavailable');
+    return {...scope,get:true};
+  } catch (error) {
+    return {...scope,get:false,getFailure:probeFailure(error)};
   }
 }
 
 /** Read one page only when draft/add had an unknown result with no media ID. */
 export async function findRecentReviewedDrafts(title: string, digest: string, since: number) {
-  const data = await api('draft/batchget', { offset: 0, count: 20, no_content: 0 });
-  if (!Array.isArray(data.item)) throw new Error('reviewed_draft_list_unavailable');
-  return [...new Set<string>(data.item.flatMap((row: {
+  const rows = draftListRows(await api('draft/batchget', { offset: 0, count: 20, no_content: 0 }));
+  return [...new Set<string>(rows.flatMap((row: {
     media_id?: unknown; update_time?: number; content?: { news_item?: { title?: string; digest?: string }[] };
   }) => {
     const articles = row?.content?.news_item;

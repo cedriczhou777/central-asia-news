@@ -1,8 +1,9 @@
 """Bound discovery work without asserting that unfetched news was completed."""
 from collections import defaultdict
-from datetime import datetime,timedelta
+from datetime import date,datetime,timedelta
 import hashlib
 import json
+from pathlib import Path
 import re
 from urllib.parse import unquote, urlsplit
 
@@ -10,6 +11,7 @@ VERSION = 'bounded-news-queue-2'
 MAX_ACTIVE_ARTICLES = 96
 MAX_ARTICLES_PER_SOURCE = 12
 MAX_LISTING_PAGES = 2
+ARCHIVE_PUBLICATIONS = json.loads(Path(__file__).with_name('verified_archive_publications.json').read_text())
 IMPORTANT = re.compile(
     r'energy|electric|power|renewab|solar|wind|neft|socar|\bgas\b|\boil\b|'
     r'invest|financ|credit|kredit|tender|contract|privatiz|sanction|bankrupt|'
@@ -46,14 +48,27 @@ STATIC_DIRECTORY_BY_HOST = {
         r'|debt-to-income|loan-to-value))?)|press-releases|report|research-analysis'
         r'|votes/(?:debt-burden-survey|systemic-risk-survey)))?'
         r'|monetary-policy/refinancing-rate(?:/schedule-of-meetings)?'
+        r'|monetary-policy/(?:local-currency-yield-curve|standards-required-reserves'
+        r'|money-market-operations(?:/interbank-(?:money|repo)-market)?)'
+        r'|banknotes-coins/gold-bars/sale-and-buy-back-offices|combating-money-laundering'
+        r'|consumer-protection/(?:reminder-of-consumer-banking-services|work-with-consumers-of-banking-services)'
+        r'|documents/list-projects-normative|payment-systems/(?:registers/operators-of-payment-systems|remote-banking-services)'
+        r'|press_center/(?:articles-and-interviews|forums-and-conferences)'
         r'|press_center/forums-and-conferences/samarkand-islamic-finance-forum-2026'
         r'|services/(?:regulations|regulatory-sandbox)|statistics/(?:credit|financing)'
         r')/?$', re.I),
     'economy.gov.az': re.compile(r'^/az/page/(?:iqtisadiyyat/investisiya|itm)/?$', re.I),
     'customs.gov.az': re.compile(r'^/az/faydali/satınalmalar/tender/?$', re.I),
     'gov.uz': re.compile(r'^/(?:ru|uz|en)/soliq/pages/soliq-qo-mitasi-faoliyat-sohasi/?$', re.I),
-    'uzdaily.uz': re.compile(r'^/(?:ru|uz|en)/special-projects/islamic-finance-2026/?$', re.I),
-    'sputnik.tj': re.compile(r'^/telegram_export/?$', re.I),
+    'uzdaily.uz': re.compile(r'^/(?:ru|uz|en)/special-projects(?:/islamic-finance-2026)?/?$', re.I),
+    'sputnik.tj': re.compile(r'^/(?:telegram_export/?|docs/(?:cookie_policy|privacy_policy|terms_of_use|index)\.html)$', re.I),
+    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512)|qissai-khudro-bigu)/?$', re.I),
+    'vecherka.tj': re.compile(
+        r'^/(?:istorii/(?:borba-s-radikalizmom|dney-16-protiv-nasiliya|grazhdanskie-zhurnalisty'
+        r'|otkritie-uroki|prava-jenshin|reforma-militsii|roditeli-i-deti|svoboda-slova|zashita_zhivotnikh)'
+        r'|spets-proekti/(?:blogotvoritelniye|ekologicheskiye|mediagramotnost|obrazovatelniye|razvlekatelniye)'
+        r'|podrobno/cpravochnaja-informacija|reklamodatelyam)/?$', re.I),
+    'kz.kursiv.media': re.compile(r'^/(?:expert/marlen-sihaev|guide/czifrovye-ekosistemy-v-kazahstane)/?$', re.I),
     'fm.gov.om': re.compile(r'^/en/royal-decrees/?$', re.I),
     # Exact KZ reference/index pages from the 11/24 queue. Actual KASE news
     # items and Inbusiness article URLs remain hard-blocking article work.
@@ -157,6 +172,52 @@ def requires_body_evidence(work, info):
         for row in (work, info.get('lead') or {}, info.get('candidate') or {}))
 
 
+def archived_publication_is_old(url, row, window_end):
+    """A previously dated publisher URL is a review hint, never editorial approval."""
+    address = urlsplit(url)
+    if address.scheme != 'https' or address.fragment or not window_end or row.get('rawPublicationEvidence'):
+        return False
+    published = ARCHIVE_PUBLICATIONS.get(url.rstrip('/'))
+    if not published:
+        return False
+    safe_day = datetime.fromisoformat(window_end).date() - timedelta(days=2)
+    if date.fromisoformat(published) >= safe_day:
+        return False
+    for anchor in row.get('anchorEvidence') or []:
+        if not isinstance(anchor, dict) or anchor.get('inNavigation'):
+            continue
+        for item in anchor.get('nearbyTimes') or []:
+            raw = (item.get('datetime') or item.get('text')) if isinstance(item, dict) else item
+            stamp, _ = _parse_listing_date_hint(raw)
+            if stamp is None or stamp.date() >= safe_day:
+                return False
+    return True
+
+
+def verified_source_date_is_old(url, candidate, window_end):
+    """Check article-bound archived publication evidence, even if prose was unavailable."""
+    if (not window_end or candidate.get('machineArticleKind') != 'article'
+            or not re.fullmatch(r'[0-9a-f]{64}', str(candidate.get('sourceJSONSha256', '')))):
+        return False
+    raw = candidate.get('rawPublicationEvidence')
+    if isinstance(raw, dict):
+        raw = raw.get('items', [raw])
+    if not isinstance(raw, list):
+        return False
+    published = [item for item in raw if isinstance(item, dict) and item.get('kind') == 'published']
+    start = datetime.fromisoformat(window_end) - timedelta(days=1)
+    if not published:
+        return False
+    for item in published:
+        if str(item.get('articleUrl') or '').rstrip('/') != url.rstrip('/'):
+            return False
+        stamp, has_timezone = _parse_listing_date_hint(item.get('raw'))
+        if stamp is None or (stamp >= start if has_timezone and start.tzinfo
+                             else stamp.date() >= start.date() - timedelta(days=1)):
+            return False
+    return True
+
+
 def bounded_review_reason(work, info, window_end):
     """Classify discovery obligations, never mark unread stories completed."""
     candidate, lead = info.get('candidate') or {}, info.get('lead') or {}
@@ -168,6 +229,10 @@ def bounded_review_reason(work, info, window_end):
     priority = importance(row, window_end)
     if work.get('kind') in ('article','lead') and priority.get('listingCardDateHint'):
         return 'listing_card_old_date_requires_coverage_review'
+    if work.get('kind') in ('article','lead') and (
+            verified_source_date_is_old(work['url'], candidate, window_end)
+            or archived_publication_is_old(work['url'], row, window_end)):
+        return 'archived_publication_requires_coverage_review'
     if priority['archiveUrlHint'] and not priority['important']:
         # A dated URL is only a triage hint. It does not prove an article's
         # publication date; a genuinely identified important headline

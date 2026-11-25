@@ -1151,7 +1151,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                     reason=bounded_review_reason({'kind':'article','url':url},
                         {'lead':by_url.get(url,{}),'candidate':old_by_url.get(url,{})},end.isoformat())
                     if reason in ('publisher_directory_requires_coverage_review','archive_url_discovery_requires_coverage_review',
-                                  'listing_card_old_date_requires_coverage_review'):
+                                  'listing_card_old_date_requires_coverage_review','archived_publication_requires_coverage_review'):
                         by_url[url]['discoveryDeferral']={'reason':reason,'completed':False}
                     else:kept.append(url)
                 urls=kept

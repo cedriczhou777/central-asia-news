@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { eligible, finalCoverageOutcome } from '../src/lib/plan-b-runtime';
+import { eligible, finalCoverageOutcome, recoverySources } from '../src/lib/plan-b-runtime';
 import { checkpointInput, latestWorkCheckpoint } from '../src/lib/plan-b-checkpoint';
 import { canonicalJson, freezeBlockReason, sha256, snapshot } from '../src/lib/plan-b-handoff';
 import { saveClaim, type StateRow } from '../src/lib/plan-b-store';
@@ -25,6 +25,12 @@ assert.equal(eligible({...row,issue_date:'2026-11-22'},Date.parse(stamp),'final'
 assert.equal(eligible(row,Date.parse(stamp),'word'),false,'no extra Word or WeChat writes');
 assert.equal(finalCoverageOutcome(receipt,1).state,'retry');
 assert.equal(finalCoverageOutcome(receipt,2).state,'blocked','important body still cannot be signed');
+assert.deepEqual(recoverySources({...coverage,pendingWork:[
+  {sourceId:'archive',kind:'lead',url:'https://news.unit-test.example/older',reason:'unprocessed_original_lead'},
+  ...coverage.pendingWork,
+  {sourceId:'discovery',kind:'article',url:null,reason:'unaccounted_queue_identity'},
+  ...coverage.pendingWork,
+]}),['important','archive'],'prioritize concrete bodies, retain a bounded distinct source order');
 const accepted=checkpointInput({snapshotHash:source.hash,stage:'draft',
   checkpointHash:sha256(canonicalJson(doc)),document:doc},[row]);
 assert.deepEqual(accepted.document,doc,'blocked snapshot can preserve merged author and reviewer work');
