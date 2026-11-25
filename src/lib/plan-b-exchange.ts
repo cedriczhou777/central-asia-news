@@ -43,7 +43,7 @@ export async function publishScan(scope:SnapshotReceipt,jsonl:string){
     formalStateAuthority:'plan_b_daily',exchangeVersion:EXCHANGE_VERSION});
 }
 
-export async function publishExchangeHealth(issue:string,payload:object,key:'latest'|'runtime_checks'='latest'){
+export async function publishExchangeHealth(issue:string,payload:object,key:'latest'|'runtime_checks'|`runtime_checks/${string}`='latest'){
   let identity:{files?:Record<string,string>}|null=null;
   try{identity=JSON.parse(await readFile(join(process.cwd(),'ops/plan-b/build-identity.json'),'utf8'));}catch{/* local source tests have no image identity */}
   const ingest=process.env.INGEST_SECRET||'',planB=process.env.PLAN_B_INGEST_SECRET||ingest;
@@ -52,7 +52,7 @@ export async function publishExchangeHealth(issue:string,payload:object,key:'lat
     credentialConfiguration:{ingestConfigured:!!ingest,planBConfigured:!!planB,planBMatchesIngest:planB===ingest},
     credentialProof:planB?createHmac('sha256',planB).update(`${EXCHANGE_VERSION}/${issue}`).digest('hex'):null,
     notification:{channel:'cloud_log_and_database',userNotified:false},costs:{workCredits:'unknown'},
-    checkedAt:new Date().toISOString()});
+    checkedAt:new Date().toISOString()},key.startsWith('runtime_checks/'));
 }
 
 export function* wordChunks(document:{sha256:string;bytes:number},bytes:Buffer){
@@ -66,7 +66,7 @@ export async function publishWord(issue:string,country:PlanBCountry,document:{sh
     `${document.sha256}/${String(part.chunkIndex).padStart(5,'0')}`,part,true);
 }
 
-export async function processExchange(issue:string,apply=applyPlanBCommand){
+export async function processExchange(issue:string,apply=applyPlanBCommand,beforeSubmission?:()=>void){
   const sb=getSupabaseClient();
   const expired=await sb.from(TABLE).update({state:'rejected',lease_until:null,updated_at:new Date().toISOString(),
     result:{ok:false,reason:'command_attempts_exhausted',checkpointPreserved:true,
@@ -81,6 +81,7 @@ export async function processExchange(issue:string,apply=applyPlanBCommand){
     let result:Record<string,unknown>;let state:'accepted'|'rejected'|'queued';
     try{
       if(!isCountry(row.country)||row.content_hash!==sha256(canonicalJson(row.payload)))throw new Error('exchange_command_hash_mismatch');
+      if(row.kind==='submission')beforeSubmission?.();
       result={ok:true,...await apply(issue,row.country,row.kind==='checkpoint',row.payload)};state='accepted';
     }catch(error){
       const message=error instanceof Error?error.message:'';

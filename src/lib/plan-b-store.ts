@@ -7,6 +7,8 @@ import { getSupabaseClient, getSupabaseServiceRoleKey } from '../storage/databas
 import type { PlanBCountry, Snapshot } from './plan-b-handoff';
 import { sha256 } from './plan-b-handoff';
 import type { WorkCheckpoint } from './plan-b-checkpoint';
+import { contentHash, reviewedCountry, validatePackage, type PackageCountry } from './reviewed-package';
+import type { VerifiedWechatDraft } from './reviewed-wechat';
 
 const TABLE = 'plan_b_daily';
 const BUCKET = 'plan-b-work';
@@ -86,11 +88,25 @@ export async function saveWorkCheckpoint(row: StateRow, checkpoint: WorkCheckpoi
   if (error || data?.length !== 1) throw new Error('checkpoint_conflict');
 }
 
-export async function latestVerifiedDraftId() {
-  const {data,error} = await client().from('reviewed_deliveries').select('media_id')
-    .eq('state','succeeded').not('media_id','is',null).order('updated_at',{ascending:false}).limit(1);
-  if (error) throw new Error('plan_b_verified_draft_read_failed');
-  return typeof data?.[0]?.media_id === 'string' ? data[0].media_id : null;
+export async function verifiedDraftReference(issue: string): Promise<VerifiedWechatDraft | null> {
+  const sb=client();
+  const receipts=()=>sb.from('reviewed_deliveries').select('version,country,media_id,detail')
+    .eq('state','succeeded').contains('detail',{verified:true}).not('media_id','is',null)
+    .lt('version',issue).order('updated_at',{ascending:false}).limit(1);
+  const preferred=issue<='2026-11-26' ? await receipts().like('version','2026-11-23%') : null;
+  if (preferred?.error) throw new Error('plan_b_verified_draft_read_failed');
+  const result=preferred?.data?.length ? preferred : await receipts();
+  if (result.error) throw new Error('plan_b_verified_draft_read_failed');
+  const row=result.data?.[0];
+  if (!row || typeof row.media_id!=='string' || !row.media_id || !/^[a-f0-9]{64}$/.test(row.detail?.readbackHash ?? '')) return null;
+  const saved=await sb.from('reviewed_packages').select('payload,content_hash').eq('version',row.version).maybeSingle();
+  if (saved.error) throw new Error('plan_b_verified_package_read_failed');
+  if (!saved.data) return null;
+  const payload=validatePackage(saved.data.payload);
+  if (payload.version!==row.version || contentHash(payload)!==saved.data.content_hash) return null;
+  const draft=reviewedCountry(payload,row.country as PackageCountry);
+  if (contentHash(draft.bodyHtml)!==row.detail.inputHash) return null;
+  return {mediaId:row.media_id,version:payload.version,country:row.country,title:draft.title,summary:draft.summary,readbackHash:row.detail.readbackHash};
 }
 
 export async function knownLiveReceipts(issue: string) {

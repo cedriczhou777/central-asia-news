@@ -1,57 +1,21 @@
-import { assertHttps, imageUrls, replaceImageSources, type ReviewedCountry, type ReviewedImageAsset } from './reviewed-package';
+import { assertHttps, contentHash, imageUrls, replaceImageSources, type ReviewedCountry, type ReviewedImageAsset } from './reviewed-package';
 import { lookup } from 'node:dns/promises';
-import { request as httpRequest } from 'node:http';
-import { Readable } from 'node:stream';
 import { FALLBACK_THUMB_JPEG_BASE64 } from './wechat-thumb-fallback';
 import { readArchivedImage } from './reviewed-image-archive';
 import { readPrivateImage } from './reviewed-private-images';
 import { validateOriginalImage } from './reviewed-image-bytes';
+import { fetchWechat, globalAgentWechat, inspectWechatNetwork, networkErrors, noAgentWechat, officialStyleWechat,
+  WECHAT_API_HOST, type Peer, type WechatRequest } from './reviewed-wechat-transport';
 
 export const REVIEWED_IMAGE_UPLOAD_CONCURRENCY = 2;
 
 let token: { value: string; until: number } | undefined;
-type WechatRequest = (url: string, options: RequestInit) => Promise<Response>;
-const fetchRequest: WechatRequest = (url, options) => fetch(url, options);
-let cloudRequest = fetchRequest;
+let cloudTransport: { protocol: 'http' | 'https'; request: WechatRequest } = {protocol:'http',request:fetchWechat};
 
-// Use the same CloudBase OpenAPI host and authorization with Node's HTTP
-// client. It never follows a redirect or retries a request.
-const nativeCloudRequest: WechatRequest = (url, options) => {
-  const message = new Request(url, options);
-  const headers = new Headers(message.headers);
-  const json = typeof options.body === 'string' ? options.body : undefined;
-  if (json !== undefined) headers.set('Content-Length', String(Buffer.byteLength(json)));
-  return new Promise((resolve, reject) => {
-    const outbound = httpRequest(url, {
-      method: message.method, headers: Object.fromEntries(headers), signal: message.signal, agent: false,
-    }, incoming => {
-      const status = incoming.statusCode || 502;
-      const noBody = [204,205,304].includes(status);
-      if (noBody) incoming.resume();
-      try {
-        const body = noBody ? null
-          : Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>;
-        resolve(new Response(body, {status}));
-      } catch (error) {
-        incoming.destroy();
-        reject(error);
-      }
-    });
-    outbound.once('error', error => reject(new TypeError('微信云调用连接失败', {cause:error})));
-    if (json !== undefined || !message.body) {
-      outbound.end(json);
-      return;
-    }
-    const body = Readable.fromWeb(message.body as Parameters<typeof Readable.fromWeb>[0]);
-    body.once('error', error => outbound.destroy(error));
-    outbound.once('close', () => body.destroy());
-    body.pipe(outbound);
-  });
-};
-
-async function requestWechat(path: string, options: RequestInit,
-    request = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? cloudRequest : fetchRequest) {
-  return request(await apiUrl(path), {...options,redirect:'manual'});
+async function requestWechat(path: string, options: RequestInit) {
+  const cloud = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? cloudTransport : null;
+  const target = cloud ? `${cloud.protocol}://${WECHAT_API_HOST}/cgi-bin/${path}` : await apiUrl(path);
+  return (cloud?.request ?? fetchWechat)(target,{...options,redirect:'manual'});
 }
 // Preflight and delivery must use the same verified bytes. A second origin
 // fetch used to fail after a successful preflight (and re-download shared images).
@@ -71,7 +35,6 @@ function cacheImage(key: string, bytes: Buffer) {
   imageCacheBytes += bytes.length;
 }
 async function apiUrl(path: string): Promise<string> {
-  if (process.env.USE_WECHAT_CLOUD_CALL === 'true') return `http://api.weixin.qq.com/cgi-bin/${path}`;
   if (!token || token.until < Date.now()) {
     const appid = process.env.WECHAT_APP_ID;
     const secret = process.env.WECHAT_APP_SECRET;
@@ -93,11 +56,11 @@ class WechatResponseError extends Error {
   }
 }
 
-async function api(path: string, body: object, timeoutMs = 60_000, request?: WechatRequest) {
+async function api(path: string, body: object, timeoutMs = 60_000) {
   const response = await requestWechat(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
-  }, request);
+  });
   const data = await response.json().catch(() => {
     throw new WechatResponseError('invalid_json', response.status, null);
   });
@@ -308,71 +271,96 @@ function draftListRows(data: {item?: unknown; item_count?: number; total_count?:
   throw new Error('reviewed_draft_list_unavailable');
 }
 
-const networkCodes = new Set(['ECONNREFUSED','ECONNRESET','ECONNABORTED','ENOTFOUND','EAI_AGAIN','ETIMEDOUT',
-  'EHOSTUNREACH','ENETUNREACH','EACCES','EPERM','ABORT_ERR','UND_ERR_CONNECT_TIMEOUT','UND_ERR_SOCKET',
-  'HPE_INVALID_CONSTANT','HPE_INVALID_HEADER_TOKEN','HPE_UNEXPECTED_CONTENT_LENGTH']);
+export type VerifiedWechatDraft = {
+  mediaId:string; version:string; country:string; title:string; summary:string; readbackHash:string;
+};
 
-type ProbeFailure = { kind:string; httpStatus:number|null; errorCode:string|null; networkCode?:string };
+type ProbeClient = {
+  id:string; protocol:'http'|'https'; request:WechatRequest; compareOnly?:boolean;
+};
+const PRIMARY_CLIENTS: ProbeClient[] = [
+  {id:'wxapi_request',protocol:'http',request:officialStyleWechat},
+  {id:'node_global_agent',protocol:'http',request:globalAgentWechat},
+  {id:'node_fetch',protocol:'http',request:fetchWechat},
+  {id:'node_no_agent',protocol:'http',request:noAgentWechat,compareOnly:true},
+  {id:'node_https_global_agent',protocol:'https',request:globalAgentWechat},
+];
+type DraftEndpoint = 'draft/get'|'draft/batchget';
+type ReadProof = {
+  ok:boolean; stage:string; startedAt:string; durationMs:number; httpStatus:number|null; errcode:string|null;
+  openApiSeqid:boolean; peer?:Peer; errors?:ReturnType<typeof networkErrors>;
+  titleMatches?:boolean; summaryMatches?:boolean; bodyMatches?:boolean;
+};
 
-function probeFailure(error: unknown): ProbeFailure {
-  if (error instanceof WechatResponseError) {
-    return { kind:error.kind, httpStatus:error.httpStatus, errorCode:error.errorCode };
+async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: VerifiedWechatDraft | null, useToken: boolean): Promise<ReadProof> {
+  const started = Date.now();
+  const timing = () => ({startedAt:new Date(started).toISOString(),durationMs:Date.now()-started});
+  const base = {ok:false,httpStatus:null,errcode:null,openApiSeqid:false};
+  if (endpoint === 'draft/get' && !known) return {...base,...timing(),stage:'stored_reference_missing'};
+  let peer:Peer|undefined;
+  let response:Response;
+  try {
+    const url = useToken ? await apiUrl(endpoint) : `${client.protocol}://${WECHAT_API_HOST}/cgi-bin/${endpoint}`;
+    const body = endpoint === 'draft/get' ? {media_id:known!.mediaId} : {offset:0,count:1,no_content:0};
+    response = await client.request(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),
+      redirect:'manual',signal:AbortSignal.timeout(6_000)},value=>{peer=value;});
+  } catch (error) {
+    const errors = networkErrors(error);
+    const stage = errors.some(e=>e.syscall==='getaddrinfo'||['ENOTFOUND','EAI_AGAIN'].includes(e.code)) ? 'dns'
+      : errors.some(e=>e.syscall==='connect'||['ECONNREFUSED','ENETUNREACH','EHOSTUNREACH','UND_ERR_CONNECT_TIMEOUT'].includes(e.code)) ? 'tcp'
+      : errors.some(e=>/TLS|CERT|SSL/.test(e.code)) ? 'tls'
+      : error instanceof Error && ['TimeoutError','AbortError'].includes(error.name) ? 'timeout' : 'before_http';
+    return {...base,...timing(),stage,peer,errors};
   }
-  const name = error instanceof Error ? error.name : '';
-  const message = error instanceof Error ? error.message : '';
-  const kind = name === 'TimeoutError' || name === 'AbortError' ? 'timeout'
-    : error instanceof TypeError ? 'transport_error'
-    : message === 'reviewed_draft_list_unavailable' || message === 'reviewed_draft_unavailable' ? 'unexpected_shape'
-    : 'request_failed';
-  const cause = error instanceof Error ? error.cause : null;
-  const code = cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : '';
-  return {kind,httpStatus:null,errorCode:null,...(networkCodes.has(code)?{networkCode:code}:{})};
+  const details = {...base,httpStatus:response.status,openApiSeqid:!!response.headers.get('x-openapi-seqid')?.trim(),peer};
+  const data = await response.json().catch(()=>null);
+  const deniedStatus = [401,403,407].includes(response.status);
+  if (!data || typeof data!=='object' || Array.isArray(data)) {
+    return {...details,...timing(),stage:deniedStatus?'authorization':'invalid_json'};
+  }
+  const errcode = /^-?\d{1,9}$/.test(String(data.errcode)) ? String(data.errcode) : null;
+  if (!response.ok || data.errcode && Number(data.errcode)!==0) {
+    const authorization = deniedStatus || ['40001','40014','40164','41001','42001','48001','50001'].includes(errcode ?? '');
+    return {...details,...timing(),errcode,stage:authorization?'authorization':'wechat_response'};
+  }
+  if (endpoint === 'draft/batchget') {
+    try { draftListRows(data); }
+    catch { return {...details,...timing(),errcode,stage:'unexpected_shape'}; }
+    return {...details,...timing(),errcode,ok:true,stage:'verified'};
+  }
+  const entry = data.news_item?.[0];
+  if (!Array.isArray(data.news_item) || data.news_item.length!==1 || !entry || typeof entry.content!=='string' || !known) {
+    return {...details,...timing(),errcode,stage:'unexpected_shape'};
+  }
+  const titleMatches = entry.title===known.title;
+  const summaryMatches = entry.digest===known.summary;
+  const bodyMatches = contentHash(entry.content)===known.readbackHash;
+  const ok = titleMatches && summaryMatches && bodyMatches;
+  return {...details,...timing(),errcode,ok,stage:ok?'verified':'stored_version_mismatch',titleMatches,summaryMatches,bodyMatches};
 }
 
-async function readOnlyDraftProbe(knownDraft: () => Promise<string | null>, request: WechatRequest) {
-  let batchget = false;
-  let mediaId: string | null = null;
-  let batchgetFailure: ReturnType<typeof probeFailure> | null = null;
-  try {
-    const rows = draftListRows(await api('draft/batchget', { offset: 0, count: 1, no_content: 0 }, 8_000, request));
-    batchget = true;
-    mediaId = typeof rows[0]?.media_id === 'string' ? rows[0].media_id : null;
-  } catch (error) {
-    batchgetFailure = probeFailure(error);
+/** Test only reads on the same authorized endpoint. Never log returned articles, media IDs or credentials. */
+export async function probeReviewedDraftReadiness(known: VerifiedWechatDraft | null,
+    {inspect=false,clients=PRIMARY_CLIENTS}: {inspect?:boolean;clients?:ProbeClient[]} = {}) {
+  const useToken = process.env.USE_WECHAT_CLOUD_CALL !== 'true';
+  const candidates:ProbeClient[] = useToken ? [{id:'standard_https',protocol:'https',request:fetchWechat}] : clients;
+  const [network,observed] = await Promise.all([inspect ? inspectWechatNetwork() : null,
+    Promise.all(candidates.map(async client=>({
+      client:client.id,protocol:client.protocol,compareOnly:client.compareOnly ?? false,
+      batchget:await probeDraft(client,'draft/batchget',known,useToken),
+      get:await probeDraft(client,'draft/get',known,useToken),
+    })))]);
+  const usable = observed.find(row=>!row.compareOnly && row.get.ok && row.batchget.ok
+    && (useToken || row.get.openApiSeqid || row.batchget.openApiSeqid));
+  if (!useToken && usable) {
+    const client = clients.find(entry=>entry.id===usable.client)!;
+    cloudTransport = {protocol:client.protocol,request:client.request};
   }
-  const scope = {batchget,batchgetFailure,errorCode:batchgetFailure?.errorCode ?? null};
-  if (!mediaId) {
-    try { mediaId = await knownDraft(); }
-    catch { return {...scope,get:null,reason:'stored_receipt_lookup_failed'}; }
-  }
-  if (!mediaId) return {...scope,get:null,reason:'no_readable_existing_draft'};
-  try {
-    const draft = await api('draft/get', { media_id: mediaId }, 8_000, request);
-    if (!Array.isArray(draft.news_item) || !draft.news_item.length) throw new Error('reviewed_draft_unavailable');
-    return {...scope,get:true};
-  } catch (error) {
-    return {...scope,get:false,getFailure:probeFailure(error)};
-  }
-}
-
-/** Select another HTTP client only after it can read through the same CloudBase OpenAPI. */
-export async function probeReviewedDraftReadiness(knownDraft: () => Promise<string | null> = async () => null,
-    nativeRequest = nativeCloudRequest) {
-  const transport = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? 'cloud_call' : 'access_token';
-  const primary = await readOnlyDraftProbe(knownDraft, fetchRequest);
-  if (transport === 'access_token') return {transport,...primary};
-  if (primary.batchget && primary.get) cloudRequest = fetchRequest;
-  const failures = [primary.batchgetFailure, 'getFailure' in primary ? primary.getFailure : null];
-  const noResponse = (failure: ProbeFailure | null | undefined) => failure
-    && ['transport_error','timeout'].includes(failure.kind)
-    && !['EACCES','EPERM'].includes(failure.networkCode ?? '');
-  if (!noResponse(failures[0]) || primary.get === true || failures[1] && !noResponse(failures[1])) {
-    return {transport,...primary};
-  }
-  const native = await readOnlyDraftProbe(knownDraft, nativeRequest);
-  if (!native.batchget || !native.get) return {transport,...primary,nativeProbe:native};
-  cloudRequest = nativeRequest;
-  return {transport,...native,client:'node_http',defaultProbe:primary};
+  return {transport:useToken?'access_token':'cloud_call',ready:!!usable,client:usable?.client ?? null,
+    get:usable?.get.ok ?? observed.some(row=>row.get.ok),
+    batchget:usable?.batchget.ok ?? observed.some(row=>row.batchget.ok),
+    openApiSeqid:observed.some(row=>row.get.openApiSeqid || row.batchget.openApiSeqid),
+    reference:known?{version:known.version,country:known.country}:null,network,observed};
 }
 
 /** Read one page only when draft/add had an unknown result with no media ID. */
