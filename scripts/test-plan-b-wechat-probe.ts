@@ -78,6 +78,19 @@ async function checkReadiness() {
   assert.equal(recovered.observed[0].get.bodyMatches,true);
   assert.match(recovered.reference!.version,/^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(recovered).includes('temporary-live-id'),false);
+
+  const other={...stored,mediaId:'other-archived-fixture',country:'kz'};
+  const emptyList:WechatRequest=async(url,init)=>{
+    if (url.endsWith('/batchget')) return Response.json({total_count:0,item_count:0},{headers});
+    return JSON.parse(String(init.body)).media_id===other.mediaId
+      ? Response.json({news_item:[{title:other.title,digest:other.summary,content:'<p>approved</p>'}]},{headers})
+      : Response.json({errcode:40007},{headers});
+  };
+  const alternativeReceipt=await probeReviewedDraftReadiness([stored,other],{clients:[{id:'wxapi_request',protocol:'http',request:emptyList}]});
+  assert.equal(alternativeReceipt.ready,true);
+  assert.deepEqual(alternativeReceipt.reference,{source:'stored_receipt',version:other.version,country:'kz'});
+  assert.equal(alternativeReceipt.observed[0].batchget.list?.total,0);
+  assert.equal(alternativeReceipt.observed[0].otherReceipts[0].proof.bodyMatches,true);
 }
 
 async function checkRetryWindows() {

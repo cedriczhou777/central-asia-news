@@ -275,7 +275,8 @@ export type VerifiedWechatDraft = {
   mediaId:string; version:string; country:string; title:string; summary:string; readbackHash:string;
 };
 
-type LiveDraftSnapshot = Omit<VerifiedWechatDraft,'country'> & {source:'wechat_batch_snapshot';updatedAt?:string};
+type DraftArticleProof = Pick<VerifiedWechatDraft,'title'|'summary'|'readbackHash'>;
+type LiveDraftSnapshot = {mediaId:string;version:string;source:'wechat_batch_snapshot';articles:DraftArticleProof[];updatedAt?:string};
 type DraftReference = VerifiedWechatDraft|LiveDraftSnapshot;
 
 type ProbeClient = {
@@ -293,6 +294,7 @@ type ReadProof = {
   ok:boolean; stage:string; startedAt:string; durationMs:number; httpStatus:number|null; errcode:string|null;
   openApiSeqid:boolean; peer?:Peer; errors?:ReturnType<typeof networkErrors>;
   titleMatches?:boolean; summaryMatches?:boolean; bodyMatches?:boolean;
+  list?:{returned:number;total:number|null;singleArticleItems:number;multiArticleItems:number;contentSamples:number};
 };
 
 async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: DraftReference | null, useToken: boolean,
@@ -331,37 +333,42 @@ async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: D
     let rows:ReturnType<typeof draftListRows>;
     try { rows=draftListRows(data); }
     catch { return {...details,...timing(),errcode,stage:'unexpected_shape'}; }
+    let singleArticleItems=0,multiArticleItems=0,contentSamples=0;
     for (const row of rows.slice(0,5)) {
       const items=row?.content?.news_item;
-      const draft=items?.[0];
-      if (typeof row?.media_id!=='string' || !row.media_id || !Array.isArray(items) || items.length!==1
-          || typeof draft?.title!=='string' || !draft.title.trim() || typeof draft.content!=='string' || !draft.content.trim()) continue;
-      const title=draft.title;
-      const summary=typeof draft.digest==='string' ? draft.digest : '';
-      const readbackHash=contentHash(draft.content);
+      if (!Array.isArray(items) || !items.length) continue;
+      if (items.length===1) singleArticleItems++;
+      else multiArticleItems++;
+      if (typeof row?.media_id!=='string' || !row.media_id || items.length>8) continue;
+      const articles:DraftArticleProof[]=items.flatMap(draft=>typeof draft?.title==='string' && draft.title.trim()
+        && typeof draft.content==='string' && draft.content.trim() ? [{title:draft.title,
+          summary:typeof draft.digest==='string'?draft.digest:'',readbackHash:contentHash(draft.content)}] : []);
+      if (articles.length!==items.length || ++contentSamples!==1) continue;
       const epoch=row.update_time;
       const updatedAt=Number.isInteger(epoch)&&epoch>0&&epoch<4_102_444_800 ? new Date(epoch*1000).toISOString() : undefined;
-      capture?.({source:'wechat_batch_snapshot',mediaId:row.media_id,
-        version:contentHash({title,summary,readbackHash}),title,summary,readbackHash,updatedAt});
-      break;
+      capture?.({source:'wechat_batch_snapshot',mediaId:row.media_id,version:contentHash(articles),articles,updatedAt});
     }
-    return {...details,...timing(),errcode,ok:true,stage:'verified'};
+    const total=Number.isInteger(data.total_count)&&data.total_count>=0?Number(data.total_count):null;
+    return {...details,...timing(),errcode,ok:true,stage:'verified',list:{returned:rows.length,total,singleArticleItems,multiArticleItems,contentSamples}};
   }
-  const entry = data.news_item?.[0];
-  if (!Array.isArray(data.news_item) || data.news_item.length!==1 || !entry || typeof entry.content!=='string' || !known) {
+  const entries:unknown=data.news_item;
+  const expected=known ? ('articles' in known ? known.articles : [known]) : [];
+  if (!Array.isArray(entries) || !expected.length || entries.length!==expected.length) {
     return {...details,...timing(),errcode,stage:'unexpected_shape'};
   }
-  const titleMatches = entry.title===known.title;
-  const summaryMatches = (entry.digest ?? '')===known.summary;
-  const bodyMatches = contentHash(entry.content)===known.readbackHash;
+  const titleMatches = expected.every((item,index)=>entries[index]?.title===item.title);
+  const summaryMatches = expected.every((item,index)=>(entries[index]?.digest ?? '')===item.summary);
+  const bodyMatches = expected.every((item,index)=>typeof entries[index]?.content==='string'&&contentHash(entries[index].content)===item.readbackHash);
   const ok = titleMatches && summaryMatches && bodyMatches;
   return {...details,...timing(),errcode,ok,stage:ok?'verified':'stored_version_mismatch',titleMatches,summaryMatches,bodyMatches};
 }
 
 /** Test only reads on the same authorized endpoint. Never log returned articles, media IDs or credentials. */
-export async function probeReviewedDraftReadiness(known: VerifiedWechatDraft | null,
+export async function probeReviewedDraftReadiness(input: VerifiedWechatDraft | readonly VerifiedWechatDraft[] | null,
     {inspect=false,clients=PRIMARY_CLIENTS}: {inspect?:boolean;clients?:ProbeClient[]} = {}) {
   const useToken = process.env.USE_WECHAT_CLOUD_CALL !== 'true';
+  const references=input ? ('mediaId' in input ? [input] : input) : [];
+  const known=references[0] ?? null;
   const candidates:ProbeClient[] = useToken ? [{id:'standard_https',protocol:'https',request:fetchWechat}] : clients;
   const [network,observed] = await Promise.all([inspect ? inspectWechatNetwork() : null,
     Promise.all(candidates.map(async client=>{
@@ -369,11 +376,24 @@ export async function probeReviewedDraftReadiness(known: VerifiedWechatDraft | n
       const batchget=await probeDraft(client,'draft/batchget',known,useToken,value=>{snapshot=value;});
       const historical=await probeDraft(client,'draft/get',known,useToken);
       const useSnapshot=snapshot && (!known || historical.errcode==='40007' || historical.stage==='stored_version_mismatch');
-      const reference=useSnapshot && snapshot ? {source:snapshot.source,version:snapshot.version,updatedAt:snapshot.updatedAt}
+      let reference=useSnapshot && snapshot ? {source:snapshot.source,version:snapshot.version,updatedAt:snapshot.updatedAt}
         : known ? {source:'stored_receipt',version:known.version,country:known.country} : null;
+      let get=useSnapshot && snapshot ? await probeDraft(client,'draft/get',snapshot,useToken) : historical;
+      const otherReceipts:Array<{country:string;version:string;proof:ReadProof}>=[];
+      if (client.id==='wxapi_request' && !get.ok && batchget.ok && historical.errcode==='40007') {
+        for (const prior of references.slice(1,5)) {
+          const proof=await probeDraft(client,'draft/get',prior,useToken);
+          otherReceipts.push({country:prior.country,version:prior.version,proof});
+          if (proof.ok) {
+            get=proof;
+            reference={source:'stored_receipt',version:prior.version,country:prior.country};
+            break;
+          }
+          if (proof.errcode!=='40007' && proof.stage!=='stored_version_mismatch') break;
+        }
+      }
       return {client:client.id,protocol:client.protocol,compareOnly:client.compareOnly ?? false,batchget,reference,
-        get:useSnapshot && snapshot ? await probeDraft(client,'draft/get',snapshot,useToken) : historical,
-        ...(useSnapshot && known?{historicalGet:historical}:{})};
+        get,...(useSnapshot && known || otherReceipts.length?{historicalGet:historical}:{}),otherReceipts};
     }))]);
   const usable = observed.find(row=>!row.compareOnly && row.get.ok && row.batchget.ok
     && (useToken || row.get.openApiSeqid || row.batchget.openApiSeqid));
