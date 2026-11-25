@@ -5,11 +5,14 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import unittest
 
+# The hosted Plan B collector is shipped from ops/plan-b.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
 from discover_work_sources import discover, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads, _FetchFlights
 
 
