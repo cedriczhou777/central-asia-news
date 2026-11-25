@@ -1,5 +1,7 @@
 import { assertHttps, imageUrls, replaceImageSources, type ReviewedCountry, type ReviewedImageAsset } from './reviewed-package';
 import { lookup } from 'node:dns/promises';
+import { request as httpRequest } from 'node:http';
+import { Readable } from 'node:stream';
 import { FALLBACK_THUMB_JPEG_BASE64 } from './wechat-thumb-fallback';
 import { readArchivedImage } from './reviewed-image-archive';
 import { readPrivateImage } from './reviewed-private-images';
@@ -8,6 +10,49 @@ import { validateOriginalImage } from './reviewed-image-bytes';
 export const REVIEWED_IMAGE_UPLOAD_CONCURRENCY = 2;
 
 let token: { value: string; until: number } | undefined;
+type WechatRequest = (url: string, options: RequestInit) => Promise<Response>;
+const fetchRequest: WechatRequest = (url, options) => fetch(url, options);
+let cloudRequest = fetchRequest;
+
+// Use the same CloudBase OpenAPI host and authorization with Node's HTTP
+// client. It never follows a redirect or retries a request.
+const nativeCloudRequest: WechatRequest = (url, options) => {
+  const message = new Request(url, options);
+  const headers = new Headers(message.headers);
+  const json = typeof options.body === 'string' ? options.body : undefined;
+  if (json !== undefined) headers.set('Content-Length', String(Buffer.byteLength(json)));
+  return new Promise((resolve, reject) => {
+    const outbound = httpRequest(url, {
+      method: message.method, headers: Object.fromEntries(headers), signal: message.signal, agent: false,
+    }, incoming => {
+      const status = incoming.statusCode || 502;
+      const noBody = [204,205,304].includes(status);
+      if (noBody) incoming.resume();
+      try {
+        const body = noBody ? null
+          : Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>;
+        resolve(new Response(body, {status}));
+      } catch (error) {
+        incoming.destroy();
+        reject(error);
+      }
+    });
+    outbound.once('error', error => reject(new TypeError('微信云调用连接失败', {cause:error})));
+    if (json !== undefined || !message.body) {
+      outbound.end(json);
+      return;
+    }
+    const body = Readable.fromWeb(message.body as Parameters<typeof Readable.fromWeb>[0]);
+    body.once('error', error => outbound.destroy(error));
+    outbound.once('close', () => body.destroy());
+    body.pipe(outbound);
+  });
+};
+
+async function requestWechat(path: string, options: RequestInit,
+    request = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? cloudRequest : fetchRequest) {
+  return request(await apiUrl(path), {...options,redirect:'manual'});
+}
 // Preflight and delivery must use the same verified bytes. A second origin
 // fetch used to fail after a successful preflight (and re-download shared images).
 const imageCache = new Map<string, { bytes: Buffer; until: number }>();
@@ -48,11 +93,11 @@ class WechatResponseError extends Error {
   }
 }
 
-async function api(path: string, body: object, timeoutMs = 60_000) {
-  const response = await fetch(await apiUrl(path), {
+async function api(path: string, body: object, timeoutMs = 60_000, request?: WechatRequest) {
+  const response = await requestWechat(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
-  });
+  }, request);
   const data = await response.json().catch(() => {
     throw new WechatResponseError('invalid_json', response.status, null);
   });
@@ -77,7 +122,7 @@ async function material(buffer: Buffer, alreadyNormalized = false) {
   const bytes = alreadyNormalized ? buffer : await normalizedJpeg(buffer);
   const form = new FormData();
   form.append('media', new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), 'news.jpg');
-  const response = await fetch(await apiUrl('material/add_material?type=image'), {
+  const response = await requestWechat('material/add_material?type=image', {
     method: 'POST', body: form, signal: AbortSignal.timeout(60000),
   });
   const data = await response.json();
@@ -90,7 +135,7 @@ async function articleImage(buffer: Buffer, alreadyNormalized = false) {
   const bytes = alreadyNormalized ? buffer : await normalizedJpeg(buffer);
   const form = new FormData();
   form.append('media', new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), 'news.jpg');
-  const response = await fetch(await apiUrl('media/uploadimg'), { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
+  const response = await requestWechat('media/uploadimg', { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
   const data = await response.json();
   if (!response.ok || data.errcode || !data.url) throw new Error(`正文图片上传失败，错误码 ${data.errcode ?? response.status}`);
   const url = new URL(data.url);
@@ -263,7 +308,13 @@ function draftListRows(data: {item?: unknown; item_count?: number; total_count?:
   throw new Error('reviewed_draft_list_unavailable');
 }
 
-function probeFailure(error: unknown) {
+const networkCodes = new Set(['ECONNREFUSED','ECONNRESET','ECONNABORTED','ENOTFOUND','EAI_AGAIN','ETIMEDOUT',
+  'EHOSTUNREACH','ENETUNREACH','EACCES','EPERM','ABORT_ERR','UND_ERR_CONNECT_TIMEOUT','UND_ERR_SOCKET',
+  'HPE_INVALID_CONSTANT','HPE_INVALID_HEADER_TOKEN','HPE_UNEXPECTED_CONTENT_LENGTH']);
+
+type ProbeFailure = { kind:string; httpStatus:number|null; errorCode:string|null; networkCode?:string };
+
+function probeFailure(error: unknown): ProbeFailure {
   if (error instanceof WechatResponseError) {
     return { kind:error.kind, httpStatus:error.httpStatus, errorCode:error.errorCode };
   }
@@ -273,35 +324,55 @@ function probeFailure(error: unknown) {
     : error instanceof TypeError ? 'transport_error'
     : message === 'reviewed_draft_list_unavailable' || message === 'reviewed_draft_unavailable' ? 'unexpected_shape'
     : 'request_failed';
-  return {kind,httpStatus:null,errorCode:null};
+  const cause = error instanceof Error ? error.cause : null;
+  const code = cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : '';
+  return {kind,httpStatus:null,errorCode:null,...(networkCodes.has(code)?{networkCode:code}:{})};
 }
 
-/** Check the production transport without creating, uploading or changing a draft. */
-export async function probeReviewedDraftReadiness(knownDraft: () => Promise<string | null> = async () => null) {
-  const transport = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? 'cloud_call' : 'access_token';
+async function readOnlyDraftProbe(knownDraft: () => Promise<string | null>, request: WechatRequest) {
   let batchget = false;
   let mediaId: string | null = null;
   let batchgetFailure: ReturnType<typeof probeFailure> | null = null;
   try {
-    const rows = draftListRows(await api('draft/batchget', { offset: 0, count: 1, no_content: 0 }, 15_000));
+    const rows = draftListRows(await api('draft/batchget', { offset: 0, count: 1, no_content: 0 }, 8_000, request));
     batchget = true;
     mediaId = typeof rows[0]?.media_id === 'string' ? rows[0].media_id : null;
   } catch (error) {
     batchgetFailure = probeFailure(error);
   }
-  const scope = {transport,batchget,batchgetFailure,errorCode:batchgetFailure?.errorCode ?? null};
+  const scope = {batchget,batchgetFailure,errorCode:batchgetFailure?.errorCode ?? null};
   if (!mediaId) {
     try { mediaId = await knownDraft(); }
     catch { return {...scope,get:null,reason:'stored_receipt_lookup_failed'}; }
   }
   if (!mediaId) return {...scope,get:null,reason:'no_readable_existing_draft'};
   try {
-    const draft = await api('draft/get', { media_id: mediaId }, 15_000);
+    const draft = await api('draft/get', { media_id: mediaId }, 8_000, request);
     if (!Array.isArray(draft.news_item) || !draft.news_item.length) throw new Error('reviewed_draft_unavailable');
     return {...scope,get:true};
   } catch (error) {
     return {...scope,get:false,getFailure:probeFailure(error)};
   }
+}
+
+/** Select another HTTP client only after it can read through the same CloudBase OpenAPI. */
+export async function probeReviewedDraftReadiness(knownDraft: () => Promise<string | null> = async () => null,
+    nativeRequest = nativeCloudRequest) {
+  const transport = process.env.USE_WECHAT_CLOUD_CALL === 'true' ? 'cloud_call' : 'access_token';
+  const primary = await readOnlyDraftProbe(knownDraft, fetchRequest);
+  if (transport === 'access_token') return {transport,...primary};
+  if (primary.batchget && primary.get) cloudRequest = fetchRequest;
+  const failures = [primary.batchgetFailure, 'getFailure' in primary ? primary.getFailure : null];
+  const noResponse = (failure: ProbeFailure | null | undefined) => failure
+    && ['transport_error','timeout'].includes(failure.kind)
+    && !['EACCES','EPERM'].includes(failure.networkCode ?? '');
+  if (!noResponse(failures[0]) || primary.get === true || failures[1] && !noResponse(failures[1])) {
+    return {transport,...primary};
+  }
+  const native = await readOnlyDraftProbe(knownDraft, nativeRequest);
+  if (!native.batchget || !native.get) return {transport,...primary,nativeProbe:native};
+  cloudRequest = nativeRequest;
+  return {transport,...native,client:'node_http',defaultProbe:primary};
 }
 
 /** Read one page only when draft/add had an unknown result with no media ID. */
