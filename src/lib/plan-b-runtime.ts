@@ -1,24 +1,25 @@
 import cron from 'node-cron';
+import { randomUUID } from 'node:crypto';
 import { freezeBlockReason, PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
-import { claim, getState, knownLiveReceipts, latestVerifiedDraftId, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
+import { claim, getState, knownLiveReceipts, verifiedDraftReference, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry, runCloudScript } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
 import {processExchange,publishExchangeHealth} from './plan-b-exchange';
 import { privateImageHealth } from './reviewed-private-images';
 import { probeReviewedDraftReadiness } from './reviewed-wechat';
+import { createRuntimeChecks, type ReadinessPhase } from './plan-b-runtime-checks';
 
 export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-6-database-exchange';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
 type RuntimeState = {
   active: Map<string, ClaimStep>; registered: boolean; reading: boolean;
   report: Record<string, unknown> | null; previewSettled: string; completedIssue: string; emitted: Set<string>;
-  checkedIssue: string;
 };
 const shared = globalThis as typeof globalThis & { [key: symbol]: RuntimeState | undefined };
 const runtime = shared[stateKey] ??= { active: new Map(), registered:false, reading:false,
-  report:null, previewSettled:'', completedIssue:'', emitted:new Set(), checkedIssue:'' };
+  report:null, previewSettled:'', completedIssue:'', emitted:new Set() };
 const { active, emitted } = runtime;
 const workerLimit = { preview: 2, final: 2, release: 2, word: 1, wechat: 2, readback: 2 };
 const cpuSteps = new Set<ClaimStep>(['preview','final','release','word']);
@@ -30,17 +31,34 @@ function runtimeHealth() {
     registration:{registered:runtime.registered}};
 }
 
-function checkRuntimeOnce(issue: string) {
-  if (runtime.checkedIssue === issue || process.env.REVIEWED_PLAN_B_CHECKS !== '1') return;
-  runtime.checkedIssue = issue;
-  // Keep external readiness checks off the editorial and delivery tick.
-  void Promise.allSettled([stagingIsPrivate(), privateImageHealth(),
-    runCloudScript('cloud_release.py', ['--help'], 15_000), probeReviewedDraftReadiness(latestVerifiedDraftId)])
-    .then(([staging, images, word, wechat]) => publishExchangeHealth(issue, {...runtimeHealth(),
-      prerequisites:{stagingPrivate:staging.status==='fulfilled'&&staging.value,
-        imagesPrivate:images.status==='fulfilled'&&images.value.ready&&images.value.private,
-        wordRenderer:word.status==='fulfilled',wechat:wechat.status==='fulfilled'?wechat.value:null},
-    }, 'runtime_checks')).catch(()=>console.warn(JSON.stringify({event:'plan_b_runtime_checks_unavailable',issue})));
+const bootId=randomUUID();
+let prerequisites: { issue:string; checks:Promise<{stagingPrivate:boolean;imagesPrivate:boolean;wordRenderer:boolean}> }|undefined;
+
+const requestReadiness=createRuntimeChecks(async attempt=>{
+  const {issue}=attempt;
+  if (prerequisites?.issue!==issue) {
+    prerequisites={issue,checks:Promise.allSettled([stagingIsPrivate(),privateImageHealth(),runCloudScript('cloud_release.py',['--help'],15_000)])
+      .then(([staging,images,word])=>({stagingPrivate:staging.status==='fulfilled'&&staging.value,
+        imagesPrivate:images.status==='fulfilled'&&images.value.ready&&images.value.private,wordRenderer:word.status==='fulfilled'}))};
+  }
+  const reference=await verifiedDraftReference(issue).then(value=>({value,state:value?'verified_receipt':'missing'}),()=>({value:null,state:'database_read_failed'}));
+  const [base,wechat]=await Promise.all([prerequisites.checks,
+    probeReviewedDraftReadiness(reference.value,{inspect:attempt.inspectNetwork})
+      .catch(()=>({ready:false,stage:'probe_unavailable'}))]);
+  const payload={...runtimeHealth(),attempt:{...attempt,finishedAt:new Date().toISOString()},
+    prerequisites:{...base,wechat:{...wechat,referenceState:reference.state}}};
+  try {
+    await publishExchangeHealth(issue,payload,`runtime_checks/${bootId}/${attempt.attempt}`);
+    await publishExchangeHealth(issue,payload,'runtime_checks');
+    return wechat.ready;
+  } catch {
+    console.warn(JSON.stringify({event:'plan_b_runtime_checks_unavailable',issue,attempt:attempt.attempt}));
+    return false;
+  }
+});
+
+function checkRuntime(issue:string,phase:Exclude<ReadinessPhase,'retry'>) {
+  if (process.env.REVIEWED_PLAN_B_CHECKS==='1') return requestReadiness(issue,phase);
 }
 
 export function planBRegistration() {
@@ -125,9 +143,9 @@ async function tick() {
   runtime.reading = true;
   try {
     const issue = clock.issue;
-    checkRuntimeOnce(issue);
+    if (clock.previewAllowed || clock.reconcileAllowed) void checkRuntime(issue,'collection');
     if (inboxOpen) {
-      try { await processExchange(issue); }
+      try { await processExchange(issue,undefined,()=>{ void checkRuntime(issue,'before_signoff'); }); }
       catch { console.warn(JSON.stringify({event:'plan_b_exchange_inbox_unavailable',issue})); }
     }
     // Collection stops at 05:50. Work can still save checkpoints until the 06:00 freeze.
@@ -210,6 +228,7 @@ async function tick() {
         const proven = release.receipt as Parameters<typeof renderCountryWord>[2];
         schedule(issue, country, 'word', state('word'), async () => ready(await renderCountryWord(issue, country, proven)));
         schedule(issue, country, 'wechat', wechat, async () => {
+          await checkRuntime(issue,'before_delivery');
           const result = await deliverCountryWechat(issue, country, proven);
           return 'pendingReadback' in result ? { state: 'blocked', receipt: result } : ready(result);
         });
@@ -230,7 +249,7 @@ export function startPlanB() {
   if (runtime.registered || !planBAdmitted()) return;
   runtime.registered = true;
   const {issue} = planBClock();
-  checkRuntimeOnce(issue);
+  void checkRuntime(issue,'startup');
   void publishExchangeHealth(issue,{...runtimeHealth(),businessSucceeded:false,startup:true})
     .catch(()=>console.warn(JSON.stringify({event:'plan_b_exchange_startup_unavailable'})));
   // Catch up when a reserved instance starts late. State is shared across

@@ -6,6 +6,8 @@ on:
       - 'ops/plan-b/**'
       - 'scripts/test_plan_b_*.py'
       - 'src/lib/reviewed-wechat.ts'
+      - 'src/lib/reviewed-wechat-transport.ts'
+      - 'src/lib/plan-b-runtime-checks.ts'
       - 'scripts/test-plan-b-wechat-probe.ts'
 
 permissions:

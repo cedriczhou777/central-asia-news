@@ -81,6 +81,7 @@
     "test:supabase-deadline": "node --import tsx scripts/test-supabase-deadline.ts"
   },
   "dependencies": {
+    "@cypress/request": "4.0.1",
     "@supabase/supabase-js": "2.95.3",
     "cheerio": "^1.2.0",
     "clsx": "^2.1.1",
