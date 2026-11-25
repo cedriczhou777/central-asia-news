@@ -1215,8 +1215,18 @@
       "country": "az",
       "entrypoints": [
         {
-          "language": "az",
+          "language": "en",
           "role": "home",
+          "url": "https://en.apa.az/economy/"
+        },
+        {
+          "language": "en",
+          "role": "section",
+          "url": "https://en.apa.az/economy/energy-and-industry"
+        },
+        {
+          "language": "az",
+          "role": "language",
           "url": "https://apa.az/ru"
         },
         {
@@ -1250,7 +1260,7 @@
           "url": "https://ru.apa.az/"
         },
         {
-          "language": "az",
+          "language": "en",
           "role": "language",
           "url": "https://en.apa.az/"
         },
@@ -1294,8 +1304,13 @@
       "country": "az",
       "entrypoints": [
         {
-          "language": "ru",
+          "language": "en",
           "role": "home",
+          "url": "https://report.az/en/economy"
+        },
+        {
+          "language": "ru",
+          "role": "language",
           "url": "https://report.az/ru"
         },
         {
@@ -1332,15 +1347,16 @@
     },
     {
       "allowedHosts": [
-        "trend.az"
+        "trend.az",
+        "www.trend.az"
       ],
       "available": true,
       "country": "az",
       "entrypoints": [
         {
-          "language": "az",
+          "language": "en",
           "role": "home",
-          "url": "https://trend.az/"
+          "url": "https://www.trend.az/azerbaijan/"
         }
       ],
       "family": "Trend",
@@ -2798,6 +2814,60 @@
       "id": "az-socar",
       "institutionType": "energy_company",
       "kind": "institution",
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "minenergy.gov.az"
+      ],
+      "articleExamples": [
+        {
+          "articleIdentityVerified": true,
+          "url": "https://minenergy.gov.az/en/xeberler-arxivi/00959"
+        }
+      ],
+      "available": true,
+      "confirmedArticlePathPattern": "/en/xeberler-arxivi/[0-9]+/?",
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "en",
+          "role": "home",
+          "url": "https://minenergy.gov.az/en/xeberler-arxivi"
+        }
+      ],
+      "family": "阿塞拜疆能源部",
+      "id": "az-ministry-energy-azerbaijan",
+      "institutionType": "energy_ministry",
+      "kind": "institution",
+      "preferredInBoundedScan": true,
+      "timezone": "Asia/Baku"
+    },
+    {
+      "allowedHosts": [
+        "president.az"
+      ],
+      "articleExamples": [
+        {
+          "articleIdentityVerified": true,
+          "url": "https://president.az/en/articles/view/74853"
+        }
+      ],
+      "available": true,
+      "confirmedArticlePathPattern": "/en/articles/view/[0-9]+/?",
+      "country": "az",
+      "entrypoints": [
+        {
+          "language": "en",
+          "role": "home",
+          "url": "https://president.az/en/articles/list/news"
+        }
+      ],
+      "family": "阿塞拜疆总统府",
+      "id": "az-presidency-azerbaijan",
+      "institutionType": "presidency",
+      "kind": "institution",
+      "preferredInBoundedScan": true,
       "timezone": "Asia/Baku"
     }
   ]

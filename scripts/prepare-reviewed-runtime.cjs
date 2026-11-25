@@ -7,6 +7,7 @@ const identityFiles=['src/lib/plan-b-runtime.ts','src/lib/plan-b-runtime-checks.
   'src/lib/plan-b-checkpoint.ts','src/lib/reviewed-manual-authorization.ts','src/app/api/plan-b/route.ts',
   'ops/plan-b/cloud_handoff.py','ops/plan-b/cloud_release.py','ops/plan-b/news_queue_policy.py',
   'ops/plan-b/source_coverage.py','ops/plan-b/discover_work_sources.py','ops/plan-b/verified_archive_publications.json',
+  'ops/plan-b/source_registry.json',
   'ops/plan-b/work_client.py','ops/plan-b/db_handoff.py','src/lib/plan-b-worker.ts','src/lib/plan-b-store.ts',
   'src/lib/plan-b-release.ts','src/app/api/word-package/route.ts','src/lib/reviewed-push-handler.ts',
   'src/lib/reviewed-package.ts','src/lib/reviewed-wechat.ts','src/lib/reviewed-wechat-transport.ts','package.json','pnpm-lock.yaml',

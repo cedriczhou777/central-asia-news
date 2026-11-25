@@ -5,11 +5,14 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import unittest
 
+# The hosted Plan B collector is shipped from ops/plan-b.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
 from discover_work_sources import discover, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads, _FetchFlights
 
 
@@ -164,8 +167,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_budget_samples_different_families_and_never_claims_complete(self):
         sources = [source('a1', 'A', 'a1.test'), source('a2', 'A', 'a2.test'), source('b1', 'B', 'b1.test')]
         records = {'https://' + host + '/': page('https://' + host + '/') for host in ('a1.test', 'a2.test', 'b1.test')}
-        ticks = iter(range(100))
-        result, _ = self.run_scan(records, sources, workers=2, max_seconds=3, clock=lambda: next(ticks))
+        result, _ = self.run_scan(records, sources, workers=2, max_seconds=3, clock=lambda: len(self.calls))
         sampled = {r['family'] for r in result['sourceScanAudit'] if r['fetchedAt']}
         self.assertEqual(sampled, {'A', 'B'})
         self.assertFalse(result['complete'])
@@ -327,12 +329,14 @@ class DiscoveryTests(unittest.TestCase):
 
         key = ('https://news.test/shared', None, 'article')
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-            results = list(pool.map(lambda _: flights.get(key, actual_fetch), range(6)))
+            responses = list(pool.map(lambda _: flights.get(key, actual_fetch), range(6)))
+        self.assertEqual(sum(owner for _, owner in responses), 1)
+        results = [result for result, _ in responses]
         self.assertEqual(len(calls), 1)
         results[0]['meta']['title'] = 'Changed by only one consumer'
         results[0]['publicationEvidence'][0]['raw'] = 'changed'
         self.assertEqual(results[1], record)
-        self.assertEqual(flights.get(key, actual_fetch), record)
+        self.assertEqual(flights.get(key, actual_fetch), (record, False))
         self.assertEqual(len(calls), 1)
         flights.get((key[0], None, 'listing'), actual_fetch)
         flights.get((key[0], STAMP, 'listing'), actual_fetch)
@@ -403,10 +407,27 @@ class DiscoveryTests(unittest.TestCase):
     def test_short_resume_prioritizes_families_not_yet_sampled(self):
         sources = [source('a', 'A', 'a.test'), source('b', 'B', 'b.test'), source('c', 'C', 'c.test')]
         records = {'https://' + host + '/': page('https://' + host + '/') for host in ('a.test', 'b.test', 'c.test')}
-        self.run_scan(records, sources, workers=1, max_seconds=3, clock=iter(range(100)).__next__)
+        self.run_scan(records, sources, workers=1, max_seconds=1.5, clock=lambda: len(self.calls))
+        self.assertEqual([url for url, _ in self.calls], ['https://a.test/'])
         before = len(self.calls)
-        self.run_scan(records, sources, workers=1, max_seconds=3, clock=iter(range(100)).__next__)
-        self.assertEqual(self.calls[before][0], 'https://b.test/')
+        self.run_scan(records, sources, workers=1, max_seconds=1.5, clock=lambda: len(self.calls) - before)
+        self.assertEqual([url for url, _ in self.calls[before:]], ['https://b.test/'])
+
+    def test_preferred_publisher_gets_a_listing_slot_under_short_news_budget(self):
+        ordinary = source('original', 'A', 'early.test')
+        primary = source('institution', 'Z', 'primary.test')
+        primary['preferredInBoundedScan'] = True
+        records = {url: page(url) for url in ['https://early.test/', 'https://primary.test/']}
+        result, _ = self.run_scan(records, [ordinary, primary], news_budget=True,
+                                  workers=1, max_seconds=3, clock=lambda: len(self.calls))
+        self.assertEqual([url for url, _ in self.calls], ['https://primary.test/'])
+        self.assertEqual([job['url'] for job in result['listingQueue']], ['https://early.test/'])
+        self.assertFalse(result['complete'])
+
+        before = len(self.calls)
+        self.run_scan(records, [ordinary, primary], news_budget=True,
+                      workers=1, max_seconds=3, clock=lambda: len(self.calls) - before)
+        self.assertEqual([url for url, _ in self.calls[before:]], ['https://early.test/'])
 
     def test_old_permanent_refusal_does_not_hide_latest_transient_failure(self):
         home = 'https://news.test/'
