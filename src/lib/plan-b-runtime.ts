@@ -2,14 +2,13 @@ import cron from 'node-cron';
 import { randomUUID } from 'node:crypto';
 import { freezeBlockReason, PLAN_B_COUNTRIES, retryableStatus, type PlanBCountry } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
-import { claim, getState, knownLiveReceipts, verifiedDraftReferences, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
+import { claim, getState, knownLiveReceipts, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry, runCloudScript } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
 import {processExchange,publishExchangeHealth} from './plan-b-exchange';
 import { privateImageHealth } from './reviewed-private-images';
-import { probeReviewedDraftReadiness } from './reviewed-wechat';
-import { createRuntimeChecks, type ReadinessPhase } from './plan-b-runtime-checks';
+import { checkCurrentWechatDrafts, createRuntimeChecks, type ReadinessPhase } from './plan-b-runtime-checks';
 
 export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-6-database-exchange';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
@@ -41,19 +40,18 @@ const requestReadiness=createRuntimeChecks(async attempt=>{
       .then(([staging,images,word])=>({stagingPrivate:staging.status==='fulfilled'&&staging.value,
         imagesPrivate:images.status==='fulfilled'&&images.value.ready&&images.value.private,wordRenderer:word.status==='fulfilled'}))};
   }
-  const reference=await verifiedDraftReferences(issue).then(value=>({value,state:value.length?'verified_receipt':'missing'}),()=>({value:[],state:'database_read_failed'}));
   const [base,wechat]=await Promise.all([prerequisites.checks,
-    probeReviewedDraftReadiness(reference.value,{inspect:attempt.inspectNetwork})
-      .catch(()=>({ready:false,stage:'probe_unavailable'}))]);
+    checkCurrentWechatDrafts().catch(()=>({ready:false,transportReady:false,emptyDraftBox:false,
+      getStatus:'not_checked' as const,stage:'probe_unavailable'}))]);
   const payload={...runtimeHealth(),attempt:{...attempt,finishedAt:new Date().toISOString()},
-    prerequisites:{...base,wechat:{...wechat,referenceState:reference.state}}};
+    prerequisites:{...base,wechat}};
   try {
     await publishExchangeHealth(issue,payload,`runtime_checks/${bootId}/${attempt.attempt}`);
     await publishExchangeHealth(issue,payload,'runtime_checks');
-    return wechat.ready;
+    return wechat.getStatus==='missing_test_object' ? 'missing_test_object' : wechat.ready ? 'passed' : 'failed';
   } catch {
     console.warn(JSON.stringify({event:'plan_b_runtime_checks_unavailable',issue,attempt:attempt.attempt}));
-    return false;
+    return 'failed';
   }
 });
 

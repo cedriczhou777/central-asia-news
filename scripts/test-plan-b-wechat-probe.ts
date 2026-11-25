@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { createRuntimeChecks } from '../src/lib/plan-b-runtime-checks';
+import { checkCurrentWechatDrafts, createRuntimeChecks } from '../src/lib/plan-b-runtime-checks';
 import { contentHash } from '../src/lib/reviewed-package';
 import { createReviewedDraft, findRecentReviewedDrafts, probeReviewedDraftReadiness } from '../src/lib/reviewed-wechat';
 import { globalAgentWechat, noAgentWechat, officialStyleWechat, type WechatRequest } from '../src/lib/reviewed-wechat-transport';
@@ -93,14 +93,65 @@ async function checkReadiness() {
   assert.equal(alternativeReceipt.observed[0].otherReceipts[0].proof.bodyMatches,true);
 }
 
+async function checkCurrentDraftBox() {
+  const paths:string[]=[];
+  const empty:WechatRequest=async url=>{
+    const path=new URL(url).pathname;
+    paths.push(path);
+    assert.equal(path,'/cgi-bin/draft/batchget');
+    return Response.json({total_count:0,item_count:0},{headers});
+  };
+  let clock=Date.UTC(2026,10,25);
+  const check=createRuntimeChecks(async()=>{
+    const result=await checkCurrentWechatDrafts(empty);
+    assert.equal(result.transportReady,true);
+    assert.equal(result.emptyDraftBox,true);
+    assert.equal(result.getStatus,'missing_test_object');
+    assert.equal(result.ready,false);
+    assert.equal(result.observed[0].get.httpStatus,null);
+    return result.getStatus==='missing_test_object' ? result.getStatus : 'failed';
+  },()=>clock,()=>assert.fail('empty list must not schedule a retry'));
+  const issue='2026-11-25';
+  await check(issue,'startup');
+  clock+=600_000;
+  for (const stage of ['collection','before_signoff','before_delivery'] as const) assert.equal(check(issue,stage),undefined);
+  assert.deepEqual(paths,['/cgi-bin/draft/batchget']);
+  await check('2026-11-26','startup');
+  assert.equal(paths.length,2);
+
+  const live={title:'Live fixture',digest:'Live summary',content:'<p>Live original</p>'};
+  for (const vanished of [false,true]) {
+    const liveOnly:WechatRequest=async(url,init)=>{
+      if (url.endsWith('/batchget')) return Response.json({total_count:1,
+        item:[{media_id:'live-fixture-id',content:{news_item:[live]}}]},{headers});
+      assert.ok(url.endsWith('/get'));
+      assert.deepEqual(JSON.parse(String(init.body)),{media_id:'live-fixture-id'});
+      return Response.json(vanished ? {errcode:40007} : {news_item:[live]},{headers});
+    };
+    const result=await checkCurrentWechatDrafts(liveOnly);
+    assert.equal(result.transportReady,true);
+    assert.equal(result.emptyDraftBox,false);
+    assert.equal(result.getStatus,vanished ? 'missing_test_object' : 'passed');
+    assert.equal(result.ready,!vanished);
+  }
+
+  const unverified=await checkCurrentWechatDrafts(async(url)=>{
+    assert.ok(url.endsWith('/batchget'));
+    return Response.json({total_count:0,item_count:0});
+  });
+  assert.equal(unverified.transportReady,false);
+  assert.equal(unverified.emptyDraftBox,false);
+  assert.equal(unverified.getStatus,'not_checked');
+}
+
 async function checkRetryWindows() {
   let clock=Date.UTC(2026,10,25);
   const pending:Array<{action:()=>void;delay:number}>=[];
-  const attempts:Array<{phase:string;attempt:number;inspectNetwork:boolean}>=[];
+  const attempts:Array<{phase:string;attempt:number}>=[];
   let willPass=false;
   const check=createRuntimeChecks(async attempt=>{
     attempts.push(attempt);
-    return willPass;
+    return willPass ? 'passed' : 'failed';
   },()=>clock,(action,delay)=>pending.push({action,delay}));
   const issue='2026-11-25';
   const first=check(issue,'startup');
@@ -116,7 +167,6 @@ async function checkRetryWindows() {
     await check(issue,'collection');
   }
   assert.deepEqual(attempts.map(a=>a.phase),['startup','retry','retry','retry']);
-  assert.deepEqual(attempts.map(a=>a.inspectNetwork),[true,false,false,false]);
   assert.equal(pending.length,0);
   assert.equal(check(issue,'before_delivery'),undefined);
   clock+=301_000;
@@ -173,12 +223,13 @@ async function main() {
   process.env.USE_WECHAT_CLOUD_CALL='true';
   try {
     await checkReadiness();
+    await checkCurrentDraftBox();
     await checkRetryWindows();
     await checkHttpClients();
   } finally {
     if (original===undefined) delete process.env.USE_WECHAT_CLOUD_CALL;
     else process.env.USE_WECHAT_CLOUD_CALL=original;
   }
-  console.log('WeChat readonly A/B/C selection, sanitized TCP probes, exact historical draft, bounded retries, multipart, and no duplicate add passed.');
+  console.log('WeChat read-only checks passed: current draft only, explicit empty list, no retry without a draft, bounded retries on failure, and no duplicate add.');
 }
 void main().catch(error=>{console.error(error);process.exitCode=1;});
