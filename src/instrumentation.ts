@@ -5,6 +5,9 @@ export async function register() {
     if (planBAdmitted()) {
       const { startPlanB } = await import('./lib/plan-b-runtime');
       startPlanB();
+      void import('./lib/reviewed-database-delivery').then(
+        ({ startReviewedDatabaseRecovery }) => startReviewedDatabaseRecovery(),
+      ).catch(() => console.warn('manual_recovery_registration_failed'));
     } else {
       const { startReviewedRecovery } = await import('./lib/reviewed-recovery');
       startReviewedRecovery();
