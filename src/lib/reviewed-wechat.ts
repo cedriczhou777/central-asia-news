@@ -275,6 +275,9 @@ export type VerifiedWechatDraft = {
   mediaId:string; version:string; country:string; title:string; summary:string; readbackHash:string;
 };
 
+type LiveDraftSnapshot = Omit<VerifiedWechatDraft,'country'> & {source:'wechat_batch_snapshot';updatedAt?:string};
+type DraftReference = VerifiedWechatDraft|LiveDraftSnapshot;
+
 type ProbeClient = {
   id:string; protocol:'http'|'https'; request:WechatRequest; compareOnly?:boolean;
 };
@@ -292,7 +295,8 @@ type ReadProof = {
   titleMatches?:boolean; summaryMatches?:boolean; bodyMatches?:boolean;
 };
 
-async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: VerifiedWechatDraft | null, useToken: boolean): Promise<ReadProof> {
+async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: DraftReference | null, useToken: boolean,
+    capture?: (snapshot:LiveDraftSnapshot)=>void): Promise<ReadProof> {
   const started = Date.now();
   const timing = () => ({startedAt:new Date(started).toISOString(),durationMs:Date.now()-started});
   const base = {ok:false,httpStatus:null,errcode:null,openApiSeqid:false};
@@ -301,7 +305,7 @@ async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: V
   let response:Response;
   try {
     const url = useToken ? await apiUrl(endpoint) : `${client.protocol}://${WECHAT_API_HOST}/cgi-bin/${endpoint}`;
-    const body = endpoint === 'draft/get' ? {media_id:known!.mediaId} : {offset:0,count:1,no_content:0};
+    const body = endpoint === 'draft/get' ? {media_id:known!.mediaId} : {offset:0,count:5,no_content:0};
     response = await client.request(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),
       redirect:'manual',signal:AbortSignal.timeout(6_000)},value=>{peer=value;});
   } catch (error) {
@@ -324,8 +328,23 @@ async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: V
     return {...details,...timing(),errcode,stage:authorization?'authorization':'wechat_response'};
   }
   if (endpoint === 'draft/batchget') {
-    try { draftListRows(data); }
+    let rows:ReturnType<typeof draftListRows>;
+    try { rows=draftListRows(data); }
     catch { return {...details,...timing(),errcode,stage:'unexpected_shape'}; }
+    for (const row of rows.slice(0,5)) {
+      const items=row?.content?.news_item;
+      const draft=items?.[0];
+      if (typeof row?.media_id!=='string' || !row.media_id || !Array.isArray(items) || items.length!==1
+          || typeof draft?.title!=='string' || !draft.title.trim() || typeof draft.content!=='string' || !draft.content.trim()) continue;
+      const title=draft.title;
+      const summary=typeof draft.digest==='string' ? draft.digest : '';
+      const readbackHash=contentHash(draft.content);
+      const epoch=row.update_time;
+      const updatedAt=Number.isInteger(epoch)&&epoch>0&&epoch<4_102_444_800 ? new Date(epoch*1000).toISOString() : undefined;
+      capture?.({source:'wechat_batch_snapshot',mediaId:row.media_id,
+        version:contentHash({title,summary,readbackHash}),title,summary,readbackHash,updatedAt});
+      break;
+    }
     return {...details,...timing(),errcode,ok:true,stage:'verified'};
   }
   const entry = data.news_item?.[0];
@@ -333,7 +352,7 @@ async function probeDraft(client: ProbeClient, endpoint: DraftEndpoint, known: V
     return {...details,...timing(),errcode,stage:'unexpected_shape'};
   }
   const titleMatches = entry.title===known.title;
-  const summaryMatches = entry.digest===known.summary;
+  const summaryMatches = (entry.digest ?? '')===known.summary;
   const bodyMatches = contentHash(entry.content)===known.readbackHash;
   const ok = titleMatches && summaryMatches && bodyMatches;
   return {...details,...timing(),errcode,ok,stage:ok?'verified':'stored_version_mismatch',titleMatches,summaryMatches,bodyMatches};
@@ -345,11 +364,17 @@ export async function probeReviewedDraftReadiness(known: VerifiedWechatDraft | n
   const useToken = process.env.USE_WECHAT_CLOUD_CALL !== 'true';
   const candidates:ProbeClient[] = useToken ? [{id:'standard_https',protocol:'https',request:fetchWechat}] : clients;
   const [network,observed] = await Promise.all([inspect ? inspectWechatNetwork() : null,
-    Promise.all(candidates.map(async client=>({
-      client:client.id,protocol:client.protocol,compareOnly:client.compareOnly ?? false,
-      batchget:await probeDraft(client,'draft/batchget',known,useToken),
-      get:await probeDraft(client,'draft/get',known,useToken),
-    })))]);
+    Promise.all(candidates.map(async client=>{
+      let snapshot:LiveDraftSnapshot|undefined;
+      const batchget=await probeDraft(client,'draft/batchget',known,useToken,value=>{snapshot=value;});
+      const historical=await probeDraft(client,'draft/get',known,useToken);
+      const useSnapshot=snapshot && (!known || historical.errcode==='40007' || historical.stage==='stored_version_mismatch');
+      const reference=useSnapshot && snapshot ? {source:snapshot.source,version:snapshot.version,updatedAt:snapshot.updatedAt}
+        : known ? {source:'stored_receipt',version:known.version,country:known.country} : null;
+      return {client:client.id,protocol:client.protocol,compareOnly:client.compareOnly ?? false,batchget,reference,
+        get:useSnapshot && snapshot ? await probeDraft(client,'draft/get',snapshot,useToken) : historical,
+        ...(useSnapshot && known?{historicalGet:historical}:{})};
+    }))]);
   const usable = observed.find(row=>!row.compareOnly && row.get.ok && row.batchget.ok
     && (useToken || row.get.openApiSeqid || row.batchget.openApiSeqid));
   if (!useToken && usable) {
@@ -360,7 +385,7 @@ export async function probeReviewedDraftReadiness(known: VerifiedWechatDraft | n
     get:usable?.get.ok ?? observed.some(row=>row.get.ok),
     batchget:usable?.batchget.ok ?? observed.some(row=>row.batchget.ok),
     openApiSeqid:observed.some(row=>row.get.openApiSeqid || row.batchget.openApiSeqid),
-    reference:known?{version:known.version,country:known.country}:null,network,observed};
+    reference:usable?.reference ?? (known?{source:'stored_receipt',version:known.version,country:known.country}:null),network,observed};
 }
 
 /** Read one page only when draft/add had an unknown result with no media ID. */

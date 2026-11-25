@@ -60,6 +60,24 @@ async function checkReadiness() {
   assert.equal(failed.observed[1].get.stage,'stored_version_mismatch');
   assert.equal(failed.observed[2].get.ok,true);
   assert.equal(failed.observed[2].get.openApiSeqid,false);
+
+  const readIds:string[]=[];
+  const currentArticle={title:'current draft fixture',digest:'live summary',content:'<p>exact current body</p>'};
+  const live:WechatRequest=async(url,init)=>{
+    if (url.endsWith('/batchget')) return Response.json({item:[{media_id:'temporary-live-id',update_time:1_795_581_315,
+      content:{news_item:[currentArticle]}}]},{headers});
+    const id=JSON.parse(String(init.body)).media_id;
+    readIds.push(id);
+    return id===stored.mediaId ? Response.json({errcode:40007},{headers}) : Response.json({news_item:[currentArticle]},{headers});
+  };
+  const recovered=await probeReviewedDraftReadiness(stored,{clients:[{id:'wxapi_request',protocol:'http',request:live}]});
+  assert.deepEqual(readIds,[stored.mediaId,'temporary-live-id']);
+  assert.equal(recovered.ready,true);
+  assert.equal(recovered.reference?.source,'wechat_batch_snapshot');
+  assert.equal(recovered.observed[0].historicalGet?.errcode,'40007');
+  assert.equal(recovered.observed[0].get.bodyMatches,true);
+  assert.match(recovered.reference!.version,/^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(recovered).includes('temporary-live-id'),false);
 }
 
 async function checkRetryWindows() {
