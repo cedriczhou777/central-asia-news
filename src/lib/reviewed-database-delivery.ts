@@ -5,7 +5,7 @@ import { canonicalJson, sha256 } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBClock, planBHandlesIssue, planBIngestSecret } from './plan-b-window';
 import { deliverReviewedPackage, deliveryAdapters, reconcileKnownReviewedDraft } from './reviewed-delivery';
 import { validManualGrant } from './reviewed-manual-authorization';
-import { contentHash, issueDate, PACKAGE_COUNTRIES, packageCountries, requirePrivateImages, reviewedCountry, validatePackage, type PackageCountry } from './reviewed-package';
+import { contentHash, imageUrls, issueDate, PACKAGE_COUNTRIES, packageCountries, requirePrivateImages, reviewedCountry, validatePackage, type PackageCountry } from './reviewed-package';
 import { REVIEWED_VERSION_CONFLICT, storeReviewedPackage } from './reviewed-package-store';
 import { findRecentReviewedDrafts } from './reviewed-wechat';
 import { summarizeDraftReadback } from './reviewed-diagnostics';
