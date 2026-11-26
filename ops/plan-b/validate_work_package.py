@@ -119,7 +119,8 @@ def quantity_report(data,now=None,countries=None):
   try:
    result[code]=evaluate_quantity(draft,scans,now=now)
    exception=draft.get('quantityExceptionReview')
-   if 10<=len(draft['articles'])<15 and (not isinstance(exception,dict) or exception.get('reviewer')!=review.get('reviewer')):
+   exception_min=result[code]['quantitySummary']['exceptionMin']
+   if exception_min<=len(draft['articles'])<15 and (not isinstance(exception,dict) or exception.get('reviewer')!=review.get('reviewer')):
     result[code].update(quantityReady=False,quantityStatus='needs_expansion',shortfallOpen=True,error='quantity exception must be approved by the actual independent reviewer')
   except (TypeError,ValueError,KeyError,AssertionError) as error:
    result[code]={'quantityReady':False,'quantityStatus':'needs_expansion','shortfallOpen':True,'error':str(error)}
