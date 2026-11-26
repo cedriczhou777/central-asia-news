@@ -10,10 +10,11 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 # The hosted Plan B collector is shipped from ops/plan-b.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
-from discover_work_sources import discover, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads, _FetchFlights
+from discover_work_sources import discover, load_fetcher, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads, _FetchFlights
 
 
 STAMP = '2026-11-15T00:01:00+00:00'
@@ -590,6 +591,44 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(ledger[article]['reason'], 'pending_body_identity_verification')
         self.assertIsNone(ledger[article]['fullTextFetchedAt'])
         self.assertTrue(ledger[article]['sourceJSON'])
+
+    def test_focused_final_uses_pending_article_after_it_leaves_the_list(self):
+        home = 'https://news.test/'
+        article = home + 'news/energy-investment'
+        incomplete = page(article, kind='article', published='2026-11-14T20:00:00+05:00')
+        incomplete.update(contentValidated=False, fullTextValidated=False,
+                          error='current_article_body_unverified_article_body_not_identified')
+        opts = {'news_budget': True, 'listing_not_before': '2026-11-14T22:00:00Z'}
+        _, first = self.run_scan({home: page(home, [(article, 'New energy investment', '')]), article: incomplete}, **opts)
+        self.assertEqual(first[article]['reason'], 'pending_body_identity_verification')
+        self.calls.clear()
+        recovered = page(article, kind='article', published='2026-11-14T20:00:00+05:00',
+                         text='This is the recovered body of the original story.')
+        recovered['fullTextValidated'] = True
+        _, ledger = self.run_scan({home: page(home), article: recovered}, only_source_ids=['one'], **opts)
+        self.assertEqual(self.calls, [(article, None)], 'fresh list is sufficient; retry the exact unfinished original')
+        self.assertTrue(ledger[article]['fullTextValidated'])
+        self.assertEqual(ledger[article]['publicationWindowAssessment'], 'in_window')
+        self.assertEqual(ledger[article]['decision'], 'pending', 'recovered text still needs editorial review')
+
+    def test_focused_body_fetch_is_bounded_and_keeps_refusal(self):
+        fetch = load_fetcher(self.output)
+        url = 'https://news.test/news/energy-investment'
+        key = hashlib.sha256(url.encode()).hexdigest()[:18]
+        record = page(url, kind='article')
+        record.update(parser_version=fetch.__globals__['PARSER_VERSION'], contentValidated=False, fullTextValidated=False,
+                      error='current_article_body_unverified_article_body_not_identified')
+        cache = self.output / 'sources' / (key + '.json')
+        cache.write_text(json.dumps(record))
+        refusal = {'status': 403, 'error': 'HTTP 403', 'fetchRetryable': False}
+        with patch.dict(fetch.__globals__, {'bounded_response': lambda *args: (refusal, b'')}):
+            metrics = {}
+            self.assertEqual(fetch(url, source_role='article', fetch_metrics=metrics)['status'], 200)
+            self.assertEqual(metrics['transportAttempts'], 0)
+            self.assertEqual(fetch(url, source_role='article', fetch_metrics=metrics, recheck_article_body=True)['status'], 403)
+            self.assertEqual(metrics['transportAttempts'], 1)
+            self.assertEqual(fetch(url, source_role='article', fetch_metrics=metrics, recheck_article_body=True)['status'], 403)
+            self.assertEqual(metrics['transportAttempts'], 0)
 
     def test_same_body_corrected_publication_or_parser_reopens_old_manual_rejection(self):
         home, article = 'https://news.test/', 'https://news.test/news/article'

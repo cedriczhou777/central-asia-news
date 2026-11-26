@@ -31,6 +31,12 @@ assert.deepEqual(recoverySources({...coverage,pendingWork:[
   {sourceId:'discovery',kind:'article',url:null,reason:'unaccounted_queue_identity'},
   ...coverage.pendingWork,
 ]}),['important','archive'],'prioritize concrete bodies, retain a bounded distinct source order');
+assert.deepEqual(recoverySources({...coverage,pendingWork:[
+  {sourceId:'first-alphabetically',kind:'article',url:'https://news.unit-test.example/one',reason:'discovered_article_needs_body_or_review'},
+  {sourceId:'second-alphabetically',kind:'article',url:'https://news.unit-test.example/two',reason:'discovered_article_needs_body_or_review'},
+  ...['a','b','c'].map(slug=>({sourceId:'busy-publisher',kind:'article',url:'https://news.unit-test.example/'+slug,
+    reason:'discovered_article_needs_body_or_review'})),
+]}),['busy-publisher','first-alphabetically'],'the second source slot follows the actual body queue instead of lexical order');
 const accepted=checkpointInput({snapshotHash:source.hash,stage:'draft',
   checkpointHash:sha256(canonicalJson(doc)),document:doc},[row]);
 assert.deepEqual(accepted.document,doc,'blocked snapshot can preserve merged author and reviewer work');
