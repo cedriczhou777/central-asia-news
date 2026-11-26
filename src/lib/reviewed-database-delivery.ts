@@ -5,7 +5,7 @@ import { canonicalJson, sha256 } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBClock, planBHandlesIssue, planBIngestSecret } from './plan-b-window';
 import { deliverReviewedPackage, deliveryAdapters, reconcileKnownReviewedDraft } from './reviewed-delivery';
 import { validManualGrant } from './reviewed-manual-authorization';
-import { contentHash, issueDate, packageCountries, requirePrivateImages, reviewedCountry, validatePackage, type PackageCountry } from './reviewed-package';
+import { contentHash, issueDate, PACKAGE_COUNTRIES, packageCountries, requirePrivateImages, reviewedCountry, validatePackage, type PackageCountry } from './reviewed-package';
 import { REVIEWED_VERSION_CONFLICT, storeReviewedPackage } from './reviewed-package-store';
 import { findRecentReviewedDrafts } from './reviewed-wechat';
 import { summarizeDraftReadback } from './reviewed-diagnostics';
@@ -22,9 +22,24 @@ const NEXT_COLLECTION_GUARD = 4 * 60 + 30;
 const DAY_MS = 24 * 60 * 60_000;
 const WORKER_VERSION = 'reviewed-database-recovery-v2';
 
+// The deployment itself carries the edition owner's one-time authorization.
+// Database input cannot choose the digest, issue, countries or expiry.
+const NOV26_DEPLOYMENT_APPROVAL = {
+  issue: '2026-11-26',
+  version: '2026-11-26',
+  authorizationId: 'nov26-deployment-approved-23c4d8774035339c',
+  contentHash: '23c4d8774035339c25ea5e1e48f693a34c236bb3694e83098dce007db3d9273c',
+  countries: PACKAGE_COUNTRIES,
+  expiresAt: Date.parse('2026-11-26T12:00:00+08:00'),
+} as const;
+
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
 type RequestRow = GrantRow & {
   issue_date: string; country: PackageCountry; record_key: string; attempts: number;
+};
+type DeploymentApproval = {
+  issue: string; version: string; authorizationId: string; contentHash: string;
+  countries: readonly PackageCountry[]; expiresAt: number;
 };
 
 // The signing key belongs to the approving operator and the cloud worker.
@@ -44,6 +59,58 @@ export function reviewedDatabaseRecoveryWindow(now = Date.now()) {
   if (issue < FIRST_RECOVERABLE_ISSUE || !planBHandlesIssue(issue)) return null;
   return { issue, opensAt: Date.parse(`${issue}T09:30:00+08:00`),
     closesAt: Date.parse(`${issue}T04:30:00+08:00`) + DAY_MS };
+}
+
+export function deploymentRecoveryRows(approval: DeploymentApproval, staged: GrantRow, key: string, now: number) {
+  const window = reviewedDatabaseRecoveryWindow(now);
+  if (!isIndependentDatabaseApprovalKey(key) || window?.issue !== approval.issue || now >= approval.expiresAt ||
+      staged.state !== 'available' || sha256(canonicalJson(staged.payload)) !== staged.content_hash) {
+    throw new Error('deployment_recovery_not_admitted');
+  }
+  const release = validatePackage(staged.payload.release);
+  requirePrivateImages(release);
+  if (release.version !== approval.version || issueDate(release.version) !== approval.issue ||
+      contentHash(release) !== approval.contentHash ||
+      canonicalJson(packageCountries(release)) !== canonicalJson(approval.countries)) {
+    throw new Error('deployment_recovery_package_mismatch');
+  }
+
+  const { authorizationId } = approval;
+  const grant = {
+    issue: approval.issue, version: approval.version, contentHash: approval.contentHash, countries: approval.countries,
+    issuedBy: 'production-deployment', reason: 'Edition owner authorized the fixed reviewed package for draft-only backfill',
+    approvedAt: new Date(now).toISOString(),
+    expiresAt: new Date(Math.min(approval.expiresAt, window.closesAt, now + 60 * 60_000)).toISOString(),
+  };
+  const proof = { ...grant, signature: databaseApprovalSignature(key, authorizationId, grant) };
+  const command = { authorizationId, release };
+  return [
+    { issue_date: approval.issue, country: 'global', kind: 'manual_authorization',
+      record_key: DATABASE_APPROVAL_PREFIX + authorizationId, state: 'available',
+      payload: proof, content_hash: sha256(canonicalJson(proof)) },
+    ...approval.countries.map(country => ({
+      issue_date: approval.issue, country, kind: 'manual_use', record_key: REQUEST_PREFIX + authorizationId,
+      state: 'queued', payload: command, content_hash: sha256(canonicalJson(command)),
+    })),
+  ];
+}
+
+async function enqueueDeploymentRecovery(key: string, sb: ReturnType<typeof getSupabaseClient>) {
+  const approval = NOV26_DEPLOYMENT_APPROVAL;
+  const now = Date.now();
+  if (now >= approval.expiresAt || reviewedDatabaseRecoveryWindow(now)?.issue !== approval.issue) return true;
+  const { data, error } = await sb.from(TABLE).select('payload,content_hash,state').match({
+    issue_date: approval.issue, country: 'global', kind: 'manual_use',
+    record_key: 'deployment-reviewed/' + approval.authorizationId, state: 'available',
+  }).maybeSingle();
+  if (error) throw new Error('deployment_recovery_read_failed');
+  if (!data) return false;
+  const rows = deploymentRecoveryRows(approval, data, key, Date.now());
+  const saved = await sb.from(TABLE).upsert(rows, {
+    onConflict: 'issue_date,country,kind,record_key', ignoreDuplicates: true,
+  });
+  if (saved.error) throw new Error('deployment_recovery_queue_failed');
+  return true;
 }
 
 export function verifyDatabaseDeliveryRequest(row: RequestRow, grant: GrantRow | null, key: string, now: number) {
@@ -219,6 +286,7 @@ export function startReviewedDatabaseRecovery() {
   const registered = isIndependentDatabaseApprovalKey(key);
   let statusIssue = '';
   let running = false;
+  let deploymentRecoveryQueued = false;
   const tick = () => {
     const window = reviewedDatabaseRecoveryWindow();
     if (running || !window) return;
@@ -235,7 +303,13 @@ export function startReviewedDatabaseRecovery() {
         if (error) console.warn('manual_recovery_registration_failed');
         else statusIssue = window.issue;
       }
-      if (registered) await processDatabaseDeliveries(key, sb);
+      if (registered) {
+        if (!deploymentRecoveryQueued) {
+          try { deploymentRecoveryQueued = await enqueueDeploymentRecovery(key, sb); }
+          catch { console.warn('deployment_recovery_not_queued'); }
+        }
+        await processDatabaseDeliveries(key, sb);
+      }
     })().catch(() => console.warn('manual_delivery_queue_unavailable')).finally(() => { running = false; });
   };
   cron.schedule('*/5 * * * *', tick, { timezone: 'Asia/Shanghai' });
