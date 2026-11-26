@@ -1,5 +1,5 @@
 import { getSupabaseClient } from '../storage/database/supabase-client';
-import { canonicalJson, freezeBlockReason, PLAN_B_COUNTRIES, sha256, type PlanBCountry } from './plan-b-handoff';
+import { canonicalJson, freezeBlockReason, PLAN_B_COUNTRIES, reviewableWindowCount, sha256, type PlanBCountry } from './plan-b-handoff';
 import { collectCountry } from './plan-b-worker';
 import { recoverySources } from './plan-b-runtime';
 import { prepareIsolatedRelease } from './plan-b-release';
@@ -13,7 +13,7 @@ const key=(step:string)=>`${run}/${step}`;
 const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'fresh-public-source-collection'};
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
-  (scope.snapshot.candidates.length<10?'insufficient_reviewable_candidates':null);
+  (!reviewableWindowCount(scope.snapshot)?'insufficient_reviewable_candidates':null);
 type Client=ReturnType<typeof getSupabaseClient>;
 type Job={country:PlanBCountry;record_key:string;state:string;content_hash:string;payload:Record<string,unknown>;
   attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean}|null};
