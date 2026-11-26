@@ -44,10 +44,10 @@ const NOV26_LAYOUT_APPROVAL = {
 const NOV26_REAL_DRAFT_APPROVAL = {
   issue: '2026-11-26',
   version: '2026-11-26-r3',
-  authorizationId: 'nov26-owner-live-r3-9a18ba2be332ae6c',
+  authorizationId: 'nov26-owner-live-r3-retry-9a18ba2be332ae6c',
   contentHash: '9a18ba2be332ae6ce361b0de80edca8f4c7fd76aecd691467c08598bdec73ae6',
   countries: PACKAGE_COUNTRIES,
-  expiresAt: Date.parse('2026-11-26T14:00:00+08:00'),
+  expiresAt: Date.parse('2026-11-26T15:00:00+08:00'),
 } as const;
 
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
