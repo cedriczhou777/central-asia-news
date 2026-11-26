@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import cron from 'node-cron';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { canonicalJson, sha256 } from './plan-b-handoff';
-import { planBIngestSecret } from './plan-b-window';
+import { PLAN_B_CLOCK, planBClock, planBHandlesIssue, planBIngestSecret } from './plan-b-window';
 import { deliverReviewedPackage, deliveryAdapters, reconcileKnownReviewedDraft } from './reviewed-delivery';
 import { validManualGrant } from './reviewed-manual-authorization';
 import { contentHash, issueDate, packageCountries, requirePrivateImages, reviewedCountry, validatePackage, type PackageCountry } from './reviewed-package';
@@ -17,10 +17,10 @@ const LEASE_MS = 5 * 60_000;
 const MAX_ATTEMPTS = 3;
 const AUTHORIZATION_ID = /^[A-Za-z0-9_-]{16,96}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-export const REVIEWED_DATABASE_RECOVERY_ISSUE = '2026-11-25';
-const RECOVERY_OPENS = Date.parse('2026-11-25T09:30:00+08:00');
-export const REVIEWED_DATABASE_RECOVERY_END = Date.parse('2026-11-26T04:30:00+08:00');
-const WORKER_VERSION = 'reviewed-database-recovery-20261125';
+const FIRST_RECOVERABLE_ISSUE = '2026-11-26';
+const NEXT_COLLECTION_GUARD = 4 * 60 + 30;
+const DAY_MS = 24 * 60 * 60_000;
+const WORKER_VERSION = 'reviewed-database-recovery-v2';
 
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
 type RequestRow = GrantRow & {
@@ -37,8 +37,13 @@ export function isIndependentDatabaseApprovalKey(key: string) {
   return SHA256.test(key) && key !== process.env.INGEST_SECRET && key !== planBIngestSecret();
 }
 
-export function reviewedDatabaseRecoveryOpen(now = Date.now()) {
-  return now >= RECOVERY_OPENS && now < REVIEWED_DATABASE_RECOVERY_END;
+export function reviewedDatabaseRecoveryWindow(now = Date.now()) {
+  const { issue: today, minute } = planBClock(now);
+  if (minute >= NEXT_COLLECTION_GUARD && minute < PLAN_B_CLOCK.closeAt) return null;
+  const issue = minute < NEXT_COLLECTION_GUARD ? planBClock(now - DAY_MS).issue : today;
+  if (issue < FIRST_RECOVERABLE_ISSUE || !planBHandlesIssue(issue)) return null;
+  return { issue, opensAt: Date.parse(`${issue}T09:30:00+08:00`),
+    closesAt: Date.parse(`${issue}T04:30:00+08:00`) + DAY_MS };
 }
 
 export function verifyDatabaseDeliveryRequest(row: RequestRow, grant: GrantRow | null, key: string, now: number) {
@@ -57,7 +62,8 @@ export function verifyDatabaseDeliveryRequest(row: RequestRow, grant: GrantRow |
     throw new Error('invalid_reviewed_package');
   }
   const issue = issueDate(payload.version);
-  if (issue !== row.issue_date || issue !== REVIEWED_DATABASE_RECOVERY_ISSUE || !reviewedDatabaseRecoveryOpen(now)) {
+  const window = reviewedDatabaseRecoveryWindow(now);
+  if (issue !== row.issue_date || issue !== window?.issue) {
     throw new Error('manual_issue_outside_window');
   }
 
@@ -71,7 +77,7 @@ export function verifyDatabaseDeliveryRequest(row: RequestRow, grant: GrantRow |
   if (typeof signature !== 'string' || !SHA256.test(signature)
       || !timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(databaseApprovalSignature(key, authorizationId, approval), 'hex'))
       || !Array.isArray(approval.countries) || approval.countries.length !== countries.length
-      || !reviewedDatabaseRecoveryOpen(approvedAt) || expiresAt > REVIEWED_DATABASE_RECOVERY_END
+      || approvedAt < window.opensAt || expiresAt > window.closesAt
       || !validManualGrant(approval, String(approval.approvedAt), issue, payload.version, contentHash(payload), countries, now)) {
     throw new Error('manual_approval_mismatch');
   }
@@ -128,7 +134,10 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
     }
     const { payload, authorizationId, expiresAt } = verifyDatabaseDeliveryRequest(row, grant, key, Date.now());
     const assertActive = () => {
-      if (Date.now() >= expiresAt || !reviewedDatabaseRecoveryOpen()) throw new Error('manual_approval_expired');
+      const stamp = Date.now();
+      if (stamp >= expiresAt || reviewedDatabaseRecoveryWindow(stamp)?.issue !== row.issue_date) {
+        throw new Error('manual_approval_expired');
+      }
     };
     assertActive();
     const { hash } = await storeReviewedPackage(payload, sb);
@@ -184,48 +193,51 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
 export async function processDatabaseDeliveries(key: string, sb = getSupabaseClient(), adapters = wechat) {
   const timestamp = Date.now();
   const now = new Date(timestamp).toISOString();
-  if (!isIndependentDatabaseApprovalKey(key) || !reviewedDatabaseRecoveryOpen(timestamp)) return;
+  const window = reviewedDatabaseRecoveryWindow(timestamp);
+  if (!isIndependentDatabaseApprovalKey(key) || !window) return;
   const { data, error } = await sb.from(TABLE)
     .select('issue_date,country,record_key,state,attempts,payload,content_hash')
     .eq('kind', 'manual_use').like('record_key', `${REQUEST_PREFIX}%`)
-    .eq('issue_date', REVIEWED_DATABASE_RECOVERY_ISSUE)
+    .eq('issue_date', window.issue)
     .or(`state.eq.queued,and(state.eq.working,lease_until.lt.${now})`)
     .order('created_at').limit(5);
   if (error) throw new Error('manual_delivery_queue_read_failed');
   for (const row of (data ?? []) as RequestRow[]) {
-    if (!reviewedDatabaseRecoveryOpen()) return;
+    if (reviewedDatabaseRecoveryWindow()?.issue !== window.issue) return;
     try { await processRequest(sb, row, key, adapters); }
     catch { console.warn(JSON.stringify({ event: 'manual_delivery_checkpoint_failed', issue: row.issue_date, country: row.country })); }
   }
 }
 
-// The historical worker has its own registration and expiry. The normal
-// Plan B cron, health contract, capabilities and timing remain independent.
+// This worker is inactive during normal production and only consumes
+// exact-issue, signed requests in the current recovery window.
 let started = false;
 export function startReviewedDatabaseRecovery() {
-  if (started || !reviewedDatabaseRecoveryOpen()) return;
+  if (started) return;
   started = true;
   const key = process.env.REVIEWED_DATABASE_APPROVAL_KEY || '';
   const registered = isIndependentDatabaseApprovalKey(key);
-  const payload = { worker: WORKER_VERSION, keyPresent: !!key, independentKey: registered, registered,
-    expiresAt: new Date(REVIEWED_DATABASE_RECOVERY_END).toISOString() };
-  const record = { issue_date: REVIEWED_DATABASE_RECOVERY_ISSUE, country: 'global', kind: 'manual_use',
-    record_key: 'db-recovery-status/2026-11-25', payload, content_hash: sha256(canonicalJson(payload)),
-    state: 'available', updated_at: new Date().toISOString() };
-  const sb = getSupabaseClient();
-  void sb.from(TABLE).upsert(record, {onConflict:'issue_date,country,kind,record_key'}).then(
-    ({error}) => { if (error) console.warn('manual_recovery_registration_failed'); },
-    () => console.warn('manual_recovery_registration_failed'),
-  );
-  if (!registered) return;
+  let statusIssue = '';
   let running = false;
   const tick = () => {
-    if (!reviewedDatabaseRecoveryOpen()) { timer.stop(); return; }
-    if (running) return;
+    const window = reviewedDatabaseRecoveryWindow();
+    if (running || !window) return;
     running = true;
-    void processDatabaseDeliveries(key, sb).catch(() => console.warn('manual_delivery_queue_unavailable'))
-      .finally(() => { running = false; });
+    void (async () => {
+      const sb = getSupabaseClient();
+      if (statusIssue !== window.issue) {
+        const payload = { worker: WORKER_VERSION, keyPresent: !!key, independentKey: registered, registered,
+          expiresAt: new Date(window.closesAt).toISOString() };
+        const { error } = await sb.from(TABLE).upsert({
+          issue_date: window.issue, country: 'global', kind: 'manual_use', record_key: `db-recovery-status/${window.issue}`,
+          payload, content_hash: sha256(canonicalJson(payload)), state: 'available', updated_at: new Date().toISOString(),
+        }, { onConflict: 'issue_date,country,kind,record_key' });
+        if (error) console.warn('manual_recovery_registration_failed');
+        else statusIssue = window.issue;
+      }
+      if (registered) await processDatabaseDeliveries(key, sb);
+    })().catch(() => console.warn('manual_delivery_queue_unavailable')).finally(() => { running = false; });
   };
-  const timer = cron.schedule('*/5 * * * *', tick, { timezone: 'Asia/Shanghai' });
+  cron.schedule('*/5 * * * *', tick, { timezone: 'Asia/Shanghai' });
   tick();
 }

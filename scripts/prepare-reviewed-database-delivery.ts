@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { canonicalJson, sha256 } from '../src/lib/plan-b-handoff';
-import { DATABASE_APPROVAL_PREFIX, databaseApprovalSignature, isIndependentDatabaseApprovalKey, reviewedDatabaseRecoveryOpen,
-  REVIEWED_DATABASE_RECOVERY_END, REVIEWED_DATABASE_RECOVERY_ISSUE } from '../src/lib/reviewed-database-delivery';
+import { DATABASE_APPROVAL_PREFIX, databaseApprovalSignature, isIndependentDatabaseApprovalKey,
+  reviewedDatabaseRecoveryWindow } from '../src/lib/reviewed-database-delivery';
 import { contentHash, issueDate, packageCountries, requirePrivateImages, validatePackage } from '../src/lib/reviewed-package';
 
 const [file, approver, reason, output] = process.argv.slice(2);
@@ -13,14 +13,14 @@ if (!file || !output || !approver?.trim() || !reason || reason.trim().length < 8
 const release = validatePackage(JSON.parse(readFileSync(file, 'utf8')));
 requirePrivateImages(release);
 const issue = issueDate(release.version);
-if (issue !== REVIEWED_DATABASE_RECOVERY_ISSUE) throw new Error('Package issue not admitted for this recovery');
 const countries = packageCountries(release);
 const authorizationId = randomUUID();
 const now = Date.now();
-if (!reviewedDatabaseRecoveryOpen(now)) throw new Error('Manual recovery signing window is closed');
+const window = reviewedDatabaseRecoveryWindow(now);
+if (window?.issue !== issue) throw new Error('Package issue not admitted for this recovery');
 const approval = { issue, version: release.version, contentHash: contentHash(release), countries,
   issuedBy: approver.trim(), reason: reason.trim(), approvedAt: new Date(now).toISOString(),
-  expiresAt: new Date(Math.min(now + 60 * 60_000, REVIEWED_DATABASE_RECOVERY_END)).toISOString() };
+  expiresAt: new Date(Math.min(now + 60 * 60_000, window.closesAt)).toISOString() };
 const grant = { ...approval, signature: databaseApprovalSignature(key, authorizationId, approval) };
 const command = { authorizationId, release };
 writeFileSync(output, JSON.stringify({

@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { canonicalJson, sha256 } from '../src/lib/plan-b-handoff';
-import { databaseApprovalSignature, processDatabaseDeliveries, reviewedDatabaseRecoveryOpen,
-  REVIEWED_DATABASE_RECOVERY_END, verifyDatabaseDeliveryRequest } from '../src/lib/reviewed-database-delivery';
+import { databaseApprovalSignature, processDatabaseDeliveries, reviewedDatabaseRecoveryWindow,
+  verifyDatabaseDeliveryRequest } from '../src/lib/reviewed-database-delivery';
 import { contentHash, validatePackage } from '../src/lib/reviewed-package';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
 import { database } from './lib/reviewed-test-db';
 
 const key = '1'.repeat(64);
-const issue = '2026-11-25';
+const issue = '2026-11-26';
+const opens = Date.parse(`${issue}T09:30:00+08:00`);
+const closes = Date.parse('2026-11-27T04:30:00+08:00');
 let clock = Date.parse(`${issue}T10:00:00+08:00`);
 const now = Date.now;
 const firstIssue = process.env.REVIEWED_PLAN_B_FIRST_ISSUE;
@@ -39,17 +41,24 @@ async function main() {
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, clock + 61 * 60_000), /approval_mismatch/);
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, Date.parse(`${issue}T09:15:00+08:00`)), /outside_window/);
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, Date.parse('2026-11-24T10:00:00+08:00')), /outside_window/);
-  assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, REVIEWED_DATABASE_RECOVERY_END), /outside_window/);
-  assert.equal(reviewedDatabaseRecoveryOpen(REVIEWED_DATABASE_RECOVERY_END-1),true);
-  assert.equal(reviewedDatabaseRecoveryOpen(REVIEWED_DATABASE_RECOVERY_END),false);
-  const beyondClosure = { ...approval, expiresAt:new Date(REVIEWED_DATABASE_RECOVERY_END+60_000).toISOString() };
+  assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, closes), /outside_window/);
+  assert.equal(reviewedDatabaseRecoveryWindow(opens - 1), null);
+  assert.deepEqual(reviewedDatabaseRecoveryWindow(opens), { issue, opensAt: opens, closesAt: closes });
+  assert.equal(reviewedDatabaseRecoveryWindow(closes - 1)?.issue, issue);
+  assert.equal(reviewedDatabaseRecoveryWindow(closes), null);
+  assert.equal(reviewedDatabaseRecoveryWindow(Date.parse('2026-11-25T19:00:00+08:00')), null);
+  assert.equal(reviewedDatabaseRecoveryWindow(Date.parse('2026-11-27T10:00:00+08:00'))?.issue, '2026-11-27');
+  const tooEarly = { ...approval, approvedAt: new Date(opens - 1000).toISOString() };
+  assert.throws(() => verifyDatabaseDeliveryRequest(kz, { ...envelope({ ...tooEarly,
+    signature:databaseApprovalSignature(key,id,tooEarly) }), state:'available' },key,clock), /approval_mismatch/);
+  const beyondClosure = { ...approval, expiresAt:new Date(closes+60_000).toISOString() };
   assert.throws(() => verifyDatabaseDeliveryRequest(kz,{ ...envelope({ ...beyondClosure,
     signature:databaseApprovalSignature(key,id,beyondClosure) }), state:'available' },key,clock), /approval_mismatch/);
   assert.throws(() => verifyDatabaseDeliveryRequest({ ...kz, country: 'az' }, grant, key, clock), /invalid_reviewed_package/);
-  const neighboringIssue = '2026-11-26';
+  const neighboringIssue = '2026-11-27';
   const neighboring = { ...kz, issue_date: neighboringIssue, ...envelope({ authorizationId: id, release: { ...release, version: neighboringIssue } }) };
   assert.throws(() => verifyDatabaseDeliveryRequest(neighboring, grant, key, clock), /outside_window/);
-  const yesterday = { ...kz,issue_date:'2026-11-24',...envelope({authorizationId:id,release:{ ...release,version:'2026-11-24' }}) };
+  const yesterday = { ...kz,issue_date:'2026-11-25',...envelope({authorizationId:id,release:{ ...release,version:'2026-11-25' }}) };
   assert.throws(() => verifyDatabaseDeliveryRequest(yesterday,grant,key,clock), /outside_window/);
   process.env.INGEST_SECRET = key;
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, clock), /invalid_manual_approval_key/);
@@ -91,6 +100,7 @@ async function main() {
           for (const row of matches) Object.assign(row, patch);
           return resolve({ data: returning ? matches : null, error: null });
         }
+        assert.equal(filters.issue_date, issue, 'look up only the recovery issue');
         return resolve({ data: queue.filter(row => row.state === 'queued' || row.state === 'working' && Date.parse(row.lease_until!) < clock), error: null });
       },
     };
