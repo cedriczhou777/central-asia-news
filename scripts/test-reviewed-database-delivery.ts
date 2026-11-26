@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { canonicalJson, sha256 } from '../src/lib/plan-b-handoff';
-import { databaseApprovalSignature, processDatabaseDeliveries, reviewedDatabaseRecoveryWindow,
+import { databaseApprovalSignature, deploymentRecoveryRows, processDatabaseDeliveries, reviewedDatabaseRecoveryWindow,
   verifyDatabaseDeliveryRequest } from '../src/lib/reviewed-database-delivery';
 import { contentHash, validatePackage } from '../src/lib/reviewed-package';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
@@ -67,6 +67,18 @@ async function main() {
   assert.throws(() => verifyDatabaseDeliveryRequest(kz, grant, key, clock), /invalid_manual_approval_key/);
   process.env.PLAN_B_INGEST_SECRET = 'fixture-unrelated-plan-b-ingest';
   const changed = { ...release, countries: { ...release.countries, kz: { ...release.countries.kz!, bodyHtml: '<p>Tampered</p>' } } };
+  const deployment = { issue, version: release.version, authorizationId: 'fixture-deployment-approved',
+    contentHash: contentHash(release), countries: ['kz','uz','kg'] as const, expiresAt: clock + 30 * 60_000 };
+  const staged = { ...envelope({ release }), state: 'available' };
+  const [signed, ...deployCommands] = deploymentRecoveryRows(deployment, staged, key, clock);
+  assert.equal(signed.record_key, 'db-approval/' + deployment.authorizationId);
+  assert.deepEqual(deployCommands.map(row=>row.country), ['kz','uz','kg']);
+  assert.equal(verifyDatabaseDeliveryRequest({ ...deployCommands[0], country:'kz', attempts:0 }, signed, key, clock).payload.version, issue);
+  assert.throws(() => deploymentRecoveryRows(deployment, staged, key, deployment.expiresAt), /not_admitted/);
+  assert.throws(() => deploymentRecoveryRows(deployment, { ...envelope({ release:changed }), state:'available' }, key, clock), /package_mismatch/);
+  assert.throws(() => deploymentRecoveryRows({ ...deployment, countries:['kz'] }, staged,key,clock), /package_mismatch/);
+  assert.throws(() => deploymentRecoveryRows(deployment,{...staged,content_hash:'0'.repeat(64)},key,clock), /not_admitted/);
+  assert.throws(() => deploymentRecoveryRows(deployment,{...staged,state:'rejected'},key,clock), /not_admitted/);
   const uz = { ...request('uz'), ...envelope({ authorizationId: id, release: changed }) };
   const kg = request('kg');
   const queue = [kz, uz, kg];
