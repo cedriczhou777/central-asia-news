@@ -299,4 +299,19 @@ class RealQueueRegression(unittest.TestCase):
                     [{**evidence,'kind':'modified'}]):
             self.assertIsNone(bounded_review_reason(work,{'candidate':{**prior,'rawPublicationEvidence':raw}},cutoff))
 
+    def test_nov26_old_financial_references_need_review_but_new_bodies_still_block(self):
+        cutoff='2026-11-26T06:00:00+08:00'
+        for url, reason in (
+            ('https://cbu.uz/ru/documents/3315/2135632/', 'archived_publication_requires_coverage_review'),
+            ('https://cbu.uz/ru/press_center/adverts/1590474/', 'archived_publication_requires_coverage_review'),
+            ('https://inbusiness.kz/ru/specprojects/qazaq-oil-itogi-2023', 'publisher_directory_requires_coverage_review'),
+        ):
+            with self.subTest(url=url):
+                work={'kind':'article','url':url}
+                self.assertEqual(bounded_review_reason(work,{},cutoff),reason)
+                self.assertIsNone(bounded_review_reason(work,{'candidate':{
+                    'publicationWindowAssessment':'in_window'}},cutoff))
+        self.assertIsNone(bounded_review_reason({'kind':'article','url':
+            'https://cbu.uz/ru/documents/3315/9999999/'}, {}, cutoff))
+
 if __name__=='__main__':unittest.main()
