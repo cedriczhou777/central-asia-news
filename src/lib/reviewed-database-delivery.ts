@@ -235,8 +235,9 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
       receipt = delivery.drafts[0] as Record<string, unknown> | undefined ?? null;
     }
     const mediaId = receipt?.mediaId ?? receipt?.media_id;
+    // Exact display text covers the source labels. WeChat can omit link targets on readback.
     const ok = typeof mediaId === 'string' && !!mediaId && receipt?.verified === true
-      && receipt.imageMatch === true && receipt.thumbnailMatchesPrepared === true && receipt.sourceUrlsVisible === true;
+      && receipt.expectedTextMatch === true && receipt.imageMatch === true && receipt.thumbnailMatchesPrepared === true;
     state = ok ? 'accepted' : attempt < MAX_ATTEMPTS ? 'working' : 'rejected';
     result = { ok, authorizationId, version: payload.version, contentHash: hash,
       ...(ok ? { mediaId, readbackAt: receipt?.readbackAt ?? null, readbackHash: receipt?.readbackHash ?? null,
