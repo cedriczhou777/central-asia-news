@@ -36,9 +36,14 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
             latest[key] = stamp, row
 
     readable, gaps, pending, review_work = [], [], [], []
+    max_seconds = inventory.get('maxSeconds')
+    # An integral scan budget has the same JSON representation before and after
+    # Node transports the frozen proof back to Python for release verification.
+    if type(max_seconds) is float and max_seconds.is_integer():
+        max_seconds = int(max_seconds)
     try:
-        bounded_scan = (type(inventory.get('maxSeconds')) in (int, float)
-                        and math.isfinite(inventory['maxSeconds']) and 0 < inventory['maxSeconds'] <= 480
+        bounded_scan = (type(max_seconds) in (int, float)
+                        and math.isfinite(max_seconds) and 0 < max_seconds <= 480
                         and cutoff <= _dt(inventory.get('observedAt')) <= observed)
     except (ValueError, TypeError):
         bounded_scan = False
@@ -155,7 +160,7 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
             'state': 'blocked' if pending else 'review_required' if gaps else 'observed',
             'readableSources': sorted(readable), 'gaps': gaps, 'pendingWork': pending,
             'queues': queues, 'closedQueueWork': closed, 'reviewWork': review_work,
-            'scanBudget': {'bounded': bounded_scan, 'maxSeconds': inventory.get('maxSeconds'),
+            'scanBudget': {'bounded': bounded_scan, 'maxSeconds': max_seconds,
                            'observedAt': inventory.get('observedAt')},
             'coverageChecked': False, 'normalTarget': [15, 20], 'scarcityRange': [10, 14]}
     metadata = {}
