@@ -49,6 +49,15 @@ const NOV26_REAL_DRAFT_APPROVAL = {
   countries: PACKAGE_COUNTRIES,
   expiresAt: Date.parse('2026-11-26T15:00:00+08:00'),
 } as const;
+const NOV26_SHORT_DRAFT_APPROVAL = {
+  issue: '2026-11-26',
+  version: '2026-11-26-r4',
+  authorizationId: 'nov26-owner-verified-short-r4-6ca4e80de36d8b',
+  contentHash: '6ca4e80de36d8ba790d8a833f458bf81fc5b2c2c9e9fb8f17a73af623bdc4283',
+  countries: PACKAGE_COUNTRIES,
+  expiresAt: Date.parse('2026-11-26T22:00:00+08:00'),
+} as const;
+const VALIDATION_DRAFT_APPROVALS = [NOV26_REAL_DRAFT_APPROVAL, NOV26_SHORT_DRAFT_APPROVAL] as const;
 
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
 type RequestRow = GrantRow & {
@@ -297,12 +306,13 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
     };
     assertActive();
     const reviseLayout = authorizationId === NOV26_LAYOUT_APPROVAL.authorizationId;
-    const validationCopy = authorizationId === NOV26_REAL_DRAFT_APPROVAL.authorizationId;
+    const validation = VALIDATION_DRAFT_APPROVALS.find(item => item.authorizationId === authorizationId);
+    const validationCopy = Boolean(validation);
     if (reviseLayout && (payload.version !== NOV26_LAYOUT_APPROVAL.version || contentHash(payload) !== NOV26_LAYOUT_APPROVAL.contentHash)) {
       throw new Error('invalid_reviewed_layout_revision');
     }
-    if (validationCopy && (payload.version !== NOV26_REAL_DRAFT_APPROVAL.version
-        || contentHash(payload) !== NOV26_REAL_DRAFT_APPROVAL.contentHash || now >= NOV26_REAL_DRAFT_APPROVAL.expiresAt)) {
+    if (validation && (payload.version !== validation.version
+        || contentHash(payload) !== validation.contentHash || now >= validation.expiresAt)) {
       throw new Error('invalid_validation_package');
     }
     const { hash } = await storeReviewedPackage(payload, sb);
@@ -411,7 +421,7 @@ export function startReviewedDatabaseRecovery() {
   const registered = isIndependentDatabaseApprovalKey(key);
   let statusIssue = '';
   let running = false;
-  const pendingDeployments = new Set<DeploymentApproval>([NOV26_DEPLOYMENT_APPROVAL, NOV26_LAYOUT_APPROVAL, NOV26_REAL_DRAFT_APPROVAL]);
+  const pendingDeployments = new Set<DeploymentApproval>([NOV26_DEPLOYMENT_APPROVAL, NOV26_LAYOUT_APPROVAL, ...VALIDATION_DRAFT_APPROVALS]);
   const tick = () => {
     const window = reviewedDatabaseRecoveryWindow();
     if (running || !window) return;
