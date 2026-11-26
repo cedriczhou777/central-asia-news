@@ -193,6 +193,47 @@ async function verifyPreviousSuccess(payload: ReturnType<typeof validatePackage>
     ...(checkLayout ? { layoutVerified: true, layout, footer } : {}) };
 }
 
+type ValidationDraft = {
+  startedAt: string;
+  mediaId: string | null;
+  detail: DraftProof['detail'];
+};
+
+// A signed, visibly marked acceptance copy has its own durable receipt on
+// the exact approval command. The normal per-issue delivery lock stays intact.
+export async function deliverValidationDraft(payload: ReturnType<typeof validatePackage>, country: PackageCountry,
+    checkpoint: ValidationDraft | undefined, adapters: Pick<typeof wechat, 'prepare' | 'create' | 'read' | 'find'>,
+    save: (draft: ValidationDraft) => Promise<void>, assertActive: () => void) {
+  const expected = reviewedCountry(payload, country);
+  if (!expected.title.startsWith('【实跑验收】')) throw new Error('invalid_validation_title');
+  let draft = checkpoint;
+  if (!draft) {
+    assertActive();
+    const prepared = await adapters.prepare(expected, async () => { assertActive(); });
+    draft = { startedAt: new Date().toISOString(), mediaId: null, detail: {
+      inputHash: contentHash(expected.bodyHtml), expectedThumbMediaId: prepared.article.thumb_media_id,
+      imageUrls: imageUrls(prepared.html),
+    } };
+    // A lost response or process crash after this checkpoint can only reconcile.
+    await save(draft);
+    assertActive();
+    draft = { ...draft, mediaId: await adapters.create(prepared.article) };
+    await save(draft);
+  }
+
+  let { mediaId } = draft;
+  if (!mediaId) {
+    const since = Date.parse(draft.startedAt);
+    if (!Number.isFinite(since)) throw new Error('invalid_validation_checkpoint');
+    const matches = await adapters.find(expected.title, expected.summary, since - 120_000);
+    if (matches.length !== 1) return null;
+    [mediaId] = matches;
+  }
+  const verified = await verifyPreviousSuccess(payload, country, { media_id: mediaId, detail: draft.detail }, adapters.read, true);
+  if (verified && mediaId !== draft.mediaId) await save({ ...draft, mediaId });
+  return verified;
+}
+
 export async function reviseTextLayout(original: ReturnType<typeof validatePackage>, revised: ReturnType<typeof validatePackage>,
     country: PackageCountry, existing: DraftProof, adapters: Pick<typeof wechat, 'read' | 'update'>,
     writeStarted: boolean, recordWrite: () => Promise<void>, assertActive: () => void) {
@@ -236,6 +277,7 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
 
   let result: Record<string, unknown>;
   let layoutWriteStarted = row.result?.layoutWriteStarted === true;
+  let validationDraft = row.result?.validationDraft as ValidationDraft | undefined;
   let state = 'rejected';
   try {
     const id = row.payload.authorizationId;
@@ -255,8 +297,13 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
     };
     assertActive();
     const reviseLayout = authorizationId === NOV26_LAYOUT_APPROVAL.authorizationId;
+    const validationCopy = authorizationId === NOV26_REAL_DRAFT_APPROVAL.authorizationId;
     if (reviseLayout && (payload.version !== NOV26_LAYOUT_APPROVAL.version || contentHash(payload) !== NOV26_LAYOUT_APPROVAL.contentHash)) {
       throw new Error('invalid_reviewed_layout_revision');
+    }
+    if (validationCopy && (payload.version !== NOV26_REAL_DRAFT_APPROVAL.version
+        || contentHash(payload) !== NOV26_REAL_DRAFT_APPROVAL.contentHash || now >= NOV26_REAL_DRAFT_APPROVAL.expiresAt)) {
+      throw new Error('invalid_validation_package');
     }
     const { hash } = await storeReviewedPackage(payload, sb);
     const receiptVersion = reviseLayout ? NOV26_DEPLOYMENT_APPROVAL.version : payload.version;
@@ -265,7 +312,14 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
     if (saved.error) throw new Error('reviewed_receipt_read_failed');
     const existing = saved.data;
     let receipt: Record<string, unknown> | null;
-    if (reviseLayout) {
+    if (validationCopy) {
+      receipt = await deliverValidationDraft(payload, row.country, validationDraft, adapters, async draft => {
+        const kept = await sb.from(TABLE).update({ result: { validationDraft: draft } }).match(match)
+          .eq('state', 'working').eq('attempts', attempt).eq('content_hash', row.content_hash).select('country');
+        if (kept.error || kept.data?.length !== 1) throw new Error('manual_validation_checkpoint_failed');
+        validationDraft = draft;
+      }, assertActive);
+    } else if (reviseLayout) {
       const base = await sb.from('reviewed_packages').select('payload,content_hash').eq('version', receiptVersion).single();
       if (base.error || base.data?.content_hash !== NOV26_DEPLOYMENT_APPROVAL.contentHash || existing?.state !== 'succeeded') {
         throw new Error('invalid_layout_baseline');
@@ -283,7 +337,7 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
         ? await verifyPreviousSuccess(payload, row.country, existing, adapters.read)
         : await reconcileKnownReviewedDraft(payload, row.country, sb, adapters.read, adapters.find);
     }
-    if (!reviseLayout && !receipt && !existing?.media_id && (!existing || ['preparing', 'failed'].includes(existing.state))) {
+    if (!validationCopy && !reviseLayout && !receipt && !existing?.media_id && (!existing || ['preparing', 'failed'].includes(existing.state))) {
       assertActive();
       const delivery = await deliverReviewedPackage(payload, sb, { ...adapters, update: undefined,
         prepare(draft, progress) {
@@ -311,7 +365,7 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
       ...(ok ? { mediaId, readbackAt: receipt?.readbackAt ?? null, readbackHash: receipt?.readbackHash ?? null,
         title: reviewedCountry(payload, row.country).title, verified: true, expectedTextMatch: receipt?.expectedTextMatch,
         imageMatch: receipt?.imageMatch, coverMatch: receipt?.thumbnailMatchesPrepared, sourceUrlsVisible: receipt?.sourceUrlsVisible,
-        ...(reviseLayout ? { layoutVerified: receipt?.layoutVerified } : {}) }
+        ...(reviseLayout || validationCopy ? { layoutVerified: receipt?.layoutVerified } : {}) }
         : { reason: 'delivery_not_verified', nextAction: 'check_delivery_receipt_before_retry' }) };
   } catch (error) {
     const reason = error instanceof Error ? error.message : '';
@@ -321,7 +375,8 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
     result = { ok: false, reason: reason === REVIEWED_VERSION_CONFLICT ? 'reviewed_version_conflict' :
       /^[a-z][a-z0-9_]{0,80}$/.test(reason) ? reason : 'manual_delivery_failed' };
   }
-  const saved = await sb.from(TABLE).update({ state, result: { ...result, ...(layoutWriteStarted ? { layoutWriteStarted: true } : {}) }, updated_at: new Date().toISOString(),
+  const saved = await sb.from(TABLE).update({ state, result: { ...result, ...(layoutWriteStarted ? { layoutWriteStarted: true } : {}),
+    ...(validationDraft ? { validationDraft } : {}) }, updated_at: new Date().toISOString(),
     ...(state === 'working' ? {} : { lease_until: null }),
   }).match(match).eq('state', 'working').eq('attempts', attempt).eq('content_hash', row.content_hash);
   if (saved.error) throw new Error('manual_delivery_result_save_failed');
