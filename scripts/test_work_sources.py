@@ -2,7 +2,6 @@ import gzip,hashlib,json,subprocess,sys,tempfile,unittest,zlib
 from pathlib import Path
 from datetime import datetime,timedelta,timezone
 from unittest.mock import patch
-from urllib.error import HTTPError
 import fetch_work_sources as f
 
 PAGE=('<!doctype html><html><head><meta property="og:title" content="Actual title"><meta property="og:type" content="article"></head><body><svg><h1>Wrong SVG title</h1></svg><article><h1>Actual title</h1><p>'+('Synthetic fixture content, not news. '*12)+'</p></article></body></html>').encode()
@@ -12,6 +11,13 @@ class Response:
     def __exit__(self,*a):pass
     def read(self,*a):return PAGE
 class ListingResponse(Response):url='https://example.com/'
+
+def worker_response(response):
+    return {'status':response.status,'final_url':response.url,'response_headers':response.headers},response.read()
+
+def worker_error(status):
+    return {'status':status,'error':f'source_http_{status}','fetchRetryable':status in f.TRANSIENT},b''
+
 class CutoffClock(datetime):
     @classmethod
     def now(cls,tz=None):return datetime.fromisoformat('2026-11-16T06:10:00+08:00').astimezone(tz or timezone.utc)
@@ -33,49 +39,49 @@ class SourceRegressions(unittest.TestCase):
         (f.S/(key+'.json')).write_text(json.dumps(d));return d
     def test_stale_listing_is_really_refetched(self):
         url='https://example.com/';self.cached(url,'listing',age=901)
-        with patch.object(f.urllib.request,'urlopen',return_value=Response()) as request:r=f.fetch(url)
+        with patch.object(f,'bounded_response',return_value=worker_response(Response())) as request:r=f.fetch(url)
         self.assertEqual(request.call_count,1);self.assertEqual(r['title'],'Actual title')
     def test_article_evidence_is_reused(self):
         url='https://example.com/story';self.cached(url,'article')
-        with patch.object(f.urllib.request,'urlopen',side_effect=AssertionError('must not refetch unchanged article')):self.assertEqual(f.fetch(url)['title'],'cached')
+        with patch.object(f,'bounded_response',side_effect=AssertionError('must not refetch unchanged article')):self.assertEqual(f.fetch(url)['title'],'cached')
     def test_transient_503_gets_bounded_retry(self):
-        url='https://example.com/story';error=lambda:HTTPError(url,503,'unavailable',{},None)
-        with patch.object(f.urllib.request,'urlopen',side_effect=[error(),error(),Response()]) as request,patch.object(f.time,'sleep'):
+        url='https://example.com/story';error=lambda:worker_error(503)
+        with patch.object(f,'bounded_response',side_effect=[error(),error(),worker_response(Response())]) as request,patch.object(f.time,'sleep'):
             r=f.fetch(url)
         self.assertEqual((r['status'],r['attempts'],request.call_count),(200,3,3));self.assertNotIn('error',r)
     def test_403_is_recorded_and_never_retried(self):
         url='https://example.com/forbidden'
-        with patch.object(f.urllib.request,'urlopen',side_effect=HTTPError(url,403,'denied',{},None)) as request,patch.object(f.time,'sleep'):
+        with patch.object(f,'bounded_response',return_value=worker_error(403)) as request,patch.object(f.time,'sleep'):
             a=f.fetch(url);b=f.fetch(url)
         self.assertEqual((a['status'],b['status'],request.call_count),(403,403,1))
     def test_cutoff_listing_bypasses_still_young_pre_cutoff_cache(self):
         url='https://example.com/';self.cached(url,'listing',fetched_at='2026-11-16T05:59:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen',return_value=ListingResponse()) as request:
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response',return_value=worker_response(ListingResponse())) as request:
             r=f.fetch(url,'2026-11-16T06:00:00+08:00')
         self.assertEqual(request.call_count,1)
         self.assertEqual(r['fetchedAt'],'2026-11-15T22:10:00+00:00','record actual request time, not the requested cutoff')
         self.assertEqual(r['source_kind'],'listing');self.assertTrue(r['contentValidated'])
     def test_cutoff_listing_reuses_real_post_cutoff_cache(self):
         url='https://example.com/';old=self.cached(url,'listing',fetched_at='2026-11-16T06:04:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:r=f.fetch(url,'2026-11-16T06:00:00+08:00')
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:r=f.fetch(url,'2026-11-16T06:00:00+08:00')
         self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt'])
     def test_listing_minimum_does_not_refetch_frozen_article(self):
         url='https://example.com/story';old=self.cached(url,'article',fetched_at='2026-11-16T05:00:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:r=f.fetch(url,'2026-11-16T06:00:00+08:00')
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:r=f.fetch(url,'2026-11-16T06:00:00+08:00')
         self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt'])
     def test_failed_cutoff_refresh_never_returns_old_success(self):
         url='https://example.com/';self.cached(url,'listing',fetched_at='2026-11-16T05:59:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen',side_effect=HTTPError(url,503,'unavailable',{},None)) as request,patch.object(f.time,'sleep'):
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response',return_value=worker_error(503)) as request,patch.object(f.time,'sleep'):
             r=f.fetch(url,'2026-11-16T06:00:00+08:00')
         self.assertEqual(request.call_count,3);self.assertEqual(r['status'],503);self.assertFalse(r['contentValidated']);self.assertNotIn('source_kind',r)
     def test_invalid_listing_minimum_is_rejected_before_fetch(self):
         for minimum in ('2026-11-16T06:00:00','2026-11-16T06:10:01+08:00','not-a-date','',42):
-            with self.subTest(minimum=minimum),patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:
+            with self.subTest(minimum=minimum),patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:
                 with self.assertRaises(ValueError):f.fetch('https://example.com/',minimum)
                 self.assertEqual(request.call_count,0)
     def test_listing_minimum_does_not_retry_cached_denial(self):
         url='https://example.com/';old=self.cached(url,'listing',status=403,fetched_at='2026-11-16T05:59:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:r=f.fetch(url,'2026-11-16T06:00:00+08:00')
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:r=f.fetch(url,'2026-11-16T06:00:00+08:00')
         self.assertEqual(request.call_count,0);self.assertEqual(r['status'],403);self.assertEqual(r['fetchedAt'],old['fetchedAt'])
     def test_cli_rejects_naive_cutoff_before_reading_input(self):
         r=subprocess.run([sys.executable,str(Path(f.__file__)),'--listing-not-before','2026-11-16T06:00:00'],input='not-json',text=True,capture_output=True,timeout=5)
@@ -155,14 +161,14 @@ class PublicationEvidenceRegressions(unittest.TestCase):
     def test_reparse_v13_archive_preserves_fetch_time_and_adds_publication_evidence(self):
         url='https://example.com/story';key=hashlib.sha256(url.encode()).hexdigest()[:18]
         raw=self.page({'@type':'NewsArticle','url':url,'datePublished':'2026-11-14T11:00:00+05:00'})
-        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f.urllib.request,'urlopen') as request:
+        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f,'bounded_response') as request:
             old={'url':url,'final_url':url,'status':200,'parser_version':'source-html-v13','source_kind':'article','contentValidated':True,'fetchedAt':'2026-11-15T03:00:00+00:00'}
             (f.S/(key+'.json')).write_text(json.dumps(old));(f.S/(key+'.html.gz')).write_bytes(gzip.compress(raw))
             r=f.fetch(url)
         self.assertEqual(request.call_count,0)
         self.assertEqual(r['fetchedAt'],old['fetchedAt'])
         self.assertEqual(r['publicationEvidence'][0]['raw'],'2026-11-14T11:00:00+05:00')
-        self.assertEqual(r['parser_version'],'source-html-v16')
+        self.assertEqual(r['parser_version'],f.PARSER_VERSION)
 
 class CharacterEncodingRegressions(unittest.TestCase):
     title='Суғд: иқтисод ва соҳибкорӣ'
@@ -209,7 +215,7 @@ class CharacterEncodingRegressions(unittest.TestCase):
         raw=self.page().decode('latin1').encode('utf-8')
         class BrokenResponse(Response):
             def read(self,*a):return raw
-        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f.urllib.request,'urlopen',return_value=BrokenResponse()) as request:
+        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f,'bounded_response',return_value=worker_response(BrokenResponse())) as request:
             r=f.fetch('https://example.com/story')
         self.assertEqual(request.call_count,1);self.assertFalse(r['contentValidated'])
         self.assertIn('HTML_mojibake_detected',r['error'])
@@ -262,7 +268,7 @@ class InstitutionArticleIdentityRegressions(unittest.TestCase):
     def test_unknown_frozen_body_does_not_follow_listing_refresh_policy(self):
         url='https://example.com/institution/notice-123';key=hashlib.sha256(url.encode()).hexdigest()[:18]
         old={'url':url,'status':200,'key':key,'source_kind':'unknown','parser_version':f.PARSER_VERSION,'contentValidated':True,'fetchedAt':'2026-11-15T20:00:00+00:00','title':'Unresolved institution body'}
-        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:
+        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:
             (f.S/(key+'.json')).write_text(json.dumps(old))
             r=f.fetch(url,'2026-11-16T06:00:00+08:00')
         self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt'])
@@ -281,43 +287,43 @@ class ExplicitSourceRoleRegressions(unittest.TestCase):
     def test_declared_unknown_listing_refreshes_after_cutoff_without_changing_identity(self):
         url='https://example.com/department/notices-feed'
         self.cached(url,'unknown',fetched_at='2026-11-16T05:59:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen',return_value=self.unknown_response(url)) as request:
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response',return_value=worker_response(self.unknown_response(url))) as request:
             r=f.fetch(url,'2026-11-16T06:00:00+08:00',source_role='listing')
         self.assertEqual(request.call_count,1);self.assertEqual(r['source_kind'],'unknown')
         self.assertEqual(r['fetchedAt'],'2026-11-15T22:10:00+00:00')
     def test_declared_unknown_listing_reuses_actual_post_cutoff_cache(self):
         url='https://example.com/department/notices-feed'
         old=self.cached(url,'unknown',fetched_at='2026-11-16T06:04:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:
             r=f.fetch(url,'2026-11-16T06:00:00+08:00',source_role='listing')
         self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt'])
     def test_declared_unknown_listing_uses_existing_fifteen_minute_freshness(self):
         url='https://example.com/department/notices-feed'
         self.cached(url,'unknown',age=901)
-        with patch.object(f.urllib.request,'urlopen',return_value=self.unknown_response(url)) as request:
+        with patch.object(f,'bounded_response',return_value=worker_response(self.unknown_response(url))) as request:
             self.assertEqual(f.fetch(url,source_role='listing')['source_kind'],'unknown')
         self.assertEqual(request.call_count,1)
     def test_unknown_article_and_auto_roles_keep_original_body_evidence(self):
         url='https://example.com/department/notice-123'
         old=self.cached(url,'unknown',fetched_at='2026-11-16T05:00:00+08:00')
         for role in ('article','auto',None):
-            with self.subTest(role=role),patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:
+            with self.subTest(role=role),patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:
                 r=f.fetch(url,'2026-11-16T06:00:00+08:00',source_role=role)
                 self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt'])
     def test_listing_hint_cannot_refetch_confirmed_article(self):
         url='https://example.com/department/notice-123'
         old=self.cached(url,'article',fetched_at='2026-11-16T05:00:00+08:00')
-        with patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:
+        with patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:
             r=f.fetch(url,'2026-11-16T06:00:00+08:00',source_role='listing')
         self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt'])
     def test_future_minimum_is_rejected_for_all_source_roles_before_cache(self):
         url='https://example.com/department/notices-feed';self.cached(url,'unknown')
         for role in ('auto','article','listing'):
-            with self.subTest(role=role),patch.object(f,'datetime',CutoffClock),patch.object(f.urllib.request,'urlopen') as request:
+            with self.subTest(role=role),patch.object(f,'datetime',CutoffClock),patch.object(f,'bounded_response') as request:
                 with self.assertRaisesRegex(ValueError,'cannot be in the future'):f.fetch(url,'2026-11-16T06:10:01+08:00',source_role=role)
                 self.assertEqual(request.call_count,0)
     def test_invalid_source_role_is_not_silently_ignored(self):
-        with patch.object(f.urllib.request,'urlopen') as request:
+        with patch.object(f,'bounded_response') as request:
             with self.assertRaisesRegex(ValueError,'source-role must be'):f.fetch('https://example.com/story',source_role='force')
         self.assertEqual(request.call_count,0)
     def test_navigation_ancestry_is_preserved_without_hiding_article_body_links(self):
@@ -365,16 +371,16 @@ class CurrentArticleBodyRegressions(unittest.TestCase):
     def test_v15_wrong_body_cache_is_reparsed_without_refetch_or_new_fetch_time(self):
         url='https://example.com/tax-story';key=hashlib.sha256(url.encode()).hexdigest()[:18]
         old={'url':url,'status':200,'final_url':url,'parser_version':'source-html-v15','source_kind':'article','contentValidated':True,'text':'Wrong unrelated recommendation','fetchedAt':'2026-11-15T13:22:37+00:00'}
-        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f.urllib.request,'urlopen') as request:
+        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f,'bounded_response') as request:
             (f.S/(key+'.json')).write_text(json.dumps(old));(f.S/(key+'.html.gz')).write_bytes(gzip.compress(self.alau_structure()))
             r=f.fetch(url)
-        self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt']);self.assertEqual(r['parser_version'],'source-html-v16')
+        self.assertEqual(request.call_count,0);self.assertEqual(r['fetchedAt'],old['fetchedAt']);self.assertEqual(r['parser_version'],f.PARSER_VERSION)
         self.assertTrue(r['fullTextValidated']);self.assertIn('300 fixture businesses',r['text']);self.assertNotEqual(r['text'],old['text'])
     def test_semantic_body_failure_survives_cache_reparse_without_network_retry(self):
         url='https://example.com/tax-story';key=hashlib.sha256(url.encode()).hexdigest()[:18]
         old={'url':url,'status':200,'final_url':url,'parser_version':'source-html-v15','source_kind':'article','contentValidated':True,'text':'Wrong cached body','fetchedAt':'2026-11-15T13:22:37+00:00'}
         raw=self.alau_structure().replace(('<h1 class="post-title">'+self.title+'</h1>').encode(),b'<h1 class="post-title">Conflicting current headline</h1>')
-        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f.urllib.request,'urlopen') as request:
+        with tempfile.TemporaryDirectory() as tmp,patch.object(f,'S',Path(tmp)),patch.object(f,'bounded_response') as request:
             (f.S/(key+'.json')).write_text(json.dumps(old));(f.S/(key+'.html.gz')).write_bytes(gzip.compress(raw))
             first=f.fetch(url);second=f.fetch(url)
         self.assertEqual(request.call_count,0)
@@ -449,6 +455,28 @@ class PublisherTemplateRegressions(unittest.TestCase):
     def test_khovar_image_only_body_does_not_fall_back_to_unrelated_footer(self):
         r=self.parse('https://khovar.tj/rus/2024/04/image-quote/',self.khovar_body('Print page. Send. 20 April 2024.'))
         self.assertFalse(r['fullTextValidated']);self.assertEqual(r['articleBodyEvidence']['status'],'publisher_body_has_no_substantive_text')
+    def test_khovar_uses_unique_visible_date_beside_the_current_headline(self):
+        from discover_work_sources import published_intervals
+        url='https://khovar.tj/rus/2026/11/current-business-notice/'
+        current=self.khovar_body(self.prose).replace('</h1>','</h1><span>Ноябрь 25, 2026 17:00</span>'
+            '<aside><span>Ноябрь 26, 2026 18:00</span></aside>',1)
+        r=self.parse(url,current)
+        self.assertEqual(published_intervals(r,'tj')[0][0].isoformat(),'2026-11-25T17:00:00+05:00')
+        self.assertEqual(r['publicationEvidence'][0]['rawLocalTime'],'Ноябрь 25, 2026 17:00')
+        self.assertEqual(published_intervals(self.parse(url,current.replace('</aside>','</aside><span>Ноябрь 25, 2026 18:00</span>')),'tj'),[])
+    def test_superkg_placeholder_only_loses_to_bound_footer_without_conflict(self):
+        from discover_work_sources import published_intervals
+        url='https://www.super.kg/kabar/news/500992'
+        body=('<div><h1 class="news_title" data-id="500992">Current business notice</h1>'
+              '<div class="my-4"><div id="inside-texts" class="inside-text"><p>'+self.prose+'</p></div>'
+              '<div><section itemprop="author" itemscope><span itemprop="additionalName">Synthetic Author</span></section></div>'
+              '<div class="my-3 text-end text-secondary"><div><time itemprop="datePublished" datetime="2026-11-25T14:40:00+06:00">25 November</time></div></div></div></div>')
+        metadata='<meta property="og:url" content="'+url+'"><meta property="article:published_time" content="1970-01-01T06:00:00+06:00">'
+        r=self.parse(url,body,head=metadata)
+        self.assertEqual([i[0].isoformat() for i in published_intervals(r,'kg')],['2026-11-25T14:40:00+06:00'])
+        self.assertIn('publisher_unix_epoch_placeholder',r['excludedPublicationEvidence'][0]['confidenceBasis'])
+        contradictory=self.parse(url,body,head=metadata+'<meta name="publication_date" content="2026-11-25T00:00:00+06:00">')
+        self.assertTrue(contradictory['publicationReviewRequired'])
     def tilda_body(self):
         return '<div id="allrecords" class="t-records" data-tilda-page-id="345011103" data-tilda-project-id="11749581"><div class="t-rec"><h1 class="tn-atom">An editorial cover headline for this same longread</h1><p>'+self.prose+'</p><ol><li>Manufacturing step 1</li><li>Manufacturing step 2</li></ol></div></div>'
     def test_tengri_tilda_editorial_cover_is_bound_to_exact_current_article_url(self):

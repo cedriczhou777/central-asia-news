@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from editorial_policy import EFFECTIVE_ISSUE, MIN_ARTICLES, TARGET_ARTICLES
 from work_quantity_policy import _dt, _listing_attempt, _url, terminal_source_failure
 from news_queue_policy import partition_coverage, validate_queue_accounting
 
@@ -155,6 +156,7 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
                   None, 'unresolved_discovery_budget')
 
     pending.sort(key=lambda r: (r['sourceId'], r['kind'], r['url'] or '', r['reason']))
+    daily_policy = cutoff.date().isoformat() >= EFFECTIVE_ISSUE
     proof = {'version': COVERAGE_VERSION, 'country': country, 'windowEnd': cutoff.isoformat(),
             'observedAt': observed.isoformat(),
             'state': 'blocked' if pending else 'review_required' if gaps else 'observed',
@@ -162,7 +164,8 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
             'queues': queues, 'closedQueueWork': closed, 'reviewWork': review_work,
             'scanBudget': {'bounded': bounded_scan, 'maxSeconds': max_seconds,
                            'observedAt': inventory.get('observedAt')},
-            'coverageChecked': False, 'normalTarget': [15, 20], 'scarcityRange': [10, 14]}
+            'coverageChecked': False, 'normalTarget': [TARGET_ARTICLES, 8] if daily_policy else [15, 20],
+            'scarcityRange': [MIN_ARTICLES, TARGET_ARTICLES - 1] if daily_policy else [10, 14]}
     metadata = {}
     for row in leads:
         metadata.setdefault((row.get('sourceId'), _url(row.get('source_url'))), {})['lead'] = row

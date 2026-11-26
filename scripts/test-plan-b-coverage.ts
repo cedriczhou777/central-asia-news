@@ -76,4 +76,39 @@ try {
 } finally {
   Date.now = originalNow;
 }
-console.log('Plan B coverage: gap signature, critical topics, scarcity, unfinished article, per-country isolation and hashes passed.');
+const newIssue = '2026-11-27';
+const newObserved = newIssue + 'T06:03:00+08:00';
+const newer = candidates.slice(0,8).map(candidate => ({ ...candidate, publishedAt:'2026-11-26T19:00:00+08:00' }));
+const followups = candidates.slice(8,11).map(candidate => ({ ...candidate,
+  publishedAt:'2026-11-25T17:00:00+08:00', previousDay:true as const }));
+const snapshotNew = snapshot({ issue:newIssue, country:'kg', phase:'final', observedAt:newObserved, pendingSources:[],
+  coverage:coverageFixture('kg',newObserved), candidates:[...newer,...followups,
+    {...candidates[11],publishedAt:'2026-11-25T05:59:59+08:00',previousDay:true}] });
+assert.equal(snapshotNew.candidates.length,11,'previous-day candidates are retained, older stories are excluded');
+function newEditorial(selected: typeof snapshotNew.candidates, exception = false) {
+  const stories = selected.map(candidate => ({
+    ...rows[0], id:candidate.id, source_url:candidate.sourceUrl, revision:candidate.revision,
+    sourceHash:candidate.sourceHash, title:(candidate.previousDay ? '【延续关注】' : '')+candidate.id,
+    published_at:candidate.publishedAt,
+    ...(candidate.previousDay ? {previousDay:true,followUpReason:'Synthetic documented continuing reader relevance'} : {}),
+  }));
+  return { finalHash:snapshotNew.hash, inspected:snapshotNew.candidates.map(row=>row.id),
+    draft:{...draft, issueDate:newIssue, windowStart:'2026-11-26T06:00:00+08:00',
+      windowEnd:newIssue+'T06:00:00+08:00', coverageEnd:newIssue+'T06:00:00+08:00', articles:stories,
+      ...(exception ? { quantityExceptionReview:{ status:'approved', reviewer:review.reviewer, evidence:[{fixture:true}] } } : {})},
+    review:{...review, issueDate:newIssue, articles:stories, originalHash:digest(stories), finalBodyHash:digest(stories)} };
+}
+assert.throws(()=>verifyEditorial(newEditorial(newer.slice(0,5),true),snapshotNew),/daily_edition_below_minimum/);
+assert.throws(()=>verifyEditorial(newEditorial(newer.slice(0,6)),snapshotNew),/quantity_exception_review_required/);
+assert.equal(verifyEditorial(newEditorial(newer.slice(0,6),true),snapshotNew).articleCount,6);
+assert.equal(verifyEditorial(newEditorial([...newer.slice(0,5),...followups.slice(0,2)]),snapshotNew).articleCount,7);
+assert.throws(()=>verifyEditorial(newEditorial([...newer.slice(0,4),...followups]),snapshotNew),/too_many_previous_day_followups/);
+const duplicated = newEditorial(newer.slice(0,7));
+const copiedTitles = duplicated.review.articles.map((article,i)=>i===1 ? {...article,title:duplicated.review.articles[0].title+'！'} : article);
+assert.throws(()=>verifyEditorial({...duplicated,review:{...duplicated.review,articles:copiedTitles,finalBodyHash:digest(copiedTitles)}},
+  snapshotNew),/same_issue_story_duplicate/);
+const shortSupply = snapshot({...snapshotNew,candidates:[...newer.slice(0,4),...followups]});
+const supplyReceipt = {snapshot:shortSupply,cache:{path:'fixture',sha256:sha256('fixture'),bytes:1},metrics:{}};
+assert.equal(finalCoverageOutcome(supplyReceipt,0).state,'retry','try bounded supplementation before signing a short pool');
+assert.equal(finalCoverageOutcome(supplyReceipt,1).state,'ready','editorial work may proceed while a real shortage is reported');
+console.log('Plan B coverage: independent gaps, verified time, six-story minimum, previous-day limits and same-edition deduplication passed.');

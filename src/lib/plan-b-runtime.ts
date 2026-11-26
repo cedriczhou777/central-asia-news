@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { randomUUID } from 'node:crypto';
-import { freezeBlockReason, PLAN_B_COUNTRIES, retryableStatus, reviewableWindowCount, SHORT_EDITION_FIRST_ISSUE, type PlanBCountry } from './plan-b-handoff';
+import { DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, freezeBlockReason, PLAN_B_COUNTRIES,
+  retryableStatus, reviewableWindowCount, SHORT_EDITION_FIRST_ISSUE, type PlanBCountry } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
 import { claim, getState, knownLiveReceipts, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry, runCloudScript } from './plan-b-worker';
@@ -79,15 +80,18 @@ export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number):
   const shortEditionsAllowed = receipt.snapshot.issue >= SHORT_EDITION_FIRST_ISSUE;
   const reviewableCandidates = shortEditionsAllowed ? reviewableWindowCount(receipt.snapshot) : receipt.snapshot.candidates.length;
   const shortage = reviewableCandidates < (shortEditionsAllowed ? 1 : 10);
-  const reason = freezeBlockReason(receipt.snapshot) || (shortage ? 'insufficient_reviewable_candidates' : null);
+  const dailyPolicy = receipt.snapshot.issue >= EDITORIAL_POLICY_FIRST_ISSUE;
+  const belowTarget = dailyPolicy && reviewableCandidates < DAILY_TARGET_ARTICLES + 1;
+  const reason = freezeBlockReason(receipt.snapshot) || (shortage ? 'insufficient_reviewable_candidates'
+    : belowTarget && attempt === 0 ? 'candidate_supply_below_target' : null);
   const limit=receipt.snapshot.issue>='2026-11-23'?3:2;
-  const coverageRecovery = shortage;
+  const coverageRecovery = shortage || reason === 'candidate_supply_below_target';
   return reason ? { state: attempt+1<limit ? 'retry' : 'blocked', delay:120_000,
     receipt:{ ...receipt, pendingSources:receipt.snapshot.pendingSources, coverage:receipt.snapshot.coverage, reason, reviewableCandidates,
       inventoryCandidates:receipt.snapshot.candidates.length,
       recovery:attempt+1<limit ? {mode:coverageRecovery?'fresh_candidate_refresh':attempt>=1?'focused_source_refresh':'bounded_retry',remainingAttempts:limit-attempt-1}
         : {mode:coverageRecovery?'candidate_supply_shortfall':'important_evidence_required',automaticAttemptsExhausted:true,checkpointsPreserved:true} } }
-    : ready(receipt);
+    : ready(dailyPolicy ? { ...receipt, reviewableCandidates, supplyBelowTarget: belowTarget } : receipt);
 }
 
 export function recoverySources(coverage: SnapshotReceipt['snapshot']['coverage'] | undefined) {

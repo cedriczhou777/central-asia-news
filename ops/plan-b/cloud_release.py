@@ -12,6 +12,8 @@ from build_reviewed_word import build_word
 from cloud_handoff import LIMIT, REGISTRY, inventory_entries, read, restore, write
 from prepare_country_release import prepare
 from prepare_editorial_input import candidate_originals, discovery_index
+from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES, previous_day
+from discover_work_sources import published_intervals
 from source_article_images import collect, save_manifest
 from validate_work_package import digest
 from source_coverage import assess_coverage, require_coverage_review
@@ -165,6 +167,13 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     draft['planBReviewerRun'] = review.get('reviewer')
     draft['planBFinalHash'] = supplied.get('finalHash')
     originals = read_originals(source, issue, country, draft, review)
+    for article in draft['articles'] + review['articles']:
+        if article.get('previousDay') is True:
+            stamps = {item[0] for item in published_intervals(originals[article['id']], country)}
+            published = _dt(article['published_at'])
+            if (issue < EFFECTIVE_ISSUE or stamps != {published}
+                    or not previous_day(published, _dt(draft['windowStart']))):
+                raise ValueError('previous_day_publication_evidence_mismatch')
     attach_audit(source, issue, country, draft, review)
     for role in (draft, review):
         role['articles'] = [bind_original(article, originals[article['id']]) for article in role['articles']]
@@ -185,9 +194,17 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     review['originalHash'], review['finalBodyHash'] = digest(draft['articles']), digest(final)
     release = directory / 'release'
     result = prepare(release, draft, review, issue, country, version, 'normal', saved / 'manifest.json')
+    target = TARGET_ARTICLES if issue >= EFFECTIVE_ISSUE else 15
     result.update(coverageState='checked_with_gaps' if actual['gaps'] else 'checked',
-                  quantityState='target_met' if len(final) >= 15 else 'scarcity_approved',
+                  quantityState='target_met' if len(final) >= target else 'scarcity_approved',
                   coverageGapCount=len(actual['gaps']))
+    if issue >= EFFECTIVE_ISSUE:
+        result['sourcePhotoChecks'] = {
+            photo['id']: {'state': photo['sourceImage']['status'],
+                          'candidateCount': len(photo['sourceImage']['candidateUrls']),
+                          'reason': photo.get('imageUnavailableReason')}
+            for photo in photos
+        }
     write(directory / 'release-status.json', result)
     save_release(release, directory / 'prepared.gz')
 

@@ -1,7 +1,7 @@
 """Offline round-trip through the source archive, signed package and Word."""
 
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 import gzip
 import hashlib
@@ -32,61 +32,73 @@ ISSUE = '2026-11-21'
 STAMP = ISSUE + 'T06:01:00+08:00'
 
 
-def inputs(directory, *, transport_budget=False):
+def inputs(directory, *, transport_budget=False, issue=ISSUE, count=15, photo_index=0, follow_up=False):
+    end = datetime.fromisoformat(issue + "T06:00:00+08:00")
+    stamp = (end + timedelta(minutes=1)).isoformat()
     source = directory / 'source-fixture'
     source.mkdir()
     evidence = source / 'evidence'
     evidence.mkdir()
-    draft, audit, _ = fixture()
+    draft, audit, _ = fixture(count)
     for index, row in enumerate(audit):
-        row.update(fetchedAt=STAMP, eventId=f'fake-{index}')
+        row.update(fetchedAt=stamp, eventId=f'fake-{index}')
     for index, (item, entry) in enumerate(zip(draft['articles'], draft['candidateLedger'], strict=True)):
         text = f'Synthetic original source text for a single test article {index}.'
-        photo_list = ([{'url': 'https://source0.example/original.png', 'basis': 'article_body'}] if index == 0 else [])
+        photo_list = ([{'url': 'https://source0.example/original.png', 'basis': 'article_body'}] if index == photo_index else [])
+        previous = follow_up and index == count - 1
+        published = (end - (timedelta(hours=30) if previous else timedelta(seconds=1))).isoformat()
         raw = {'title': f'Synthetic title {index}', 'text': text, 'articleImages': {'candidates': photo_list},
-               'publicationEvidence': [{'kind': 'published', 'value': ISSUE + 'T05:59:59+08:00', 'timezoneEvidence': 'explicit'}]}
+               'publicationEvidence': [{'kind': 'published', 'value': published, 'timezoneEvidence': 'explicit'}]}
         path = evidence / f'article-{index}.json'
         write(path, raw)
         exact = hashlib.sha256(path.read_bytes()).hexdigest()
         source_hash = hashlib.sha256(text.encode()).hexdigest()
         entry.update(sourceJSON=str(path), sourceJSONSha256=exact, sourceHash=source_hash,
                      fullTextValidated=True, firstDisclosureVerified=True,
-                     publicationWindowAssessment='in_window', discoveredAt=STAMP, fullTextFetchedAt=STAMP)
+                     publicationWindowAssessment='outside_window' if previous else 'in_window',
+                     discoveredAt=stamp, fullTextFetchedAt=stamp)
+        if previous:
+            entry.update(decision='rejected', reason='explicit_publication_outside_window', decisionOrigin='mechanical')
         for item_evidence in entry['publicationEvidence'] + entry['evidence']:
-            item_evidence['observedAt'] = STAMP
+            item_evidence['observedAt'] = stamp
         audit[11 + index]['sourceHash'] = source_hash
         item.update(title=f'测试新闻{index}', body='这是离线合成的测试稿件。', category='产业', source='Fixture Media',
-                    sourceHash=source_hash, published_at=ISSUE + 'T05:59:59+08:00',
+                    sourceHash=source_hash, published_at=published,
                     timeEvidence='合成报文显示的带时区发布时间',
                     firstPublicationCheck='合成报文同时提供首次披露和实际发布时间')
-    region = {'issueDate': ISSUE, 'country': 'kg', 'windowStart': '2026-11-20T06:00:00+08:00',
-              'windowEnd': ISSUE + 'T06:00:00+08:00'}
+        if previous:
+            item.update(title='【延续关注】'+item['title'],previousDay=True,followUpReason='Synthetic continuing interest after the previous publication')
+    region = {'issueDate': issue, 'country': 'kg', 'windowStart': (end - timedelta(days=1)).isoformat(),
+              'windowEnd': end.isoformat()}
     registry = directory / 'registry.json'
     write(registry, draft['sourceRegistry'])
     write(source / 'candidate_ledger.json', {**region, 'candidateLedger': draft['candidateLedger']})
     inventory = {**region, 'sourceScanAudit': audit, 'sourceScanAuditHistory': [],
                  'listingQueue': [], 'articleQueue': [], 'budgetEvents': []}
     if transport_budget:
-        inventory.update(maxSeconds=480.0, observedAt=STAMP)
+        inventory.update(maxSeconds=480.0, observedAt=stamp)
     write(source / 'source_scan_audit.json', inventory)
     backup(source, directory / 'input.gz')
-    draft.update(**region, coverageEnd=ISSUE + 'T06:00:00+08:00')
+    draft.update(**region, coverageEnd=end.isoformat())
     rows = copy.deepcopy(draft['articles'])
     review = {**region, 'reviewer': 'independent-test', 'stage': 'verified', 'issues': [],
               'articles': rows, 'originalHash': digest(draft['articles']), 'finalBodyHash': digest(rows),
               'fullSourceReviewCompleted': True, 'titleFactReviewCompleted': True, 'bodyFactReviewCompleted': True}
     proof = assess_coverage(read(registry), 'kg', read(source / 'source_scan_audit.json'),
-                            datetime.fromisoformat(ISSUE + 'T06:00:00+08:00'),
-                            draft['candidateLedger'], observed_at=STAMP)
+                            end,
+                            draft['candidateLedger'], observed_at=stamp)
     if transport_budget:
         # Node JSON.stringify transports the integral Python float as an integer.
         proof['scanBudget']['maxSeconds'] = 480
     final_hash = 'f' * 64
     review['coverageReview'] = {'status': 'verified', 'reviewer': review['reviewer'], 'finalHash': final_hash,
-                               'reviewedAt': STAMP, 'criticalTopicsReviewed': ['policy', 'energy', 'investment', 'business'],
+                               'reviewedAt': stamp, 'criticalTopicsReviewed': ['policy', 'energy', 'investment', 'business'],
                                'sourceIdsReviewed': proof['readableSources'] + [g['sourceId'] for g in proof['gaps']],
                                'gapResolutions': [{'sourceId': g['sourceId'], 'reason': 'Synthetic independent coverage of all four critical news topics',
                                                    'alternativeCandidateIds': ['article0']} for g in proof['gaps']]}
+    if follow_up:
+        review['candidateDecisions'] = {rows[-1]['id']: {'decision': 'selected',
+            'reason': 'Verified original retained explicitly as a previous-day follow-up in this fixture'}}
     with gzip.open(directory / 'editorial.gz', 'wt') as out:
         json.dump({'draft': draft, 'review': review, 'coverage': proof, 'finalHash': final_hash}, out)
     return source, registry
@@ -96,13 +108,13 @@ def photo(original, image_root):
     urls = [row['url'] for row in original['articleImages']['candidates']]
     decision = {'sourceUrl': original['source_url'], 'candidateUrls': urls, 'status': 'original' if urls else 'none'}
     if not urls:
-        return {'sourceImage': decision, 'imageUnavailableReason': '合成原文无图'}
+        return {'id': original['id'], 'sourceImage': decision, 'imageUnavailableReason': '合成原文无图'}
     target = image_root / 'test.png'
     Image.new('RGB', (120, 90), 'blue').save(target)
     sha = hashlib.sha256(target.read_bytes()).hexdigest()
     ready = image_root / sha
     target.rename(ready)
-    return {'sourceImage': decision, 'image_url': urls[0], 'image_sha256': sha, 'image_bytes': ready.stat().st_size}
+    return {'id': original['id'], 'sourceImage': decision, 'image_url': urls[0], 'image_sha256': sha, 'image_bytes': ready.stat().st_size}
 
 
 class CloudReleaseTest(unittest.TestCase):
@@ -159,6 +171,35 @@ class CloudReleaseTest(unittest.TestCase):
             self.assertEqual(package['readyCountries'], ['kg'])
             self.assertEqual(package['countries']['kg']['bodyHtml'].count('<img '), 1)
             self.assertIn('https://source0.example/original.png', package['countries']['kg']['bodyHtml'])
+
+    def test_daily_edition_renders_a_previous_day_followup_and_second_story_cover(self):
+        issue = '2026-11-27'
+        now = datetime.fromisoformat(issue + 'T07:00:00+08:00')
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            source, registry = inputs(directory, issue=issue, count=7, photo_index=1, follow_up=True)
+            inventory = {row['id']: row for row in inventory_entries(source, issue, 'kg')}
+            self.assertEqual(inventory['article6']['publishedAt'], '2026-11-26T00:00:00+08:00')
+            self.assertIs(inventory['article6']['previousDay'], True)
+            self.assertEqual(inventory['article1']['photoCandidates'], 1)
+            gate = partial(verify_rendered_package, now=now)
+            with patch.object(cloud_release, 'REGISTRY', registry), patch.object(prepare_country_release, 'verify_rendered_package', gate), \
+                    patch('source_coverage.datetime') as clock:
+                clock.now.return_value = now
+                cloud_release.prepare_from_handoff(directory, issue, 'kg', issue + '-r104', fetch_photo=photo)
+            release = directory / 'release'
+            result = read(directory / 'release-status.json')
+            self.assertEqual(result['quantityState'], 'target_met')
+            self.assertEqual(result['sourcePhotoChecks']['article0']['state'], 'none')
+            self.assertEqual(result['sourcePhotoChecks']['article1']['state'], 'original')
+            package = read(release / 'package.json')['countries']['kg']
+            self.assertEqual(package['coverUrl'], 'https://source0.example/original.png')
+            self.assertLess(package['bodyHtml'].index('测试新闻0'), package['bodyHtml'].index('<img '))
+            self.assertIn('【延续关注】测试新闻6', package['bodyHtml'])
+            word = cloud_release.build_word(release, directory / 'test.docx')
+            self.assertEqual((word['articles'],word['images']), (7,1))
+            with ZipFile(directory / 'test.docx') as doc:
+                self.assertIn('【延续关注】测试新闻6', doc.read('word/document.xml').decode())
 
     def test_source_timeout_is_neither_success_nor_empty_source(self):
         registry = {'sources': [{'id': 'missing', 'country': 'kg'}, {'id': 'retrying', 'country': 'kg'}]}

@@ -13,7 +13,8 @@ import { saveFile, verifyObject, wordLink, type ObjectReceipt, type SnapshotRece
 import { restoreCache, runCloudScript, scratch, timeWithin } from './plan-b-worker';
 
 type ReleaseReceipt = { prepared: ObjectReceipt; version: string; images: number; editorialHash: string; transportHash?: string;
-  coverageState?: string; quantityState?: string; coverageGapCount?: number };
+  coverageState?: string; quantityState?: string; coverageGapCount?: number;
+  sourcePhotoChecks?: Record<string, {state:string;candidateCount:number;reason:string|null}> };
 export type WordReceipt = { document: ObjectReceipt; version: string; completedAt: string };
 type ImageRow = { url: string; sha256: string; bytes: number };
 
@@ -38,7 +39,8 @@ export async function prepareCountryRelease(source: SnapshotReceipt, editorial: 
     const { ready } = await readReleaseTransport(join(directory, 'release'), version, country);
     const prepared = await saveFile(issue, country, 'gz', join(directory, 'prepared.gz'));
     return { prepared, version, images: state.uniqueImages, editorialHash: editorial.editorialHash, transportHash: contentHash(ready),
-      coverageState:state.coverageState, quantityState:state.quantityState, coverageGapCount:state.coverageGapCount };
+      coverageState:state.coverageState, quantityState:state.quantityState, coverageGapCount:state.coverageGapCount,
+      ...(state.sourcePhotoChecks ? { sourcePhotoChecks: state.sourcePhotoChecks } : {}) };
   });
 }
 
