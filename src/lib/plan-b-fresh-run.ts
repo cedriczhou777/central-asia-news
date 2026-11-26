@@ -12,6 +12,8 @@ const deadline=Date.parse('2026-11-26T20:00:00+08:00');
 const key=(step:string)=>`${run}/${step}`;
 const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'fresh-public-source-collection'};
 const hash=(value:unknown)=>sha256(canonicalJson(value));
+const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
+  (scope.snapshot.candidates.length<10?'insufficient_reviewable_candidates':null);
 type Client=ReturnType<typeof getSupabaseClient>;
 type Job={country:PlanBCountry;record_key:string;state:string;content_hash:string;payload:Record<string,unknown>;
   attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean}|null};
@@ -54,7 +56,7 @@ export async function processFreshRun(sb=getSupabaseClient()){
   if(authorized.error||authorized.data?.state!=='available'||authorized.data.content_hash!==hash(request)||
       hash(authorized.data.payload)!==hash(request))return;
   const records=await sb.from(TABLE).select('country,record_key,state,content_hash,payload,attempts,lease_until,result')
-    .eq('issue_date',issue).eq('kind','manual_use').in('record_key',[key('scan'),key('prepare')]);
+    .eq('issue_date',issue).eq('kind','manual_use').in('record_key',[key('scan'),key('extend'),key('prepare')]);
   if(records.error)return;
   const rows=(records.data??[]) as Job[];
   const row=(country:PlanBCountry,step:string)=>rows.find(r=>r.country===country&&r.record_key===key(step));
@@ -65,18 +67,30 @@ export async function processFreshRun(sb=getSupabaseClient()){
         const namespace=key(`scan-${attempt}`);
         let originalNamespace=namespace;
         let scope=await collectCountry(issue,country,'final',undefined,undefined,{namespace,deadline});
-        const reason=(value:SnapshotReceipt)=>freezeBlockReason(value.snapshot) ||
-          (value.snapshot.candidates.length<10?'insufficient_reviewable_candidates':null);
         const focus=recoverySources(scope.snapshot.coverage);
-        if(reason(scope)&&focus.length){
+        if(blockReason(scope)&&focus.length){
           originalNamespace=namespace+'/supplement';
           scope=await collectCountry(issue,country,'final',scope.cache,focus,{namespace:originalNamespace,deadline});
         }
-        return {scope,originalNamespace,ready:!reason(scope),reason:reason(scope),usedPriorIssueCache:false};
+        const reason=blockReason(scope);
+        return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false};
       });
+      const continuation=row(country,'extend');
+      const base=current?.state==='accepted'?current.result?.scope:undefined;
+      if(base&&!current?.result?.ready){
+        // A single new pass resumes only this execution's recorded observations.
+        // The collector prioritizes sources the first pass did not reach.
+        await advance(sb,country,'extend',continuation,{run,country,baseHash:base.snapshot.hash},async attempt=>{
+          const originalNamespace=key(`extend-${attempt}`);
+          const scope=await collectCountry(issue,country,'final',base.cache,undefined,{namespace:originalNamespace,deadline});
+          const reason=blockReason(scope);
+          return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false};
+        });
+      }
       const prepare=row(country,'prepare');
-      if(current?.state==='accepted'&&current.result?.ready&&current.result.scope&&prepare?.payload.run===run){
-        const source=current.result.scope;
+      const frozen=current?.result?.ready?current:continuation;
+      if(frozen?.state==='accepted'&&frozen.result?.ready&&frozen.result.scope&&prepare?.payload.run===run){
+        const source=frozen.result.scope;
         await advance(sb,country,'prepare',prepare,prepare.payload,async ()=>{
           const result=await prepareIsolatedRelease(source,prepare.payload.handoff,request.version,deadline);
           return {ok:true,...result};
