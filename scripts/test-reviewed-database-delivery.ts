@@ -17,7 +17,9 @@ const ingest = process.env.INGEST_SECRET;
 const planBIngest = process.env.PLAN_B_INGEST_SECRET;
 const release = validatePackage({ version: issue, readyCountries: ['kz', 'uz', 'kg'],
   countries: Object.fromEntries(['kz', 'uz', 'kg'].map(code => [code, {
-    title: `Draft fixture ${code}`, summary: 'Summary', bodyHtml: `<p>${code} body</p>`, sourceName: 'Fixture', sourceUrl: '', coverUrl: '',
+    title: `Draft fixture ${code}`, summary: 'Summary',
+    bodyHtml: `<p>${code} body</p><p>Source: <a href="https://example.test/${code}">Fixture News</a></p>`,
+    sourceName: 'Fixture News', sourceUrl: '', coverUrl: '',
   }])),
 });
 const id = 'fixture-approved-command';
@@ -122,6 +124,7 @@ async function main() {
   const created: string[] = [];
   const reads: string[] = [];
   let reconciliationCandidates: string[] = [];
+  let dropSourceLabel = false;
   const adapters: NonNullable<Parameters<typeof processDatabaseDeliveries>[2]> = {
     async prepare(draft) {
       return { html: draft.bodyHtml, images: 0, imageProbes: [], cover: 'fallback',
@@ -139,13 +142,16 @@ async function main() {
       reads.push(mediaId);
       const country = mediaId === 'media-kz' ? 'kz' : 'kg';
       const draft = release.countries[country]!;
-      return { title: draft.title, content: draft.bodyHtml, digest: draft.summary, thumb_media_id: 'fixture-thumb' };
+      const visibleHtml = draft.bodyHtml.replace(/<a\b[^>]*>([^<]+)<\/a>/g, '$1');
+      const content = dropSourceLabel ? visibleHtml.replace('<p>Source: Fixture News</p>', '') : visibleHtml;
+      return { title: draft.title, content, digest: draft.summary, thumb_media_id: 'fixture-thumb' };
     },
   };
   await processDatabaseDeliveries(key, sb, adapters);
   assert.deepEqual(queue.map(row => row.state), ['working', 'rejected', 'accepted']);
   assert.equal(uz.result.reason, 'manual_approval_mismatch');
   assert.equal(kg.result.mediaId, 'media-kg');
+  assert.equal(kg.result.sourceUrlsVisible, false, 'external link targets are separate from source label readback');
   assert.deepEqual(created, [release.countries.kz!.title, release.countries.kg!.title]);
   reconciliationCandidates = ['media-kz', 'ambiguous-match'];
   clock += 6 * 60_000;
@@ -162,6 +168,17 @@ async function main() {
   assert.equal(created.length, 2, 'a lost receipt is reconciled without another draft creation');
   await processDatabaseDeliveries(key, sb, adapters);
   assert.equal(created.length, 2, 'accepted requests are not re-claimed');
+  Object.assign(kg, { state: 'working', lease_until: new Date(clock - 1).toISOString() });
+  dropSourceLabel = true;
+  await processDatabaseDeliveries(key, sb, adapters);
+  assert.equal(kg.state, 'working');
+  assert.equal(kg.result.reason, 'delivery_not_verified', 'a missing source label must fail exact text verification');
+  dropSourceLabel = false;
+  clock += 6 * 60_000;
+  await processDatabaseDeliveries(key, sb, adapters);
+  assert.equal(kg.state, 'accepted');
+  assert.equal(kg.result.mediaId, 'media-kg');
+  assert.equal(created.length, 2, 'confirm the existing draft without recreating it');
   console.log('Database delivery: grant scope, deadline, tamper rejection, independent progress, lost reply readback and dedupe passed; real writes=0.');
 }
 
