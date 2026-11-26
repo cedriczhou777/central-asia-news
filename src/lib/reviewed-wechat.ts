@@ -199,12 +199,15 @@ export async function probeReviewedImage(url: string, referer: string, asset?: R
     if (timer) clearTimeout(timer);
   }
 }
-export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>Promise<void>, smallContainer = false) {
+export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>Promise<void>, smallContainer = false, optionalImages = false) {
   const images = imageUrls(d.bodyHtml);
   const uniqueImages = [...new Set(images)];
   const uploadedUrls: string[] = [];
   const imageProbes: Array<{url:string;accessible:true;sha256?:string;bytes?:number;transport:string}> = [];
   const failures: Array<{index:number;error:unknown}> = [];
+  const omissions = new Map<string,string>();
+  let coverFailure: string|null = null;
+  const reason = (error: unknown) => (error instanceof Error ? error.message : '图片转存失败').slice(0,180);
   let thumb = '';
   let nextIndex = 0;
   let heartbeat = Promise.resolve();
@@ -221,33 +224,52 @@ export async function prepareReviewedDraft(d: ReviewedCountry, onProgress?:()=>P
         await reportProgress();
         if (failures.length) return;
         const asset = d.imageAssets?.[url];
-        let bytes: Buffer;
-        try { bytes = await download(url, d.sourceUrl, undefined, asset); }
-        catch(e) { throw new Error(`正文第${images.indexOf(url)+1}张图片：${e instanceof Error?e.message:'读取失败'}`); }
+        let image: Buffer;
+        try {
+          const bytes = await download(url, d.sourceUrl, undefined, asset);
+          image = smallContainer ? await normalizedJpeg(bytes, 1600) : bytes;
+        } catch (error) {
+          if (!optionalImages) throw new Error('正文第'+(images.indexOf(url)+1)+'张图片：'+reason(error));
+          omissions.set(url, reason(error));
+          continue;
+        }
         if (failures.length) return;
         imageProbes[index] = {url,accessible:true,...asset,transport:asset?'private-original':'legacy-https'};
-        const image = smallContainer ? await normalizedJpeg(bytes, 1600) : bytes;
-        if (index === 0) thumb = (await material(image, smallContainer)).mediaId;
+        if (!optionalImages && index === 0) thumb = (await material(image, smallContainer)).mediaId;
         if (failures.length) return;
-        uploadedUrls[index] = await articleImage(image, smallContainer);
+        try { uploadedUrls[index] = await articleImage(image, smallContainer); }
+        catch (error) {
+          if (!optionalImages) throw error;
+          omissions.set(url, reason(error));
+          continue;
+        }
         await reportProgress();
+        if (optionalImages && !thumb && !coverFailure) {
+          try { thumb = (await material(image, smallContainer)).mediaId; }
+          catch (error) { coverFailure = reason(error); }
+        }
       } catch (error) {
         failures.push({index,error});
       }
     }
   }
   // Let both lanes stop before returning an error, with no orphan image tasks.
-  const workerCount = Math.min(smallContainer ? 1 : REVIEWED_IMAGE_UPLOAD_CONCURRENCY,uniqueImages.length);
+  const workerCount = Math.min(smallContainer || optionalImages ? 1 : REVIEWED_IMAGE_UPLOAD_CONCURRENCY,uniqueImages.length);
   await Promise.all(Array.from({length:workerCount},()=>prepareImages()));
   if (failures.length) throw failures.sort((a,b)=>a.index-b.index)[0].error;
-  const replacements = new Map(uniqueImages.map((url,index)=>[url,uploadedUrls[index]] as const));
-  if (!thumb) thumb = (await material(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64'))).mediaId;
-  const html = replaceImageSources(d.bodyHtml, replacements);
+  const replacements = new Map(uniqueImages.flatMap((url,index)=>uploadedUrls[index] ? [[url,uploadedUrls[index]] as const] : []));
+  const cover = thumb ? 'first_body_image' : 'brand';
+  if (!thumb) {
+    await reportProgress();
+    thumb = (await material(Buffer.from(FALLBACK_THUMB_JPEG_BASE64, 'base64'))).mediaId;
+  }
+  const html = replaceImageSources(d.bodyHtml, replacements, new Set(omissions.keys()));
   if (imageUrls(html).some(url => ![...replacements.values()].includes(url))) throw new Error('正文图片替换不完整');
   return {
     article: { title: d.title, digest: d.summary, content: html, author: '中亚动态–INVEST',
       thumb_media_id: thumb, content_source_url: '', need_open_comment: 0, only_fans_can_comment: 0 },
-    images: images.length, cover: images.length ? 'first_body_image' : 'brand', html, imageProbes,
+    images: imageUrls(html).length, cover, html, imageProbes:imageProbes.filter(Boolean),
+    ...(optionalImages ? {omittedImages:[...omissions].map(([url,error])=>({url,error})), coverFailure} : {}),
   };
 }
 export async function createReviewedDraft(article: object): Promise<string> {

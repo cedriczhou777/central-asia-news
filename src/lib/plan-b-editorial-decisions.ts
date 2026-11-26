@@ -13,7 +13,7 @@ const evidenceNote = (value: unknown): value is Record<string, unknown> =>
   && typeof value.description==='string' && value.description.trim().length>=8;
 
 /** Per-source decisions are bound to the final hash by verifyEditorial. */
-export function editorialFunnel(final: Snapshot, selected: string[], decisions: unknown) {
+export function editorialFunnel(final: Snapshot, selected: string[], decisions: unknown, reviewer: string) {
   if (!record(decisions)) throw new Error('editorial_decision_ledger_required');
   const candidates = new Map(final.candidates.map(c => [c.id,c]));
   const adopted = new Set(selected);
@@ -21,7 +21,10 @@ export function editorialFunnel(final: Snapshot, selected: string[], decisions: 
   const bySource:Record<string, Partial<Record<DecisionStatus,number>>> = Object.create(null);
   const adoptedEventStages = new Set<string>();
   for (const [id,item] of Object.entries(decisions)) {
-    if (!candidates.has(id) || !record(item) || !statuses.includes(item.editorialState as DecisionStatus)
+    const candidate = candidates.get(id);
+    if (!candidate || !record(item) || item.sourceHash!==candidate.sourceHash
+        || item.revision!==candidate.revision || item.reviewedBy!==reviewer
+        || !statuses.includes(item.editorialState as DecisionStatus)
         || typeof item.reason !== 'string' || item.reason.trim().length<8) {
       throw new Error('editorial_decision_identity_or_reason_invalid');
     }
@@ -73,38 +76,50 @@ export function editorialFunnel(final: Snapshot, selected: string[], decisions: 
     finallyAdopted:adopted.size, states:counts, bySource};
 }
 
+type UsageObservation = {
+  callId:string; stage:string; inputHash:string; duplicateInput:boolean;
+  retry:boolean; failed:boolean; evidenceReused:boolean;
+  inputTokens:number|null; outputTokens:number|null; workCredits:number|null;
+};
+
 /** Usage is optional. Unknown usage stays null rather than being inferred from bytes. */
 export function summarizeUsage(raw: unknown, adopted: number) {
   if (!record(raw) || !Array.isArray(raw.observations)) return null;
-  const observed = new Set<string>();
+  const callIds = new Set<string>();
   const inputs = new Set<string>();
-  const stages:Record<string,{calls:number;duplicateInputs:number;retries:number;inputTokens:number;outputTokens:number;
-    measuredCalls:number}> = Object.create(null);
-  let inputTokens=0, outputTokens=0, tokenUsageKnown=true;
+  const observations:UsageObservation[] = [];
+  const stages:Record<string,UsageObservation[]> = Object.create(null);
+  const tokenCount = (value:unknown) => typeof value==='number' && Number.isSafeInteger(value) && value>=0 ? value : null;
+  const sumMeasured = (values:Array<number|null>) =>
+    values.every((value):value is number=>value!==null) ? values.reduce((sum,value)=>sum+value,0) : null;
   for (const row of raw.observations) {
-    if (!record(row) || typeof row.callId!=='string' || !row.callId.trim() || observed.has(row.callId)
+    if (!record(row) || typeof row.callId!=='string' || !/^[\w.:-]{1,128}$/.test(row.callId) || callIds.has(row.callId)
         || !['triage','author','independent_review','fact_check'].includes(String(row.stage))
         || typeof row.inputHash!=='string' || !shaPattern.test(row.inputHash)) continue;
-    observed.add(row.callId);
-    const stage=stages[String(row.stage)]??={calls:0,duplicateInputs:0,retries:0,inputTokens:0,outputTokens:0,measuredCalls:0};
-    const scope=String(row.stage)+'/'+row.inputHash;
-    stage.calls++;
-    if (inputs.has(scope)) stage.duplicateInputs++;
+    callIds.add(row.callId);
+    const stage = String(row.stage);
+    const scope = stage+'/'+row.inputHash;
+    const observation = {callId:row.callId, stage, inputHash:row.inputHash, duplicateInput:inputs.has(scope),
+      retry:row.retry===true, failed:row.failed===true, evidenceReused:row.evidenceReused===true,
+      inputTokens:tokenCount(row.inputTokens), outputTokens:tokenCount(row.outputTokens),
+      workCredits:typeof row.workCredits==='number' && Number.isFinite(row.workCredits) && row.workCredits>=0 ? row.workCredits : null};
     inputs.add(scope);
-    if (row.retry===true) stage.retries++;
-    if (typeof row.inputTokens==='number'&&Number.isSafeInteger(row.inputTokens)&&row.inputTokens>=0
-        && typeof row.outputTokens==='number'&&Number.isSafeInteger(row.outputTokens)&&row.outputTokens>=0) {
-      inputTokens+=row.inputTokens;
-      outputTokens+=row.outputTokens;
-      stage.inputTokens+=row.inputTokens;
-      stage.outputTokens+=row.outputTokens;
-      stage.measuredCalls++;
-    } else tokenUsageKnown=false;
+    observations.push(observation);
+    (stages[stage]??=[]).push(observation);
   }
-  if (!observed.size) return null;
-  return {reportedCalls:observed.size, inputTokens:tokenUsageKnown?inputTokens:null, outputTokens:tokenUsageKnown?outputTokens:null,
-    tokensPerAdopted:tokenUsageKnown&&adopted>0?(inputTokens+outputTokens)/adopted:null, workCredits:null,
-    stages:Object.fromEntries(Object.entries(stages).map(([key,stage])=>[key,{...stage,
-      inputTokens:stage.measuredCalls===stage.calls?stage.inputTokens:null,
-      outputTokens:stage.measuredCalls===stage.calls?stage.outputTokens:null}]))};
+  if (!observations.length) return null;
+  const totals = (rows:typeof observations) => ({
+    calls:rows.length, duplicateInputs:rows.filter(row=>row.duplicateInput).length,
+    retries:rows.filter(row=>row.retry).length, failures:rows.filter(row=>row.failed).length,
+    evidenceReuses:rows.filter(row=>row.evidenceReused).length,
+    inputTokens:sumMeasured(rows.map(row=>row.inputTokens)), outputTokens:sumMeasured(rows.map(row=>row.outputTokens)),
+    measuredCalls:rows.filter(row=>row.inputTokens!==null && row.outputTokens!==null).length,
+    workCredits:sumMeasured(rows.map(row=>row.workCredits)),
+  });
+  const {calls:reportedCalls,...total} = totals(observations);
+  return {reportedCalls, ...total, observations, duplicateInputRatio:total.duplicateInputs/reportedCalls,
+    tokensPerAdopted:total.inputTokens!==null&&total.outputTokens!==null&&adopted>0
+      ?(total.inputTokens+total.outputTokens)/adopted:null,
+    creditsPerAdopted:total.workCredits!==null&&adopted>0?total.workCredits/adopted:null,
+    stages:Object.fromEntries(Object.entries(stages).map(([stage,rows])=>[stage,totals(rows)]))};
 }

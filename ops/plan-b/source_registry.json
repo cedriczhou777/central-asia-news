@@ -1391,6 +1391,11 @@
           "url": "https://report.az/en/economy"
         },
         {
+          "language": "az",
+          "role": "language",
+          "url": "https://report.az/iqtisadiyyat-xeberleri"
+        },
+        {
           "language": "ru",
           "role": "language",
           "url": "https://report.az/ru"

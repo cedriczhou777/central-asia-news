@@ -125,13 +125,16 @@ export function contentHash(value: unknown): string {
   return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 }
 /** Replace only img src attribute values, preserving all surrounding submitted HTML bytes. */
-export function replaceImageSources(html: string, urls: Map<string, string>): string {
-  return html.replace(/<img\b[^>]*>/gi, tag => tag.replace(/(\ssrc\s*=\s*)(["'])(.*?)\2/i, (all, prefix, quote, raw) => {
-    const decoded = load(`<img src=${quote}${raw}${quote}>`)('img').attr('src') || '';
-    const replacement = urls.get(decoded);
-    if (!replacement) throw new Error('图片转存结果缺失');
-    return `${prefix}${quote}${replacement.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')}${quote}`;
-  }));
+export function replaceImageSources(html: string, urls: Map<string, string>, omit: ReadonlySet<string> = new Set()): string {
+  return html.replace(/<img\b[^>]*>/gi, tag => {
+    const decoded = load(tag, {}, false)('img').attr('src') || '';
+    if (omit.has(decoded)) return '';
+    return tag.replace(/(\ssrc\s*=\s*)(["'])(.*?)\2/i, (_all,prefix,quote) => {
+      const replacement = urls.get(decoded);
+      if (!replacement) throw new Error('图片转存结果缺失');
+      return prefix + quote + replacement.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') + quote;
+    });
+  });
 }
 export function latestVersion(versions: string[], date: string): string | undefined {
   return versions.filter(v => issueDate(v) === date).sort((a,b) => Number(b.split('-r')[1] || 1) - Number(a.split('-r')[1] || 1))[0];

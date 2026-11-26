@@ -192,6 +192,8 @@ def source_revision_hash(record, source_hash=None, language_context=None):
                 'fullTextValidated': record.get('fullTextValidated'), 'articleBodyEvidence': record.get('articleBodyEvidence'),
                 'sourceKind': record.get('source_kind'), 'sourceKindEvidence': record.get('sourceKindEvidence'),
                 'parserVersion': record.get('parser_version', record.get('parserVersion'))}
+    if record.get('languageAlternates'):
+        revision['languageAlternates'] = record['languageAlternates']
     if language_context is not None:
         revision['registeredLanguagePolicy'] = language_context
         revision['htmlLanguage'] = record.get('html_lang', record.get('htmlLanguage', record.get('language')))
@@ -905,7 +907,7 @@ def date_only_outside_window(record, start, end):
     if not isinstance(evidence, list):
         return False
     published = [item for item in evidence if isinstance(item, dict) and item.get('kind') == 'published']
-    dates = set()
+    dates, bounds = set(), set()
     for item in published:
         raw, url = item.get('raw'), item.get('articleUrl')
         if (item.get('precision') != 'date' or not isinstance(raw, str) or not re.fullmatch(r'\d{4}-\d\d-\d\d', raw)
@@ -913,10 +915,17 @@ def date_only_outside_window(record, start, end):
             return False
         try:
             dates.add(datetime.fromisoformat(raw).replace(tzinfo=timezone.utc))
-        except ValueError:
+            if item.get('timezoneEvidence')=='registered_publisher_calendar_day':
+                lo, hi = (datetime.fromisoformat(item[key]) for key in ('dayStart','dayEnd'))
+                if lo.tzinfo and hi.tzinfo and lo < hi:
+                    bounds.add((lo,hi))
+        except (ValueError, KeyError, TypeError):
             return False
     if len(dates) != 1:
         return False
+    if len(bounds)==1:
+        lo, hi = next(iter(bounds))
+        return hi <= start or lo >= end
     day = dates.pop()
     # Cover all possible local timezones. A plausible boundary date stays uncertain.
     return day + timedelta(hours=36) <= start or day - timedelta(hours=14) >= end

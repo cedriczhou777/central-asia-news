@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { randomUUID } from 'node:crypto';
-import { DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, freezeBlockReason, PLAN_B_COUNTRIES,
+import { DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, EDITORIAL_POLICY_VERSION, freezeBlockReason, PLAN_B_COUNTRIES,
   retryableStatus, reviewableWindowCount, SHORT_EDITION_FIRST_ISSUE, type PlanBCountry } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
 import { claim, getState, knownLiveReceipts, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
@@ -29,8 +29,8 @@ function runtimeHealth() {
     activation:{enabled:process.env.REVIEWED_PLAN_B==='1',admitted:planBAdmitted(),
       checksEnabled:process.env.REVIEWED_PLAN_B_CHECKS==='1',firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
     registration:{registered:runtime.registered},
-    editorialPolicy:{version:'plan-b-editorial-2',fromIssue:EDITORIAL_POLICY_FIRST_ISSUE,
-      targetMin:DAILY_TARGET_ARTICLES,targetMax:20,reviewedShortfallMin:DAILY_MIN_ARTICLES}};
+    editorialPolicy:{version:EDITORIAL_POLICY_VERSION,fromIssue:EDITORIAL_POLICY_FIRST_ISSUE,
+      targetMin:DAILY_TARGET_ARTICLES,targetMax:20,reviewedShortfallMin:8,minimumFallback:DAILY_MIN_ARTICLES}};
 }
 
 const bootId=randomUUID();
@@ -84,8 +84,9 @@ export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number):
   const shortage = reviewableCandidates < (shortEditionsAllowed ? 1 : 10);
   const dailyPolicy = receipt.snapshot.issue >= EDITORIAL_POLICY_FIRST_ISSUE;
   const belowTarget = dailyPolicy && reviewableCandidates < DAILY_TARGET_ARTICLES;
+  const belowMinimum = dailyPolicy && reviewableCandidates < DAILY_MIN_ARTICLES;
   const reason = freezeBlockReason(receipt.snapshot) || (shortage ? 'insufficient_reviewable_candidates'
-    : belowTarget && attempt === 0 ? 'candidate_supply_below_target' : null);
+    : (belowTarget && attempt === 0) || (belowMinimum && attempt === 1) ? 'candidate_supply_below_target' : null);
   const limit=receipt.snapshot.issue>='2026-11-23'?3:2;
   const coverageRecovery = shortage || reason === 'candidate_supply_below_target';
   return reason ? { state: attempt+1<limit ? 'retry' : 'blocked', delay:120_000,

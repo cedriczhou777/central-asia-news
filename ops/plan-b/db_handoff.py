@@ -61,7 +61,9 @@ def sql(view,issue,country=None,phase='preview',ids=(),document=None):
           from public.plan_b_daily where step='editorial' and issue_date between {literal(start)} and {literal(issue)}
         )
         select s.country,s.source->>'sourceId' as source_id,s.source->>'family' as family,
-          count(*) as observed_days,count(e.decisions) as reviewed_days,
+          count(*) filter (where s.source->>'actuallyObserved'='true'
+            or (s.source->>'attemptedPages')::int>0 or (s.source->>'articleAttemptedUrls')::int>0) as observed_days,
+          count(e.decisions) as reviewed_days,
           sum((s.source->>'readablePages')::int) as readable_pages,sum((s.source->>'http403Pages')::int) as refused_pages,
           count(*) filter (where (s.source->>'attemptedPages')::int>0 and (s.source->>'readablePages')::int=0) as unavailable_days,
           sum((s.source->>'articleAttemptedUrls')::int) as article_urls_attempted,

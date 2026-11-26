@@ -7,6 +7,7 @@ export type Phase = 'preview' | 'final';
 export const COVERAGE_VERSION = 'plan-b-coverage-2';
 export const SHORT_EDITION_FIRST_ISSUE = '2026-11-26';
 export const EDITORIAL_POLICY_FIRST_ISSUE = '2026-11-27';
+export const EDITORIAL_POLICY_VERSION = 'plan-b-editorial-2';
 export const DAILY_TARGET_ARTICLES = 15;
 export const DAILY_MIN_ARTICLES = 6;
 
@@ -41,6 +42,9 @@ export interface Candidate {
   sourceHash: string;
   publishedAt: string | null;
   timeEvidence?: string;
+  publicationOptions?: { url:string; publishedAt:string; evidenceSha256:string }[];
+  languageVersions?: {candidateIds:string[]; preferredId:string; differingNumbers:boolean;
+    versions: {candidateId:string;language:string|null;url:string;title:string;publishedAt:string|null}[]}[];
   needsTimeReview: boolean;
   previousDay?: true;
   photoCandidates?: number;

@@ -1,4 +1,4 @@
-import { canonicalJson, DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE,
+import { canonicalJson, DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, EDITORIAL_POLICY_VERSION,
   requireFrozenVersion, sha256, shaPattern, SHORT_EDITION_FIRST_ISSUE, type Snapshot } from './plan-b-handoff';
 import { issueWindow } from './plan-b-window';
 import { editorialFunnel, summarizeUsage } from './plan-b-editorial-decisions';
@@ -72,6 +72,7 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
     throw new Error('editorial_hash_mismatch');
   }
   const dailyPolicy = final.issue >= EDITORIAL_POLICY_FIRST_ISSUE;
+  if (dailyPolicy && review.policyVersion !== EDITORIAL_POLICY_VERSION) throw new Error('editorial_policy_version_mismatch');
   if (dailyPolicy && ids.length < DAILY_MIN_ARTICLES) throw new Error('daily_edition_below_minimum');
   if (dailyPolicy) {
     const titles = review.articles.map(row => String(row.title)
@@ -87,7 +88,8 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
     if (!isRecord(exception) || exception.status !== 'approved' || typeof exception.reviewer !== 'string'
         || exception.reviewer !== review.reviewer || exception.reviewer === draft.writerRun || !Array.isArray(exception.evidence)
         || !exception.evidence.length) throw new Error('quantity_exception_review_required');
-    if (dailyPolicy && (exception.finalHash !== final.hash
+    if (dailyPolicy && (exception.tier !== (ids.length < 8 ? 'minimum_fallback' : 'verified_shortfall')
+        || exception.finalHash !== final.hash
         || exception.candidateInventoryReviewed !== final.candidates.length
         || typeof exception.reason !== 'string' || exception.reason.trim().length < 16
         || !Number.isFinite(Date.parse(String(exception.reviewedAt)))
@@ -120,14 +122,17 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
       const proof=isRecord(decision) ? decision.publicationTimeResolution : null;
       if (!isRecord(proof) || proof.sourceHash!==source.sourceHash || proof.revision!==source.revision
           || proof.publishedAt!==row.published_at || typeof proof.url!=='string' || !/^https:\/\//.test(proof.url)
-          || !shaPattern.test(String(proof.evidenceSha256)) || typeof proof.description!=='string'
+          || !shaPattern.test(String(proof.evidenceSha256))
+          || !source.publicationOptions?.some(observation => observation.url===proof.url
+            && observation.evidenceSha256===proof.evidenceSha256 && Date.parse(observation.publishedAt)===published)
+          || typeof proof.description!=='string'
           || proof.description.trim().length<16) throw new Error('verified_publication_resolution_required');
     }
     if (!/(?:Z|[+-]\d\d:\d\d)$/.test(String(row.published_at))
       || published >= window.end || !Number.isFinite(published)
       || (source.publishedAt && published !== Date.parse(source.publishedAt))) throw new Error('story_publication_mismatch');
   }
-  const funnel = dailyPolicy ? editorialFunnel(final, ids, review.candidateDecisions) : undefined;
+  const funnel = dailyPolicy ? editorialFunnel(final, ids, review.candidateDecisions, String(review.reviewer)) : undefined;
   const usage = dailyPolicy ? summarizeUsage(input.usage, ids.length) : undefined;
   const value = { finalHash: final.hash, coverage: final.coverage, draft, review, ...(funnel ? {funnel} : {}) };
   return { value, editorialHash: hash(value), articleCount: ids.length,

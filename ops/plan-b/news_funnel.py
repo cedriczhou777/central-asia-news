@@ -61,6 +61,8 @@ def scan_funnel(sources, audit, leads, candidates):
         result.append({'sourceId':sid,'family':source.get('family', sid),'type':source.get('kind','media'),
                        'institutionType':source.get('institutionType'),
                        'attemptedPages':len(observed),'readablePages':sum(p['readable'] for p in observed),
+                       'emptyReadablePages':sum(p['readable'] and p['newsLinks']==0 for p in observed),
+                       'actuallyObserved':bool(observed or attempted),
                        'http403Pages':sum(p['httpStatus']==403 for p in observed),
                        'articleAttemptedUrls':len(attempted),
                        'articleHttpFailures':sum(r.get('status') != 200 for r in attempted),

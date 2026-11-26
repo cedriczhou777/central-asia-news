@@ -6,7 +6,7 @@ import { getSupabaseClient } from '../storage/database/supabase-client';
 import { deliveryAdapters, deliverReviewedPackage, readPackage, reconcileKnownReviewedDraft } from './reviewed-delivery';
 import { contentHash, packageCountries, requirePrivateImages, reviewedCountry, validatePackage } from './reviewed-package';
 import { ensurePrivateImage } from './reviewed-private-images';
-import { canonicalJson, PLAN_B_COUNTRIES, shaPattern, type PlanBCountry } from './plan-b-handoff';
+import { canonicalJson, EDITORIAL_POLICY_FIRST_ISSUE, PLAN_B_COUNTRIES, shaPattern, type PlanBCountry } from './plan-b-handoff';
 import { verifyEditorial } from './plan-b-editorial';
 import { planBClock } from './plan-b-window';
 import { saveFile, verifyObject, wordLink, type ObjectReceipt, type SnapshotReceipt } from './plan-b-store';
@@ -126,7 +126,13 @@ async function storeReviewedTransports(issue: string, country: PlanBCountry, rel
         assertMayWrite(issue);
         const bytes = await readFile(join(root, 'images', image.sha256));
         if (bytes.length !== image.bytes) throw new Error('invalid_plan_b_image_length');
-        await ensurePrivateImage(bytes, image.sha256);
+        try {
+          await ensurePrivateImage(bytes, image.sha256);
+        } catch (error) {
+          if (issue < EDITORIAL_POLICY_FIRST_ISSUE) throw error;
+          // The signed package stays intact. Transport may omit unavailable
+          // pinned images on future issues and records each omission.
+        }
         verified.add(image.sha256);
       }
     }
@@ -154,7 +160,7 @@ export async function deliverCountryWechat(issue: string, country: PlanBCountry,
     ...deliveryAdapters,
     prepare: (draft, progress) => {
       check();
-      return deliveryAdapters.prepare(draft, async () => { check(); await progress?.(); }, true);
+      return deliveryAdapters.prepare(draft, async () => { check(); await progress?.(); }, true, issue>=EDITORIAL_POLICY_FIRST_ISSUE);
     },
     beforeWrite: check,
     create: article => { check(); return deliveryAdapters.create(article); },

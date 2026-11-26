@@ -20,12 +20,17 @@ const originalFetch=globalThis.fetch, originalNow=Date.now;
 const images=new Map<string,Uint8Array>(),packages=new Map<string,unknown>(),drafts=new Map<string,Record<string,string>>();
 let bucketExists=false,bucketPublic=false,deniedRequests=0,created=0,originRequests=0;
 let bucketStatus=0,bucketTransportError:Error|null=null;
+let bodyUploadFailure=false, coverUploadFailures=0;
 globalThis.fetch=async(input,init)=>{
   const r=input instanceof Request?input:new Request(input,init),u=new URL(r.url);
   if(u.hostname==='1.1.1.1'){deniedRequests++;return new Response('denied',{status:403});}
   if(u.hostname==='api.weixin.qq.com'){
-    if(u.pathname.includes('material/add_material'))return Response.json({media_id:'cover',url:'https://mmbiz.qpic.cn/cover'});
-    if(u.pathname.includes('media/uploadimg'))return Response.json({url:'https://mmbiz.qpic.cn/body'});
+    if(u.pathname.includes('material/add_material')){
+      if(coverUploadFailures>0){coverUploadFailures--;return Response.json({errcode:40007,errmsg:'fixture invalid cover'});}
+      return Response.json({media_id:'cover',url:'https://mmbiz.qpic.cn/cover'});
+    }
+    if(u.pathname.includes('media/uploadimg'))return bodyUploadFailure
+      ?Response.json({errcode:40005,errmsg:'fixture upload rejected'}):Response.json({url:'https://mmbiz.qpic.cn/body'});
     const body=await r.json();
     if(u.pathname.endsWith('/draft/add')){const id='fixture-'+(++created);drafts.set(id,body.articles[0]);return Response.json({media_id:id});}
     if(u.pathname.endsWith('/draft/get')){const d=drafts.get(body.media_id)!;return Response.json({news_item:[{...d}]});}
@@ -88,6 +93,20 @@ async function main(){
   assert.equal((await probeReviewedImage(source,'',asset)).accessible,true);
   const d={title:'test',summary:'摘要',bodyHtml:`<p>事实保持原样</p><img src="${source}">`,sourceName:'来源',sourceUrl:'',coverUrl:source,imageAssets:{[source]:asset}};
   const prepared=await prepareReviewedDraft(d);assert.equal(prepared.images,1);assert.match(prepared.html,/事实保持原样/);assert.equal(prepared.imageProbes[0].sha256,sha256);assert.equal(originRequests,0,'pinned images never request the original source');
+  const optional=async(input=d)=>prepareReviewedDraft(input,undefined,true,true);
+  const incorrect={...d,imageAssets:{[source]:{...asset,bytes:asset.bytes+1}}};
+  const brokenOriginal=await optional(incorrect);
+  assert.equal(brokenOriginal.images,0);assert.equal(brokenOriginal.cover,'brand');
+  assert.equal(brokenOriginal.omittedImages?.[0].url,source);assert.match(brokenOriginal.html,/事实保持原样/);
+  bodyUploadFailure=true;
+  const brokenUpload=await optional();
+  assert.equal(brokenUpload.images,0);assert.equal(brokenUpload.omittedImages?.length,1);
+  assert.match(brokenUpload.html,/事实保持原样/);bodyUploadFailure=false;
+  coverUploadFailures=1;
+  const brand=await optional();
+  assert.equal(brand.cover,'brand');assert.equal(brand.images,1);assert.ok(brand.coverFailure);
+  assert.equal(created,0,'readiness must never create a draft');
+  assert.equal(originRequests,0,'failed pinned images never request the original source');
   const legacy=await probeReviewedImage('https://1.1.1.1/denied.jpg','');assert.equal(legacy.accessible,false);assert.equal(deniedRequests,1,'403 must not trigger header/proxy retries');
   await assert.rejects(readPrivateImage({...asset,bytes:asset.bytes+1}),/哈希|长度/);
   bucketPublic=true;health=await privateImageHealth();assert.equal(health.ready,false);assert.equal(health.retryable,false);assert.equal(health.failureKind,'public_bucket');await assert.rejects(readPrivateImage(asset),/公开/);bucketPublic=false;

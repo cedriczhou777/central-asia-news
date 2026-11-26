@@ -38,6 +38,6 @@ export async function applyPlanBCommand(issue:string,country:PlanBCountry,checkp
   if(!planBClock().finalizationAllowed)throw new PlanBCommandRejected('handoff_outside_production_window');
   const archived=await archiveEditorial(issue,country,content);
   const state=await saveEditorial(issue,country,{...binding,archived,acceptedAt:new Date().toISOString(),
-    actualModel:null,actualReasoning:null,actualSpeed:null,actualCredits:null});
+    actualModel:null,actualReasoning:null,actualSpeed:null,actualCredits:binding.usage?.workCredits??null});
   return {state,...binding};
 }

@@ -67,10 +67,11 @@ STATIC_DIRECTORY_BY_HOST = {
         r')/?$', re.I),
     'economy.gov.az': re.compile(r'^/az/page/(?:iqtisadiyyat/investisiya|itm)/?$', re.I),
     'customs.gov.az': re.compile(r'^/az/faydali/satınalmalar/tender/?$', re.I),
+    'nuz.uz': re.compile(r'^/(?:politika|zdorove|obschestvo)/?$', re.I),
     'gov.uz': re.compile(r'^/(?:ru|uz|en)/soliq/pages/soliq-qo-mitasi-faoliyat-sohasi/?$', re.I),
     'uzdaily.uz': re.compile(r'^/(?:ru|uz|en)/special-projects(?:/islamic-finance-2026)?/?$', re.I),
     'sputnik.tj': re.compile(r'^/(?:telegram_export/?|docs/(?:cookie_policy|privacy_policy|terms_of_use|index)\.html)$', re.I),
-    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512)|qissai-khudro-bigu)/?$', re.I),
+    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512|17274)|qissai-khudro-bigu)/?$', re.I),
     'vecherka.tj': re.compile(
         r'^/(?:istorii/(?:borba-s-radikalizmom|dney-16-protiv-nasiliya|grazhdanskie-zhurnalisty'
         r'|otkritie-uroki|prava-jenshin|reforma-militsii|roditeli-i-deti|svoboda-slova|zashita_zhivotnikh)'

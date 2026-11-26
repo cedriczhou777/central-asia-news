@@ -12,6 +12,7 @@ import tarfile
 from discover_work_sources import assess_window, discover, published_intervals, rebase_discovery_paths
 from editorial_policy import EFFECTIVE_ISSUE
 from news_funnel import event_pairs, scan_funnel
+from source_evidence import language_versions, publication_options
 from prepare_editorial_input import candidate_originals, discovery_index, indexed
 from source_coverage import assess_coverage, coverage_self_test
 from news_queue_policy import ADAPTIVE_ARTICLES_PER_SOURCE, ADAPTIVE_LISTING_PAGES, ADAPTIVE_WORKERS, MAX_LISTING_PAGES, MAX_ARTICLES_PER_SOURCE
@@ -91,6 +92,7 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
     index = discovery_index(root, issue, country) if index is None else index
     ledger = indexed(read(root / 'candidate_ledger.json')['candidateLedger'])
     result = []
+    language_records = {}
     cutoff = datetime.fromisoformat(issue + 'T06:00:00+08:00')
     start = cutoff - timedelta(days=1)
     daily_policy = issue >= EFFECTIVE_ISSUE
@@ -121,7 +123,15 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
                        'publishedAt': times[0][0].isoformat() if valid else None, 'needsTimeReview': not valid}
         if daily_policy:
             candidate['photoCandidates'] = len((source.get('articleImages') or {}).get('candidates') or [])
+            if not valid:
+                options = publication_options(source, datetime.fromisoformat(observed_at) if observed_at else cutoff, start, cutoff)
+                if options:
+                    candidate['publicationOptions'] = options
         result.append(candidate)
+        if daily_policy and source.get('languageAlternates'):
+            language_records[candidate['id']] = source
+    if language_records:
+        language_versions(result, language_records)
     return result
 
 
