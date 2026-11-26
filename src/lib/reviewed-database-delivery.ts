@@ -434,6 +434,8 @@ export function startReviewedDatabaseRecovery() {
           catch { console.warn('deployment_recovery_not_queued'); }
         }
         await processDatabaseDeliveries(key, sb);
+        const {processFreshRun}=await import('./plan-b-fresh-run');
+        await processFreshRun(sb);
       }
     })().catch(() => console.warn('manual_delivery_queue_unavailable')).finally(() => { running = false; });
   };
