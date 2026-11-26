@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { canonicalJson, sha256 } from '../src/lib/plan-b-handoff';
-import { databaseApprovalSignature, deploymentRecoveryRows, processDatabaseDeliveries, reviseTextLayout, reviewedDatabaseRecoveryWindow,
+import { databaseApprovalSignature, deliverValidationDraft, deploymentRecoveryRows, processDatabaseDeliveries, reviseTextLayout, reviewedDatabaseRecoveryWindow,
   verifyDatabaseDeliveryRequest } from '../src/lib/reviewed-database-delivery';
 import { contentHash, validatePackage } from '../src/lib/reviewed-package';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
@@ -215,6 +215,41 @@ async function main() {
   assert.equal(await reviseTextLayout(release, revision, 'kg', originalProof, updateAdapters,
     updateStarted, markUpdate, () => {}), null);
   assert.equal(updateCalls, 1, 'layout mismatch does not issue another write');
+  const acceptance = { ...revision, version: issue + '-r3', countries: { ...revision.countries,
+    kg: { ...revision.countries.kg!, title: '【实跑验收】' + revision.countries.kg!.title } } };
+  let checkpoint: Parameters<typeof deliverValidationDraft>[2];
+  const saveCheckpoint = async (value: NonNullable<typeof checkpoint>) => { checkpoint = value; };
+  let validationCreates = 0;
+  let validationMatches = ['validation-new-id'];
+  const validationAdapters = {
+    ...adapters,
+    async create() {
+      assert.ok(checkpoint && !checkpoint.mediaId, 'persist the intention before the API call');
+      validationCreates++;
+      throw new Error('validation create reply lost');
+    },
+    async find(title: string) {
+      assert.equal(title, acceptance.countries.kg!.title);
+      return validationMatches;
+    },
+    async read(mediaId: string) {
+      assert.equal(mediaId, 'validation-new-id');
+      return { title: acceptance.countries.kg!.title, digest: acceptance.countries.kg!.summary,
+        content: nextHtml, thumb_media_id: 'fixture-thumb' };
+    },
+  };
+  const checkValidation = (payload = acceptance) => deliverValidationDraft(
+    payload, 'kg', checkpoint, validationAdapters, saveCheckpoint, () => {});
+  await assert.rejects(checkValidation(revision as typeof acceptance), /invalid_validation_title/);
+  await assert.rejects(checkValidation(), /validation create reply lost/);
+  validationMatches = ['validation-new-id', 'ambiguous-id'];
+  assert.equal(await checkValidation(), null);
+  validationMatches = ['validation-new-id'];
+  const acceptedCopy = await checkValidation();
+  assert.equal(acceptedCopy?.mediaId, 'validation-new-id');
+  assert.equal(acceptedCopy?.layoutVerified, true);
+  assert.equal((await checkValidation())?.mediaId, 'validation-new-id');
+  assert.equal(validationCreates, 1, 'validation retries only read back, and do not touch the normal daily receipt');
   console.log('Database delivery: grant scope, deadline, tamper rejection, independent progress, lost reply readback and dedupe passed; real writes=0.');
 }
 
