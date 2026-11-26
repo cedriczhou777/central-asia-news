@@ -5,6 +5,7 @@ export const PLAN_B_COUNTRIES = ['kz', 'uz', 'kg', 'tj', 'az'] as const;
 export type PlanBCountry = typeof PLAN_B_COUNTRIES[number];
 export type Phase = 'preview' | 'final';
 export const COVERAGE_VERSION = 'plan-b-coverage-2';
+export const SHORT_EDITION_FIRST_ISSUE = '2026-11-26';
 
 export interface SourceCoverage {
   version: string;
@@ -161,6 +162,16 @@ export function requireFrozenVersion(state: Snapshot | null, hash: string, inspe
   if (!selected.length || selected.length > 20 || new Set(selected).size !== selected.length || selected.some(id => !current.has(id))) {
     throw new Error('selection_outside_frozen_snapshot');
   }
+}
+
+/** The inventory may include originals whose publication time still needs review. */
+export function reviewableWindowCount(state: Snapshot) {
+  const window = issueWindow(state.issue);
+  return state.candidates.filter(candidate => {
+    if (candidate.needsTimeReview || !candidate.publishedAt || !/(?:Z|[+-]\d\d:\d\d)$/.test(candidate.publishedAt)) return false;
+    const published = Date.parse(candidate.publishedAt);
+    return published >= window.start && published < window.end;
+  }).length;
 }
 
 export function retryableStatus(status: number | null) {
