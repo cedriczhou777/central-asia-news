@@ -74,7 +74,9 @@ STATIC_DIRECTORY_BY_HOST = {
     # items and Inbusiness article URLs remain hard-blocking article work.
     'kase.kz': re.compile(r'^/(?:en/investors/esg-data-platform/knowledge-hub|en/markets/dfa)/?$', re.I),
     'inbusiness.kz': re.compile(
-        r'^/ru/cat/(?:biznes/transport-i-logistika|ekonomika/nalogi-i-sbory|finansy/pravila-igry-finance)/?$', re.I),
+        r'^/ru/(?:cat/(?:biznes/transport-i-logistika|ekonomika/nalogi-i-sbory|finansy/pravila-igry-finance)'
+        r'|specprojects/(?:kak-qazaq-oil-kontroliruet-klyuchevye-protsessy|qazaq-oil-itogi-2023'
+        r'|tulpar-toplivo-novogo-pokoleniya-ot-qazaq-oil))/?$', re.I),
 }
 
 
