@@ -8,7 +8,7 @@ import { validManualGrant } from './reviewed-manual-authorization';
 import { contentHash, imageUrls, issueDate, PACKAGE_COUNTRIES, packageCountries, requirePrivateImages, reviewedCountry, validatePackage, type PackageCountry } from './reviewed-package';
 import { REVIEWED_VERSION_CONFLICT, storeReviewedPackage } from './reviewed-package-store';
 import { findRecentReviewedDrafts } from './reviewed-wechat';
-import { summarizeDraftReadback } from './reviewed-diagnostics';
+import { summarizeDraftReadback, verifiedReviewedLayout } from './reviewed-diagnostics';
 
 const TABLE = 'plan_b_exchange';
 const REQUEST_PREFIX = 'db-delivery/';
@@ -177,7 +177,7 @@ async function verifyPreviousSuccess(payload: ReturnType<typeof validatePackage>
     && proof.actualImageIdentities.every((value, i) => value && normalize(value) === normalize(proof.expectedImageIdentities[i]));
   if (!proof.titleMatch || !proof.digestMatch || !proof.expectedTextMatch || !imageMatch || proof.thumbnailMatchesPrepared !== true) return null;
   const { layout, footer } = proof;
-  if (checkLayout && !(layout.justified && layout.lastLineLeft && layout.lineHeight19 && layout.outerMargin10 && layout.innerMargin12 && footer.passed)) return null;
+  if (checkLayout && !verifiedReviewedLayout(proof)) return null;
   return { ...existing.detail, mediaId: existing.media_id, verified: true, expectedTextMatch: true,
     imageMatch, thumbnailMatchesPrepared: true, readbackAt: new Date().toISOString(), readbackHash: contentHash(draft.content),
     ...(checkLayout ? { layoutVerified: true, layout, footer } : {}) };

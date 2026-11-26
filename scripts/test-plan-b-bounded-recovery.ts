@@ -59,6 +59,10 @@ reviewable.queueAccounting!.lead={total:2,pending:0,review:2,closed:0,identityHa
 reviewable.reviewWork=[{sourceId:'ordinary',kind:'lead',url:null,reason:'bounded discovery',count:2,queueHash:hash}];
 const closed=snapshot({...source,pendingSources:[],coverage:reviewable});
 assert.equal(freezeBlockReason(closed),null,'coverage review can replace ordinary discovery blocking');
+const short=finalCoverageOutcome({...receipt,snapshot:closed},0);
+assert.equal(short.state,'retry','empty article supply needs a bounded refresh');
+assert.equal((short.receipt as {reason:string}).reason,'insufficient_reviewable_candidates');
+assert.equal(finalCoverageOutcome({...receipt,snapshot:closed},2).state,'blocked','the refresh respects the existing attempt ceiling');
 assert.equal(freezeBlockReason({...closed,coverage:{...reviewable,reviewWork:[]}}),'coverage_evidence_invalid');
 assert.equal(freezeBlockReason({...closed,coverage:{...reviewable,queueAccounting:undefined}}),'coverage_evidence_invalid');
 

@@ -1,7 +1,7 @@
 """Run the existing source and verification code against an isolated country cache."""
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +9,7 @@ import re
 import shutil
 import tarfile
 
-from discover_work_sources import discover, published_intervals, rebase_discovery_paths
+from discover_work_sources import assess_window, discover, published_intervals, rebase_discovery_paths
 from prepare_editorial_input import candidate_originals, discovery_index, indexed
 from source_coverage import assess_coverage, coverage_self_test
 from news_queue_policy import MAX_LISTING_PAGES, MAX_ARTICLES_PER_SOURCE
@@ -85,10 +85,11 @@ def coverage(registry, country, inventory, cutoff, ledger=(), leads=(), observed
     }
 
 
-def inventory_entries(root, issue, country):
-    index = discovery_index(root, issue, country)
+def inventory_entries(root, issue, country, index=None, observed_at=None):
+    index = discovery_index(root, issue, country) if index is None else index
     ledger = indexed(read(root / 'candidate_ledger.json')['candidateLedger'])
     result = []
+    cutoff = datetime.fromisoformat(issue + 'T06:00:00+08:00')
     for entry in index['candidates']:
         if (entry.get('decision') == 'rejected' or entry.get('fullTextValidated') is not True
                 or not entry.get('fullTextFetchedAt')):
@@ -99,11 +100,15 @@ def inventory_entries(root, issue, country):
         if hashlib.sha256(raw).hexdigest() != actual.get('sourceJSONSha256'):
             raise ValueError('source_archive_hash_mismatch')
         source = json.loads(raw)
+        if assess_window(source, country, cutoff - timedelta(days=1), cutoff) == 'outside_window':
+            continue
         title = source.get('title') or (source.get('meta') or {}).get('og:title')
         if not isinstance(title, str) or not title.strip():
             continue
         times = published_intervals(source, country)
         valid = (actual.get('publicationWindowAssessment') == 'in_window' and len({v[0] for v in times}) == 1)
+        if valid and observed_at is not None and times[0][0] > datetime.fromisoformat(observed_at):
+            continue
         result.append({'id': entry['id'], 'revision': entry['editorialFingerprint'], 'title': title.strip(),
                        'sourceId': actual['sourceId'], 'family': actual['family'],
                        'sourceUrl': entry['source_url'], 'sourceHash': entry['sourceHash'],
@@ -131,19 +136,21 @@ def snapshot_from_cache(root,directory,issue,country,phase,audit):
     ledger = read(root / 'candidate_ledger.json')['candidateLedger']
     leads = read(root / 'lead_queue.json').get('leadLedger', []) if (root / 'lead_queue.json').exists() else []
     pending, metrics = coverage(registry, country, audit, cutoff, ledger, leads, observed)
+    index = discovery_index(root, issue, country)
+    entries = inventory_entries(root, issue, country, index, observed)
     write(directory / 'snapshot.json', {
         'issue': issue, 'country': country, 'phase': phase, 'observedAt': observed,
-        'candidates': inventory_entries(root, issue, country),
+        'candidates': entries,
         'coverage': metrics['coverage'],
         'pendingSources': pending if phase == 'final' else [], 'metrics': metrics,
     })
     # Private database transport receives verified unabridged text and evidence,
     # streamed one candidate at a time by Node. No model, new fetch or new cache.
-    entries = inventory_entries(root, issue, country)
     with (directory / 'originals.jsonl').open('w', encoding='utf-8') as stream:
         for start in range(0,len(entries),5):
-            result = originals(root,issue,country,[row['id'] for row in entries[start:start+5]])
+            result = candidate_originals(index, [row['id'] for row in entries[start:start+5]])
             for row in result['articles']:
+                row.pop('sourceJSON', None)
                 stream.write(json.dumps(row,ensure_ascii=False,separators=(',',':'))+'\n')
     backup(root, directory / 'output.gz')
 

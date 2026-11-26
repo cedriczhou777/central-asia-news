@@ -860,7 +860,36 @@ def assess_window(record, country, start, end):
             votes.add('uncertain')
     if len(votes) == 1:
         return next(iter(votes))
+    if not votes and date_only_outside_window(record, start, end):
+        return 'outside_window'
     return 'uncertain'
+
+
+def date_only_outside_window(record, start, end):
+    """Use article-bound calendar dates only to rule out an impossible window."""
+    if record.get('source_kind') != 'article' or record.get('publicationReviewRequired'):
+        return False
+    urls = {normal_url(value).rstrip('/') for value in
+            (record.get('final_url'), record.get('canonical_url'), record.get('url')) if isinstance(value, str) and value}
+    evidence = record.get('publicationEvidence') or []
+    if not isinstance(evidence, list):
+        return False
+    published = [item for item in evidence if isinstance(item, dict) and item.get('kind') == 'published']
+    dates = set()
+    for item in published:
+        raw, url = item.get('raw'), item.get('articleUrl')
+        if (item.get('precision') != 'date' or not isinstance(raw, str) or not re.fullmatch(r'\d{4}-\d\d-\d\d', raw)
+                or not isinstance(url, str) or normal_url(url).rstrip('/') not in urls):
+            return False
+        try:
+            dates.add(datetime.fromisoformat(raw).replace(tzinfo=timezone.utc))
+        except ValueError:
+            return False
+    if len(dates) != 1:
+        return False
+    day = dates.pop()
+    # Cover all possible local timezones. A plausible boundary date stays uncertain.
+    return day + timedelta(hours=36) <= start or day - timedelta(hours=14) >= end
 
 
 def load_fetcher(output):

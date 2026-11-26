@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
-import {originalRecord,processExchange,wordChunks} from '../src/lib/plan-b-exchange';
+import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {originalRecord,processExchange,publishScan,wordChunks} from '../src/lib/plan-b-exchange';
 import {applyPlanBCommand} from '../src/lib/plan-b-command';
 import {validManualGrant} from '../src/lib/reviewed-manual-authorization';
 import {sha256} from '../src/lib/plan-b-handoff';
 import {checkpointInput} from '../src/lib/plan-b-checkpoint';
 import {canonicalJson} from '../src/lib/plan-b-handoff';
-import type {StateRow} from '../src/lib/plan-b-store';
+import type {SnapshotReceipt,StateRow} from '../src/lib/plan-b-store';
+import {coverageFixture} from './plan-b-fixtures';
+import {snapshot} from '../src/lib/plan-b-handoff';
 
 const body='Fixed existing source text — no news request or model call.';
 const c={id:'one',revision:sha256('revision'),sourceHash:sha256(body)};
@@ -43,14 +48,47 @@ async function orchestration(){
   process.env={...env,SUPABASE_URL:'https://db.unit-test.example',SUPABASE_ANON_KEY:'fixture-anon',SUPABASE_SERVICE_ROLE_KEY:'fixture-role',REVIEWED_PLAN_B:'1',REVIEWED_PLAN_B_FIRST_ISSUE:'2026-11-24'};
   const records=['kz','uz','kg'].map(country=>({issue_date:'2026-11-24',country,kind:'checkpoint',record_key:hash,content_hash:sha256(canonicalJson(input)),payload:input,state:'working',attempts:1}));
   const results:{state:string;result:{reason?:string}}[]=[];const visited:string[]=[];
+  const posted:Record<string,unknown>[][]=[];
+  let failOriginalBatch=false;
   globalThis.fetch=async (request,init)=>{
     const url=new URL(request instanceof Request?request.url:String(request));assert.equal(url.host,'db.unit-test.example');
     if(url.pathname==='/rest/v1/rpc/claim_plan_b_exchange')return Response.json(records);
-    assert.equal(url.pathname,'/rest/v1/plan_b_exchange');assert.equal(init?.method,'PATCH');
+    assert.equal(url.pathname,'/rest/v1/plan_b_exchange');
+    if(init?.method==='POST'){
+      const payload=JSON.parse(String(init.body));
+      const rows=Array.isArray(payload)?payload:[payload];
+      posted.push(rows);
+      if(failOriginalBatch&&rows[0]?.kind==='original')return Response.json({message:'isolated write failure'},{status:503});
+      return Response.json([], {status:201});
+    }
+    assert.equal(init?.method,'PATCH');
     if(url.searchParams.has('record_key'))results.push(JSON.parse(String(init?.body)));
     return Response.json([]);
   };
+  const directory=await mkdtemp(join(tmpdir(),'plan-b-exchange-test-'));
   try{
+    const stamp='2026-11-24T06:30:00+08:00';
+    const candidates=Array.from({length:6},(_,i)=>({id:`fixture-${i}`,revision:c.revision,sourceHash:c.sourceHash,
+      sourceId:'fixture',family:'Fixture',title:`Fixture ${i}`,sourceUrl:`https://fixture.example/${i}`,
+      publishedAt:'2026-11-24T05:55:00+08:00',needsTimeReview:false}));
+    const scope:SnapshotReceipt={snapshot:snapshot({issue:'2026-11-24',country:'kz',phase:'final',observedAt:stamp,
+      coverage:coverageFixture('kz',stamp),pendingSources:[],candidates}),cache:{path:'fixture',sha256:hash,bytes:1},metrics:{}};
+    const lines=candidates.map(candidate=>JSON.stringify({id:candidate.id,sourceHash:candidate.sourceHash,text:body}));
+    const file=join(directory,'originals.jsonl');
+    await writeFile(file,lines.join('\n'));
+    await publishScan(scope,file);
+    assert.deepEqual(posted.map(batch=>batch.length),[5,1,1]);
+    assert.deepEqual(posted.map(batch=>batch[0].kind),['original','original','manifest']);
+    assert.equal((posted.at(-1)![0].payload as {originalCount:number}).originalCount,6);
+    posted.length=0;
+    failOriginalBatch=true;
+    await assert.rejects(publishScan(scope,file),/exchange_publish_failed/);
+    assert.deepEqual(posted.map(batch=>batch[0].kind),['original'],'a failed batch never publishes the manifest');
+    failOriginalBatch=false;
+    posted.length=0;
+    await writeFile(file,[...lines.slice(0,-1),lines[0]].join('\n'));
+    await assert.rejects(publishScan(scope,file),/exchange_candidate_mismatch/,'a duplicate cannot substitute for a missing original');
+    assert.equal(posted.some(batch=>batch[0].kind==='manifest'),false);
     assert.equal(await processExchange('2026-11-24',async(_issue,country)=>{
       visited.push(country);if(country==='kz')throw new Error('checkpoint_conflict');
       return {state:'checkpoint_saved',checkpoint:row.receipt!.workCheckpoint as never,editorialApproved:false};
@@ -60,7 +98,7 @@ async function orchestration(){
     assert.deepEqual(records[0].payload.document,document,'failed country retains both roles in its command');
     Date.now=()=>Date.parse('2026-11-24T09:00:00+08:00');
     await assert.rejects(applyPlanBCommand('2026-11-24','kz',false,{}),/handoff_outside_production_window/);
-  }finally{globalThis.fetch=fetchBefore;process.env=env;Date.now=now;}
+  }finally{globalThis.fetch=fetchBefore;process.env=env;Date.now=now;await rm(directory,{recursive:true,force:true});}
   console.log('Actual inbox orchestrator: one stale checkpoint rejected, two countries continue, failed payload preserved, 09:00 new submission refused; no real services called.');
 }
 void orchestration().catch(error=>{console.error(error);process.exitCode=1;});
