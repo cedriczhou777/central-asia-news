@@ -32,7 +32,7 @@ ISSUE = '2026-11-21'
 STAMP = ISSUE + 'T06:01:00+08:00'
 
 
-def inputs(directory):
+def inputs(directory, *, transport_budget=False):
     source = directory / 'source-fixture'
     source.mkdir()
     evidence = source / 'evidence'
@@ -64,8 +64,11 @@ def inputs(directory):
     registry = directory / 'registry.json'
     write(registry, draft['sourceRegistry'])
     write(source / 'candidate_ledger.json', {**region, 'candidateLedger': draft['candidateLedger']})
-    write(source / 'source_scan_audit.json', {**region, 'sourceScanAudit': audit, 'sourceScanAuditHistory': [],
-                                              'listingQueue': [], 'articleQueue': [], 'budgetEvents': []})
+    inventory = {**region, 'sourceScanAudit': audit, 'sourceScanAuditHistory': [],
+                 'listingQueue': [], 'articleQueue': [], 'budgetEvents': []}
+    if transport_budget:
+        inventory.update(maxSeconds=480.0, observedAt=STAMP)
+    write(source / 'source_scan_audit.json', inventory)
     backup(source, directory / 'input.gz')
     draft.update(**region, coverageEnd=ISSUE + 'T06:00:00+08:00')
     rows = copy.deepcopy(draft['articles'])
@@ -75,6 +78,9 @@ def inputs(directory):
     proof = assess_coverage(read(registry), 'kg', read(source / 'source_scan_audit.json'),
                             datetime.fromisoformat(ISSUE + 'T06:00:00+08:00'),
                             draft['candidateLedger'], observed_at=STAMP)
+    if transport_budget:
+        # Node JSON.stringify transports the integral Python float as an integer.
+        proof['scanBudget']['maxSeconds'] = 480
     final_hash = 'f' * 64
     review['coverageReview'] = {'status': 'verified', 'reviewer': review['reviewer'], 'finalHash': final_hash,
                                'reviewedAt': STAMP, 'criticalTopicsReviewed': ['policy', 'energy', 'investment', 'business'],
@@ -127,7 +133,7 @@ class CloudReleaseTest(unittest.TestCase):
     def test_fifteen_reviewed_items_render_in_word_and_transport(self):
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
-            source, registry = inputs(directory)
+            source, registry = inputs(directory, transport_budget=True)
             restored = directory / 'rehydrated'
             restore(restored, directory / 'input.gz')
             self.assertEqual(len(inventory_entries(restored, ISSUE, 'kg')), 15)
