@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import re
 from urllib.parse import urlparse, urlunparse, urlsplit, urlunsplit, parse_qsl, urlencode
 
+from editorial_policy import EFFECTIVE_ISSUE, MIN_ARTICLES, TARGET_ARTICLES
 
 POLICY_VERSION = "quantity-v1"
 LISTING_ROLES = {"listing", "section", "archive", "feed", "home", "date_archive", "pagination", "language"}
@@ -500,8 +501,11 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
     missing_cutoff = sorted(available - after_cutoff - unavailable - reviewed_gaps)
     articles = draft.get("articles", [])
     count = len(articles)
-    exception_min = 1 if verified_plan_b and draft["issueDate"] >= '2026-11-26' else 10
-    short_edition = exception_min == 1 and 0 < count < 15
+    daily_policy = verified_plan_b and draft["issueDate"] >= EFFECTIVE_ISSUE
+    target = TARGET_ARTICLES if daily_policy else 15
+    exception_min = MIN_ARTICLES if daily_policy else (
+        1 if verified_plan_b and draft["issueDate"] >= '2026-11-26' else 10)
+    short_edition = verified_plan_b and draft["issueDate"] >= '2026-11-26' and 0 < count < 15
     if not short_edition and len(media_attempts) < 8:
         coverage_errors.append("need attempts across at least 8 distinct media families")
     if short_edition and not fulltext_families:
@@ -646,7 +650,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
     exception_errors = []
     exception = draft.get("quantityExceptionReview")
     exception_approved = False
-    if exception_min <= count < 15:
+    if exception_min <= count < target:
         if not isinstance(exception, dict) or exception.get("status") != "approved":
             exception_errors.append("a short edition requires independent quantity exception approval")
         else:
@@ -666,7 +670,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
                 exception_errors.extend(_discovery_exception_errors(draft, exception, records, unavailable, now))
         exception_approved = not exception_errors
     ready = (coverage["complete"] and ledger_status["complete"]
-             and (15 <= count <= 20 or exception_min <= count < 15 and exception_approved))
+             and (target <= count <= 20 or exception_min <= count < target and exception_approved))
     review = draft.get("review") if isinstance(draft.get("review"), dict) else {}
     independent = (review.get("independentReviewCompleted") is True
                    and bool(review.get("reviewer"))
@@ -680,12 +684,12 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
         "sourceCoverage": coverage,
         "candidateLedgerValidation": ledger_status,
         "quantityExceptionValidation": {"approved": exception_approved, "errors": exception_errors},
-        "quantityStatus": "target_met" if ready and count >= 15 else "exception_approved" if ready else "needs_expansion",
+        "quantityStatus": "target_met" if ready and count >= target else "exception_approved" if ready else "needs_expansion",
         "quantityReady": ready,
         "qualityDeliveryComplete": ready and independent and not open_issues,
         "shortfallOpen": not ready,
         "quantitySummary": {
-            "adopted": count, "targetMin": 15, "targetMax": 20, "exceptionMin": exception_min,
+            "adopted": count, "targetMin": target, "targetMax": 8 if daily_policy else 20, "exceptionMin": exception_min,
             "reason": "Quantity and source/candidate evidence complete" if ready else
                       "Expand sources and close candidate decisions; free-text shortfall explanations do not complete delivery",
         },

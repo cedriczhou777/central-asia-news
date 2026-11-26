@@ -7,6 +7,7 @@ const identityFiles=['src/lib/plan-b-runtime.ts','src/lib/plan-b-runtime-checks.
   'src/lib/plan-b-handoff.ts','src/lib/plan-b-editorial.ts','src/lib/plan-b-checkpoint.ts',
   'src/lib/reviewed-manual-authorization.ts','src/lib/reviewed-database-delivery.ts','src/app/api/plan-b/route.ts',
   'ops/plan-b/cloud_handoff.py','ops/plan-b/cloud_release.py','ops/plan-b/news_queue_policy.py',
+  'ops/plan-b/editorial_policy.py','ops/plan-b/source_article_images.py',
   'ops/plan-b/work_quantity_policy.py','ops/plan-b/validate_work_package.py',
   'ops/plan-b/source_coverage.py','ops/plan-b/discover_work_sources.py','ops/plan-b/fetch_work_sources.py','ops/plan-b/verified_archive_publications.json',
   'ops/plan-b/source_registry.json',

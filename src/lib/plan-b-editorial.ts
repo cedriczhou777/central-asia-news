@@ -1,4 +1,5 @@
-import { canonicalJson, requireFrozenVersion, sha256, SHORT_EDITION_FIRST_ISSUE, type Snapshot } from './plan-b-handoff';
+import { canonicalJson, DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE,
+  MAX_PREVIOUS_DAY, requireFrozenVersion, sha256, SHORT_EDITION_FIRST_ISSUE, type Snapshot } from './plan-b-handoff';
 import { issueWindow } from './plan-b-window';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -10,6 +11,7 @@ type SignedRecord = Record<string, unknown> & { articles: Record<string, unknown
 const isSignedRecord = (value: unknown): value is SignedRecord =>
   isRecord(value) && Array.isArray(value.articles) && value.articles.length <= 20 && value.articles.every(isRecord);
 const hash = (value: unknown) => sha256(canonicalJson(value));
+const followUpLabel = '【延续关注】';
 
 function verifyCoverageReview(final: Snapshot, draft: SignedRecord, review: SignedRecord) {
   if (!final.coverage.gaps.length) return;
@@ -69,8 +71,21 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
   if (review.originalHash !== hash(draft.articles) || review.finalBodyHash !== hash(review.articles)) {
     throw new Error('editorial_hash_mismatch');
   }
+  const dailyPolicy = final.issue >= EDITORIAL_POLICY_FIRST_ISSUE;
+  if (dailyPolicy && ids.length < DAILY_MIN_ARTICLES) throw new Error('daily_edition_below_minimum');
+  if (dailyPolicy) {
+    const titles = review.articles.map(row => String(row.title).replace(/^【延续关注】\s*/, '')
+      .normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ''));
+    if (new Set(titles).size !== ids.length || new Set(review.articles.map(row => row.sourceHash)).size !== ids.length) {
+      throw new Error('same_issue_story_duplicate');
+    }
+    if (review.articles.filter(row => row.previousDay === true).length > MAX_PREVIOUS_DAY) {
+      throw new Error('too_many_previous_day_followups');
+    }
+  }
   verifyCoverageReview(final, draft, review);
-  if (ids.length < 15 && (ids.length >= 10 || final.issue >= SHORT_EDITION_FIRST_ISSUE)) {
+  const quantityTarget = dailyPolicy ? DAILY_TARGET_ARTICLES : 15;
+  if (ids.length < quantityTarget && (ids.length >= 10 || final.issue >= SHORT_EDITION_FIRST_ISSUE)) {
     const exception = draft.quantityExceptionReview;
     if (!isRecord(exception) || exception.status !== 'approved' || typeof exception.reviewer !== 'string'
         || exception.reviewer !== review.reviewer || exception.reviewer === draft.writerRun || !Array.isArray(exception.evidence)
@@ -89,7 +104,18 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
     if (['title','body','category','source','timeEvidence','firstPublicationCheck'].some(
       key => typeof row[key] !== 'string' || !String(row[key]).trim())) throw new Error('missing_editorial_evidence');
     const published = Date.parse(String(row.published_at));
-    if (!/(?:Z|[+-]\d\d:\d\d)$/.test(String(row.published_at)) || published < window.start
+    const previousDay = dailyPolicy && source.previousDay === true;
+    if (previousDay) {
+      if (row.previousDay !== true || !String(row.title).startsWith(followUpLabel)
+          || typeof row.followUpReason !== 'string' || row.followUpReason.trim().length < 8
+          || source.needsTimeReview || !source.publishedAt
+          || published < window.start - (window.end - window.start) || published >= window.start) {
+        throw new Error('invalid_previous_day_followup');
+      }
+    } else if (published < window.start || dailyPolicy && (row.previousDay === true || String(row.title).startsWith(followUpLabel))) {
+      throw new Error('story_publication_mismatch');
+    }
+    if (!/(?:Z|[+-]\d\d:\d\d)$/.test(String(row.published_at))
       || published >= window.end || !Number.isFinite(published)
       || (source.publishedAt && published !== Date.parse(source.publishedAt))) throw new Error('story_publication_mismatch');
   }

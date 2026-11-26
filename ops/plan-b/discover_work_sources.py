@@ -804,7 +804,8 @@ def article_links(record, source, known_listings, structural_filter=False):
         if re.search(r'\.(?:pdf|jpe?g|png|gif|svg|zip|mp4|xml|json|css|js)$', path, re.I):
             continue
         # Structural navigation filtering only; no business/topic keyword filter.
-        if len(label) < 12 or re.fullmatch(r'(?:https?://)?[^\s]+\.[a-z]{2,5}/?', label, re.I):
+        strong_card = structural_filter and entry.get('inHeading') and entry.get('articleCard') and not entry.get('inNavigation')
+        if len(label) < (4 if strong_card else 12) or re.fullmatch(r'(?:https?://)?[^\s]+\.[a-z]{2,5}/?', label, re.I):
             continue
         if path.rstrip('/') in ('', '/ru', '/en', '/uz', '/kg', '/az'):
             continue
@@ -824,7 +825,10 @@ def published_intervals(record, country):
         label = ' '.join(str(item.get(k, '')) for k in ('kind', 'field', 'property', 'type', 'label', 'attribute'))
         if re.search(r'modif|updat|edited|обнов|измен', label, re.I):
             continue
-        if item.get('kind') != 'published' or item.get('timezoneEvidence') != 'explicit':
+        bound_publisher_time = (country == 'tj' and item.get('timezoneEvidence') == 'publisher_local'
+                                and item.get('field') == 'publisher.khovar.currentArticlePublicationBadge'
+                                and urlparse(item.get('articleUrl') or '').hostname == 'khovar.tj')
+        if item.get('kind') != 'published' or (item.get('timezoneEvidence') != 'explicit' and not bound_publisher_time):
             continue
         value = next((item[k] for k in ('value', 'datetime', 'raw', 'iso', 'timestamp') if item.get(k)), None)
         if value:

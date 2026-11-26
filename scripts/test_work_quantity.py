@@ -97,6 +97,24 @@ class QuantityEvidence(unittest.TestCase):
                 'evidence': [{'url': r['url'], 'observedAt': r['fetchedAt'],
                               'description': 'Actual final-window source scan reviewed with full candidate ledger'}]}
 
+    def test_daily_target_matches_the_editorial_gate(self):
+        for count, approved, ready in [(5,True,False),(6,False,False),(6,True,True),(7,False,True)]:
+            with self.subTest(count=count, approved=approved):
+                draft, audit, _ = fixture(count)
+                draft = json.loads(json.dumps(draft).replace('2026-11-15','2026-11-27'))
+                draft['sourceRegistry']['sources'] = draft['sourceRegistry']['sources'][:3]
+                audit = json.loads(json.dumps([row for row in audit if row['status']==200]).replace('2026-11-15','2026-11-27'))
+                from source_coverage import assess_coverage
+                stamp = '2026-11-27T06:03:00+08:00'
+                draft['planBCoverage'] = assess_coverage(draft['sourceRegistry'],'kg',{'sourceScanAudit':audit},
+                    datetime.fromisoformat('2026-11-27T06:00:00+08:00'),observed_at=stamp)
+                draft['planBFinalHash'] = 'b'*64
+                if approved:
+                    draft['quantityExceptionReview']={**self.exception(draft,audit),'reviewedAt':'2026-11-27T07:00:00+08:00'}
+                result=evaluate_quantity(draft,audit,datetime.fromisoformat('2026-11-27T08:00:00+08:00'))
+                self.assertEqual(result['quantitySummary']['exceptionMin'], 6, result)
+                self.assertEqual(result['quantityReady'],ready,result)
+
     def test_ten_requires_independent_evidenced_exception(self):
         d, audit, now = fixture(10)
         self.assertFalse(evaluate_quantity(d, audit, now)['quantityReady'])

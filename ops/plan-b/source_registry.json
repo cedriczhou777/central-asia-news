@@ -1,5 +1,5 @@
 {
-  "registryVersion": "SOURCE-REGISTRY-20261119-v9",
+  "registryVersion": "SOURCE-REGISTRY-20261126-v10",
   "sources": [
     {
       "allowedHosts": [
@@ -328,6 +328,11 @@
           "language": "en",
           "role": "language",
           "url": "https://www.gazeta.uz/en/"
+        },
+        {
+          "language": "ru",
+          "role": "section",
+          "url": "https://www.gazeta.uz/ru/society/"
         }
       ],
       "family": "Gazeta.uz",
@@ -594,22 +599,39 @@
     },
     {
       "allowedHosts": [
+        "en.kabar.kg",
         "ru.kabar.kg"
       ],
       "available": true,
       "country": "kg",
       "entrypoints": [
         {
+          "language": "en",
+          "role": "home",
+          "url": "https://en.kabar.kg/"
+        },
+        {
           "language": "und",
           "role": "home",
           "url": "https://ru.kabar.kg/"
+        },
+        {
+          "language": "en",
+          "role": "section",
+          "url": "https://en.kabar.kg/cat/society/"
+        },
+        {
+          "language": "en",
+          "role": "section",
+          "url": "https://en.kabar.kg/cat/economics/"
         }
       ],
       "family": "Kabar",
       "id": "kg-kabar",
       "institutionType": "news_media",
       "kind": "media",
-      "timezone": "Asia/Bishkek"
+      "timezone": "Asia/Bishkek",
+      "preferredInBoundedScan": true
     },
     {
       "allowedHosts": [
@@ -1646,6 +1668,11 @@
       "available": true,
       "country": "uz",
       "entrypoints": [
+        {
+          "language": "ru",
+          "role": "home",
+          "url": "https://cbu.uz/ru/press_center/news/"
+        },
         {
           "language": "ru",
           "role": "home",
@@ -2869,6 +2896,59 @@
       "kind": "institution",
       "preferredInBoundedScan": true,
       "timezone": "Asia/Baku"
+    },
+    {
+      "id": "az-azernews",
+      "country": "az",
+      "family": "AzerNEWS",
+      "available": true,
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "www.azernews.az"
+      ],
+      "preferredInBoundedScan": true,
+      "confirmedArticlePathPattern": "/(?:business|nation|region|culture|sports|oil_and_gas|analysis|lifestyle)/[0-9]+[.]html",
+      "entrypoints": [
+        {
+          "language": "en",
+          "role": "home",
+          "url": "https://www.azernews.az/nation/"
+        },
+        {
+          "language": "en",
+          "role": "section",
+          "url": "https://www.azernews.az/business/"
+        }
+      ]
+    },
+    {
+      "id": "az-renewables",
+      "country": "az",
+      "family": "Renewables.az",
+      "available": true,
+      "kind": "media",
+      "institutionType": "news_media",
+      "timezone": "Asia/Baku",
+      "allowedHosts": [
+        "renewables.az",
+        "www.renewables.az"
+      ],
+      "preferredInBoundedScan": true,
+      "confirmedArticlePathPattern": "/(?:public/)?en/news/[^/]+/?",
+      "entrypoints": [
+        {
+          "language": "en",
+          "role": "home",
+          "url": "https://www.renewables.az/en/all-news"
+        },
+        {
+          "language": "en",
+          "role": "section",
+          "url": "https://renewables.az/public/en/all-news"
+        }
+      ]
     }
   ]
 }

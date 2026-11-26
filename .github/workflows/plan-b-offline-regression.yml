@@ -35,6 +35,10 @@ jobs:
         run: python -m unittest discover -s scripts -p 'test_plan_b_coverage.py' -v
       - name: Verify discovery classification contracts
         run: python -m unittest discover -s scripts -p 'test_work_discovery.py' -v
+      - name: Verify publisher publication evidence and editorial counts
+        env:
+          PYTHONPATH: ops/plan-b:scripts
+        run: python -m unittest test_work_sources test_work_quantity
 
   offline-handoff-typescript:
     runs-on: ubuntu-latest

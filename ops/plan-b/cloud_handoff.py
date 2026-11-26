@@ -10,6 +10,7 @@ import shutil
 import tarfile
 
 from discover_work_sources import assess_window, discover, published_intervals, rebase_discovery_paths
+from editorial_policy import EFFECTIVE_ISSUE, previous_day
 from prepare_editorial_input import candidate_originals, discovery_index, indexed
 from source_coverage import assess_coverage, coverage_self_test
 from news_queue_policy import MAX_LISTING_PAGES, MAX_ARTICLES_PER_SOURCE
@@ -90,9 +91,14 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
     ledger = indexed(read(root / 'candidate_ledger.json')['candidateLedger'])
     result = []
     cutoff = datetime.fromisoformat(issue + 'T06:00:00+08:00')
+    start = cutoff - timedelta(days=1)
+    daily_policy = issue >= EFFECTIVE_ISSUE
     for entry in index['candidates']:
-        if (entry.get('decision') == 'rejected' or entry.get('fullTextValidated') is not True
-                or not entry.get('fullTextFetchedAt')):
+        if entry.get('fullTextValidated') is not True or not entry.get('fullTextFetchedAt'):
+            continue
+        rejected = entry.get('decision') == 'rejected'
+        if rejected and (not daily_policy or entry.get('reason') != 'explicit_publication_outside_window'
+                         or entry.get('decisionOrigin') != 'mechanical'):
             continue
         actual = ledger[entry['id']]
         path = root / 'evidence' / Path(actual['sourceJSON']).name
@@ -100,19 +106,28 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
         if hashlib.sha256(raw).hexdigest() != actual.get('sourceJSONSha256'):
             raise ValueError('source_archive_hash_mismatch')
         source = json.loads(raw)
-        if assess_window(source, country, cutoff - timedelta(days=1), cutoff) == 'outside_window':
+        times = published_intervals(source, country)
+        previous = (daily_policy and not source.get('publicationReviewRequired')
+                    and len({value[0] for value in times}) == 1 and previous_day(times[0][0], start))
+        if not previous and (rejected or assess_window(source, country, start, cutoff) == 'outside_window'):
             continue
         title = source.get('title') or (source.get('meta') or {}).get('og:title')
         if not isinstance(title, str) or not title.strip():
             continue
-        times = published_intervals(source, country)
-        valid = (actual.get('publicationWindowAssessment') == 'in_window' and len({v[0] for v in times}) == 1)
+        valid = previous or ((not daily_policy or not source.get('publicationReviewRequired'))
+                             and actual.get('publicationWindowAssessment') == 'in_window'
+                             and len({v[0] for v in times}) == 1)
         if valid and observed_at is not None and times[0][0] > datetime.fromisoformat(observed_at):
             continue
-        result.append({'id': entry['id'], 'revision': entry['editorialFingerprint'], 'title': title.strip(),
+        candidate = {'id': entry['id'], 'revision': entry['editorialFingerprint'], 'title': title.strip(),
                        'sourceId': actual['sourceId'], 'family': actual['family'],
                        'sourceUrl': entry['source_url'], 'sourceHash': entry['sourceHash'],
-                       'publishedAt': times[0][0].isoformat() if valid else None, 'needsTimeReview': not valid})
+                       'publishedAt': times[0][0].isoformat() if valid else None, 'needsTimeReview': not valid}
+        if daily_policy:
+            candidate['photoCandidates'] = len((source.get('articleImages') or {}).get('candidates') or [])
+            if previous:
+                candidate['previousDay'] = True
+        result.append(candidate)
     return result
 
 

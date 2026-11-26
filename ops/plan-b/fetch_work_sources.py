@@ -6,10 +6,12 @@ from urllib.parse import urljoin,urlparse,urlsplit,urlunsplit
 import urllib.request,urllib.error
 from lxml import html
 P=Path(__file__).parent;S=P/'sources'
-PARSER_VERSION='source-html-v20'
+PARSER_VERSION='source-html-v21'
 TRANSIENT={429,500,502,503,504}
 MAX_NETWORK_SECONDS = 45
 MAX_TRANSPORT_BYTES = 10_000_000
+KHOVAR_RUSSIAN_MONTHS = ('январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+                         'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь')
 class HTMLValidationError(ValueError):
     def __init__(self,message,encoding,evidence):
         super().__init__(message);self.decodedEncoding=encoding;self.encodingEvidence=evidence
@@ -234,6 +236,13 @@ def publication_evidence(tree,linked_data,final_url,canonical_url,primary_articl
         accepted.append(evidence('publisher.' + publisher_template['name'] + '.publicationDay',
                                  publisher_date, 'published', canonical_url or final_url,
                                  ['unique_date_beside_current_article_heading'], 35))
+    badge = (publisher_template or {}).get('publicationBadge')
+    if badge:
+        raw, stamp = badge
+        accepted.append({**evidence('publisher.khovar.currentArticlePublicationBadge', stamp, 'published',
+                                    canonical_url or final_url,
+                                    ['unique_visible_date_above_current_article_body', 'Asia/Dushanbe'], 35),
+                         'rawLocalTime': raw, 'timezoneEvidence': 'publisher_local'})
     return sorted(accepted,key=lambda e:e['priority']),excluded
 
 def link_time_context(node):
@@ -398,7 +407,11 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
         if re.match(r'^/(?:rus/)?\d{4}/\d{2}/[^/]+/?$',path):
             scopes=[n for n in tree.xpath('//div[@class]') if has_class(n,'block-content') and has_class(n,'type-post') and has_class(n,'status-publish') and any(re.fullmatch(r'post-\d+',c) for c in (n.get('class') or '').split())]
             bodies=[n for scope in scopes for n in scope.xpath('.//div[@class]') if has_class(n,'shortcode-content')]
-            if headings_match(tree.xpath('//h1')):profile=make('khovar_published_post_shortcode_content',bodies,extra=['wordpress_published_post_identity','current_h1_matches_title'])
+            heads=tree.xpath('//h1[not(ancestor::nav or ancestor::aside or ancestor::footer)]')
+            if headings_match(heads):
+                profile=make('khovar_published_post_shortcode_content',bodies,extra=['wordpress_published_post_identity','current_h1_matches_title'])
+                if profile and host=='khovar.tj' and path.startswith('/rus/') and len(heads)==1:
+                    profile['publicationBadge']=khovar_publication_badge(tree,heads[0],bodies[0],path)
     elif host=='tengrinews.kz' or host.endswith('.tengrinews.kz'):
         # Tilda longreads use an editorial cover H1 which can differ from the
         # SEO/OG headline. Both belong to one explicitly identified article URL.
@@ -409,6 +422,40 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
             heads=bodies[0].xpath('.//h1')
             if len(heads)==1 and len(' '.join(heads[0].text_content().split()))>=15:profile=make('tengri_url_bound_tilda_longread',bodies,heads,['og_article_url_matches_response','unique_tilda_article_page','unique_editorial_cover_h1'],True)
     return profile
+
+
+def khovar_publication_badge(tree, heading, body, path):
+    # The publisher shows the local publication time between the unique story
+    # heading and the already bound prose. A sidebar or the body dateline
+    # cannot donate a timestamp. Reject conflicts and URL-month mismatches.
+    values = {}
+    after_heading = False
+    for node in tree.iter():
+        if node is heading:
+            after_heading = True
+        if node is body:
+            break
+        if (not after_heading or node.tag not in ('time', 'span', 'p', 'div')
+                or node.xpath('ancestor-or-self::aside|ancestor-or-self::nav|ancestor-or-self::footer')
+                or any(recommendation_card(parent) for parent in node.iterancestors())):
+            continue
+        raw = ' '.join(node.text_content().split())
+        match = re.fullmatch(r'([а-яё]+) (\d{1,2}), (20\d{2}) (\d\d):(\d\d)', raw, re.I)
+        if not match or match[1].casefold() not in KHOVAR_RUSSIAN_MONTHS:
+            continue
+        month = KHOVAR_RUSSIAN_MONTHS.index(match[1].casefold()) + 1
+        if not path.startswith(f'/rus/{match[3]}/{month:02d}/'):
+            return None
+        try:
+            stamp = datetime(int(match[3]), month, int(match[2]), int(match[4]), int(match[5]),
+                             tzinfo=timezone(timedelta(hours=5))).isoformat()
+        except ValueError:
+            return None
+        values[stamp] = raw
+    if len(values) == 1:
+        stamp, raw = next(iter(values.items()))
+        return raw, stamp
+    return None
 
 def select_article_body(tree,title,alternative_titles=None,publisher_template=None):
     """Bind the current heading to a prose container, never the longest card.
@@ -601,14 +648,24 @@ def parse_response(url,final_url,raw,headers):
     if full_text_validated:
         result['articleImages'] = article_image_candidates(tree, selected_body, bound_article, final_url, meta)
     if publisher_template and publisher_template['name']=='superkg_current_news_inside_text_author_time' and full_text_validated:
-        stamps=[];issues=[]
+        stamps=set();footer_stamps=set();epoch=[];issues=[]
         for item in publications:
             if item.get('kind')!='published' or item.get('timezoneEvidence')!='explicit':continue
             stamp=datetime.fromisoformat(item['raw'].replace('Z','+00:00').replace('z','+00:00'))
-            stamps.append(stamp)
-            if item['field'].startswith('meta.') and stamp.timestamp()==0:
-                issues.append({'kind':'unix_epoch_publication_metadata','field':item['field'],'raw':item['raw']})
-        if len(set(stamps))>1:issues.append({'kind':'publisher_publication_time_conflict','requiresManualReview':True,'fields':[item['field'] for item in publications if item.get('kind')=='published']})
+            if item['field']=='meta.article:published_time' and stamp.timestamp()==0:
+                epoch.append(item)
+                continue
+            stamps.add(stamp)
+            if item['field'].startswith('publisher.') and stamp.timestamp()>0:
+                footer_stamps.add(stamp)
+        if epoch:
+            if len(stamps)==1 and stamps==footer_stamps:
+                for item in epoch:
+                    publications.remove(item)
+                    excluded_publications.append({**item, 'confidenceBasis':['publisher_unix_epoch_placeholder']})
+            else:
+                issues.append({'kind':'unix_epoch_publication_metadata','field':epoch[0]['field'],'raw':epoch[0]['raw']})
+        if len(stamps)>1:issues.append({'kind':'publisher_publication_time_conflict','requiresManualReview':True,'fields':[item['field'] for item in publications if item.get('kind')=='published']})
         if issues:result['publicationEvidenceIssues']=issues;result['publicationReviewRequired']=True
     if source_kind=='article' and not full_text_validated:result['error']='current_article_body_unverified_'+body_evidence['status']
     return result
