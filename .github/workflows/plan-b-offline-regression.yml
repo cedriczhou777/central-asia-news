@@ -7,7 +7,7 @@ on:
       - 'scripts/test_plan_b_*.py'
       - 'src/lib/reviewed-wechat.ts'
       - 'src/lib/reviewed-wechat-transport.ts'
-      - 'src/lib/plan-b-runtime-checks.ts'
+      - 'src/lib/plan-b-*.ts'
       - 'src/lib/reviewed-database-delivery.ts'
       - 'scripts/prepare-reviewed-database-delivery.ts'
       - 'scripts/test-reviewed-database-delivery.ts'
@@ -38,7 +38,7 @@ jobs:
       - name: Verify publisher publication evidence and editorial counts
         env:
           PYTHONPATH: ops/plan-b:scripts
-        run: python -m unittest test_work_sources test_work_quantity
+        run: python -m unittest test_work_sources test_work_quantity test_work_source_evidence
 
   offline-handoff-typescript:
     runs-on: ubuntu-latest

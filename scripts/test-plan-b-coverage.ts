@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { canonicalJson, freezeBlockReason, PLAN_B_COUNTRIES, requireFrozenVersion, sha256, snapshot,
   type Candidate, type Snapshot } from '../src/lib/plan-b-handoff';
 import { verifyEditorial } from '../src/lib/plan-b-editorial';
+import { summarizeUsage } from '../src/lib/plan-b-editorial-decisions';
 import { finalCoverageOutcome } from '../src/lib/plan-b-runtime';
 import { coverageFixture } from './plan-b-fixtures';
 
@@ -78,37 +79,82 @@ try {
 }
 const newIssue = '2026-11-27';
 const newObserved = newIssue + 'T06:03:00+08:00';
-const newer = candidates.slice(0,8).map(candidate => ({ ...candidate, publishedAt:'2026-11-26T19:00:00+08:00' }));
-const followups = candidates.slice(8,11).map(candidate => ({ ...candidate,
-  publishedAt:'2026-11-25T17:00:00+08:00', previousDay:true as const }));
+Date.now = () => Date.parse(newIssue + 'T07:00:00+08:00');
+const newer = Array.from({ length:20 }, (_, i) => ({...candidates[i % candidates.length],
+  id:'run-news-'+i, title:'Fixed sample '+i, sourceHash:sha256('new-body-'+i), revision:sha256('new-revision-'+i),
+  sourceUrl:'https://healthy-'+i%3+'.example/new-'+i, publishedAt:'2026-11-26T19:00:00+08:00' }));
+const outside = {...candidates[0], id:'outside-window', publishedAt:'2026-11-26T05:59:59+08:00', previousDay:true as const};
+const unresolved = {...candidates[1], id:'unverified-time', publishedAt:null, needsTimeReview:true};
 const snapshotNew = snapshot({ issue:newIssue, country:'kg', phase:'final', observedAt:newObserved, pendingSources:[],
-  coverage:coverageFixture('kg',newObserved), candidates:[...newer,...followups,
-    {...candidates[11],publishedAt:'2026-11-25T05:59:59+08:00',previousDay:true}] });
-assert.equal(snapshotNew.candidates.length,11,'previous-day candidates are retained, older stories are excluded');
+  coverage:coverageFixture('kg',newObserved), candidates:[...newer,outside,unresolved] });
+assert.equal(snapshotNew.candidates.length,21,'unverified candidates remain visible; previous-day stories cannot enter');
 function newEditorial(selected: typeof snapshotNew.candidates, exception = false) {
   const stories = selected.map(candidate => ({
     ...rows[0], id:candidate.id, source_url:candidate.sourceUrl, revision:candidate.revision,
-    sourceHash:candidate.sourceHash, title:(candidate.previousDay ? '【延续关注】' : '')+candidate.id,
-    published_at:candidate.publishedAt,
-    ...(candidate.previousDay ? {previousDay:true,followUpReason:'Synthetic documented continuing reader relevance'} : {}),
+    sourceHash:candidate.sourceHash, title:candidate.id, published_at:candidate.publishedAt,
   }));
+  const ids = new Set(selected.map(c=>c.id));
+  const decisions:Record<string,Record<string,unknown>> = Object.fromEntries(snapshotNew.candidates.map(c=>[c.id, ids.has(c.id)
+    ? {decision:'selected',editorialState:'selected',reason:'Reviewed original evidence for this fixed sample.',
+       firstDisclosureVerified:true,firstDisclosureEvidence:[{url:c.sourceUrl,description:'The publisher provides original time and facts.'}]}
+    : {decision:'pending',editorialState:'pending_time_check',reason:'This fixture still lacks a complete timestamp.'}]));
   return { finalHash:snapshotNew.hash, inspected:snapshotNew.candidates.map(row=>row.id),
     draft:{...draft, issueDate:newIssue, windowStart:'2026-11-26T06:00:00+08:00',
       windowEnd:newIssue+'T06:00:00+08:00', coverageEnd:newIssue+'T06:00:00+08:00', articles:stories,
-      ...(exception ? { quantityExceptionReview:{ status:'approved', reviewer:review.reviewer, evidence:[{fixture:true}] } } : {})},
-    review:{...review, issueDate:newIssue, articles:stories, originalHash:digest(stories), finalBodyHash:digest(stories)} };
+      ...(exception ? { quantityExceptionReview:{ status:'approved', reviewer:review.reviewer, finalHash:snapshotNew.hash,
+        candidateInventoryReviewed:snapshotNew.candidates.length, reason:'Independent sources and candidate shortages individually verified.',
+        reviewedAt:newObserved, evidence:[{url:newer[0].sourceUrl,observedAt:newObserved,description:'Real observations in this isolated fixed fixture.'}] } } : {})},
+    review:{...review, issueDate:newIssue, articles:stories, originalHash:digest(stories), finalBodyHash:digest(stories),
+      candidateDecisions:decisions } };
 }
 assert.throws(()=>verifyEditorial(newEditorial(newer.slice(0,5),true),snapshotNew),/daily_edition_below_minimum/);
-assert.throws(()=>verifyEditorial(newEditorial(newer.slice(0,6)),snapshotNew),/quantity_exception_review_required/);
-assert.equal(verifyEditorial(newEditorial(newer.slice(0,6),true),snapshotNew).articleCount,6);
-assert.equal(verifyEditorial(newEditorial([...newer.slice(0,5),...followups.slice(0,2)]),snapshotNew).articleCount,7);
-assert.throws(()=>verifyEditorial(newEditorial([...newer.slice(0,4),...followups]),snapshotNew),/too_many_previous_day_followups/);
-const duplicated = newEditorial(newer.slice(0,7));
+for (const count of [6,7,8,14]) {
+  assert.throws(()=>verifyEditorial(newEditorial(newer.slice(0,count)),snapshotNew),/quantity_exception_review_required/);
+  const signed = newEditorial(newer.slice(0,count),true);
+  assert.equal(verifyEditorial(signed,snapshotNew).articleCount,count);
+  assert.throws(()=>verifyEditorial({...signed,draft:{...signed.draft,
+    quantityExceptionReview:{...signed.draft.quantityExceptionReview,finalHash:'x'} }},snapshotNew),/quantity_exception_not_bound/);
+}
+for (const count of [15,16,20]) {
+  const checked=verifyEditorial(newEditorial(newer.slice(0,count)),snapshotNew);
+  assert.equal(checked.articleCount,count);
+  assert.equal(checked.funnel?.pending,21-count);
+}
+const duplicated = newEditorial(newer.slice(0,15));
 const copiedTitles = duplicated.review.articles.map((article,i)=>i===1 ? {...article,title:duplicated.review.articles[0].title+'！'} : article);
 assert.throws(()=>verifyEditorial({...duplicated,review:{...duplicated.review,articles:copiedTitles,finalBodyHash:digest(copiedTitles)}},
   snapshotNew),/same_issue_story_duplicate/);
-const shortSupply = snapshot({...snapshotNew,candidates:[...newer.slice(0,4),...followups]});
+const unproved=newEditorial(newer.slice(0,15));
+unproved.review.candidateDecisions[newer[0].id]={decision:'selected',editorialState:'selected',reason:'An original source must be supplied.'};
+assert.throws(()=>verifyEditorial(unproved,snapshotNew),/selected_candidate_missing_first_disclosure_evidence/);
+const sameEvent=newEditorial(newer.slice(0,15));
+for (const id of [newer[0].id,newer[1].id]) Object.assign(sameEvent.review.candidateDecisions[id],
+  {eventGroup:'project-a',eventPhase:'financing',newFact:'The same loan was announced.'});
+assert.throws(()=>verifyEditorial(sameEvent,snapshotNew),/same_issue_event_stage_duplicate/);
+Object.assign(sameEvent.review.candidateDecisions[newer[1].id],{eventPhase:'construction',newFact:'Construction started after the approval.'});
+assert.equal(verifyEditorial(sameEvent,snapshotNew).articleCount,15);
+sameEvent.review.candidateDecisions[unresolved.id] = {decision:'rejected',editorialState:'rejected_old',
+  reason:'Earlier item carries the same facts as this one.'};
+assert.throws(()=>verifyEditorial(sameEvent,snapshotNew),/prior_publication_evidence_required/);
+sameEvent.review.candidateDecisions[unresolved.id].priorPublicationEvidence={url:outside.sourceUrl,publishedAt:outside.publishedAt,
+  description:'Original disclosed before the issue window.',noNewFacts:true};
+assert.equal(verifyEditorial(sameEvent,snapshotNew).funnel?.states.rejected_old,1);
+delete sameEvent.review.candidateDecisions[unresolved.id];
+assert.throws(()=>verifyEditorial(sameEvent,snapshotNew),/editorial_decision_ledger_incomplete/);
+const shortSupply = snapshot({...snapshotNew,candidates:[...newer.slice(0,6),unresolved]});
 const supplyReceipt = {snapshot:shortSupply,cache:{path:'fixture',sha256:sha256('fixture'),bytes:1},metrics:{}};
 assert.equal(finalCoverageOutcome(supplyReceipt,0).state,'retry','try bounded supplementation before signing a short pool');
 assert.equal(finalCoverageOutcome(supplyReceipt,1).state,'ready','editorial work may proceed while a real shortage is reported');
-console.log('Plan B coverage: independent gaps, verified time, six-story minimum, previous-day limits and same-edition deduplication passed.');
+const usage = summarizeUsage({observations:[
+  {callId:'first',stage:'triage',inputHash:sha256('fixture'),inputTokens:100,outputTokens:25},
+  {callId:'second',stage:'triage',inputHash:sha256('fixture'),inputTokens:100,outputTokens:15,retry:true},
+  {callId:'second',stage:'triage',inputHash:sha256('fixture')},
+  {callId:'independent',stage:'independent_review',inputHash:sha256('fixture')},
+]},15);
+assert.equal(usage?.reportedCalls,3);
+assert.equal(usage?.inputTokens,null);
+assert.deepEqual(usage?.stages.triage,{calls:2,duplicateInputs:1,retries:1,inputTokens:200,outputTokens:40,measuredCalls:2});
+assert.equal(usage?.stages.independent_review.inputTokens,null);
+assert.equal(usage?.tokensPerAdopted,null);
+Date.now = originalNow;
+console.log('Plan B coverage: independent gaps, verified time, 15–20 normal target, strict window, reviewed shortfall, event eligibility and same-edition deduplication passed.');

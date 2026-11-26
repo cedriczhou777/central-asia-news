@@ -3,7 +3,7 @@ Only the coordinator executes the generated SQL. No credentials occur in SQL.
 """
 import argparse,hashlib,hmac,json,os,re
 from pathlib import Path
-from datetime import date
+from datetime import date, timedelta
 
 def canonical(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
@@ -39,13 +39,47 @@ def sql(view,issue,country=None,phase='preview',ids=(),document=None):
     if country:scope+=' and country='+literal(country)
     if view=='health':return f"select payload,updated_at from public.plan_b_exchange where {scope} and country='global' and kind='health' and record_key='latest';"
     if view=='status':return f"select country,step,state,attempt,updated_at,receipt from public.plan_b_daily where {scope} order by country,step;"
+    if view=='funnel':
+        return f'''select country,step,state,attempt,updated_at,
+          case when step='final' then receipt #> '{{metrics,funnel}}'
+               when step='editorial' then receipt->'funnel' end as funnel,
+          case when step='final' then receipt #> '{{metrics,sourceFunnel}}' end as source_funnel,
+          case when step='editorial' then receipt->'usage' end as usage
+          from public.plan_b_daily where {scope} and step in ('final','editorial','release','word','wechat','readback')
+          order by country,step;'''
+    if view=='weekly-funnel':
+        start=(date.fromisoformat(issue)-timedelta(days=6)).isoformat()
+        country_scope=' and d.country='+literal(country) if country else ''
+        return f'''with source_days as (
+          select d.issue_date,d.country,src as source
+          from public.plan_b_daily d
+          cross join lateral jsonb_array_elements(case when jsonb_typeof(d.receipt #> '{{metrics,sourceFunnel}}')='array'
+            then d.receipt #> '{{metrics,sourceFunnel}}' else '[]'::jsonb end) src
+          where d.step='final' and d.issue_date between {literal(start)} and {literal(issue)}{country_scope}
+        ), editorial_days as (
+          select issue_date,country,receipt #> '{{funnel,bySource}}' as decisions
+          from public.plan_b_daily where step='editorial' and issue_date between {literal(start)} and {literal(issue)}
+        )
+        select s.country,s.source->>'sourceId' as source_id,s.source->>'family' as family,
+          count(*) as observed_days,count(e.decisions) as reviewed_days,
+          sum((s.source->>'readablePages')::int) as readable_pages,sum((s.source->>'http403Pages')::int) as refused_pages,
+          count(*) filter (where (s.source->>'attemptedPages')::int>0 and (s.source->>'readablePages')::int=0) as unavailable_days,
+          sum((s.source->>'articleAttemptedUrls')::int) as article_urls_attempted,
+          sum((s.source->>'articleParseFailures')::int) as article_parse_failures,
+          sum((s.source->>'fullText')::int) as full_text,sum((s.source->>'inWindow')::int) as in_window,
+          sum(case when e.decisions is not null then
+            coalesce((e.decisions->(s.source->>'sourceId')->>'selected')::int,0)+
+            coalesce((e.decisions->(s.source->>'sourceId')->>'revised')::int,0) end) as adopted
+          from source_days s left join editorial_days e using (issue_date,country)
+          group by 1,2,3 order by 1, in_window desc nulls last, 2;'''
     if not country:raise ValueError('country_required')
     if view=='manifest':
         if phase not in ('preview','final'):raise ValueError('invalid_phase')
         return f"select e.payload,d.state,d.attempt,d.receipt->'workCheckpoint' as checkpoint from public.plan_b_exchange e left join public.plan_b_daily d on d.issue_date=e.issue_date and d.country=e.country and d.step=e.record_key where e.{scope.replace(' and country=',' and e.country=')} and e.kind='manifest' and e.record_key={literal(phase)};"
-    if view=='originals':
+    if view in ('originals','evidence'):
         if not 1<=len(ids)<=5 or len(set(ids))!=len(ids) or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,96}/[a-f0-9]{64}/[a-f0-9]{64}',v)for v in ids):raise ValueError('one_to_five_id_hash_revision_keys_required')
-        return f"select record_key,content_hash,payload from public.plan_b_exchange where {scope} and kind='original' and record_key in ({','.join(map(literal,ids))});"
+        payload="payload" if view=='originals' else "jsonb_build_object('candidate',payload->'candidate','evidencePacket',payload #> '{original,evidencePacket}') as payload"
+        return f"select record_key,content_hash,{payload} from public.plan_b_exchange where {scope} and kind='original' and record_key in ({','.join(map(literal,ids))});"
     if view in ('word','commands'):
         if view=='word':
             if not ids:return f"select record_key,payload-'base64' as metadata from public.plan_b_exchange where {scope} and kind='word' order by created_at desc limit 1;"
@@ -63,7 +97,7 @@ def sql(view,issue,country=None,phase='preview',ids=(),document=None):
     return f"insert into public.plan_b_exchange(issue_date,country,kind,record_key,content_hash,payload,state) values ({literal(issue)},{literal(country)},{literal(kind)},{literal(key)},{literal(key)},{literal(canonical(document))}::jsonb,'queued') on conflict do nothing; select record_key,state,attempts,result from public.plan_b_exchange where {scope} and kind={literal(kind)} and record_key={literal(key)};"
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('view',choices=['health','status','manifest','originals','checkpoint','submit','commands','word','verify-health','verify-original'])
+    p=argparse.ArgumentParser();p.add_argument('view',choices=['health','status','funnel','weekly-funnel','manifest','originals','evidence','checkpoint','submit','commands','word','verify-health','verify-original'])
     p.add_argument('--issue',required=True);p.add_argument('--country');p.add_argument('--phase',default='preview');p.add_argument('--ids',nargs='*',default=[]);p.add_argument('--document',type=Path)
     a=p.parse_args();body=json.loads(a.document.read_bytes())if a.document else None
     if a.view=='verify-health':print(json.dumps({'verified':health_verified(body,a.issue)}))

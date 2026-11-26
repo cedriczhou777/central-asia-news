@@ -8,10 +8,10 @@ from datetime import datetime, timedelta, timezone
 import re
 from urllib.parse import urlparse, urlunparse, urlsplit, urlunsplit, parse_qsl, urlencode
 
-from editorial_policy import EFFECTIVE_ISSUE, MIN_ARTICLES, TARGET_ARTICLES
+from editorial_policy import EFFECTIVE_ISSUE, MAX_ARTICLES, MIN_ARTICLES, TARGET_ARTICLES
 
 POLICY_VERSION = "quantity-v1"
-LISTING_ROLES = {"listing", "section", "archive", "feed", "home", "date_archive", "pagination", "language"}
+LISTING_ROLES = {"listing", "section", "archive", "feed", "sitemap", "home", "date_archive", "pagination", "language"}
 TERMINAL_UNAVAILABLE_STATUSES = {401, 403, 404, 410}
 
 
@@ -541,7 +541,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
     ledger = draft.get("candidateLedger")
     ledger_errors, seen_ids, seen_urls, selected_urls, candidate_urls = [], set(), set(), set(), set()
     accounted_records = set()
-    counts = {"selected": 0, "rejected": 0, "pending": 0, "fullTextFetched": 0}
+    counts = {"selected": 0, "rejected": 0, "pending": 0, "heldOutOfEdition": 0, "fullTextFetched": 0}
     if not isinstance(ledger, list) or not ledger:
         ledger_errors.append("candidateLedger: nonempty candidate decision ledger required")
         ledger = []
@@ -581,7 +581,12 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
         if decision not in {"selected", "rejected", "pending"}:
             ledger_errors.append(label + ": selected/rejected/pending decision required")
             continue
-        counts[decision] += 1
+        held = (daily_policy and decision=='pending' and cid not in adopted_ids
+                and candidate.get('editorialState') in ('pending_source_check','pending_time_check')
+                and candidate.get('reviewedBy')==draft.get('planBReviewerRun') and bool(draft.get('planBReviewerRun'))
+                and _detail(candidate.get('reason')) and not candidate.get('mustProcess')
+                and not candidate.get('important') and candidate.get('priority') not in ('critical','important'))
+        counts['heldOutOfEdition' if held else decision] += 1
         fulltext_at = candidate.get("fullTextFetchedAt")
         if not fulltext_at and any(r.get("articleIdentityReviewed") for r in bound):
             # Preserve the parser's original classification/time. Only a bound
@@ -615,6 +620,9 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             origin_source = by_id.get(origin.get("sourceId"))
             origin_hash = origin.get("sourceHash")
             primary_hash = candidate.get("sourceHash")
+            if (daily_policy and origin_url==url and origin_source==source
+                    and origin.get('id')==cid and origin_hash==primary_hash):
+                continue  # The primary observation was already checked above.
             if (not origin_source or not origin_url
                     or origin.get("family", origin_source.get("family")) != origin_source.get("family")
                     or not re.fullmatch(r"[0-9a-fA-F]{64}", str(origin_hash or "")) or origin_hash != primary_hash):
@@ -689,7 +697,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
         "qualityDeliveryComplete": ready and independent and not open_issues,
         "shortfallOpen": not ready,
         "quantitySummary": {
-            "adopted": count, "targetMin": target, "targetMax": 8 if daily_policy else 20, "exceptionMin": exception_min,
+            "adopted": count, "targetMin": target, "targetMax": MAX_ARTICLES, "exceptionMin": exception_min,
             "reason": "Quantity and source/candidate evidence complete" if ready else
                       "Expand sources and close candidate decisions; free-text shortfall explanations do not complete delivery",
         },

@@ -1,5 +1,5 @@
 {
-  "registryVersion": "SOURCE-REGISTRY-20261126-v10",
+  "registryVersion": "SOURCE-REGISTRY-20261126-v11",
   "sources": [
     {
       "allowedHosts": [
@@ -144,6 +144,12 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://inbusiness.kz/ru/cat/biznes/?page=2"
+        },
+        {
+          "url": "https://inbusiness.kz/ru/rss",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Inbusiness.kz",
@@ -202,6 +208,12 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://lsm.kz/banks?page=2"
+        },
+        {
+          "url": "https://lsm.kz/rss.xml",
+          "role": "feed",
+          "language": "und",
+          "preferredDiscovery": false
         }
       ],
       "family": "LS",
@@ -265,6 +277,12 @@
           "language": "ru",
           "role": "section",
           "url": "https://informburo.kz/page/politika-konfidencialnosti-i-obrabotki-personalnyx-dannyx"
+        },
+        {
+          "url": "https://informburo.kz/rss/pubsubhubbub-feed.xml",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "Informburo",
@@ -381,6 +399,12 @@
           "language": "ru",
           "role": "section",
           "url": "https://www.spot.uz/ru/transport/"
+        },
+        {
+          "url": "https://www.spot.uz/ru/rss/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Spot.uz",
@@ -420,6 +444,12 @@
           "language": "und",
           "role": "language",
           "url": "https://www.uzdaily.uz/en/"
+        },
+        {
+          "url": "https://www.uzdaily.uz/ru/rss/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "UzDaily",
@@ -536,6 +566,12 @@
           "language": "ru",
           "role": "home",
           "url": "https://nuz.uz/"
+        },
+        {
+          "url": "https://nuz.uz/feed/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "NUZ",
@@ -799,6 +835,12 @@
           "language": "ru",
           "role": "section",
           "url": "https://economist.kg/tag/society/"
+        },
+        {
+          "url": "https://economist.kg/rss/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Economist.kg",
@@ -977,6 +1019,12 @@
           "language": "ru",
           "role": "language",
           "url": "https://eng.khovar.tj:443/"
+        },
+        {
+          "url": "https://khovar.tj/rus/feed/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Khovar",
@@ -1046,6 +1094,12 @@
           "language": "und",
           "role": "home",
           "url": "https://avesta.tj/"
+        },
+        {
+          "url": "https://avesta.tj/feed/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "Avesta",
@@ -1219,6 +1273,12 @@
           "language": "ru",
           "role": "home",
           "url": "https://azertag.az/ru"
+        },
+        {
+          "url": "https://azertag.az/ru/rss",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "AZERTAC",
@@ -1566,6 +1626,22 @@
           "language": "kk",
           "role": "section",
           "url": "https://nationalbank.kz/kz"
+        },
+        {
+          "url": "https://nationalbank.kz/rss_news_kazakh.xml",
+          "role": "feed",
+          "language": "kk",
+          "preferredDiscovery": true
+        },
+        {
+          "url": "https://nationalbank.kz/rss_news_russian.xml",
+          "role": "feed",
+          "language": "ru"
+        },
+        {
+          "url": "https://nationalbank.kz/rss_news_english.xml",
+          "role": "feed",
+          "language": "en"
         }
       ],
       "family": "National Bank of Kazakhstan",
@@ -1750,6 +1826,11 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://president.uz/ru/lists/news?page=1&per-page=15"
+        },
+        {
+          "url": "https://president.uz/en/lists/news",
+          "role": "archive",
+          "language": "en"
         }
       ],
       "family": "President Uzbekistan",
@@ -1833,6 +1914,11 @@
           "language": "ru",
           "role": "home",
           "url": "https://www.gov.kg/ru"
+        },
+        {
+          "url": "https://www.gov.kg/ru/post/c/press",
+          "role": "section",
+          "language": "ru"
         }
       ],
       "family": "Cabinet Kyrgyzstan",
@@ -2065,6 +2151,11 @@
           "language": "az",
           "role": "language",
           "url": "https://economy.gov.az/en"
+        },
+        {
+          "url": "https://economy.gov.az/en/page/media/news",
+          "role": "section",
+          "language": "en"
         }
       ],
       "family": "Ministry Economy Azerbaijan",
@@ -2800,6 +2891,12 @@
           "language": "ru",
           "role": "home",
           "url": "https://navonews.tj/"
+        },
+        {
+          "url": "https://navonews.tj/rss.xml?lang=tj",
+          "role": "feed",
+          "language": "tg",
+          "preferredDiscovery": false
         }
       ],
       "family": "NAVO",
@@ -2947,6 +3044,25 @@
           "language": "en",
           "role": "section",
           "url": "https://renewables.az/public/en/all-news"
+        }
+      ]
+    },
+    {
+      "id": "tj-foreign-ministry-tajikistan",
+      "country": "tj",
+      "family": "Foreign Ministry Tajikistan",
+      "kind": "institution",
+      "institutionType": "foreign_ministry",
+      "available": true,
+      "allowedHosts": [
+        "mfa.tj"
+      ],
+      "timezone": "Asia/Dushanbe",
+      "entrypoints": [
+        {
+          "url": "https://mfa.tj/tg/main",
+          "role": "home",
+          "language": "tg"
         }
       ]
     }

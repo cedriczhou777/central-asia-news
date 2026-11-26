@@ -11,6 +11,8 @@ import re
 import tempfile
 
 from source_attribution import publisher_name
+from editorial_policy import EFFECTIVE_ISSUE
+from source_evidence import evidence_packet
 from work_quantity_policy import _listing_attempt
 
 
@@ -297,13 +299,16 @@ def candidate_originals(index, article_ids):
             publisher_hint = site_name if isinstance(site_name, str) else None
         else:
             publisher_hint = None
-        originals.append({'id': article_id, 'sourceJSON': str(path), 'sourceHash': entry['sourceHash'],
+        original = {'id': article_id, 'sourceJSON': str(path), 'sourceHash': entry['sourceHash'],
                           'sourceId': entry.get('sourceId'), 'source_url': source_url,
                           'source': source_name, 'publisherHint': publisher_hint,
                           'archiveBytes': len(raw), **pick(record, ('title', 'url', 'final_url', 'canonical_url', 'text',
                                                                    'fetchedAt', 'publicationEvidence', 'html_lang',
                                                                    'publicationEvidenceIssues', 'articleBodyEvidence',
-                                                                   'articleImages'))})
+                                                                   'articleImages'))}
+        if index['issueDate'] >= EFFECTIVE_ISSUE:
+            original['evidencePacket'] = evidence_packet(record, entry, original)
+        originals.append(original)
     return {'issueDate': index['issueDate'], 'country': index['country'], 'articles': originals}
 
 

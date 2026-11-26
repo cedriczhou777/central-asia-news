@@ -11,6 +11,14 @@ VERSION = 'bounded-news-queue-2'
 MAX_ACTIVE_ARTICLES = 96
 MAX_ARTICLES_PER_SOURCE = 12
 MAX_LISTING_PAGES = 2
+ADAPTIVE_LISTING_PAGES = 4
+ADAPTIVE_ARTICLES_PER_SOURCE = 24
+ADAPTIVE_LISTING_FRACTION = .40
+ADAPTIVE_WORKERS = 3
+ADAPTIVE_DOMAIN_WORKERS = 1
+# Only source evidence can extend per-source collection beyond its base share.
+ADAPTIVE_EXTRA_LISTING_PAGES = 3
+ADAPTIVE_EXTRA_ARTICLES = 12
 ARCHIVE_PUBLICATIONS = json.loads(Path(__file__).with_name('verified_archive_publications.json').read_text())
 IMPORTANT = re.compile(
     r'energy|electric|power|renewab|solar|wind|neft|socar|\bgas\b|\boil\b|'

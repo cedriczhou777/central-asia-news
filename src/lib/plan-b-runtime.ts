@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { randomUUID } from 'node:crypto';
-import { DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, freezeBlockReason, PLAN_B_COUNTRIES,
+import { DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, freezeBlockReason, PLAN_B_COUNTRIES,
   retryableStatus, reviewableWindowCount, SHORT_EDITION_FIRST_ISSUE, type PlanBCountry } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
 import { claim, getState, knownLiveReceipts, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
@@ -28,7 +28,9 @@ function runtimeHealth() {
   return {runtime:PLAN_B_RUNTIME_VERSION,commit:process.env.BUILD_GIT_SHA||null,
     activation:{enabled:process.env.REVIEWED_PLAN_B==='1',admitted:planBAdmitted(),
       checksEnabled:process.env.REVIEWED_PLAN_B_CHECKS==='1',firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
-    registration:{registered:runtime.registered}};
+    registration:{registered:runtime.registered},
+    editorialPolicy:{version:'plan-b-editorial-2',fromIssue:EDITORIAL_POLICY_FIRST_ISSUE,
+      targetMin:DAILY_TARGET_ARTICLES,targetMax:20,reviewedShortfallMin:DAILY_MIN_ARTICLES}};
 }
 
 const bootId=randomUUID();
@@ -81,7 +83,7 @@ export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number):
   const reviewableCandidates = shortEditionsAllowed ? reviewableWindowCount(receipt.snapshot) : receipt.snapshot.candidates.length;
   const shortage = reviewableCandidates < (shortEditionsAllowed ? 1 : 10);
   const dailyPolicy = receipt.snapshot.issue >= EDITORIAL_POLICY_FIRST_ISSUE;
-  const belowTarget = dailyPolicy && reviewableCandidates < DAILY_TARGET_ARTICLES + 1;
+  const belowTarget = dailyPolicy && reviewableCandidates < DAILY_TARGET_ARTICLES;
   const reason = freezeBlockReason(receipt.snapshot) || (shortage ? 'insufficient_reviewable_candidates'
     : belowTarget && attempt === 0 ? 'candidate_supply_below_target' : null);
   const limit=receipt.snapshot.issue>='2026-11-23'?3:2;

@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from editorial_policy import EFFECTIVE_ISSUE, MIN_ARTICLES, TARGET_ARTICLES
+from editorial_policy import EFFECTIVE_ISSUE, MAX_ARTICLES, MIN_ARTICLES, TARGET_ARTICLES
 from work_quantity_policy import _dt, _listing_attempt, _url, terminal_source_failure
 from news_queue_policy import partition_coverage, validate_queue_accounting
 
@@ -164,7 +164,7 @@ def assess_coverage(registry, country, inventory, cutoff, ledger=(), leads=(), o
             'queues': queues, 'closedQueueWork': closed, 'reviewWork': review_work,
             'scanBudget': {'bounded': bounded_scan, 'maxSeconds': max_seconds,
                            'observedAt': inventory.get('observedAt')},
-            'coverageChecked': False, 'normalTarget': [TARGET_ARTICLES, 8] if daily_policy else [15, 20],
+            'coverageChecked': False, 'normalTarget': [TARGET_ARTICLES, MAX_ARTICLES] if daily_policy else [15, 20],
             'scarcityRange': [MIN_ARTICLES, TARGET_ARTICLES - 1] if daily_policy else [10, 14]}
     metadata = {}
     for row in leads:

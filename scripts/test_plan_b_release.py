@@ -172,15 +172,14 @@ class CloudReleaseTest(unittest.TestCase):
             self.assertEqual(package['countries']['kg']['bodyHtml'].count('<img '), 1)
             self.assertIn('https://source0.example/original.png', package['countries']['kg']['bodyHtml'])
 
-    def test_daily_edition_renders_a_previous_day_followup_and_second_story_cover(self):
+    def test_daily_edition_renders_fifteen_and_uses_second_story_cover(self):
         issue = '2026-11-27'
         now = datetime.fromisoformat(issue + 'T07:00:00+08:00')
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
-            source, registry = inputs(directory, issue=issue, count=7, photo_index=1, follow_up=True)
+            source, registry = inputs(directory, issue=issue, count=15, photo_index=1)
             inventory = {row['id']: row for row in inventory_entries(source, issue, 'kg')}
-            self.assertEqual(inventory['article6']['publishedAt'], '2026-11-26T00:00:00+08:00')
-            self.assertIs(inventory['article6']['previousDay'], True)
+            self.assertEqual(inventory['article14']['publishedAt'], issue + 'T05:59:59+08:00')
             self.assertEqual(inventory['article1']['photoCandidates'], 1)
             gate = partial(verify_rendered_package, now=now)
             with patch.object(cloud_release, 'REGISTRY', registry), patch.object(prepare_country_release, 'verify_rendered_package', gate), \
@@ -195,11 +194,11 @@ class CloudReleaseTest(unittest.TestCase):
             package = read(release / 'package.json')['countries']['kg']
             self.assertEqual(package['coverUrl'], 'https://source0.example/original.png')
             self.assertLess(package['bodyHtml'].index('测试新闻0'), package['bodyHtml'].index('<img '))
-            self.assertIn('【延续关注】测试新闻6', package['bodyHtml'])
+            self.assertIn('测试新闻14', package['bodyHtml'])
             word = cloud_release.build_word(release, directory / 'test.docx')
-            self.assertEqual((word['articles'],word['images']), (7,1))
+            self.assertEqual((word['articles'],word['images']), (15,1))
             with ZipFile(directory / 'test.docx') as doc:
-                self.assertIn('【延续关注】测试新闻6', doc.read('word/document.xml').decode())
+                self.assertIn('测试新闻14', doc.read('word/document.xml').decode())
 
     def test_source_timeout_is_neither_success_nor_empty_source(self):
         registry = {'sources': [{'id': 'missing', 'country': 'kg'}, {'id': 'retrying', 'country': 'kg'}]}
