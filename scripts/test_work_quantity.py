@@ -98,12 +98,14 @@ class QuantityEvidence(unittest.TestCase):
                               'description': 'Actual final-window source scan reviewed with full candidate ledger'}]}
 
     def test_daily_target_matches_the_editorial_gate(self):
-        for count, approved, ready in [(5,True,False),(6,False,False),(6,True,True),(7,False,True)]:
+        for count, approved, ready in [(5,True,False),(6,False,False),(6,True,True),(7,False,False),(7,True,True),(8,False,False),(14,True,True),(15,False,True),(20,False,True)]:
             with self.subTest(count=count, approved=approved):
                 draft, audit, _ = fixture(count)
                 draft = json.loads(json.dumps(draft).replace('2026-11-15','2026-11-27'))
-                draft['sourceRegistry']['sources'] = draft['sourceRegistry']['sources'][:3]
-                audit = json.loads(json.dumps([row for row in audit if row['status']==200]).replace('2026-11-15','2026-11-27'))
+                audit = json.loads(json.dumps(audit).replace('2026-11-15','2026-11-27'))
+                for row in audit:
+                    if row['role']=='home':
+                        row.update(status=200,contentValidated=True)
                 from source_coverage import assess_coverage
                 stamp = '2026-11-27T06:03:00+08:00'
                 draft['planBCoverage'] = assess_coverage(draft['sourceRegistry'],'kg',{'sourceScanAudit':audit},

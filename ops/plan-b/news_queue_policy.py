@@ -11,6 +11,14 @@ VERSION = 'bounded-news-queue-2'
 MAX_ACTIVE_ARTICLES = 96
 MAX_ARTICLES_PER_SOURCE = 12
 MAX_LISTING_PAGES = 2
+ADAPTIVE_LISTING_PAGES = 4
+ADAPTIVE_ARTICLES_PER_SOURCE = 24
+ADAPTIVE_LISTING_FRACTION = .40
+ADAPTIVE_WORKERS = 3
+ADAPTIVE_DOMAIN_WORKERS = 1
+# Only source evidence can extend per-source collection beyond its base share.
+ADAPTIVE_EXTRA_LISTING_PAGES = 3
+ADAPTIVE_EXTRA_ARTICLES = 12
 ARCHIVE_PUBLICATIONS = json.loads(Path(__file__).with_name('verified_archive_publications.json').read_text())
 IMPORTANT = re.compile(
     r'energy|electric|power|renewab|solar|wind|neft|socar|\bgas\b|\boil\b|'
@@ -59,10 +67,11 @@ STATIC_DIRECTORY_BY_HOST = {
         r')/?$', re.I),
     'economy.gov.az': re.compile(r'^/az/page/(?:iqtisadiyyat/investisiya|itm)/?$', re.I),
     'customs.gov.az': re.compile(r'^/az/faydali/satınalmalar/tender/?$', re.I),
+    'nuz.uz': re.compile(r'^/(?:politika|zdorove|obschestvo)/?$', re.I),
     'gov.uz': re.compile(r'^/(?:ru|uz|en)/soliq/pages/soliq-qo-mitasi-faoliyat-sohasi/?$', re.I),
     'uzdaily.uz': re.compile(r'^/(?:ru|uz|en)/special-projects(?:/islamic-finance-2026)?/?$', re.I),
     'sputnik.tj': re.compile(r'^/(?:telegram_export/?|docs/(?:cookie_policy|privacy_policy|terms_of_use|index)\.html)$', re.I),
-    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512)|qissai-khudro-bigu)/?$', re.I),
+    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512|17274)|qissai-khudro-bigu)/?$', re.I),
     'vecherka.tj': re.compile(
         r'^/(?:istorii/(?:borba-s-radikalizmom|dney-16-protiv-nasiliya|grazhdanskie-zhurnalisty'
         r'|otkritie-uroki|prava-jenshin|reforma-militsii|roditeli-i-deti|svoboda-slova|zashita_zhivotnikh)'

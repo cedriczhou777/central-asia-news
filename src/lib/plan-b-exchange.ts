@@ -4,11 +4,12 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHmac} from 'node:crypto';
 import {getSupabaseClient} from '../storage/database/supabase-client';
-import {canonicalJson,sha256,isCountry,type PlanBCountry} from './plan-b-handoff';
+import {canonicalJson,sha256,isCountry,EDITORIAL_POLICY_FIRST_ISSUE,type PlanBCountry} from './plan-b-handoff';
 import type {SnapshotReceipt} from './plan-b-store';
 import {applyPlanBCommand} from './plan-b-command';
 
 export const EXCHANGE_VERSION='plan-b-database-exchange-1';
+export const SOURCE_EVIDENCE_VERSION='source-evidence-2';
 const TABLE='plan_b_exchange';
 const RECORD_KEY='issue_date,country,kind,record_key';
 type RecordRow={issue_date:string;country:PlanBCountry;kind:'checkpoint'|'submission';record_key:string;
@@ -25,15 +26,22 @@ async function publish(issue:string,country:string,kind:string,key:string,payloa
   if(error)throw new Error('plan_b_exchange_publish_failed');
 }
 
-export function originalRecord(candidate:{id:string;sourceHash:string;revision:string},original:Record<string,unknown>){
+export function originalRecord(candidate:{id:string;sourceHash:string;revision:string;sourceUrl?:string},
+    original:Record<string,unknown>,requireRevision=false){
   if(original.id!==candidate.id||original.sourceHash!==candidate.sourceHash||typeof original.text!=='string'
       ||sha256(original.text)!==candidate.sourceHash)throw new Error('exchange_original_hash_mismatch');
+  const packet=original.evidencePacket as {version?:unknown}|undefined;
+  if(requireRevision && (!candidate.revision || original.revision!==candidate.revision || !candidate.sourceUrl
+    || original.source_url!==candidate.sourceUrl || packet?.version!==SOURCE_EVIDENCE_VERSION)){
+    throw new Error('exchange_original_revision_or_source_mismatch');
+  }
   return {candidate,original};
 }
 
 /** Publish original evidence in small immutable batches before publishing the manifest. */
 export async function publishScan(scope:SnapshotReceipt,jsonl:string,namespace?:string){
   const {snapshot}=scope;const candidates=new Map(snapshot.candidates.map(c=>[c.id,c]));
+  const versioned=snapshot.issue>=EDITORIAL_POLICY_FIRST_ISSUE;
   const keyFor=(key:string)=>namespace ? `${namespace}/${key}` : key;
   const lines=createInterface({input:createReadStream(jsonl),crlfDelay:Infinity});
   let batch:ReturnType<typeof exchangeRow>[]=[];
@@ -49,8 +57,10 @@ export async function publishScan(scope:SnapshotReceipt,jsonl:string,namespace?:
     if(!line)continue;
     const original=JSON.parse(line)as Record<string,unknown>;
     const candidate=candidates.get(String(original.id));if(!candidate)throw new Error('exchange_candidate_mismatch');
-    const payload=originalRecord(candidate,original);
-    const row=exchangeRow(snapshot.issue,snapshot.country,'original',keyFor(`${candidate.id}/${candidate.sourceHash}/${candidate.revision}`),payload);
+    const payload=originalRecord(candidate,original,versioned);
+    const id=`${candidate.id}/${candidate.sourceHash}/${candidate.revision}`;
+    const row=exchangeRow(snapshot.issue,snapshot.country,'original',
+      keyFor(versioned ? `${SOURCE_EVIDENCE_VERSION}/${id}` : id),payload);
     const size=Buffer.byteLength(JSON.stringify(row));
     if(batch.length>=5||bytes+size>512*1024)await publishBatch();
     batch.push(row);
@@ -60,7 +70,8 @@ export async function publishScan(scope:SnapshotReceipt,jsonl:string,namespace?:
   if(candidates.size)throw new Error('exchange_originals_incomplete');
   await publishBatch();
   await publish(snapshot.issue,snapshot.country,'manifest',keyFor(snapshot.phase),{snapshot,originalCount:snapshot.candidates.length,
-    formalStateAuthority:namespace ?? 'plan_b_daily',exchangeVersion:EXCHANGE_VERSION},!!namespace);
+    formalStateAuthority:namespace ?? 'plan_b_daily',exchangeVersion:EXCHANGE_VERSION,
+    ...(versioned ? {sourceEvidenceVersion:SOURCE_EVIDENCE_VERSION} : {})},!!namespace);
 }
 
 export async function publishExchangeHealth(issue:string,payload:object,key:'latest'|'runtime_checks'|`runtime_checks/${string}`='latest'){

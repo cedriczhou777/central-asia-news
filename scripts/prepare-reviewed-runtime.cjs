@@ -4,10 +4,13 @@ const path = require('node:path');
 const {createHash}=require('node:crypto');
 if (process.env.REVIEWED_BUILD_ONLY !== '1') throw new Error('This script may run only in the image build stage');
 const identityFiles=['src/lib/plan-b-runtime.ts','src/lib/plan-b-runtime-checks.ts','src/lib/plan-b-exchange.ts','src/lib/plan-b-command.ts',
-  'src/lib/plan-b-handoff.ts','src/lib/plan-b-editorial.ts','src/lib/plan-b-checkpoint.ts',
+  'src/lib/plan-b-handoff.ts','src/lib/plan-b-editorial.ts','src/lib/plan-b-editorial-decisions.ts','src/lib/plan-b-checkpoint.ts','src/lib/plan-b-window.ts',
   'src/lib/reviewed-manual-authorization.ts','src/lib/reviewed-database-delivery.ts','src/app/api/plan-b/route.ts',
   'ops/plan-b/cloud_handoff.py','ops/plan-b/cloud_release.py','ops/plan-b/news_queue_policy.py',
-  'ops/plan-b/editorial_policy.py','ops/plan-b/source_article_images.py',
+  'ops/plan-b/build_work_package.py','ops/plan-b/build_reviewed_word.py','ops/plan-b/prepare_country_release.py',
+  'ops/plan-b/verify_rendered_package.py','ops/plan-b/source_attribution.py',
+  'ops/plan-b/editorial_policy.py','ops/plan-b/source_article_images.py','ops/plan-b/source_evidence.py',
+  'ops/plan-b/discovery_feed.py','ops/plan-b/news_funnel.py','ops/plan-b/prepare_editorial_input.py',
   'ops/plan-b/work_quantity_policy.py','ops/plan-b/validate_work_package.py',
   'ops/plan-b/source_coverage.py','ops/plan-b/discover_work_sources.py','ops/plan-b/fetch_work_sources.py','ops/plan-b/verified_archive_publications.json',
   'ops/plan-b/source_registry.json',

@@ -19,6 +19,13 @@ assert.equal(parts.length,6);assert.equal(sha256(Buffer.concat(parts.map(p=>Buff
 assert(parts.every(p=>p.base64.length<400_000));
 assert.equal(originalRecord(c,{id:c.id,sourceHash:c.sourceHash,text:body}).original.text,body);
 assert.throws(()=>originalRecord(c,{id:c.id,sourceHash:c.sourceHash,text:body+'changed'}),/hash_mismatch/);
+const scopedCandidate={...c,sourceUrl:'https://publisher.example/story'};
+const versionedOriginal={id:c.id,sourceHash:c.sourceHash,text:body,revision:c.revision,source_url:scopedCandidate.sourceUrl,
+  evidencePacket:{version:'source-evidence-2'}};
+assert.equal(originalRecord(scopedCandidate,versionedOriginal,true).original.revision,c.revision);
+assert.throws(()=>originalRecord(scopedCandidate,{...versionedOriginal,revision:sha256('changed')},true),/revision_or_source_mismatch/);
+assert.throws(()=>originalRecord(scopedCandidate,{...versionedOriginal,source_url:'https://publisher.example/other'},true),/revision_or_source_mismatch/);
+assert.throws(()=>originalRecord(scopedCandidate,{...versionedOriginal,evidencePacket:undefined},true),/revision_or_source_mismatch/);
 const at=Date.parse('2026-11-24T10:00:00+08:00');
 const grant={issue:'2026-11-24',version:'2026-11-24',contentHash:sha256('content'),countries:['kz'],
   issuedBy:'owner-explicit-approval',reason:'Specific overdue issue approved by owner',expiresAt:new Date(at+3600000).toISOString()};
@@ -80,6 +87,19 @@ async function orchestration(){
     assert.deepEqual(posted.map(batch=>batch.length),[5,1,1]);
     assert.deepEqual(posted.map(batch=>batch[0].kind),['original','original','manifest']);
     assert.equal((posted.at(-1)![0].payload as {originalCount:number}).originalCount,6);
+    assert.equal(posted[0][0].record_key,`${candidates[0].id}/${c.sourceHash}/${c.revision}`);
+    posted.length=0;
+    const newIssue='2026-11-27';
+    const newStamp=`${newIssue}T06:30:00+08:00`;
+    const newCandidates=candidates.map(candidate=>({...candidate,publishedAt:`${newIssue}T05:55:00+08:00`}));
+    const newScope={...scope,snapshot:snapshot({...scope.snapshot,issue:newIssue,observedAt:newStamp,
+      coverage:coverageFixture('kz',newStamp),candidates:newCandidates})};
+    await writeFile(file,newCandidates.map(candidate=>JSON.stringify({...versionedOriginal,id:candidate.id,
+      source_url:candidate.sourceUrl})).join('\n'));
+    await publishScan(newScope,file);
+    assert.equal(posted[0][0].record_key,`source-evidence-2/${candidates[0].id}/${c.sourceHash}/${c.revision}`);
+    assert.equal((posted.at(-1)![0].payload as {sourceEvidenceVersion:string}).sourceEvidenceVersion,'source-evidence-2');
+    await writeFile(file,lines.join('\n'));
     posted.length=0;
     failOriginalBatch=true;
     await assert.rejects(publishScan(scope,file),/exchange_publish_failed/);

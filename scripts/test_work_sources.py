@@ -464,6 +464,56 @@ class PublisherTemplateRegressions(unittest.TestCase):
         self.assertEqual(published_intervals(r,'tj')[0][0].isoformat(),'2026-11-25T17:00:00+05:00')
         self.assertEqual(r['publicationEvidence'][0]['rawLocalTime'],'Ноябрь 25, 2026 17:00')
         self.assertEqual(published_intervals(self.parse(url,current.replace('</aside>','</aside><span>Ноябрь 25, 2026 18:00</span>')),'tj'),[])
+    def test_azertac_original_heading_gallery_and_local_publication_are_bound(self):
+        from source_evidence import source_time
+        from discover_work_sources import published_intervals
+        url='https://azertag.az/ru/xeber/observed-shape-12345'
+        content = ('<h1>Новости раздела</h1><div class="sa-post app-post">'
+                   '<h2 class="entry-title">Current business notice</h2>'
+                   '<div class="entry-meta"><ul><li>26.11.2026 [01:59]</li></ul></div>'
+                   '<div class="news-gallery"><a href="/photo-full.jpg"><img src="/photo-thumb.jpg"></a></div>'
+                   '<div class="news-body"><p>'+self.prose+'</p></div></div>'
+                   '<div class="sa-post mid-post"><img src="/side-feature.jpg"></div>')
+        raw=('<html lang="ru"><head><meta property="og:title" content="Current business notice">'
+             '<meta property="og:type" content="article"><meta property="og:url" content="'+url+'">'
+             '<meta property="og:image" content="/meta-only.jpg"></head><body>'+content+'</body></html>').encode()
+        page=f.parse_response(url,url,raw,{})
+        self.assertTrue(page['fullTextValidated'])
+        self.assertEqual(published_intervals(page,'az'),[])
+        dated=source_time(page,'Asia/Baku')
+        self.assertEqual(published_intervals(dated,'az')[0][0].isoformat(),'2026-11-26T01:59:00+04:00')
+        self.assertEqual(dated['publicationEvidence'][0]['raw'],'26.11.2026 [01:59]')
+        self.assertEqual({r['url'] for r in page['articleImages']['candidates']},
+                         {'https://azertag.az/photo-full.jpg','https://azertag.az/photo-thumb.jpg'})
+        self.assertFalse(f.parse_response(url+'x',url+'x',raw,{})['fullTextValidated'])
+
+    def test_economy_ministry_post_excludes_related_publication_badges(self):
+        from source_evidence import source_time
+        from discover_work_sources import published_intervals
+        url='https://economy.gov.az/az/post/181/observed-shape'
+        body=('<section class="news-inner"><div class="content-block"><h1>Current business notice</h1>'
+              '<span class="news-section__date">Noyabr 25, 2026 17:00</span>'
+              '<div class="content-block__text"><p>'+self.prose+'</p></div></div>'
+              '<aside><span class="news-section__date">Noyabr 26, 2026 21:00</span></aside></section>')
+        raw=('<html lang="az"><head><meta property="og:type" content="website">'
+             '<meta property="og:url" content="'+url+'">'
+             '<meta property="og:title" content="Current business notice"></head><body>'+body+'</body></html>').encode()
+        page=source_time(f.parse_response(url,url,raw,{}),'Asia/Baku')
+        self.assertTrue(page['fullTextValidated'])
+        self.assertEqual([x[0].isoformat() for x in published_intervals(page,'az')],['2026-11-25T17:00:00+04:00'])
+
+    def test_khovar_linked_undated_slug_gets_only_the_current_badge(self):
+        from discover_work_sources import published_intervals
+        url='https://khovar.tj/rus/unique-public-notice'
+        canonical='https://khovar.tj/rus/2026/11/unique-public-notice/'
+        current=self.khovar_body(self.prose).replace('</h1>','</h1><div class="author">Ноябрь 25, 2026 17:00</div>',1)
+        raw=('<html><head><meta property="og:url" content="'+url+'"><link rel="canonical" href="'+canonical
+            +'"><meta property="og:title" content="Current business notice"></head><body>'+current+'</body></html>').encode()
+        page=f.parse_response(url,url,raw,{})
+        self.assertTrue(page['fullTextValidated'])
+        self.assertEqual(published_intervals(page,'tj')[0][0].isoformat(),'2026-11-25T17:00:00+05:00')
+        self.assertFalse(f.parse_response(url+'/other',url+'/other',raw,{})['fullTextValidated'])
+
     def test_superkg_placeholder_only_loses_to_bound_footer_without_conflict(self):
         from discover_work_sources import published_intervals
         url='https://www.super.kg/kabar/news/500992'

@@ -8,7 +8,6 @@ from datetime import date,datetime,timedelta,timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit,urlunsplit,parse_qsl,urlencode
-from editorial_policy import EFFECTIVE_ISSUE, FOLLOW_UP_LABEL, MAX_PREVIOUS_DAY, previous_day
 COUNTRIES=('kz','uz','kg','tj','az')
 NUM=r'\d+(?:[ \u00a0\u202f,]\d{3})*(?:[.,]\d+)?'
 def number(raw,decimal_comma=False):
@@ -167,10 +166,6 @@ def validate(data,require_cloud_images=True,now=None,delivery_mode='normal',coun
   entries=review.get('articles',[])
   check(isinstance(entries,list) and 0<len(entries)<=20,prefix+'invalid article count')
   if not isinstance(entries,list):continue
-  allow_followups=issue>=EFFECTIVE_ISSUE and draft.get('planBCoverage') is not None
-  if allow_followups:
-   check(sum(isinstance(e,dict) and e.get('previousDay') is True for e in entries)<=MAX_PREVIOUS_DAY,
-         prefix+'too many previous-day follow-ups')
   ids=[e.get('id') for e in entries if isinstance(e,dict)]
   urls=[story_source_key(e.get('source_url','')) for e in entries if isinstance(e,dict) and isinstance(e.get('source_url'),str)]
   check(len(ids)==len(entries) and len(set(map(str,ids)))==len(entries),prefix+'duplicate adopted article IDs')
@@ -200,12 +195,7 @@ def validate(data,require_cloud_images=True,now=None,delivery_mode='normal',coun
     valid_time=published is not None and published.tzinfo is not None
     check(valid_time,item+'publication time must be a valid timezone-aware timestamp')
     if valid_time:
-     if e.get('previousDay') is True:
-      check(allow_followups and previous_day(published,start)
-            and str(e.get('title','')).startswith(FOLLOW_UP_LABEL)
-            and len(str(e.get('followUpReason') or '').strip())>=8,item+'invalid previous-day follow-up')
-     else:
-      check(start<=published<end,item+'publication outside issue window')
+     check(start<=published<end and e.get('previousDay') is not True,item+'publication outside issue window')
      check(published<=current,item+'future publication')
    check(e.get('source_url','').startswith('https://'),item+'invalid source URL')
    if issue>='2026-11-20':

@@ -2,6 +2,7 @@ import argparse, json, html, hashlib, re
 from pathlib import Path
 from source_article_images import EFFECTIVE_ISSUE, origin_error
 from source_attribution import source_name_error
+from editorial_policy import EFFECTIVE_ISSUE as EDITORIAL_ISSUE
 
 NAMES={'kz':('哈萨克斯坦','🇰🇿'),'uz':('乌兹别克斯坦','🇺🇿'),'kg':('吉尔吉斯斯坦','🇰🇬'),'tj':('塔吉克斯坦','🇹🇯'),'az':('阿塞拜疆','🇦🇿')}
 def country_scope(countries=None):
@@ -48,7 +49,14 @@ def build(root, issue, version=None,countries=None):
                     chunks.append(f'<p style="font-size:11px;line-height:1.6;color:#888;margin:0 0 12px;text-align:left;text-align-last:left;letter-spacing:normal;word-spacing:normal;overflow-wrap:break-word;">{html.escape(caption)}</p>')
             for paragraph in e['body'].split('\n'):
                 if paragraph.strip(): chunks.append(f'<p style="font-size:16px;line-height:1.9;color:#252525;margin:0 0 12px;text-align:justify;text-justify:inter-ideograph;text-align-last:left;overflow-wrap:break-word;">{html.escape(paragraph)}</p>')
-            chunks.append(f'<p style="font-size:12px;line-height:1.6;color:#929292;margin:0;text-align:left;text-align-last:left;letter-spacing:normal;word-spacing:normal;overflow-wrap:break-word;">来源：{html.escape(source)}</p></section>')
+            source_label = html.escape(source)
+            if issue >= EDITORIAL_ISSUE:
+                url = e.get('source_url') or ''
+                if not url.startswith('https://'):
+                    raise ValueError(f'{code} story {i+1}: missing HTTPS original URL')
+                escaped_url = html.escape(url,quote=True)
+                source_label += f'（<a href="{escaped_url}">{escaped_url}</a>）'
+            chunks.append(f'<p style="font-size:12px;line-height:1.6;color:#929292;margin:0;text-align:left;text-align-last:left;letter-spacing:normal;word-spacing:normal;overflow-wrap:break-word;">来源：{source_label}</p></section>')
         chunks.append('</section><section data-role="daily-footer" style="background:#f7f5ef;text-align:center;padding:30px 12px 6px;"><p style="color:#929292;text-align:center;font-size:12px;line-height:1.9;letter-spacing:0.3px;margin:0 0 4px;">中亚投资资讯 | Central Asia Investment Daily</p><p style="color:#929292;text-align:center;font-size:12px;line-height:1.9;letter-spacing:0.3px;margin:0;">数据来源：各国主流媒体</p></section></section>')
         summaries=json.loads((root/'summaries.json').read_text())
         country={'title':f'{name}｜每日投资资讯（{date}）','summary':summaries[code],'bodyHtml':''.join(chunks),'sourceName':'中亚动态–INVEST','sourceUrl':'','coverUrl':pictures[0] if pictures else ''}

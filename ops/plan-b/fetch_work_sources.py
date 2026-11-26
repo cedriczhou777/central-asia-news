@@ -5,13 +5,13 @@ from pathlib import Path
 from urllib.parse import urljoin,urlparse,urlsplit,urlunsplit
 import urllib.request,urllib.error
 from lxml import html
+from discovery_feed import FEED_TYPES, parse_feed
+from source_evidence import KHOVAR_RUSSIAN_MONTHS, header_clock, khovar_archive_dateline, khovar_archive_publication_footer
 P=Path(__file__).parent;S=P/'sources'
-PARSER_VERSION='source-html-v21'
+PARSER_VERSION='source-html-v26'
 TRANSIENT={429,500,502,503,504}
 MAX_NETWORK_SECONDS = 45
 MAX_TRANSPORT_BYTES = 10_000_000
-KHOVAR_RUSSIAN_MONTHS = ('январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
-                         'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь')
 class HTMLValidationError(ValueError):
     def __init__(self,message,encoding,evidence):
         super().__init__(message);self.decodedEncoding=encoding;self.encodingEvidence=evidence
@@ -111,6 +111,19 @@ def article_identities(node,base):
             if normalized:values.append((field,value,normalized))
     return values
 
+
+def matches_article_identity(url, page_urls):
+    if url in page_urls:
+        return True
+    # TopTJ emits http://www article identities even when it serves https://
+    # on either hostname. Bind only the identical, dated article path.
+    page = urlsplit(url)
+    hosts = ('toptj.com','www.toptj.com')
+    if page.netloc not in hosts or not re.fullmatch(r'/news/20\d\d/\d\d/\d\d/[^/]+',page.path):
+        return False
+    return any(current.netloc in hosts and current.path == page.path and current.query == page.query
+               for current in map(urlsplit, filter(None, page_urls)))
+
 def article_date_nodes(article):
     """Compact publication badges/times belonging to this article, not cards."""
     dates=[]
@@ -159,7 +172,7 @@ def classify_source(tree,final_url,canonical_url,meta,linked_data):
     def current_article(node):
         if isinstance(node,dict):
             kinds=node.get('@type',[]);kinds=kinds if isinstance(kinds,list) else [kinds]
-            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(x[2] in identities for x in article_identities(node,final_url)):return True
+            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(matches_article_identity(x[2],identities) for x in article_identities(node,final_url)):return True
             return any(current_article(v) for v in node.values() if isinstance(v,(dict,list)))
         if isinstance(node,list):return any(current_article(v) for v in node)
         return False
@@ -175,6 +188,68 @@ def classify_source(tree,final_url,canonical_url,meta,linked_data):
     # pages remain unknown rather than being mechanically ruled out as no news.
     if len(articles)>1 and all(n.xpath('.//a[@href]') and not structural_article_evidence(n)[0] for n in articles):return 'listing',['multiple_linked_article_cards'],None
     return 'unknown',['article_identity_needs_manual_verification'],None
+
+
+def publisher_header_clocks(tree, source_url, canonical_url, selected, body_evidence):
+    """Observe compact dates by the current heading of known article routes."""
+    page = urlsplit(source_url)
+    host = (page.hostname or '').removeprefix('www.')
+    route = {
+        'review.uz': r'^/post/[^/]+/?$',
+        'podrobno.uz': r'^/cat/[^/]+/[^/]+/?$',
+        'alau.kz': r'^/[^/]+/?$',
+        'sugd.tj': r'^/(?:ru|tj)/(?:[^/]+/)+\d+-[^/]+/?$',
+        'taxes.gov.az': r'^/az/post/\d+/?$',
+    }.get(host)
+    if (not route or not re.fullmatch(route,page.path)
+            or (canonical_url and normalized_url(canonical_url,source_url)!=normalized_url(source_url,source_url))):
+        return []
+    headings = [node for node in tree.xpath('//h1[not(ancestor::aside or ancestor::nav or ancestor::footer)]')
+                if ' '.join(node.text_content().split()) in body_evidence.get('headingTexts',[])]
+    if len(headings)!=1:
+        return []
+    heading = headings[0]
+    badges = {}
+    for anchor in [heading, heading.getparent()]:
+        if anchor is None or selected in anchor.iterdescendants():
+            continue
+        for sibling in list(anchor.itersiblings())[:4]:
+            if not isinstance(sibling.tag,str):
+                continue
+            if (sibling is selected or selected in sibling.iterdescendants()
+                    or sibling.tag in ('article','section','main','aside','nav','footer','ul','ol')
+                    or sibling.xpath('.//h1|.//h2|.//h3') or recommendation_card(sibling)):
+                break
+            for node in [sibling, *sibling.xpath('.//time|./*|./*/*')]:
+                if (node.xpath('ancestor::aside|ancestor::nav|ancestor::footer')
+                        or any(recommendation_card(parent) for parent in [node, *node.iterancestors()])):
+                    continue
+                value = ' '.join(node.text_content().split())
+                marker = (node.get('class','')+' '+node.get('itemprop','')).lower()
+                if re.search('updat|modif|обнов|измен', marker+' '+value, re.I):
+                    continue
+                created = re.fullmatch(r'Создано:\s*(.+?)(?:\s+Просмотров:\s*\d+)?',value,re.I) if host=='sugd.tj' else None
+                if host=='sugd.tj' and not created:
+                    continue
+                kind = 'created' if created else 'published'
+                plain = created[1] if created else re.sub(r'^Опубликовано:\s*','',value,flags=re.I)
+                wall = header_clock(plain)
+                if wall:
+                    badges[(kind,wall)] = value
+                elif host=='alau.kz' and re.search(r'(?:^|[—–]\s*)(?:Сегодня|Вчера),?\s+\d{1,2}:[0-5]\d$',value,re.I):
+                    badges[('unclassified',value)] = value
+    if len(badges) != 1:
+        return []
+    (kind, clock), raw = next(iter(badges.items()))
+    explicit = kind != 'unclassified'
+    return [{'field':'publisher.sugd.article_created_label' if kind=='created' else
+                     'publisher.current_heading_adjacent_date' if explicit else 'publisher.alau.relative_article_clock',
+             'raw':raw, **({'localWallTime':clock} if explicit else {}),
+             'kind':kind, 'precision':timestamp_precision(clock)[0] if explicit else 'relative_clock',
+             'timezoneEvidence':'not_provided' if explicit else 'reference_day_missing',
+             'articleUrl':canonical_url or source_url,
+             'confidenceBasis':['unique_date_in_compact_current_article_header'],'priority':35 if kind=='published' else 95}]
+
 
 def publication_evidence(tree,linked_data,final_url,canonical_url,primary_article,publisher_template=None):
     """Collect article-bound observations, not a first-publication verdict.
@@ -193,12 +268,15 @@ def publication_evidence(tree,linked_data,final_url,canonical_url,primary_articl
             types=value.get('@type',[]);types=types if isinstance(types,list) else [types]
             if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in types):
                 bound=article_identities(value,final_url)
-                match=next((x for x in bound if x[2] in identities),None)
+                match=next((x for x in bound if matches_article_identity(x[2],identities)),None)
                 for key,kind in (('datePublished','published'),('dateModified','modified')):
                     if key not in value:continue
                     raws=value[key] if isinstance(value[key],list) else [value[key]]
                     for raw in raws:
                         ev=evidence(path+'.'+key,raw,kind,match[2] if match else bound[0][2] if bound else None,['jsonld_article_identity_matches_'+match[0]] if match else ['article_identity_mismatch' if bound else 'article_identity_missing'],10 if kind=='published' else 80)
+                        if match and match[2] not in identities:
+                            ev.update(articleUrl=final_url, observedArticleIdentity=match[1])
+                            ev['confidenceBasis'].append('toptj_http_www_same_article_alias')
                         (accepted if match else excluded).append(ev)
             for k,v in value.items():
                 if isinstance(v,(dict,list)):walk(v,path+'.'+k)
@@ -243,7 +321,41 @@ def publication_evidence(tree,linked_data,final_url,canonical_url,primary_articl
                                     canonical_url or final_url,
                                     ['unique_visible_date_above_current_article_body', 'Asia/Dushanbe'], 35),
                          'rawLocalTime': raw, 'timezoneEvidence': 'publisher_local'})
+    local_badge = (publisher_template or {}).get('localPublicationBadge')
+    if local_badge:
+        raw, wall_time = local_badge
+        accepted.append({**evidence('publisher.' + publisher_template['name'] + '.currentPublicationBadge',raw,
+                                    'published',canonical_url or final_url,
+                                    ['unique_date_next_to_url_bound_current_heading'],35),
+                         'precision':'minutes', 'localWallTime':wall_time})
     return sorted(accepted,key=lambda e:e['priority']),excluded
+
+
+def superkg_publication_evidence(publications):
+    """Suppress only the known epoch placeholder backed by a unique author time."""
+    stamps, footer_stamps, epoch, issues = set(), set(), [], []
+    for item in publications:
+        if item.get('kind')!='published' or item.get('timezoneEvidence')!='explicit':
+            continue
+        stamp=datetime.fromisoformat(item['raw'].replace('Z','+00:00').replace('z','+00:00'))
+        if item['field']=='meta.article:published_time' and stamp.timestamp()==0:
+            epoch.append(item)
+            continue
+        stamps.add(stamp)
+        if item['field'].startswith('publisher.superkg_current_news_inside_text_author_time.') and stamp.timestamp()>0:
+            footer_stamps.add(stamp)
+    excluded = []
+    if epoch:
+        if len(stamps)==1 and stamps==footer_stamps:
+            publications = [item for item in publications if item not in epoch]
+            excluded = [{**item, 'confidenceBasis':['publisher_unix_epoch_placeholder']} for item in epoch]
+        else:
+            issues.append({'kind':'unix_epoch_publication_metadata','field':epoch[0]['field'],'raw':epoch[0]['raw']})
+    if len(stamps)>1:
+        issues.append({'kind':'publisher_publication_time_conflict','requiresManualReview':True,
+                       'fields':[item['field'] for item in publications if item.get('kind')=='published']})
+    return publications, excluded, issues
+
 
 def link_time_context(node):
     # Stop at the closest compact card; never attach every date in a page to
@@ -297,7 +409,7 @@ def article_headline_aliases(linked_data,final_url,canonical_url):
     def walk(value):
         if isinstance(value,dict):
             kinds=value.get('@type',[]);kinds=kinds if isinstance(kinds,list) else [kinds]
-            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(x[2] in identities for x in article_identities(value,final_url)):
+            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(matches_article_identity(x[2],identities) for x in article_identities(value,final_url)):
                 headline=value.get('headline')
                 if isinstance(headline,str) and headline.strip():aliases.append(headline)
             for child in value.values():
@@ -381,6 +493,51 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
             if len(heads) == 1 and headings_match(heads):
                 profile = make('kg_invest_current_article_prose', bodies, heads,
                                ['same_og_article_url', 'current_h1_matches_title'])
+    elif host=='azertag.az' and re.fullmatch(r'/(?:[a-z]{2}/)?xeber/[^/]+-\d+/?',path):
+        if normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url):
+            scopes=[n for n in tree.xpath('//div[@class]') if has_class(n,'sa-post') and has_class(n,'app-post')]
+            if len(scopes)==1:
+                scope=scopes[0]
+                heads=[n for n in scope.xpath('.//h2[@class]') if has_class(n,'entry-title')]
+                bodies=[n for n in scope.xpath('.//div[@class]') if has_class(n,'news-body')]
+                if len(heads)==1 and headings_match(heads):
+                    profile=make('azertac_current_entry_title_news_body',bodies,heads,
+                                 ['same_og_article_url','unique_app_post_heading'])
+                    dates=scope.xpath('.//div[@class="entry-meta"]/ul/li[1]')
+                    if profile and len(dates)==1:
+                        raw=' '.join(dates[0].text_content().split())
+                        match=re.fullmatch(r'(\d\d)\.(\d\d)\.(20\d\d)\s*\[(\d\d:\d\d)\]',raw)
+                        if match:
+                            day,month,year,clock=match.groups()
+                            profile['localPublicationBadge']=(raw,f'{year}-{month}-{day}T{clock}')
+    elif host=='economy.gov.az' and re.fullmatch(r'/(?:az|en|ru)/post/\d+/[^/]+/?',path):
+        if normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url):
+            scopes=[n for n in tree.xpath('//section[@class]//div[@class]')
+                    if has_class(n,'content-block') and n.xpath('./h1')]
+            if len(scopes)==1:
+                scope=scopes[0]
+                heads=scope.xpath('./h1')
+                bodies=[n for n in scope.xpath('./div[@class]') if has_class(n,'content-block__text')]
+                if len(heads)==1 and headings_match(heads):
+                    profile=make('az_economy_ministry_current_post',bodies,heads,
+                                 ['same_og_article_url','heading_and_text_share_current_post'])
+                    dates=[n for n in scope.xpath('./span[@class]') if has_class(n,'news-section__date')]
+                    if profile and len(dates)==1:
+                        raw=' '.join(dates[0].text_content().split())
+                        match=re.fullmatch(r'([^\W\d_]+)\s+(\d{1,2}),\s*(20\d\d)\s+(\d\d:\d\d)',raw)
+                        months=('yanvar','fevral','mart','aprel','may','iyun','iyul','avqust','sentyabr','oktyabr','noyabr','dekabr')
+                        if match and match[1].casefold() in months:
+                            profile['localPublicationBadge']=(raw,f'{match[3]}-{months.index(match[1].casefold())+1:02d}-{int(match[2]):02d}T{match[4]}')
+    elif host=='nuz.uz' and re.fullmatch(r'/20\d\d/\d\d/\d\d/[^/]+/?',path):
+        if normalized_url(canonical_url,final_url)==normalized_url(final_url,final_url):
+            heads=[n for n in tree.xpath('//article//h1') if has_class(n,'tdb-title-text')]
+            if len(heads)==1 and headings_match(heads):
+                article=next(iter(heads[0].xpath('ancestor::article[1]')),None)
+                bodies=[n for n in article.xpath('.//div[@class]') if has_class(n,'tdb_single_content')]
+                profile=make('nuz_tagdiv_current_post',bodies,heads,['same_canonical_article_url','unique_published_heading'])
+                stamps=article.xpath('.//div[contains(concat(" ",normalize-space(@class)," ")," tdb_single_date ")]//time[@datetime]')
+                if profile and len(stamps)==1:
+                    profile['publicationNodes']=stamps
     elif host=='24.kg' or host.endswith('.24.kg'):
         if re.match(r'^/article/[^/]+/?$',path):
             bodies=[n for n in tree.xpath('//*[@id="article-content"]') if has_class(n,'article-viewer-content')]
@@ -404,14 +561,23 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
                     profile=make('superkg_current_news_inside_text_author_time',bodies,heads,['current_h1_matches_title','heading_data_id_matches_article_route','og_article_url_matches_response','same_wrapper_named_author_and_unique_publication_time'])
                     if profile:profile['publicationNodes']=times
     elif host=='khovar.tj' or host.endswith('.khovar.tj'):
-        if re.match(r'^/(?:rus/)?\d{4}/\d{2}/[^/]+/?$',path):
+        dated_route=r'^/(?:rus/)?20\d\d/\d\d/[^/]+/?$'
+        canonical_path=urlparse(canonical_url or '').path
+        same_slug_alias=(host=='khovar.tj' and urlparse(canonical_url or '').hostname==host
+                         and re.fullmatch(dated_route,canonical_path)
+                         and normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url)
+                         and tuple(p for p in path.strip('/').split('/') if p!='rus')
+                             == (canonical_path.rstrip('/').rsplit('/',1)[-1],)
+                         and path.startswith('/rus/')==canonical_path.startswith('/rus/'))
+        if re.fullmatch(dated_route,path) or same_slug_alias:
             scopes=[n for n in tree.xpath('//div[@class]') if has_class(n,'block-content') and has_class(n,'type-post') and has_class(n,'status-publish') and any(re.fullmatch(r'post-\d+',c) for c in (n.get('class') or '').split())]
             bodies=[n for scope in scopes for n in scope.xpath('.//div[@class]') if has_class(n,'shortcode-content')]
             heads=tree.xpath('//h1[not(ancestor::nav or ancestor::aside or ancestor::footer)]')
             if headings_match(heads):
                 profile=make('khovar_published_post_shortcode_content',bodies,extra=['wordpress_published_post_identity','current_h1_matches_title'])
-                if profile and host=='khovar.tj' and path.startswith('/rus/') and len(heads)==1:
-                    profile['publicationBadge']=khovar_publication_badge(tree,heads[0],bodies[0],path)
+                if profile and host=='khovar.tj' and len(heads)==1:
+                    profile['publicationBadge']=khovar_publication_badge(
+                        tree,heads[0],bodies[0],canonical_path if same_slug_alias else path)
     elif host=='tengrinews.kz' or host.endswith('.tengrinews.kz'):
         # Tilda longreads use an editorial cover H1 which can differ from the
         # SEO/OG headline. Both belong to one explicitly identified article URL.
@@ -444,7 +610,7 @@ def khovar_publication_badge(tree, heading, body, path):
         if not match or match[1].casefold() not in KHOVAR_RUSSIAN_MONTHS:
             continue
         month = KHOVAR_RUSSIAN_MONTHS.index(match[1].casefold()) + 1
-        if not path.startswith(f'/rus/{match[3]}/{month:02d}/'):
+        if not path.removeprefix('/rus').startswith(f'/{match[3]}/{month:02d}/'):
             return None
         try:
             stamp = datetime(int(match[3]), month, int(match[2]), int(match[4]), int(match[5]),
@@ -544,6 +710,13 @@ def publisher_hero_nodes(body, page_url):
                 return [(n, [n.get('original-src')]) for n in galleries[0].xpath('.//img[@original-src]')
                         if n.get('original-src').startswith('/mediafiles/mediafiles/dropzone_files/Post/')
                         and n.getparent().get('data-original') == n.get('original-src')]
+    elif host == 'azertag.az' and has(body, 'news-body'):
+        scope = next((p for p in body.iterancestors() if has(p,'sa-post') and has(p,'app-post')),None)
+        if scope is not None:
+            galleries=[n for n in scope.xpath('.//div[@class]') if has(n,'news-gallery')]
+            return [(n, [n.getparent().get('href')]) if n.getparent().tag=='a'
+                    and re.search(r'\.(?:jpe?g|png|webp)(?:\?|$)',n.getparent().get('href') or '',re.I)
+                    else (n,None) for gallery in galleries for n in gallery.xpath('.//img')]
     elif host == 'avesta.tj':
         for scope in list(body.iterancestors())[:5]:
             heroes = [n for n in scope.xpath('.//img') if has(n, 'wp-post-image') and
@@ -611,6 +784,15 @@ def parse_response(url,final_url,raw,headers):
     headers={k.lower():v for k,v in headers.items()}
     decoded=decode_transport(raw,headers.get('content-encoding',''))
     if len(decoded)>20_000_000:raise ValueError('decompressed_HTML_exceeds_20MB')
+    probe=decoded.lstrip()[:400].lower()
+    if any(m in headers.get('content-type','') for m in ('xml','json')) or any(
+            marker in probe for marker in (b'<?xml',b'<rss',b'<feed',b'<urlset',b'<sitemapindex',b'<rdf:rdf')):
+        feed=parse_feed(decoded,final_url)
+        if feed is not None:
+            return {**feed,'title':feed['format'],'text':'','source_kind':'listing',
+                    'contentValidated':bool(feed['links'] or feed['discoveryEntries']),'fullTextValidated':False,
+                    'parser_version':PARSER_VERSION,'transport_sha256':hashlib.sha256(raw).hexdigest(),
+                    'final_url':final_url,'publicationEvidence':[]}
     decoded_text,decoded_encoding,encoding_evidence=decode_html(decoded,headers)
     if '<html' not in decoded_text[:5000].lower() and '<!doctype' not in decoded_text[:5000].lower():
         raise ValueError('response_is_not_HTML')
@@ -624,6 +806,10 @@ def parse_response(url,final_url,raw,headers):
     linked_data=[n.text for n in tree.xpath('//script[@type="application/ld+json"]')]
     page_links=[{'rel':n.get('rel'),'href':n.get('href'),'url':urljoin(final_url,n.get('href'))} for n in tree.xpath('//link[@href][@rel]') if {'canonical','next'} & set(n.get('rel').lower().split())]
     canonical=next((n['url'] for n in page_links if 'canonical' in n['rel'].lower().split()),None)
+    discovery_entries=[urljoin(final_url,n.get('href')) for n in tree.xpath('//link[@href][@type][@rel]')
+                       if n.get('type').lower().split(';')[0].strip() in FEED_TYPES
+                       and 'alternate' in n.get('rel').lower().split()
+                       and 'comment' not in n.get('href').lower()]
     source_kind,source_kind_evidence,primary_article=classify_source(tree,final_url,canonical,meta,linked_data)
     aliases=article_headline_aliases(linked_data,final_url,canonical)
     publisher_template=publisher_article_template(tree,final_url,canonical,meta,title,aliases)
@@ -637,35 +823,47 @@ def parse_response(url,final_url,raw,headers):
     full_text_validated=source_kind=='article' and selected_body is not None
     if source_kind=='article':primary_article=bound_article
     publications,excluded_publications=publication_evidence(tree,linked_data,final_url,canonical,primary_article,publisher_template if full_text_validated else None)
+    if full_text_validated and not (publisher_template or {}).get('localPublicationBadge'):
+        publications.extend(publisher_header_clocks(tree,final_url,canonical,selected_body,body_evidence))
     links=[{'text':' '.join(n.text_content().split()),'url':urljoin(final_url,n.get('href')),'rel':n.get('rel'),'nearbyTimes':link_time_context(n),'inNavigation':link_in_navigation(n),**link_article_features(n)} for n in tree.xpath('//a[@href]') if n.text_content().strip()]
     images=[{'url':urljoin(final_url,n.get('src') or n.get('data-src') or ''),'alt':n.get('alt'),'title':n.get('title')} for n in tree.xpath('//img')]
     candidates=tree.xpath('//main') or tree.xpath('//body') or [tree]
     el=selected_body if selected_body is not None else max(candidates,key=lambda n:len(n.text_content()))
     text=clean_content(el,selected_body is not None,selected_body is not None or source_kind=='article')
+    if full_text_validated and body_evidence.get('basis')=='publisher_template:khovar_published_post_shortcode_content':
+        dateline=khovar_archive_dateline(canonical or final_url,text)
+        if dateline:
+            publications.append(dateline)
+        footer=khovar_archive_publication_footer(canonical or final_url,text)
+        if footer:
+            publications.append(footer)
     reject_mojibake(title+'\n'+text,decoded_encoding,encoding_evidence)
     if (len(text)<80 or '\ufffd' in text[:100]) and not (source_kind=='article' and not full_text_validated):raise ValueError('unreadable_or_empty_HTML')
     result={'meta':meta,'title':title,'time_tags':times,'linked_data':linked_data,'links':links,'images':images,'text':text,'source_sha256':hashlib.sha256(text.encode()).hexdigest(),'source_kind':source_kind,'sourceKindEvidence':source_kind_evidence,'parser_version':PARSER_VERSION,'contentValidated':source_kind!='article' or full_text_validated,'fullTextValidated':full_text_validated,'articleBodyEvidence':body_evidence,'transport_sha256':hashlib.sha256(raw).hexdigest(),'final_url':final_url,'html_lang':tree.get('lang'),'canonical_url':canonical,'page_links':page_links,'publicationEvidence':publications,'excludedPublicationEvidence':excluded_publications,'decodedEncoding':decoded_encoding,'encodingEvidence':encoding_evidence}
+    result['discoveryEntries']=list(dict.fromkeys(discovery_entries))[:5]
     if full_text_validated:
-        result['articleImages'] = article_image_candidates(tree, selected_body, bound_article, final_url, meta)
-    if publisher_template and publisher_template['name']=='superkg_current_news_inside_text_author_time' and full_text_validated:
-        stamps=set();footer_stamps=set();epoch=[];issues=[]
-        for item in publications:
-            if item.get('kind')!='published' or item.get('timezoneEvidence')!='explicit':continue
-            stamp=datetime.fromisoformat(item['raw'].replace('Z','+00:00').replace('z','+00:00'))
-            if item['field']=='meta.article:published_time' and stamp.timestamp()==0:
-                epoch.append(item)
+        lang_seen = set()
+        language_alternates = []
+        for ref in tree.xpath('//head/link[@hreflang][@href][@rel]'):
+            lang = ref.get('hreflang').lower()
+            target = normalized_url(ref.get('href'), final_url)
+            if (not target or not target.startswith('https://') or target in lang_seen
+                   or 'alternate' not in ref.get('rel').lower().split()
+                   or not re.fullmatch(r'[a-z]{2,3}(?:-[a-z0-9]{2,8})*', lang)):
                 continue
-            stamps.add(stamp)
-            if item['field'].startswith('publisher.') and stamp.timestamp()>0:
-                footer_stamps.add(stamp)
-        if epoch:
-            if len(stamps)==1 and stamps==footer_stamps:
-                for item in epoch:
-                    publications.remove(item)
-                    excluded_publications.append({**item, 'confidenceBasis':['publisher_unix_epoch_placeholder']})
-            else:
-                issues.append({'kind':'unix_epoch_publication_metadata','field':epoch[0]['field'],'raw':epoch[0]['raw']})
-        if len(stamps)>1:issues.append({'kind':'publisher_publication_time_conflict','requiresManualReview':True,'fields':[item['field'] for item in publications if item.get('kind')=='published']})
+            if target != normalized_url(final_url,final_url):
+                lang_seen.add(target)
+                language_alternates.append({'language':lang,'url':target})
+        if language_alternates:
+            result['languageAlternates'] = language_alternates[:12]
+        result['articleImages'] = article_image_candidates(tree, selected_body, bound_article, final_url, meta)
+        author = meta.get('author') or meta.get('article:author')
+        if author and len(author.strip())<=160 and not re.match(r'https?://',author):
+            result['author'] = author.strip()
+    if publisher_template and publisher_template['name']=='superkg_current_news_inside_text_author_time' and full_text_validated:
+        publications, excluded, issues = superkg_publication_evidence(publications)
+        result['publicationEvidence'] = publications
+        excluded_publications.extend(excluded)
         if issues:result['publicationEvidenceIssues']=issues;result['publicationReviewRequired']=True
     if source_kind=='article' and not full_text_validated:result['error']='current_article_body_unverified_'+body_evidence['status']
     return result

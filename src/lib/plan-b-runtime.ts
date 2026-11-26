@@ -1,15 +1,16 @@
 import cron from 'node-cron';
 import { randomUUID } from 'node:crypto';
-import { DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, freezeBlockReason, PLAN_B_COUNTRIES,
+import { DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, EDITORIAL_POLICY_VERSION, freezeBlockReason, PLAN_B_COUNTRIES,
   retryableStatus, reviewableWindowCount, SHORT_EDITION_FIRST_ISSUE, type PlanBCountry } from './plan-b-handoff';
 import { PLAN_B_CLOCK, planBAdmitted, planBClock, planBHandlesIssue } from './plan-b-window';
 import { claim, getState, knownLiveReceipts, saveClaim, stagingIsPrivate, type ClaimStep, type SnapshotReceipt, type StateRow } from './plan-b-store';
 import { collectCountry, runCloudScript } from './plan-b-worker';
 import { deliverCountryWechat, planBPackageVersion, prepareCountryRelease, reconcileCountryWechat, renderCountryWord } from './plan-b-release';
 import { planBBusinessStatus } from './plan-b-status';
-import {processExchange,publishExchangeHealth} from './plan-b-exchange';
+import {processExchange,publishExchangeHealth,SOURCE_EVIDENCE_VERSION} from './plan-b-exchange';
 import { privateImageHealth } from './reviewed-private-images';
-import { checkCurrentWechatDrafts, createRuntimeChecks, type ReadinessPhase } from './plan-b-runtime-checks';
+import { checkCurrentWechatDrafts, cloudPrerequisitesReady, createCloudPrerequisiteCheck,
+  createRuntimeChecks, type ReadinessPhase } from './plan-b-runtime-checks';
 
 export const PLAN_B_RUNTIME_VERSION = 'plan-b-handoff-6-database-exchange';
 const stateKey = Symbol.for('central-asia-news.plan-b.runtime');
@@ -28,20 +29,20 @@ function runtimeHealth() {
   return {runtime:PLAN_B_RUNTIME_VERSION,commit:process.env.BUILD_GIT_SHA||null,
     activation:{enabled:process.env.REVIEWED_PLAN_B==='1',admitted:planBAdmitted(),
       checksEnabled:process.env.REVIEWED_PLAN_B_CHECKS==='1',firstIssue:process.env.REVIEWED_PLAN_B_FIRST_ISSUE||null},
-    registration:{registered:runtime.registered}};
+    registration:{registered:runtime.registered},sourceEvidenceVersion:SOURCE_EVIDENCE_VERSION,
+    editorialPolicy:{version:EDITORIAL_POLICY_VERSION,fromIssue:EDITORIAL_POLICY_FIRST_ISSUE,
+      targetMin:DAILY_TARGET_ARTICLES,targetMax:20,reviewedShortfallMin:8,minimumFallback:DAILY_MIN_ARTICLES}};
 }
 
 const bootId=randomUUID();
-let prerequisites: { issue:string; checks:Promise<{stagingPrivate:boolean;imagesPrivate:boolean;wordRenderer:boolean}> }|undefined;
+const cloudPrerequisites=createCloudPrerequisiteCheck(()=>
+  Promise.allSettled([stagingIsPrivate(),privateImageHealth(),runCloudScript('cloud_release.py',['--help'],15_000)])
+    .then(([staging,images,word])=>({stagingPrivate:staging.status==='fulfilled'&&staging.value,
+      imagesPrivate:images.status==='fulfilled'&&images.value.ready&&images.value.private,wordRenderer:word.status==='fulfilled'})));
 
 const requestReadiness=createRuntimeChecks(async attempt=>{
   const {issue}=attempt;
-  if (prerequisites?.issue!==issue) {
-    prerequisites={issue,checks:Promise.allSettled([stagingIsPrivate(),privateImageHealth(),runCloudScript('cloud_release.py',['--help'],15_000)])
-      .then(([staging,images,word])=>({stagingPrivate:staging.status==='fulfilled'&&staging.value,
-        imagesPrivate:images.status==='fulfilled'&&images.value.ready&&images.value.private,wordRenderer:word.status==='fulfilled'}))};
-  }
-  const [base,wechat]=await Promise.all([prerequisites.checks,
+  const [base,wechat]=await Promise.all([cloudPrerequisites(issue),
     checkCurrentWechatDrafts().catch(()=>({ready:false,transportReady:false,emptyDraftBox:false,
       getStatus:'not_checked' as const,stage:'probe_unavailable'}))]);
   const payload={...runtimeHealth(),attempt:{...attempt,finishedAt:new Date().toISOString()},
@@ -49,6 +50,7 @@ const requestReadiness=createRuntimeChecks(async attempt=>{
   try {
     await publishExchangeHealth(issue,payload,`runtime_checks/${bootId}/${attempt.attempt}`);
     await publishExchangeHealth(issue,payload,'runtime_checks');
+    if (!cloudPrerequisitesReady(base) || !wechat.transportReady) return 'failed';
     return wechat.getStatus==='missing_test_object' ? 'missing_test_object' : wechat.ready ? 'passed' : 'failed';
   } catch {
     console.warn(JSON.stringify({event:'plan_b_runtime_checks_unavailable',issue,attempt:attempt.attempt}));
@@ -81,9 +83,10 @@ export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number):
   const reviewableCandidates = shortEditionsAllowed ? reviewableWindowCount(receipt.snapshot) : receipt.snapshot.candidates.length;
   const shortage = reviewableCandidates < (shortEditionsAllowed ? 1 : 10);
   const dailyPolicy = receipt.snapshot.issue >= EDITORIAL_POLICY_FIRST_ISSUE;
-  const belowTarget = dailyPolicy && reviewableCandidates < DAILY_TARGET_ARTICLES + 1;
+  const belowTarget = dailyPolicy && reviewableCandidates < DAILY_TARGET_ARTICLES;
+  const belowMinimum = dailyPolicy && reviewableCandidates < DAILY_MIN_ARTICLES;
   const reason = freezeBlockReason(receipt.snapshot) || (shortage ? 'insufficient_reviewable_candidates'
-    : belowTarget && attempt === 0 ? 'candidate_supply_below_target' : null);
+    : (belowTarget && attempt === 0) || (belowMinimum && attempt === 1) ? 'candidate_supply_below_target' : null);
   const limit=receipt.snapshot.issue>='2026-11-23'?3:2;
   const coverageRecovery = shortage || reason === 'candidate_supply_below_target';
   return reason ? { state: attempt+1<limit ? 'retry' : 'blocked', delay:120_000,

@@ -1,5 +1,5 @@
 {
-  "registryVersion": "SOURCE-REGISTRY-20261126-v10",
+  "registryVersion": "SOURCE-REGISTRY-20261126-v13",
   "sources": [
     {
       "allowedHosts": [
@@ -144,6 +144,12 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://inbusiness.kz/ru/cat/biznes/?page=2"
+        },
+        {
+          "url": "https://inbusiness.kz/ru/rss",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Inbusiness.kz",
@@ -202,6 +208,12 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://lsm.kz/banks?page=2"
+        },
+        {
+          "url": "https://lsm.kz/rss.xml",
+          "role": "feed",
+          "language": "und",
+          "preferredDiscovery": false
         }
       ],
       "family": "LS",
@@ -265,6 +277,12 @@
           "language": "ru",
           "role": "section",
           "url": "https://informburo.kz/page/politika-konfidencialnosti-i-obrabotki-personalnyx-dannyx"
+        },
+        {
+          "url": "https://informburo.kz/rss/pubsubhubbub-feed.xml",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "Informburo",
@@ -381,6 +399,12 @@
           "language": "ru",
           "role": "section",
           "url": "https://www.spot.uz/ru/transport/"
+        },
+        {
+          "url": "https://www.spot.uz/ru/rss/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Spot.uz",
@@ -420,6 +444,12 @@
           "language": "und",
           "role": "language",
           "url": "https://www.uzdaily.uz/en/"
+        },
+        {
+          "url": "https://www.uzdaily.uz/ru/rss/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "UzDaily",
@@ -536,6 +566,12 @@
           "language": "ru",
           "role": "home",
           "url": "https://nuz.uz/"
+        },
+        {
+          "url": "https://nuz.uz/feed/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "NUZ",
@@ -799,6 +835,12 @@
           "language": "ru",
           "role": "section",
           "url": "https://economist.kg/tag/society/"
+        },
+        {
+          "url": "https://economist.kg/rss/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Economist.kg",
@@ -977,6 +1019,12 @@
           "language": "ru",
           "role": "language",
           "url": "https://eng.khovar.tj:443/"
+        },
+        {
+          "url": "https://khovar.tj/rus/feed/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "Khovar",
@@ -1046,6 +1094,12 @@
           "language": "und",
           "role": "home",
           "url": "https://avesta.tj/"
+        },
+        {
+          "url": "https://avesta.tj/feed/",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": false
         }
       ],
       "family": "Avesta",
@@ -1206,7 +1260,7 @@
       "id": "tj-toptj",
       "institutionType": "news_media",
       "kind": "media",
-      "timezone": "Asia/Dushanbe"
+      "timezone": "Etc/UTC"
     },
     {
       "allowedHosts": [
@@ -1219,6 +1273,12 @@
           "language": "ru",
           "role": "home",
           "url": "https://azertag.az/ru"
+        },
+        {
+          "url": "https://azertag.az/ru/rss",
+          "role": "feed",
+          "language": "ru",
+          "preferredDiscovery": true
         }
       ],
       "family": "AZERTAC",
@@ -1329,6 +1389,11 @@
           "language": "en",
           "role": "home",
           "url": "https://report.az/en/economy"
+        },
+        {
+          "language": "az",
+          "role": "language",
+          "url": "https://report.az/iqtisadiyyat-xeberleri"
         },
         {
           "language": "ru",
@@ -1566,6 +1631,22 @@
           "language": "kk",
           "role": "section",
           "url": "https://nationalbank.kz/kz"
+        },
+        {
+          "url": "https://nationalbank.kz/rss_news_kazakh.xml",
+          "role": "feed",
+          "language": "kk",
+          "preferredDiscovery": true
+        },
+        {
+          "url": "https://nationalbank.kz/rss_news_russian.xml",
+          "role": "feed",
+          "language": "ru"
+        },
+        {
+          "url": "https://nationalbank.kz/rss_news_english.xml",
+          "role": "feed",
+          "language": "en"
         }
       ],
       "family": "National Bank of Kazakhstan",
@@ -1750,6 +1831,11 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://president.uz/ru/lists/news?page=1&per-page=15"
+        },
+        {
+          "url": "https://president.uz/en/lists/news",
+          "role": "archive",
+          "language": "en"
         }
       ],
       "family": "President Uzbekistan",
@@ -1833,6 +1919,11 @@
           "language": "ru",
           "role": "home",
           "url": "https://www.gov.kg/ru"
+        },
+        {
+          "url": "https://www.gov.kg/ru/post/c/press",
+          "role": "section",
+          "language": "ru"
         }
       ],
       "family": "Cabinet Kyrgyzstan",
@@ -1992,7 +2083,8 @@
     },
     {
       "allowedHosts": [
-        "cbar.az"
+        "cbar.az",
+        "www.cbar.az"
       ],
       "available": true,
       "country": "az",
@@ -2001,6 +2093,16 @@
           "language": "az",
           "role": "home",
           "url": "https://cbar.az/"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://www.cbar.az/press-releases/index?language=az"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://www.cbar.az/press-releases?language=en"
         },
         {
           "language": "az",
@@ -2018,7 +2120,7 @@
           "url": "https://cbar.az/page-60/corporate-social-responsibility"
         },
         {
-          "language": "az",
+          "language": "en",
           "role": "language",
           "url": "https://cbar.az/home?language=en"
         }
@@ -2065,6 +2167,11 @@
           "language": "az",
           "role": "language",
           "url": "https://economy.gov.az/en"
+        },
+        {
+          "url": "https://economy.gov.az/en/page/media/news",
+          "role": "section",
+          "language": "en"
         }
       ],
       "family": "Ministry Economy Azerbaijan",
@@ -2230,6 +2337,11 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://alau.kz/category/economics/page/2/"
+        },
+        {
+          "language": "ru",
+          "role": "feed",
+          "url": "https://alau.kz/feed/"
         }
       ],
       "family": "Alau",
@@ -2800,6 +2912,12 @@
           "language": "ru",
           "role": "home",
           "url": "https://navonews.tj/"
+        },
+        {
+          "url": "https://navonews.tj/rss.xml?lang=tj",
+          "role": "feed",
+          "language": "tg",
+          "preferredDiscovery": false
         }
       ],
       "family": "NAVO",
@@ -2881,13 +2999,18 @@
         }
       ],
       "available": true,
-      "confirmedArticlePathPattern": "/en/articles/view/[0-9]+/?",
+      "confirmedArticlePathPattern": "/(?:az|en)/articles/view/[0-9]+/?",
       "country": "az",
       "entrypoints": [
         {
           "language": "en",
           "role": "home",
           "url": "https://president.az/en/articles/list/news"
+        },
+        {
+          "language": "az",
+          "role": "language",
+          "url": "https://president.az/az/articles/list/news"
         }
       ],
       "family": "阿塞拜疆总统府",
@@ -2947,6 +3070,47 @@
           "language": "en",
           "role": "section",
           "url": "https://renewables.az/public/en/all-news"
+        }
+      ]
+    },
+    {
+      "id": "az-state-tax-service-azerbaijan",
+      "country": "az",
+      "family": "阿塞拜疆国家税务局",
+      "kind": "institution",
+      "institutionType": "tax_authority",
+      "available": true,
+      "allowedHosts": [
+        "www.taxes.gov.az",
+        "taxes.gov.az"
+      ],
+      "timezone": "Asia/Baku",
+      "confirmedArticlePathPattern": "/az/post/\\d+/?",
+      "preferredInBoundedScan": true,
+      "entrypoints": [
+        {
+          "role": "home",
+          "language": "az",
+          "url": "https://www.taxes.gov.az/az/page/xeberler"
+        }
+      ]
+    },
+    {
+      "id": "tj-foreign-ministry-tajikistan",
+      "country": "tj",
+      "family": "Foreign Ministry Tajikistan",
+      "kind": "institution",
+      "institutionType": "foreign_ministry",
+      "available": true,
+      "allowedHosts": [
+        "mfa.tj"
+      ],
+      "timezone": "Asia/Dushanbe",
+      "entrypoints": [
+        {
+          "url": "https://mfa.tj/tg/main",
+          "role": "home",
+          "language": "tg"
         }
       ]
     }

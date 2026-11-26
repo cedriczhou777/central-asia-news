@@ -20,10 +20,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
 from news_queue_policy import VERSION as QUEUE_POLICY_VERSION, MAX_ACTIVE_ARTICLES, importance, bounded_review_reason
+from news_queue_policy import ADAPTIVE_DOMAIN_WORKERS, ADAPTIVE_EXTRA_ARTICLES, ADAPTIVE_EXTRA_LISTING_PAGES, ADAPTIVE_LISTING_FRACTION
+from source_evidence import source_time
+from news_funnel import scan_funnel
 
 VERSION = 'work-discovery-v6'
 OFFSETS = {'kz': 5, 'uz': 5, 'kg': 6, 'tj': 5, 'az': 4}
-LISTING_ROLES = {'home', 'section', 'archive', 'date_archive', 'pagination', 'language'}
+LISTING_ROLES = {'home', 'section', 'archive', 'date_archive', 'pagination', 'language', 'feed', 'sitemap'}
 TERMINAL = {'selected', 'rejected'}
 ARTICLE_PATTERNS = {
     'kz-inbusiness-kz': r'^/(?:ru|kz)/(?:news|last)/[^/]+',
@@ -189,6 +192,8 @@ def source_revision_hash(record, source_hash=None, language_context=None):
                 'fullTextValidated': record.get('fullTextValidated'), 'articleBodyEvidence': record.get('articleBodyEvidence'),
                 'sourceKind': record.get('source_kind'), 'sourceKindEvidence': record.get('sourceKindEvidence'),
                 'parserVersion': record.get('parser_version', record.get('parserVersion'))}
+    if record.get('languageAlternates'):
+        revision['languageAlternates'] = record['languageAlternates']
     if language_context is not None:
         revision['registeredLanguagePolicy'] = language_context
         revision['htmlLanguage'] = record.get('html_lang', record.get('htmlLanguage', record.get('language')))
@@ -479,6 +484,7 @@ def rerank_cached_leads(registry, country, output):
         stamp = cached.get('reparsedAt') if cached.get('parser_version') == parser.PARSER_VERSION else None
         record['reparsedAt'] = stamp or utcnow()
         record['fetchedAt'] = cached['fetchedAt']
+        record = source_time(record, source.get('timezone'))
         write_json(cache, record)
         source_hash = record.get('source_sha256') or candidate.get('sourceHash')
         route, route_reason = lead_route(url, source, {e['url'] for e in source_entries(source)})
@@ -786,7 +792,7 @@ def pagination_links(record, next_only=False):
     return safe[:1]
 
 
-def article_links(record, source, known_listings, structural_filter=False):
+def article_links(record, source, known_listings, structural_filter=False, adaptive=False):
     pages = set(pagination_links(record)) | known_listings
     result = []
     for entry in links_from(record):
@@ -798,19 +804,44 @@ def article_links(record, source, known_listings, structural_filter=False):
         if structural_filter and (urlparse(url).scheme != 'https'
                 or lead_route(url,source,known_listings)[0] in ('listing','static_page')):
             continue
+        article_card = entry.get('inHeading') and entry.get('articleCard') and not entry.get('inNavigation')
+        feed_entry = adaptive and entry.get('feedEntry') is True
         pattern = source.get('confirmedArticlePathPattern')
-        if pattern and not re.fullmatch(pattern, path):
+        if pattern and not re.fullmatch(pattern, path) and not (adaptive and (article_card or feed_entry)):
             continue
         if re.search(r'\.(?:pdf|jpe?g|png|gif|svg|zip|mp4|xml|json|css|js)$', path, re.I):
             continue
         # Structural navigation filtering only; no business/topic keyword filter.
-        strong_card = structural_filter and entry.get('inHeading') and entry.get('articleCard') and not entry.get('inNavigation')
-        if len(label) < (4 if strong_card else 12) or re.fullmatch(r'(?:https?://)?[^\s]+\.[a-z]{2,5}/?', label, re.I):
+        strong_card = structural_filter and article_card
+        recognized_route = bool(pattern and re.fullmatch(pattern,path) or
+                                re.search(ARTICLE_PATTERNS.get(source['id'], r'(?!)'),path))
+        label_minimum = 1 if adaptive and (strong_card or recognized_route) else 4 if strong_card else 12
+        if not feed_entry and (len(label) < label_minimum
+                               or re.fullmatch(r'(?:https?://)?[^\s]+\.[a-z]{2,5}/?', label, re.I)):
             continue
         if path.rstrip('/') in ('', '/ru', '/en', '/uz', '/kg', '/az'):
             continue
         result.append(url)
     return list(dict.fromkeys(result))
+
+
+def dated_links(record, urls, lower, upper):
+    """Use per-card timestamps for scheduling only, never as article proof."""
+    urls = set(urls)
+    stamps = defaultdict(set)
+    for link in links_from(record):
+        url = normal_url(link['url'])
+        if url not in urls or link.get('inNavigation') or not (link.get('inHeading') or link.get('articleCard')):
+            continue
+        for hint in link.get('nearbyTimes', []):
+            try:
+                at = datetime.fromisoformat((hint.get('datetime') or '').replace('Z', '+00:00'))
+            except (TypeError, ValueError):
+                continue
+            if at.tzinfo:
+                stamps[url].add(at)
+    valid = [next(iter(values)) for values in stamps.values() if len(values)==1]
+    return sum(lower <= at < upper for at in valid), len(valid)>=3 and all(at < lower for at in valid) and len(valid)>=len(urls)*.8
 
 
 def published_intervals(record, country):
@@ -828,9 +859,10 @@ def published_intervals(record, country):
         bound_publisher_time = (country == 'tj' and item.get('timezoneEvidence') == 'publisher_local'
                                 and item.get('field') == 'publisher.khovar.currentArticlePublicationBadge'
                                 and urlparse(item.get('articleUrl') or '').hostname == 'khovar.tj')
-        if item.get('kind') != 'published' or (item.get('timezoneEvidence') != 'explicit' and not bound_publisher_time):
+        registered = item.get('timezoneEvidence')=='registered_publisher_timezone' and item.get('normalizedAt')
+        if item.get('kind') != 'published' or (item.get('timezoneEvidence') != 'explicit' and not bound_publisher_time and not registered):
             continue
-        value = next((item[k] for k in ('value', 'datetime', 'raw', 'iso', 'timestamp') if item.get(k)), None)
+        value = next((item[k] for k in ('normalizedAt', 'value', 'datetime', 'raw', 'iso', 'timestamp') if item.get(k)), None)
         if value:
             explicit.append(str(value))
     # v13 compatibility: explicit page publication metadata with a timezone.
@@ -879,7 +911,7 @@ def date_only_outside_window(record, start, end):
     if not isinstance(evidence, list):
         return False
     published = [item for item in evidence if isinstance(item, dict) and item.get('kind') == 'published']
-    dates = set()
+    dates, bounds = set(), set()
     for item in published:
         raw, url = item.get('raw'), item.get('articleUrl')
         if (item.get('precision') != 'date' or not isinstance(raw, str) or not re.fullmatch(r'\d{4}-\d\d-\d\d', raw)
@@ -887,10 +919,17 @@ def date_only_outside_window(record, start, end):
             return False
         try:
             dates.add(datetime.fromisoformat(raw).replace(tzinfo=timezone.utc))
-        except ValueError:
+            if item.get('timezoneEvidence')=='registered_publisher_calendar_day':
+                lo, hi = (datetime.fromisoformat(item[key]) for key in ('dayStart','dayEnd'))
+                if lo.tzinfo and hi.tzinfo and lo < hi:
+                    bounds.add((lo,hi))
+        except (ValueError, KeyError, TypeError):
             return False
     if len(dates) != 1:
         return False
+    if len(bounds)==1:
+        lo, hi = next(iter(bounds))
+        return hi <= start or lo >= end
     day = dates.pop()
     # Cover all possible local timezones. A plausible boundary date stays uncertain.
     return day + timedelta(hours=36) <= start or day - timedelta(hours=14) >= end
@@ -907,7 +946,7 @@ def load_fetcher(output):
 
 def discover(registry, country, issue_date, output, listing_not_before=None,
              max_pages_per_source=4, max_articles_per_source=30, workers=6,
-             max_seconds=600, fetcher=None, clock=time.monotonic, only_source_ids=None, news_budget=False):
+             max_seconds=600, fetcher=None, clock=time.monotonic, only_source_ids=None, news_budget=False, adaptive=False):
     if not math.isfinite(max_seconds) or max_seconds <= 0:
         raise ValueError('max-seconds must be finite and positive')
     output = Path(output)
@@ -931,12 +970,13 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
     fetcher_parameters = inspect.signature(fetcher).parameters
     start_clock = clock()
     deadline = start_clock + max_seconds
-    listing_deadline = start_clock + max_seconds * (.25 if news_budget else .55)
+    listing_fraction = ADAPTIVE_LISTING_FRACTION if adaptive else .25 if news_budget else .55
+    listing_deadline = start_clock + max_seconds * listing_fraction
     bjt = timezone(timedelta(hours=8))
     end = datetime.fromisoformat(issue_date).replace(hour=6, tzinfo=bjt)
     start = end - timedelta(days=1)
     sources = [dict(s, family=s.get('family', s.get('publisherFamily', s['id'])))
-               for s in registry['sources'] if s['country'].lower() == country]
+               for s in registry['sources'] if s['country'].lower() == country and (not adaptive or s.get('available') is not False)]
     sources = fair_sources(sources)
     by_id = {s['id']: s for s in sources}
     all_sources = sources
@@ -1003,13 +1043,17 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
     seen_listing, page_counts = set(), defaultdict(int)
     deferred_listing = []
     page_candidates = defaultdict(list)
+    source_latest_links = defaultdict(set)
+    productive_pages = Counter()
+    stale_listing_sources = set()
     discovered = {}
     seed_groups = []
     focused_recovery = news_budget and only_source_ids is not None and minimum is not None
     body_rechecks = set()
     for source in sources:
         entries = source_entries(source)
-        entries.sort(key=lambda e: (e.get('accessStatus') != 'public_html_readable_listing', e.get('role') != 'home'))
+        entries.sort(key=lambda e: (not (adaptive and e.get('preferredDiscovery') is True),
+                                   e.get('accessStatus') != 'public_html_readable_listing', e.get('role') != 'home'))
         jobs = [(source['id'], normal_url(e['url']), e.get('role', 'home'), e.get('language')) for e in entries]
         pending = [(j['sourceId'], j['url'], j['role'], j.get('language')) for j in prior_jobs
                    if j.get('sourceId') == source['id'] and allowed_url(j.get('url'), source)]
@@ -1017,7 +1061,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             deferred_listing.extend(pending)
             continue
         all_jobs = list({(j[0], j[1]): j for j in pending + jobs}.values())
-        home = next((j for j in jobs if j[2] == 'home'), jobs[0] if jobs else None)
+        home = jobs[0] if adaptive and jobs else next((j for j in jobs if j[2] == 'home'), jobs[0] if jobs else None)
         unvisited = [j for j in all_jobs if j != home and (j[0], j[1]) not in visited_listing]
         revisits = [j for j in all_jobs if j != home and (j[0], j[1]) in visited_listing]
         seed_groups.append(([home] if home else []) + unvisited + revisits)
@@ -1028,6 +1072,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                               if j.get('sourceId') in by_id and allowed_url(j.get('url'), by_id[j['sourceId']]))
 
     flights = _FetchFlights()
+    domain_slots = {}
     fetch_metrics = {role: Counter(observations=0, fetchOperations=0, unmeasuredOperations=0,
                                    transportAttempts=0, transportRetries=0, cacheHits=0,
                                    archiveReparses=0, inRunReuses=0)
@@ -1039,6 +1084,20 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
         operation_metrics = {}
 
         def actual_fetch():
+            domain = (urlparse(job[1]).hostname or '').removeprefix('www.')
+            if not adaptive:
+                return fetch_within_budget(phase_deadline)
+            with flights.lock:
+                slot = domain_slots.setdefault(domain, threading.BoundedSemaphore(ADAPTIVE_DOMAIN_WORKERS))
+            if not slot.acquire(timeout=max(0, phase_deadline-clock())):
+                return {'url':job[1], 'contentValidated':False, 'fetchRetryable':True,
+                        'error':'source_domain_slot_deadline_exceeded'}
+            try:
+                return fetch_within_budget(phase_deadline)
+            finally:
+                slot.release()
+
+        def fetch_within_budget(phase_deadline):
             try:
                 remaining = phase_deadline - clock()
                 if remaining <= 0:
@@ -1048,7 +1107,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                 if 'source_role' in fetcher_parameters:
                     hints['source_role'] = source_role
                 if 'network_timeout' in fetcher_parameters:
-                    hints['network_timeout'] = remaining
+                    hints['network_timeout'] = min(remaining, 14 if source_role=='listing' else 19) if adaptive else remaining
                 if 'fetch_metrics' in fetcher_parameters:
                     hints['fetch_metrics'] = operation_metrics
                 if 'recheck_article_body' in fetcher_parameters:
@@ -1064,7 +1123,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
         record, owner = flights.get((job[1], minimum, source_role), actual_fetch)
         return record, owner, operation_metrics
 
-    def observe(job, record, owner, operation):
+    def observe(job, record, owner, operation, news_links=None):
         source_id, url, role, expected_language = job
         metrics = fetch_metrics['article' if role == 'article' else 'listing']
         metrics['observations'] += 1
@@ -1104,6 +1163,9 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
         for key in ('attemptedAt', 'transportAttemptsTotal', 'retryBudgetExhausted'):
             if key in record:
                 row[key] = record[key]
+        if adaptive and role != 'article':
+            row['newsLinksFound'] = len(news_links or [])
+            row['discoveryFormat'] = record.get('format', 'html')
         if record.get('fetchRetryable'):
             row['fetchRetryable'] = True
         identity = {k: v for k, v in row.items() if k != 'observedAt'}
@@ -1123,7 +1185,11 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                 job = listing_queue.popleft()
                 if (job[0], job[1]) in seen_listing:
                     continue
-                if page_counts[job[0]] >= max_pages_per_source:
+                if adaptive and job[2]=='pagination' and job[0] in stale_listing_sources:
+                    deferred_listing.append(job)
+                    continue
+                extra = ADAPTIVE_EXTRA_LISTING_PAGES if adaptive and productive_pages[job[0]] and job[2]=='pagination' else 0
+                if page_counts[job[0]] >= max_pages_per_source + extra:
                     budgets.append({'sourceId': job[0], 'reason': 'listing_page_budget', 'url': job[1]})
                     deferred_listing.append(job)
                     continue
@@ -1132,13 +1198,28 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                 batch.append(job)
             for job, fetched in zip(batch, pool.map(lambda job: fetch_job(job, listing_deadline), batch)):
                 record, owner, operation = fetched
-                valid, _, row = observe(job, record, owner, operation)
+                source = by_id[job[0]]
+                links = article_links(record, source, known_listings, structural_filter=news_budget, adaptive=adaptive)
+                valid, _, row = observe(job, record, owner, operation, links)
                 if record.get('fetchRetryable'):
                     deferred_listing.append(job)
                 if not valid:
                     continue
-                source = by_id[job[0]]
-                links = article_links(record, source, known_listings, structural_filter=news_budget)
+                if adaptive:
+                    new_links = [url for url in links if url not in source_latest_links[job[0]]]
+                    recent, stale = dated_links(record, new_links, start, end)
+                    source_latest_links[job[0]].update(links)
+                    productive_pages[job[0]] += int(recent>=3)
+                    if stale and job[2]=='pagination':
+                        stale_listing_sources.add(job[0])
+                    for value in record.get('discoveryEntries', [])[:3]:
+                        if not allowed_url(value, source):
+                            continue
+                        url = normal_url(value)
+                        next_job = (job[0], url, 'feed', job[3])
+                        if url not in known_listings:
+                            known_listings.add(url)
+                            listing_queue.append(next_job)
                 page_candidates[job[0]].append(links)
                 anchors_by_url = defaultdict(list)
                 for anchor in links_from(record):
@@ -1156,7 +1237,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                                       'discoveredAt': row['observedAt'], 'status': 'queued',
                                       'reason': 'full_text_not_fetched_budget', 'listingEvidenceResolved': True,
                                       'evidence': [{'url': row['final_url'], 'observedAt': row.get('fetchedAt') or row['observedAt'],
-                                                    'description': 'Target link observed in fetched listing DOM', 'linkURL': link,
+                                                    'description': 'Target link observed in fetched discovery entry', 'linkURL': link,
                                                     'sha256': digest(listing_raw), 'localPath': str(listing_snapshot.resolve())}]}
                     anchors = leads[key].setdefault('anchorEvidence', [])
                     for anchor in anchors_by_url[link]:
@@ -1167,7 +1248,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                 for url in pagination_links(record, next_only=news_budget):
                     if allowed_url(url, source) and (not news_budget or urlparse(url).scheme=='https') and (job[0], url) not in seen_listing:
                         known_listings.add(url)
-                        listing_queue.append((job[0], url, 'pagination', job[3]))
+                        next_job = (job[0], url, 'pagination', job[3])
+                        (deferred_listing if job[0] in stale_listing_sources else listing_queue).append(next_job)
         # Full-text evidence retains its own time budget even if a listing stalls.
         prior_article_jobs = defaultdict(list)
         for job in previous_scan.get('articleQueue', []):
@@ -1223,10 +1305,13 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                            (old_by_url[u].get('decision') == 'pending' and not old_by_url[u].get('sourceJSON'))]
             fetch_set = set(needs_fetch)
             rechecks = [u for u in urls if u not in fetch_set]
-            if len(needs_fetch) > max_articles_per_source:
-                budgets.append({'sourceId': source['id'], 'reason': 'article_budget', 'remaining': len(needs_fetch) - max_articles_per_source})
-            selected_urls = needs_fetch[:max_articles_per_source]
-            selected_urls += rechecks[:max_articles_per_source - len(selected_urls)]
+            article_limit = max_articles_per_source
+            if adaptive and productive_pages[source['id']]:
+                article_limit += ADAPTIVE_EXTRA_ARTICLES
+            if len(needs_fetch) > article_limit:
+                budgets.append({'sourceId': source['id'], 'reason': 'article_budget', 'remaining': len(needs_fetch) - article_limit})
+            selected_urls = needs_fetch[:article_limit]
+            selected_urls += rechecks[:article_limit - len(selected_urls)]
             expected = [e.get('language') for e in source_entries(source) if e.get('language')]
             article_groups.append([(source['id'], u, 'article', expected) for u in selected_urls])
         article_queue = deque(round_robin(article_groups))
@@ -1240,6 +1325,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             batch = [article_queue.popleft() for _ in range(min(workers, len(article_queue)))]
             for job, fetched in zip(batch, pool.map(lambda job: fetch_job(job, deadline), batch)):
                 record, owner, operation = fetched
+                if adaptive:
+                    record = source_time(record, by_id[job[0]].get('timezone'))
                 valid, error, row = observe(job, record, owner, operation)
                 if record.get('fetchRetryable'):
                     deferred_article.append(job)
@@ -1428,6 +1515,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                                          'sourceJSON', 'canonicalURL', 'fullTextFetchedAt', 'articleIdentityReview',
                                          'languageReview', 'evidence', 'sourceJSONSha256', 'sourceRevisionHash')}]
             for entry in entries:
+                if adaptive and entry.get('id')==primary['id'] and entry.get('source_url')==primary['source_url']:
+                    continue
                 origins[(entry.get('sourceId'), entry.get('source_url'))] = entry
         primary['discoveryOrigins'] = list(origins.values())
         for origin in origins.values():
@@ -1489,13 +1578,17 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
               'maxPagesPerSource': max_pages_per_source, 'maxArticlesPerSource': max_articles_per_source,
               'maxSeconds': max_seconds, 'pageFetchCounts': dict(page_counts),
               'newsBudget': {'version':QUEUE_POLICY_VERSION,'maxActiveArticles':MAX_ACTIVE_ARTICLES,
-                             'listingFraction':.25} if news_budget else None,
+                             'listingFraction':listing_fraction, 'adaptive':adaptive,
+                             'productiveSources':sorted(sid for sid, count in productive_pages.items() if count),
+                             'olderPageSources':sorted(stale_listing_sources)} if news_budget else None,
               'retryableFetchesThisRun': retryable_fetches,
               'fetchMetrics': fetch_metrics, 'evidenceReadMetrics': evidence_metrics,
               'elapsedSeconds': round(clock() - start_clock, 3), 'complete': not incomplete,
               'needs_expansion': incomplete,
               **raw_state,
               'editorialComplete': False, 'limitation': 'Finite DOM crawl only; counts are candidates, not publishable news. Unknown dates/languages and first disclosure need review.'}
+    if adaptive:
+        result['sourceFunnel'] = scan_funnel(all_sources, audit_history + audit, leads.values(), candidates)
     write_json(ledger_path, {'version': VERSION, 'country': country, 'issueDate': issue_date,
                              'windowStart': start.isoformat(), 'windowEnd': end.isoformat(), 'candidateLedger': candidates})
     write_json(lead_path, {'version': VERSION, 'country': country, 'issueDate': issue_date,

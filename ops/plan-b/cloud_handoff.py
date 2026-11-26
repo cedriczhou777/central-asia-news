@@ -10,10 +10,12 @@ import shutil
 import tarfile
 
 from discover_work_sources import assess_window, discover, published_intervals, rebase_discovery_paths
-from editorial_policy import EFFECTIVE_ISSUE, previous_day
+from editorial_policy import EFFECTIVE_ISSUE
+from news_funnel import event_pairs, scan_funnel
+from source_evidence import language_versions, publication_options
 from prepare_editorial_input import candidate_originals, discovery_index, indexed
 from source_coverage import assess_coverage, coverage_self_test
-from news_queue_policy import MAX_LISTING_PAGES, MAX_ARTICLES_PER_SOURCE
+from news_queue_policy import ADAPTIVE_ARTICLES_PER_SOURCE, ADAPTIVE_LISTING_PAGES, ADAPTIVE_WORKERS, MAX_LISTING_PAGES, MAX_ARTICLES_PER_SOURCE
 
 
 REGISTRY = Path(__file__).with_name('source_registry.json')
@@ -90,15 +92,14 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
     index = discovery_index(root, issue, country) if index is None else index
     ledger = indexed(read(root / 'candidate_ledger.json')['candidateLedger'])
     result = []
+    language_records = {}
     cutoff = datetime.fromisoformat(issue + 'T06:00:00+08:00')
     start = cutoff - timedelta(days=1)
     daily_policy = issue >= EFFECTIVE_ISSUE
     for entry in index['candidates']:
         if entry.get('fullTextValidated') is not True or not entry.get('fullTextFetchedAt'):
             continue
-        rejected = entry.get('decision') == 'rejected'
-        if rejected and (not daily_policy or entry.get('reason') != 'explicit_publication_outside_window'
-                         or entry.get('decisionOrigin') != 'mechanical'):
+        if entry.get('decision') == 'rejected':
             continue
         actual = ledger[entry['id']]
         path = root / 'evidence' / Path(actual['sourceJSON']).name
@@ -107,16 +108,13 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
             raise ValueError('source_archive_hash_mismatch')
         source = json.loads(raw)
         times = published_intervals(source, country)
-        previous = (daily_policy and not source.get('publicationReviewRequired')
-                    and len({value[0] for value in times}) == 1 and previous_day(times[0][0], start))
-        if not previous and (rejected or assess_window(source, country, start, cutoff) == 'outside_window'):
+        if assess_window(source, country, start, cutoff) == 'outside_window':
             continue
         title = source.get('title') or (source.get('meta') or {}).get('og:title')
         if not isinstance(title, str) or not title.strip():
             continue
-        valid = previous or ((not daily_policy or not source.get('publicationReviewRequired'))
-                             and actual.get('publicationWindowAssessment') == 'in_window'
-                             and len({v[0] for v in times}) == 1)
+        valid = (not daily_policy or not source.get('publicationReviewRequired')) and (
+            actual.get('publicationWindowAssessment') == 'in_window' and len({v[0] for v in times}) == 1)
         if valid and observed_at is not None and times[0][0] > datetime.fromisoformat(observed_at):
             continue
         candidate = {'id': entry['id'], 'revision': entry['editorialFingerprint'], 'title': title.strip(),
@@ -125,9 +123,15 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
                        'publishedAt': times[0][0].isoformat() if valid else None, 'needsTimeReview': not valid}
         if daily_policy:
             candidate['photoCandidates'] = len((source.get('articleImages') or {}).get('candidates') or [])
-            if previous:
-                candidate['previousDay'] = True
+            if not valid:
+                options = publication_options(source, datetime.fromisoformat(observed_at) if observed_at else cutoff, start, cutoff)
+                if options:
+                    candidate['publicationOptions'] = options
         result.append(candidate)
+        if daily_policy and source.get('languageAlternates'):
+            language_records[candidate['id']] = source
+    if language_records:
+        language_versions(result, language_records)
     return result
 
 
@@ -137,10 +141,12 @@ def scan(root, directory, issue, country, phase, seconds, source_ids=None):
     known = directory / 'input.gz'
     if known.is_file():
         restore(root, known)
+    adaptive = issue >= EFFECTIVE_ISSUE
     audit = discover(registry, country, issue, root, cutoff.isoformat() if phase == 'final' else None,
-                     workers=2, max_seconds=seconds, news_budget=True,
-                     max_pages_per_source=1 if source_ids else MAX_LISTING_PAGES,
-                     max_articles_per_source=MAX_ARTICLES_PER_SOURCE, only_source_ids=source_ids)
+                     workers=ADAPTIVE_WORKERS if adaptive else 2, max_seconds=seconds, news_budget=True,
+                     max_pages_per_source=(2 if source_ids else ADAPTIVE_LISTING_PAGES) if adaptive else (1 if source_ids else MAX_LISTING_PAGES),
+                     max_articles_per_source=ADAPTIVE_ARTICLES_PER_SOURCE if adaptive else MAX_ARTICLES_PER_SOURCE,
+                     only_source_ids=source_ids, adaptive=adaptive)
     snapshot_from_cache(root,directory,issue,country,phase,audit)
 
 
@@ -153,6 +159,18 @@ def snapshot_from_cache(root,directory,issue,country,phase,audit):
     pending, metrics = coverage(registry, country, audit, cutoff, ledger, leads, observed)
     index = discovery_index(root, issue, country)
     entries = inventory_entries(root, issue, country, index, observed)
+    if issue >= EFFECTIVE_ISSUE:
+        hints = event_pairs(entries)
+        for entry in entries:
+            if entry['id'] in hints:
+                entry['eventHints'] = hints[entry['id']]
+        inventory_funnel = audit.get('funnel', {})
+        metrics['sourceFunnel'] = audit.get('sourceFunnel') or scan_funnel(
+            [s for s in registry['sources'] if s['country'].lower()==country and s.get('available') is not False],
+            audit['sourceScanAudit'], leads, ledger)
+        metrics['funnel'] = {**inventory_funnel, 'frozenOriginals':len(entries),
+                             'frozenInWindow':sum(not e['needsTimeReview'] for e in entries),
+                             'eventHints':len(hints)}
     write(directory / 'snapshot.json', {
         'issue': issue, 'country': country, 'phase': phase, 'observedAt': observed,
         'candidates': entries,

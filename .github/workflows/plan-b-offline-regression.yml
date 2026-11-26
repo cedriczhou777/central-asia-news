@@ -7,11 +7,12 @@ on:
       - 'scripts/test_plan_b_*.py'
       - 'src/lib/reviewed-wechat.ts'
       - 'src/lib/reviewed-wechat-transport.ts'
-      - 'src/lib/plan-b-runtime-checks.ts'
+      - 'src/lib/plan-b-*.ts'
       - 'src/lib/reviewed-database-delivery.ts'
       - 'scripts/prepare-reviewed-database-delivery.ts'
       - 'scripts/test-reviewed-database-delivery.ts'
       - 'scripts/test-plan-b-wechat-probe.ts'
+      - 'scripts/test-reviewed-private-images.ts'
 
 permissions:
   contents: read
@@ -25,8 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install parser dependency
-        run: python -m pip install lxml
+      - name: Install parser and image dependencies
+        run: python -m pip install lxml pillow
       - name: Verify bounded queue and evidence invariants
         run: python -m unittest discover -s scripts -p 'test_plan_b_bounded_queues.py' -v
       - name: Verify incident real-route regressions
@@ -38,7 +39,7 @@ jobs:
       - name: Verify publisher publication evidence and editorial counts
         env:
           PYTHONPATH: ops/plan-b:scripts
-        run: python -m unittest test_work_sources test_work_quantity
+        run: python -m unittest test_work_sources test_work_quantity test_work_source_evidence test_plan_b_release
 
   offline-handoff-typescript:
     runs-on: ubuntu-latest
@@ -64,3 +65,5 @@ jobs:
         run: pnpm exec tsx scripts/test-reviewed-database-delivery.ts
       - name: Offline WeChat readback transport and duplicate prevention
         run: pnpm exec tsx scripts/test-plan-b-wechat-probe.ts
+      - name: Offline five-country image and draft readback
+        run: pnpm exec tsx scripts/test-reviewed-private-images.ts

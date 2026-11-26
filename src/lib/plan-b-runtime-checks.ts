@@ -4,6 +4,7 @@ import { fetchWechat } from './reviewed-wechat-transport';
 export type ReadinessPhase = 'startup' | 'collection' | 'before_signoff' | 'before_delivery' | 'retry';
 export type ReadinessAttempt = { issue:string; attempt:number; phase:ReadinessPhase; startedAt:string };
 type ReadinessResult = 'passed' | 'failed' | 'missing_test_object';
+type CloudPrerequisites = {stagingPrivate:boolean;imagesPrivate:boolean;wordRenderer:boolean};
 const RETRY_DELAYS = [30_000,60_000,120_000];
 const FRESH_MS = 5 * 60_000;
 
@@ -21,6 +22,21 @@ export async function checkCurrentWechatDrafts(request = fetchWechat) {
     : 'failed';
   return {...probe, ready:getStatus === 'passed', transportReady:!!verifiedList,
     emptyDraftBox:list?.total === 0 && list.returned === 0, getStatus};
+}
+
+export function createCloudPrerequisiteCheck(check:()=>Promise<CloudPrerequisites>) {
+  let current: {issue:string; checks:Promise<CloudPrerequisites>}|undefined;
+  return async (issue:string) => {
+    if (current?.issue!==issue) current={issue,checks:check()};
+    const attempt=current;
+    const value=await attempt.checks;
+    if (current===attempt && !cloudPrerequisitesReady(value)) current=undefined;
+    return value;
+  };
+}
+
+export function cloudPrerequisitesReady(value:CloudPrerequisites) {
+  return value.stagingPrivate && value.imagesPrivate && value.wordRenderer;
 }
 
 /** One check at a time. Startup retries and one recheck at each production stage have separate bounds. */

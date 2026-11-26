@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from lxml import html
 
 from build_work_package import build, country_scope, NAMES
 
@@ -60,6 +61,24 @@ class CountryPackageBuilder(unittest.TestCase):
     def test_scope_rejects_empty_unknown_and_duplicate_countries(self):
         for scope in ('','kz,kz','kz,xx','kz,','KZ',['kz','kz'],[]):
             with self.subTest(scope=scope),self.assertRaises(ValueError):country_scope(scope)
+
+    def test_future_issue_preserves_body_when_source_image_is_unavailable(self):
+        self.write_countries(['kz'])
+        country_file=self.root/'kz.json'
+        country=json.loads(country_file.read_text())
+        row=country['articles'][0]
+        row['source_url']='https://example.com/single-story'
+        del row['image_url']
+        row['sourceImage']={'sourceUrl':row['source_url'],'status':'none','candidateUrls':[]}
+        country_file.write_text(json.dumps(country))
+        with contextlib.redirect_stdout(io.StringIO()):build(self.root,'2026-11-27',countries=['kz'])
+        package=json.loads((self.root/'package.json').read_text())['countries']['kz']
+        section=html.fromstring(package['bodyHtml'])
+        links=section.xpath('.//a[@href]')
+        self.assertEqual([(link.get('href'),link.text_content()) for link in links],[(row['source_url'],row['source_url'])])
+        self.assertIn(row['body'],section.text_content())
+        self.assertFalse(section.xpath('.//img'))
+        self.assertEqual(package['coverUrl'],'')
 
     def test_default_does_not_silently_turn_missing_country_into_partial_package(self):
         self.write_countries(['kz'])

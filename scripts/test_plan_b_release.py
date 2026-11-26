@@ -22,6 +22,7 @@ from source_coverage import assess_coverage
 import cloud_release
 from fetch_work_sources import decode_transport
 import prepare_country_release
+from prepare_editorial_input import candidate_row
 from source_article_images import collect, connect_public
 from test_work_quantity import fixture
 from validate_work_package import digest
@@ -32,7 +33,7 @@ ISSUE = '2026-11-21'
 STAMP = ISSUE + 'T06:01:00+08:00'
 
 
-def inputs(directory, *, transport_budget=False, issue=ISSUE, count=15, photo_index=0, follow_up=False):
+def inputs(directory, *, transport_budget=False, issue=ISSUE, count=15, photo_index=0, follow_up=False, country='kg'):
     end = datetime.fromisoformat(issue + "T06:00:00+08:00")
     stamp = (end + timedelta(minutes=1)).isoformat()
     source = directory / 'source-fixture'
@@ -40,6 +41,8 @@ def inputs(directory, *, transport_budget=False, issue=ISSUE, count=15, photo_in
     evidence = source / 'evidence'
     evidence.mkdir()
     draft, audit, _ = fixture(count)
+    for registered in draft['sourceRegistry']['sources']:
+        registered['country'] = country
     for index, row in enumerate(audit):
         row.update(fetchedAt=stamp, eventId=f'fake-{index}')
     for index, (item, entry) in enumerate(zip(draft['articles'], draft['candidateLedger'], strict=True)):
@@ -66,9 +69,11 @@ def inputs(directory, *, transport_budget=False, issue=ISSUE, count=15, photo_in
                     sourceHash=source_hash, published_at=published,
                     timeEvidence='合成报文显示的带时区发布时间',
                     firstPublicationCheck='合成报文同时提供首次披露和实际发布时间')
+        if issue >= '2026-11-27':
+            item['revision'] = candidate_row(entry)['editorialFingerprint']
         if previous:
             item.update(title='【延续关注】'+item['title'],previousDay=True,followUpReason='Synthetic continuing interest after the previous publication')
-    region = {'issueDate': issue, 'country': 'kg', 'windowStart': (end - timedelta(days=1)).isoformat(),
+    region = {'issueDate': issue, 'country': country, 'windowStart': (end - timedelta(days=1)).isoformat(),
               'windowEnd': end.isoformat()}
     registry = directory / 'registry.json'
     write(registry, draft['sourceRegistry'])
@@ -84,7 +89,7 @@ def inputs(directory, *, transport_budget=False, issue=ISSUE, count=15, photo_in
     review = {**region, 'reviewer': 'independent-test', 'stage': 'verified', 'issues': [],
               'articles': rows, 'originalHash': digest(draft['articles']), 'finalBodyHash': digest(rows),
               'fullSourceReviewCompleted': True, 'titleFactReviewCompleted': True, 'bodyFactReviewCompleted': True}
-    proof = assess_coverage(read(registry), 'kg', read(source / 'source_scan_audit.json'),
+    proof = assess_coverage(read(registry), country, read(source / 'source_scan_audit.json'),
                             end,
                             draft['candidateLedger'], observed_at=stamp)
     if transport_budget:
@@ -172,34 +177,43 @@ class CloudReleaseTest(unittest.TestCase):
             self.assertEqual(package['countries']['kg']['bodyHtml'].count('<img '), 1)
             self.assertIn('https://source0.example/original.png', package['countries']['kg']['bodyHtml'])
 
-    def test_daily_edition_renders_a_previous_day_followup_and_second_story_cover(self):
+    def test_daily_edition_renders_fifteen_and_uses_second_story_cover(self):
+        for country in ('kz', 'uz', 'kg', 'tj', 'az'):
+            with self.subTest(country=country):
+                self.check_daily_edition(country)
+
+    def check_daily_edition(self, country):
         issue = '2026-11-27'
         now = datetime.fromisoformat(issue + 'T07:00:00+08:00')
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
-            source, registry = inputs(directory, issue=issue, count=7, photo_index=1, follow_up=True)
-            inventory = {row['id']: row for row in inventory_entries(source, issue, 'kg')}
-            self.assertEqual(inventory['article6']['publishedAt'], '2026-11-26T00:00:00+08:00')
-            self.assertIs(inventory['article6']['previousDay'], True)
+            source, registry = inputs(directory, issue=issue, count=15, photo_index=1, country=country)
+            inventory = {row['id']: row for row in inventory_entries(source, issue, country)}
+            self.assertEqual(inventory['article14']['publishedAt'], issue + 'T05:59:59+08:00')
             self.assertEqual(inventory['article1']['photoCandidates'], 1)
             gate = partial(verify_rendered_package, now=now)
             with patch.object(cloud_release, 'REGISTRY', registry), patch.object(prepare_country_release, 'verify_rendered_package', gate), \
                     patch('source_coverage.datetime') as clock:
                 clock.now.return_value = now
-                cloud_release.prepare_from_handoff(directory, issue, 'kg', issue + '-r104', fetch_photo=photo)
+                cloud_release.prepare_from_handoff(directory, issue, country, issue + '-r104', fetch_photo=photo)
             release = directory / 'release'
             result = read(directory / 'release-status.json')
             self.assertEqual(result['quantityState'], 'target_met')
             self.assertEqual(result['sourcePhotoChecks']['article0']['state'], 'none')
             self.assertEqual(result['sourcePhotoChecks']['article1']['state'], 'original')
-            package = read(release / 'package.json')['countries']['kg']
+            package = read(release / 'package.json')['countries'][country]
             self.assertEqual(package['coverUrl'], 'https://source0.example/original.png')
             self.assertLess(package['bodyHtml'].index('测试新闻0'), package['bodyHtml'].index('<img '))
-            self.assertIn('【延续关注】测试新闻6', package['bodyHtml'])
+            self.assertIn('测试新闻14', package['bodyHtml'])
+            if country == 'tj':
+                invalid_output = directory / 'directory-not-word.docx'
+                invalid_output.mkdir()
+                with self.assertRaises(OSError):
+                    cloud_release.build_word(release, invalid_output)
             word = cloud_release.build_word(release, directory / 'test.docx')
-            self.assertEqual((word['articles'],word['images']), (7,1))
+            self.assertEqual((word['articles'],word['images']), (15,1))
             with ZipFile(directory / 'test.docx') as doc:
-                self.assertIn('【延续关注】测试新闻6', doc.read('word/document.xml').decode())
+                self.assertIn('测试新闻14', doc.read('word/document.xml').decode())
 
     def test_source_timeout_is_neither_success_nor_empty_source(self):
         registry = {'sources': [{'id': 'missing', 'country': 'kg'}, {'id': 'retrying', 'country': 'kg'}]}

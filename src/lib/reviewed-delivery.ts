@@ -32,8 +32,10 @@ function verifyReadback(d: ReviewedCountry, readback: Awaited<ReturnType<typeof 
   const cover=compareReviewedCover(readback,expectedImages[0],expectedThumbId);
   const layoutVerified = d.bodyHtml.includes('data-role="daily-footer"')
     ? verifiedReviewedLayout(summarizeDraftReadback(d, readback, expectedImages, expectedThumbId)) : null;
+  const expectsVisibleSourceUrls = expectedSourceUrls.every(url => expectedText.includes(text(url)));
   const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText
-    && imageMatch && cover.thumbnailMatchesPrepared !== false && layoutVerified !== false;
+    && (!expectsVisibleSourceUrls || sourceUrlsVisible) && imageMatch
+    && cover.thumbnailMatchesPrepared !== false && layoutVerified !== false;
   return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch,
     expectedTextMatch:actualText === expectedText, imageMatch, ...cover, layoutVerified, verified:passed };
 }
@@ -164,8 +166,10 @@ export async function deliverReviewedPackage(
       };
       const prepared = await adapters.prepare(d,heartbeat);
       detail = { ...ownership,inputHash: contentHash(d.bodyHtml), transportedHash: contentHash(prepared.html),
-        inputImages: prepared.images, transferredImages: prepared.images, imageUrls:imageUrls(prepared.html), cover: prepared.cover,
-        imageProbes: prepared.imageProbes, expectedThumbMediaId:prepared.article.thumb_media_id };
+        inputImages: imageUrls(d.bodyHtml).length, transferredImages: imageUrls(prepared.html).length,
+        imageUrls:imageUrls(prepared.html), cover: prepared.cover, imageProbes:prepared.imageProbes,
+        omittedImages:prepared.omittedImages ?? [], coverFailure:prepared.coverFailure ?? null,
+        expectedThumbMediaId:prepared.article.thumb_media_id };
       adapters.beforeWrite?.();
       const armed = await sb.from('reviewed_deliveries').update({ state:'sending', detail, updated_at: new Date().toISOString() }).match(key).eq('state','preparing').contains('detail',{preparationToken}).select('country');
       if (armed.error || armed.data?.length !== 1) throw new Error('发送前持久化失败');

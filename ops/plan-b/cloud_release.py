@@ -12,8 +12,7 @@ from build_reviewed_word import build_word
 from cloud_handoff import LIMIT, REGISTRY, inventory_entries, read, restore, write
 from prepare_country_release import prepare
 from prepare_editorial_input import candidate_originals, discovery_index
-from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES, previous_day
-from discover_work_sources import published_intervals
+from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES
 from source_article_images import collect, save_manifest
 from validate_work_package import digest
 from source_coverage import assess_coverage, require_coverage_review
@@ -63,8 +62,10 @@ def read_originals(source_root, issue, country, draft, review):
     return originals
 
 
-def bind_original(article, original):
+def bind_original(article, original, require_revision=False):
     if article['source_url'] != original['source_url'] or article['sourceHash'] != original['sourceHash']:
+        raise ValueError('frozen_source_binding_mismatch')
+    if require_revision and (not article.get('revision') or article['revision'] != original.get('revision')):
         raise ValueError('frozen_source_binding_mismatch')
     # Replace delivery metadata only. Signed titles, bodies and source identity
     # stay byte-for-byte identical to the Work handoff.
@@ -101,10 +102,15 @@ def attach_audit(source, issue, country, draft, review):
         decision = conclusion.get(entry['id'])
         if decision:
             for key in ('decision', 'reason', 'languageReview', 'articleIdentityReview', 'firstDisclosureEvidence',
-                        'firstDisclosureVerified', 'reviewedAt', 'reviewedBy'):
+                        'firstDisclosureVerified', 'reviewedAt', 'reviewedBy',
+                        'editorialState', 'publicationTimeResolution', 'priorPublicationEvidence', 'contradictionEvidence', 'duplicateOf', 'eventGroup', 'eventPhase', 'newFact'):
                 if key in decision:
                     entry[key] = decision[key]
-            if entry['decision'] != ('selected' if entry['id'] in adopted else 'rejected'):
+            held = (issue >= EFFECTIVE_ISSUE and entry['id'] not in adopted
+                    and entry.get('editorialState') in ('pending_source_check','pending_time_check'))
+            if held:
+                entry['reviewedBy'] = review['reviewer']
+            if entry['decision'] != ('selected' if entry['id'] in adopted else 'pending' if held else 'rejected'):
                 raise ValueError('candidate_selection_mismatch')
         if entry['id'] in adopted and (entry.get('decision') != 'selected' or not entry.get('firstDisclosureVerified')):
             raise ValueError('selected_candidate_missing_first_disclosure_evidence')
@@ -115,7 +121,7 @@ def attach_audit(source, issue, country, draft, review):
     draft.update(sourceRegistry={'sources': [row for row in registry['sources'] if row['country'].lower() == country]},
                  sourceScanAudit=list(events.values()), candidateLedger=editorial_ledger,
                  deferredCandidateLedger=[entry for entry in ledger if entry['id'] in deferred])
-    # Keep the actual queue/budget state for the existing 10-14 scarcity gate.
+    # Keep the actual queue/budget state for the independent scarcity gate.
     draft['discoveryState'] = {**audit, 'country': country, 'issueDate': issue,
                               'listingQueueRemaining': audit.get('listingQueueRemaining', len(audit.get('listingQueue', []))),
                               'articleQueueRemaining': audit.get('articleQueueRemaining', len(audit.get('articleQueue', []))),
@@ -167,16 +173,10 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     draft['planBReviewerRun'] = review.get('reviewer')
     draft['planBFinalHash'] = supplied.get('finalHash')
     originals = read_originals(source, issue, country, draft, review)
-    for article in draft['articles'] + review['articles']:
-        if article.get('previousDay') is True:
-            stamps = {item[0] for item in published_intervals(originals[article['id']], country)}
-            published = _dt(article['published_at'])
-            if (issue < EFFECTIVE_ISSUE or stamps != {published}
-                    or not previous_day(published, _dt(draft['windowStart']))):
-                raise ValueError('previous_day_publication_evidence_mismatch')
     attach_audit(source, issue, country, draft, review)
     for role in (draft, review):
-        role['articles'] = [bind_original(article, originals[article['id']]) for article in role['articles']]
+        role['articles'] = [bind_original(article, originals[article['id']], issue >= EFFECTIVE_ISSUE)
+                            for article in role['articles']]
     saved = directory / 'photos'
     saved.mkdir()
     root = saved / 'images'

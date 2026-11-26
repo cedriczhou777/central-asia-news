@@ -7,10 +7,9 @@ export type Phase = 'preview' | 'final';
 export const COVERAGE_VERSION = 'plan-b-coverage-2';
 export const SHORT_EDITION_FIRST_ISSUE = '2026-11-26';
 export const EDITORIAL_POLICY_FIRST_ISSUE = '2026-11-27';
-export const DAILY_TARGET_ARTICLES = 7;
+export const EDITORIAL_POLICY_VERSION = 'plan-b-editorial-2';
+export const DAILY_TARGET_ARTICLES = 15;
 export const DAILY_MIN_ARTICLES = 6;
-export const MAX_PREVIOUS_DAY = 2;
-const day = 86_400_000;
 
 export interface SourceCoverage {
   version: string;
@@ -43,9 +42,13 @@ export interface Candidate {
   sourceHash: string;
   publishedAt: string | null;
   timeEvidence?: string;
+  publicationOptions?: { url:string; publishedAt:string; evidenceSha256:string }[];
+  languageVersions?: {candidateIds:string[]; preferredId:string; differingNumbers:boolean;
+    versions: {candidateId:string;language:string|null;url:string;title:string;publishedAt:string|null}[]}[];
   needsTimeReview: boolean;
   previousDay?: true;
   photoCandidates?: number;
+  eventHints?: { candidateId:string; kind:'same_text'|'similar_title'; score:number }[];
   sourceId?: string;
   family?: string;
 }
@@ -85,17 +88,14 @@ function timestamp(value: string) {
   return parsed;
 }
 
-function canonicalCandidate(entry: Candidate, start: number, end: number, observation: number, issue: string) {
+function canonicalCandidate(entry: Candidate, start: number, end: number, observation: number) {
   if (!idPattern.test(entry.id) || !shaPattern.test(entry.revision) || !shaPattern.test(entry.sourceHash)) {
     throw new Error('invalid_candidate_evidence');
   }
   const url = new URL(entry.sourceUrl);
   if (url.protocol !== 'https:' || url.username || url.password || !entry.title.trim()) throw new Error('invalid_candidate');
-  if (entry.previousDay === true) {
-    if (issue < EDITORIAL_POLICY_FIRST_ISSUE || entry.needsTimeReview || !entry.publishedAt) return null;
-    const at = timestamp(entry.publishedAt);
-    if (at < start - day || at >= start || at > observation) return null;
-  } else if (entry.publishedAt !== null && !entry.needsTimeReview) {
+  if (entry.previousDay === true) return null;
+  if (entry.publishedAt !== null && !entry.needsTimeReview) {
     const at = timestamp(entry.publishedAt);
     if (at < start || at >= end || at > observation) return null;
   }
@@ -109,7 +109,7 @@ export function snapshot(input: Omit<Snapshot, 'hash' | 'provisional'>): Snapsho
   if (input.phase === 'preview' ? observation >= window.end : observation < window.end) throw new Error('wrong_observation_phase');
   const indexed = new Map<string, Candidate>();
   for (const item of input.candidates) {
-    const entry = canonicalCandidate(item, window.start, window.end, observation, input.issue);
+    const entry = canonicalCandidate(item, window.start, window.end, observation);
     if (!entry) continue;
     const earlier = indexed.get(entry.id);
     if (earlier && canonicalJson(earlier) !== canonicalJson(entry)) throw new Error('ambiguous_candidate_identity');
