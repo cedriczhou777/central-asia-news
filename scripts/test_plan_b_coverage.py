@@ -42,6 +42,15 @@ class CoverageClosure(unittest.TestCase):
         self.assertIn('source3', [g['sourceId'] for g in proof['gaps']])
         self.assertTrue(evaluate_quantity(values[0], values[1], values[4])['quantityReady'])
 
+    def test_integral_scan_budget_has_stable_json_across_exchange(self):
+        values = sample()
+        values[2].update(maxSeconds=480.0, observedAt=values[4].isoformat())
+        from_archive = self.assess(values)
+        values[2]['maxSeconds'] = 480
+        from_exchange = self.assess(values)
+        self.assertTrue(from_archive['scanBudget']['bounded'])
+        self.assertEqual(json.dumps(from_archive, sort_keys=True), json.dumps(from_exchange, sort_keys=True))
+
     def test_exhausted_timeout_uses_actual_attempt_and_is_not_full_text(self):
         values = sample()
         row = values[1][3]
