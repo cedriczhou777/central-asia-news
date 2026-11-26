@@ -66,6 +66,16 @@ assert.equal(finalCoverageOutcome({...receipt,snapshot:closed},2).state,'blocked
 assert.equal(freezeBlockReason({...closed,coverage:{...reviewable,reviewWork:[]}}),'coverage_evidence_invalid');
 assert.equal(freezeBlockReason({...closed,coverage:{...reviewable,queueAccounting:undefined}}),'coverage_evidence_invalid');
 
+const shortIssue='2026-11-26', shortScan=shortIssue+'T06:42:00+08:00';
+const withoutTime=Array.from({length:12},(_,i)=>({id:'unknown-'+i,title:'Archived article without a verified time',
+  revision:hash,sourceHash:hash,sourceUrl:'https://news.unit-test.example/'+i,publishedAt:null,needsTimeReview:true}));
+const az=snapshot({issue:shortIssue,country:'az',phase:'final',observedAt:shortScan,pendingSources:[],
+  coverage:coverageFixture('az',shortScan),candidates:withoutTime});
+assert.equal(finalCoverageOutcome({...receipt,snapshot:az},0).state,'retry','twelve undated entries cannot make a country ready');
+const published={...withoutTime[0],publishedAt:'2026-11-25T18:07:00+08:00',needsTimeReview:false};
+const withEvidence=snapshot({...az,candidates:[published,...withoutTime.slice(1)]});
+assert.equal(finalCoverageOutcome({...receipt,snapshot:withEvidence},0).state,'ready','one time-verified article can enter independent short-edition review');
+
 async function main(){
   const before=process.env,originalFetch=globalThis.fetch;
   process.env={...before,SUPABASE_URL:'https://db.unit-test.example',SUPABASE_ANON_KEY:'fixture-anon',SUPABASE_SERVICE_ROLE_KEY:'fixture-role'};
