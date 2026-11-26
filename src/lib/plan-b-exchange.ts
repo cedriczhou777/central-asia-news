@@ -9,7 +9,7 @@ import type {SnapshotReceipt} from './plan-b-store';
 import {applyPlanBCommand} from './plan-b-command';
 
 export const EXCHANGE_VERSION='plan-b-database-exchange-1';
-const SOURCE_EVIDENCE_VERSION='source-evidence-2';
+export const SOURCE_EVIDENCE_VERSION='source-evidence-2';
 const TABLE='plan_b_exchange';
 const RECORD_KEY='issue_date,country,kind,record_key';
 type RecordRow={issue_date:string;country:PlanBCountry;kind:'checkpoint'|'submission';record_key:string;

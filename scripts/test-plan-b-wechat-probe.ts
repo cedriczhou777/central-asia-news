@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { checkCurrentWechatDrafts, createRuntimeChecks } from '../src/lib/plan-b-runtime-checks';
+import { checkCurrentWechatDrafts, cloudPrerequisitesReady, createCloudPrerequisiteCheck,
+  createRuntimeChecks } from '../src/lib/plan-b-runtime-checks';
 import { contentHash } from '../src/lib/reviewed-package';
 import { createReviewedDraft, findRecentReviewedDrafts, probeReviewedDraftReadiness } from '../src/lib/reviewed-wechat';
 import { globalAgentWechat, noAgentWechat, officialStyleWechat, type WechatRequest } from '../src/lib/reviewed-wechat-transport';
@@ -218,6 +219,22 @@ async function checkHttpClients() {
   }
 }
 
+async function checkPrerequisiteRecovery() {
+  let probes=0;
+  const issue='2026-11-27';
+  const probe=createCloudPrerequisiteCheck(async()=>({stagingPrivate:true,imagesPrivate:true,wordRenderer:++probes>1}));
+  const waits:(()=>void)[]=[];
+  const check=createRuntimeChecks(async ({issue})=>cloudPrerequisitesReady(await probe(issue))
+    ? 'missing_test_object' : 'failed',Date.now,action=>waits.push(action));
+  await check(issue,'startup');
+  assert.equal(waits.length,1,'a Word dependency failure must retry even when the live draft list is empty');
+  waits.shift()!();
+  await check(issue,'collection');
+  assert.equal(probes,2,'the next attempt obtains new dependency evidence');
+  await probe(issue);
+  assert.equal(probes,2,'healthy prerequisites are reused for the issue');
+}
+
 async function main() {
   const original=process.env.USE_WECHAT_CLOUD_CALL;
   process.env.USE_WECHAT_CLOUD_CALL='true';
@@ -225,6 +242,7 @@ async function main() {
     await checkReadiness();
     await checkCurrentDraftBox();
     await checkRetryWindows();
+    await checkPrerequisiteRecovery();
     await checkHttpClients();
   } finally {
     if (original===undefined) delete process.env.USE_WECHAT_CLOUD_CALL;

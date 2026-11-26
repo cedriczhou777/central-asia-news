@@ -1,5 +1,5 @@
 {
-  "registryVersion": "SOURCE-REGISTRY-20261126-v12",
+  "registryVersion": "SOURCE-REGISTRY-20261126-v13",
   "sources": [
     {
       "allowedHosts": [
@@ -2083,7 +2083,8 @@
     },
     {
       "allowedHosts": [
-        "cbar.az"
+        "cbar.az",
+        "www.cbar.az"
       ],
       "available": true,
       "country": "az",
@@ -2092,6 +2093,16 @@
           "language": "az",
           "role": "home",
           "url": "https://cbar.az/"
+        },
+        {
+          "language": "az",
+          "role": "section",
+          "url": "https://www.cbar.az/press-releases/index?language=az"
+        },
+        {
+          "language": "en",
+          "role": "language",
+          "url": "https://www.cbar.az/press-releases?language=en"
         },
         {
           "language": "az",
@@ -2109,7 +2120,7 @@
           "url": "https://cbar.az/page-60/corporate-social-responsibility"
         },
         {
-          "language": "az",
+          "language": "en",
           "role": "language",
           "url": "https://cbar.az/home?language=en"
         }
