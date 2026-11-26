@@ -1,10 +1,13 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { deliveryAdapters, deliverReviewedPackage, readPackage, reconcileKnownReviewedDraft } from './reviewed-delivery';
 import { contentHash, packageCountries, requirePrivateImages, reviewedCountry, validatePackage } from './reviewed-package';
 import { ensurePrivateImage } from './reviewed-private-images';
-import { PLAN_B_COUNTRIES, shaPattern, type PlanBCountry } from './plan-b-handoff';
+import { canonicalJson, PLAN_B_COUNTRIES, shaPattern, type PlanBCountry } from './plan-b-handoff';
+import { verifyEditorial } from './plan-b-editorial';
 import { planBClock } from './plan-b-window';
 import { saveFile, verifyObject, wordLink, type ObjectReceipt, type SnapshotReceipt } from './plan-b-store';
 import { restoreCache, runCloudScript, scratch, timeWithin } from './plan-b-worker';
@@ -71,6 +74,40 @@ async function readReleaseTransport(root: string, version: string, country: Plan
   const ready = validatePackage(payload);
   requirePrivateImages(ready);
   return { ready, images: manifest.images };
+}
+
+/** Prepare a signed, isolated draft and Word. Draft creation requires a separate
+ * exact-package authority, and this preparation never changes normal issue rows. */
+export async function prepareIsolatedRelease(source: SnapshotReceipt, input: unknown, version: string, deadline: number) {
+  const { issue, country } = source.snapshot;
+  if (version !== `${issue}-r4`) throw new Error('invalid_isolated_release_version');
+  const checked = verifyEditorial(input, source.snapshot);
+  const remaining = (maximum: number) => {
+    const value = Math.min(maximum, deadline - Date.now());
+    if (value < 2_000) throw new Error('isolated_release_window_closed');
+    return value;
+  };
+  return scratch(async directory => {
+    await restoreCache(directory, source.cache);
+    await writeFile(join(directory,'editorial.gz'),await promisify(gzip)(canonicalJson(checked.value)));
+    await runCloudScript('cloud_release.py',['prepare',directory,issue,country,version],remaining(480_000));
+    const root=join(directory,'release');
+    const {ready,images}=await readReleaseTransport(root,version,country);
+    for(const image of images){
+      remaining(30_000);
+      const bytes=await readFile(join(root,'images',image.sha256));
+      if(bytes.length!==image.bytes)throw new Error('invalid_plan_b_image_length');
+      await ensurePrivateImage(bytes,image.sha256);
+    }
+    await runCloudScript('cloud_release.py',['word',directory],remaining(90_000));
+    const document=await saveFile(issue,country,'docx',join(directory,'word.docx'));
+    await verifyObject(document);
+    const article=reviewedCountry(ready,country);
+    article.title='【实跑验收】重采版·'+article.title;
+    const release=validatePackage(ready);
+    return {release,word:{document,url:await wordLink(document)},editorialHash:checked.editorialHash,
+      articles:checked.articleCount,images:images.length,transportHash:contentHash(release)};
+  });
 }
 
 async function storeReviewedTransports(issue: string, country: PlanBCountry, release: ReleaseReceipt) {

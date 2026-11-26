@@ -40,10 +40,14 @@ export function timeWithin(issue: string, hms: '06:00:00' | '09:00:00', maximum:
 }
 
 export async function collectCountry(issue: string, country: PlanBCountry,
-    phase: Phase, prior: ObjectReceipt | undefined, focus?: string[]): Promise<SnapshotReceipt> {
+    phase: Phase, prior: ObjectReceipt | undefined, focus?: string[],
+    isolated?: { namespace: string; deadline: number }): Promise<SnapshotReceipt> {
   return scratch(async directory => {
     await restoreCache(directory, prior);
-    const timeout = timeWithin(issue, phase === 'preview' ? '06:00:00' : '09:00:00', focus?160_000:520_000);
+    const maximum = focus ? 160_000 : 520_000;
+    const timeout = isolated ? Math.min(maximum, isolated.deadline - Date.now())
+      : timeWithin(issue, phase === 'preview' ? '06:00:00' : '09:00:00', maximum);
+    if (isolated && timeout < 20_000) throw new Error('isolated_scan_window_closed');
     const args=focus && !focus.length ? ['reassess',directory,issue,country,phase]
       : ['scan', directory, issue, country, phase,
         String(Math.min(focus?120:480, Math.max(1, (timeout - 20_000) / 1_000))),...(focus ?? [])];
@@ -55,7 +59,7 @@ export async function collectCountry(issue: string, country: PlanBCountry,
     const cache = await saveFile(issue, country, 'gz', join(directory, 'output.gz'));
     const receipt={ snapshot: frozen, cache, metrics };
     const {publishScan}=await import('./plan-b-exchange');
-    try{await publishScan(receipt,join(directory,'originals.jsonl'));}
+    try{await publishScan(receipt,join(directory,'originals.jsonl'),isolated?.namespace);}
     catch{throw Object.assign(new Error('exchange_publish_failed'),{snapshotReceipt:receipt});}
     return receipt;
   });
