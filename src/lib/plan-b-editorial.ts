@@ -1,4 +1,4 @@
-import { canonicalJson, requireFrozenVersion, sha256, type Snapshot } from './plan-b-handoff';
+import { canonicalJson, requireFrozenVersion, sha256, SHORT_EDITION_FIRST_ISSUE, type Snapshot } from './plan-b-handoff';
 import { issueWindow } from './plan-b-window';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -70,10 +70,10 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
     throw new Error('editorial_hash_mismatch');
   }
   verifyCoverageReview(final, draft, review);
-  if (ids.length >= 10 && ids.length < 15) {
+  if (ids.length < 15 && (ids.length >= 10 || final.issue >= SHORT_EDITION_FIRST_ISSUE)) {
     const exception = draft.quantityExceptionReview;
     if (!isRecord(exception) || exception.status !== 'approved' || typeof exception.reviewer !== 'string'
-        || !exception.reviewer || exception.reviewer === draft.writerRun || !Array.isArray(exception.evidence)
+        || exception.reviewer !== review.reviewer || exception.reviewer === draft.writerRun || !Array.isArray(exception.evidence)
         || !exception.evidence.length) throw new Error('quantity_exception_review_required');
   }
   const sources = new Map(final.candidates.map(row => [row.id, row]));
