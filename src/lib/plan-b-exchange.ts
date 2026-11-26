@@ -32,8 +32,9 @@ export function originalRecord(candidate:{id:string;sourceHash:string;revision:s
 }
 
 /** Publish original evidence in small immutable batches before publishing the manifest. */
-export async function publishScan(scope:SnapshotReceipt,jsonl:string){
+export async function publishScan(scope:SnapshotReceipt,jsonl:string,namespace?:string){
   const {snapshot}=scope;const candidates=new Map(snapshot.candidates.map(c=>[c.id,c]));
+  const keyFor=(key:string)=>namespace ? `${namespace}/${key}` : key;
   const lines=createInterface({input:createReadStream(jsonl),crlfDelay:Infinity});
   let batch:ReturnType<typeof exchangeRow>[]=[];
   let bytes=0;
@@ -49,7 +50,7 @@ export async function publishScan(scope:SnapshotReceipt,jsonl:string){
     const original=JSON.parse(line)as Record<string,unknown>;
     const candidate=candidates.get(String(original.id));if(!candidate)throw new Error('exchange_candidate_mismatch');
     const payload=originalRecord(candidate,original);
-    const row=exchangeRow(snapshot.issue,snapshot.country,'original',`${candidate.id}/${candidate.sourceHash}/${candidate.revision}`,payload);
+    const row=exchangeRow(snapshot.issue,snapshot.country,'original',keyFor(`${candidate.id}/${candidate.sourceHash}/${candidate.revision}`),payload);
     const size=Buffer.byteLength(JSON.stringify(row));
     if(batch.length>=5||bytes+size>512*1024)await publishBatch();
     batch.push(row);
@@ -58,8 +59,8 @@ export async function publishScan(scope:SnapshotReceipt,jsonl:string){
   }
   if(candidates.size)throw new Error('exchange_originals_incomplete');
   await publishBatch();
-  await publish(snapshot.issue,snapshot.country,'manifest',snapshot.phase,{snapshot,originalCount:snapshot.candidates.length,
-    formalStateAuthority:'plan_b_daily',exchangeVersion:EXCHANGE_VERSION});
+  await publish(snapshot.issue,snapshot.country,'manifest',keyFor(snapshot.phase),{snapshot,originalCount:snapshot.candidates.length,
+    formalStateAuthority:namespace ?? 'plan_b_daily',exchangeVersion:EXCHANGE_VERSION},!!namespace);
 }
 
 export async function publishExchangeHealth(issue:string,payload:object,key:'latest'|'runtime_checks'|`runtime_checks/${string}`='latest'){
