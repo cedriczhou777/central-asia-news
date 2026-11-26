@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { canonicalJson, freezeBlockReason, PLAN_B_COUNTRIES, requireFrozenVersion, sha256, snapshot,
   type Candidate, type Snapshot } from '../src/lib/plan-b-handoff';
 import { verifyEditorial } from '../src/lib/plan-b-editorial';
-import { summarizeUsage } from '../src/lib/plan-b-editorial-decisions';
 import { finalCoverageOutcome } from '../src/lib/plan-b-runtime';
 import { coverageFixture } from './plan-b-fixtures';
 
@@ -167,19 +166,5 @@ assert.equal(finalCoverageOutcome(supplyReceipt,1).state,'ready','editorial work
 const belowMinimum = {...supplyReceipt,snapshot:snapshot({...snapshotNew,candidates:[...newer.slice(0,5),unresolved]})};
 assert.equal(finalCoverageOutcome(belowMinimum,1).state,'retry','exhaust the bounded refresh when fewer than six are confirmed');
 assert.equal(finalCoverageOutcome(belowMinimum,2).state,'ready','unresolved originals remain reviewable, while the submission floor still applies');
-const usage = summarizeUsage({observations:[
-  {callId:'first',stage:'triage',inputHash:sha256('fixture'),inputTokens:100,outputTokens:25,failed:true,workCredits:1.5},
-  {callId:'second',stage:'triage',inputHash:sha256('fixture'),inputTokens:100,outputTokens:15,retry:true,evidenceReused:true,workCredits:0.5},
-  {callId:'second',stage:'triage',inputHash:sha256('fixture')},
-  {callId:'independent',stage:'independent_review',inputHash:sha256('fixture')},
-]},15);
-assert.equal(usage?.reportedCalls,3);
-assert.equal(usage?.inputTokens,null);
-assert.deepEqual(usage?.stages.triage,{calls:2,duplicateInputs:1,retries:1,failures:1,evidenceReuses:1,
-  inputTokens:200,outputTokens:40,measuredCalls:2,workCredits:2});
-assert.equal(usage?.stages.independent_review.inputTokens,null);
-assert.equal(usage?.observations[1].callId,'second');
-assert.equal(usage?.workCredits,null);
-assert.equal(usage?.tokensPerAdopted,null);
 Date.now = originalNow;
 console.log('Plan B coverage: independent gaps, verified time, 15–20 normal target, strict window, reviewed shortfall, event eligibility and same-edition deduplication passed.');

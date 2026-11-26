@@ -1,4 +1,4 @@
-import { DAILY_TARGET_ARTICLES, shaPattern, type Snapshot } from './plan-b-handoff';
+import { DAILY_TARGET_ARTICLES, type Snapshot } from './plan-b-handoff';
 import { issueWindow } from './plan-b-window';
 
 const statuses = ['selected', 'revised', 'pending_source_check', 'pending_time_check',
@@ -74,52 +74,4 @@ export function editorialFunnel(final: Snapshot, selected: string[], decisions: 
     pending:counts.pending_source_check+counts.pending_time_check,
     rejected:counts.rejected_old+counts.rejected_duplicate+counts.rejected_false+counts.rejected_irrelevant,
     finallyAdopted:adopted.size, states:counts, bySource};
-}
-
-type UsageObservation = {
-  callId:string; stage:string; inputHash:string; duplicateInput:boolean;
-  retry:boolean; failed:boolean; evidenceReused:boolean;
-  inputTokens:number|null; outputTokens:number|null; workCredits:number|null;
-};
-
-/** Usage is optional. Unknown usage stays null rather than being inferred from bytes. */
-export function summarizeUsage(raw: unknown, adopted: number) {
-  if (!record(raw) || !Array.isArray(raw.observations)) return null;
-  const callIds = new Set<string>();
-  const inputs = new Set<string>();
-  const observations:UsageObservation[] = [];
-  const stages:Record<string,UsageObservation[]> = Object.create(null);
-  const tokenCount = (value:unknown) => typeof value==='number' && Number.isSafeInteger(value) && value>=0 ? value : null;
-  const sumMeasured = (values:Array<number|null>) =>
-    values.every((value):value is number=>value!==null) ? values.reduce((sum,value)=>sum+value,0) : null;
-  for (const row of raw.observations) {
-    if (!record(row) || typeof row.callId!=='string' || !/^[\w.:-]{1,128}$/.test(row.callId) || callIds.has(row.callId)
-        || !['triage','author','independent_review','fact_check'].includes(String(row.stage))
-        || typeof row.inputHash!=='string' || !shaPattern.test(row.inputHash)) continue;
-    callIds.add(row.callId);
-    const stage = String(row.stage);
-    const scope = stage+'/'+row.inputHash;
-    const observation = {callId:row.callId, stage, inputHash:row.inputHash, duplicateInput:inputs.has(scope),
-      retry:row.retry===true, failed:row.failed===true, evidenceReused:row.evidenceReused===true,
-      inputTokens:tokenCount(row.inputTokens), outputTokens:tokenCount(row.outputTokens),
-      workCredits:typeof row.workCredits==='number' && Number.isFinite(row.workCredits) && row.workCredits>=0 ? row.workCredits : null};
-    inputs.add(scope);
-    observations.push(observation);
-    (stages[stage]??=[]).push(observation);
-  }
-  if (!observations.length) return null;
-  const totals = (rows:typeof observations) => ({
-    calls:rows.length, duplicateInputs:rows.filter(row=>row.duplicateInput).length,
-    retries:rows.filter(row=>row.retry).length, failures:rows.filter(row=>row.failed).length,
-    evidenceReuses:rows.filter(row=>row.evidenceReused).length,
-    inputTokens:sumMeasured(rows.map(row=>row.inputTokens)), outputTokens:sumMeasured(rows.map(row=>row.outputTokens)),
-    measuredCalls:rows.filter(row=>row.inputTokens!==null && row.outputTokens!==null).length,
-    workCredits:sumMeasured(rows.map(row=>row.workCredits)),
-  });
-  const {calls:reportedCalls,...total} = totals(observations);
-  return {reportedCalls, ...total, observations, duplicateInputRatio:total.duplicateInputs/reportedCalls,
-    tokensPerAdopted:total.inputTokens!==null&&total.outputTokens!==null&&adopted>0
-      ?(total.inputTokens+total.outputTokens)/adopted:null,
-    creditsPerAdopted:total.workCredits!==null&&adopted>0?total.workCredits/adopted:null,
-    stages:Object.fromEntries(Object.entries(stages).map(([stage,rows])=>[stage,totals(rows)]))};
 }

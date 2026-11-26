@@ -1,10 +1,14 @@
+import hashlib
 import json
 import unittest
 
 from discovery_feed import parse_feed
-from source_evidence import fact_locations, local_timestamp, source_time
+from source_evidence import fact_locations, khovar_archive_dateline, local_timestamp, source_time
 from news_funnel import event_pairs, scan_funnel
-from db_handoff import sql
+from db_handoff import sql, verify_original
+from datetime import datetime
+from discover_work_sources import article_links, assess_window, published_intervals
+from fetch_work_sources import parse_response
 
 
 class SourceEvidencePolicy(unittest.TestCase):
@@ -43,6 +47,77 @@ class SourceEvidencePolicy(unittest.TestCase):
                                         'timezoneEvidence':'not_provided','articleUrl':'https://press.example/related'}]}
         self.assertNotIn('normalizedAt',source_time(record,'Asia/Dushanbe')['publicationEvidence'][0])
 
+    def test_source_header_clocks_do_not_turn_creation_or_relative_time_into_publication(self):
+        def parse(url, badge, zone):
+            prose=('The current government report describes a separate local project and the accompanying '
+                   'budget and work plan. The data refers to the same project and named agency. ')*3
+            raw=(f'<!doctype html><html><head><meta property="og:type" content="article">'
+                 f'<link rel="canonical" href="{url}"></head><body><article><h1>Verified current report</h1>{badge}'
+                 f'<div itemprop="articleBody"><p>{prose}</p></div></article></body></html>').encode()
+            return source_time({'url':url, **parse_response(url,url,raw,{})},zone)
+
+        su='https://www.sugd.tj/ru/novosty/novosti-dnya/5048-agriculture'
+        result=parse(su,'<div>Создано: <time datetime="2025-05-06 07:19:17">06.05.2025 12:19</time> Просмотров: 24</div>',
+                     'Asia/Dushanbe')
+        self.assertTrue(result['fullTextValidated'])
+        created=next(row for row in result['publicationEvidence'] if row['kind']=='created')
+        self.assertEqual(created['normalizedAt'],'2025-05-06T12:19:00+05:00')
+        self.assertEqual(published_intervals(result,'tj'),[])
+        self.assertTrue(any(row['raw']=='2025-05-06 07:19:17' and row['kind']=='unclassified'
+                            for row in result['publicationEvidence']))
+
+        result=parse('https://alau.kz/current-report/','<div><a href="/author/a">Автор</a> — Сегодня, 14:59</div>','Asia/Almaty')
+        self.assertEqual(result['publicationEvidence'][0]['timezoneEvidence'],'reference_day_missing')
+        self.assertEqual(published_intervals(result,'kz'),[])
+        result=parse('https://review.uz/post/current-report',
+                     '<div class="related-news"><span>25.11.2026 в 10:37</span></div>','Asia/Tashkent')
+        self.assertEqual(published_intervals(result,'uz'),[])
+        for url,badge,zone,country,wanted in (
+                ('https://podrobno.uz/cat/economic/current-report/','25 ноября 2026, 20:54','Asia/Tashkent','uz','2026-11-25T20:54:00+05:00'),
+                ('https://review.uz/post/current-report','25.11.2026 в 10:37','Asia/Tashkent','uz','2026-11-25T10:37:00+05:00'),
+                ('https://www.taxes.gov.az/az/post/5167','26 noyabr 2026, 11:52','Asia/Baku','az','2026-11-26T11:52:00+04:00')):
+            with self.subTest(url=url):
+                self.assertEqual(published_intervals(parse(url,f'<div>{badge}</div>',zone),country)[0][0].isoformat(),wanted)
+
+    def test_agency_dateline_stays_distinct_from_publication(self):
+        url='https://khovar.tj/rus/2026/11/current-report/'
+        prose='ДУШАНБЕ, 22.11.2026 /НИАТ «Ховар»/. The agency reported the local authorities’ decision.'
+        item=khovar_archive_dateline(url,prose)
+        self.assertEqual((item['kind'],item['calendarDay']),('dateline','2026-11-22'))
+        self.assertEqual(khovar_archive_dateline(url,prose.replace('/НИАТ','\n/\nНИА\nТ'))['calendarDay'],'2026-11-22')
+        self.assertIsNone(khovar_archive_dateline(url.replace('/11/','/10/'),prose))
+        record=source_time({'url':url,'source_kind':'article','fullTextValidated':True,'publicationEvidence':[item]},
+                           'Asia/Dushanbe')
+        self.assertEqual(published_intervals(record,'tj'),[])
+        self.assertEqual(assess_window(record,'tj',datetime.fromisoformat('2026-11-25T06:00:00+08:00'),
+                                       datetime.fromisoformat('2026-11-26T06:00:00+08:00')),'uncertain')
+
+    def test_toptj_utc_metadata_is_bound_to_same_article_alias_only(self):
+        url='https://toptj.com/news/2026/11/25/this-report'
+        original_id='http://www.toptj.com/news/2026/11/25/this-report'
+        records=[{'@type':'NewsArticle','url':original_id,'datePublished':'2026-11-25T16:00:53Z'},
+                 {'@type':'NewsArticle','url':original_id.replace('this-report','next-report'),
+                  'datePublished':'2026-11-25T11:00:00Z'}]
+        prose=('The current publisher reported a change in tax policy with sufficient detail for a '
+               'bound body and scope. The policy is related to the current article heading. ')*3
+        raw=(f'<html><head><script type="application/ld+json">{json.dumps(records)}</script></head>'
+             f'<body><article><h1>Current report</h1><div>25 ноября 2026, 16:00</div>'
+             f'<div itemprop="articleBody"><p>{prose}</p></div></article></body></html>').encode()
+        record=parse_response(url,url,raw,{})
+        self.assertTrue(record['fullTextValidated'])
+        self.assertEqual(len(record['publicationEvidence']),1)
+        self.assertEqual(record['publicationEvidence'][0]['observedArticleIdentity'],original_id)
+        self.assertEqual(record['publicationEvidence'][0]['articleUrl'],url)
+        self.assertEqual(record['excludedPublicationEvidence'][0]['raw'],'2026-11-25T11:00:00Z')
+        intervals=published_intervals(record,'tj')
+        self.assertEqual(intervals[0][0].isoformat(),'2026-11-25T16:00:53+00:00')
+
+    def test_short_title_on_confirmed_article_route_still_fetches_body(self):
+        url='https://press.example/story/47'
+        source={'id':'example','allowedHosts':['press.example'],'confirmedArticlePathPattern':r'/story/\d+'}
+        record={'links':[{'url':url,'text':'税','inHeading':False,'articleCard':False}]}
+        self.assertEqual(article_links(record,source,set(),structural_filter=True,adaptive=True),[url])
+
     def test_funnel_keeps_http_parse_and_time_distinct_and_event_hints_keep_both(self):
         stamp='2026-11-26T06:01:00+08:00'
         root='https://press.example/'
@@ -67,3 +142,17 @@ class SourceEvidencePolicy(unittest.TestCase):
         self.assertIn("payload #> '{original,evidencePacket}'",sql('evidence','2026-11-26','az',ids=['id/'+'a'*64+'/'+'b'*64]))
         with self.assertRaises(ValueError):
             sql('evidence','2026-11-26','az',ids=['id'])
+
+    def test_exchange_original_checks_revision_and_source_with_legacy_compatibility(self):
+        source_url='https://press.example/post/1'
+        text='Same archived original.'
+        body_hash=hashlib.sha256(text.encode()).hexdigest()
+        candidate={'id':'id','sourceHash':body_hash,'sourceUrl':source_url,'revision':'b'*64}
+        legacy={'id':'id','sourceHash':body_hash,'text':text}
+        self.assertTrue(verify_original({'candidate':candidate,'original':legacy}))
+        original={**legacy,'revision':candidate['revision'],'source_url':source_url,
+                  'evidencePacket':{'version':'source-evidence-2'}}
+        self.assertTrue(verify_original({'candidate':candidate,'original':original}))
+        for patch in ({'revision':None},{'revision':'a'*64},{'source_url':source_url+'0'}):
+            with self.assertRaisesRegex(ValueError,'original_revision_or_source_mismatch'):
+                verify_original({'candidate':candidate,'original':{**original,**patch}})

@@ -484,6 +484,7 @@ def rerank_cached_leads(registry, country, output):
         stamp = cached.get('reparsedAt') if cached.get('parser_version') == parser.PARSER_VERSION else None
         record['reparsedAt'] = stamp or utcnow()
         record['fetchedAt'] = cached['fetchedAt']
+        record = source_time(record, source.get('timezone'))
         write_json(cache, record)
         source_hash = record.get('source_sha256') or candidate.get('sourceHash')
         route, route_reason = lead_route(url, source, {e['url'] for e in source_entries(source)})
@@ -812,7 +813,10 @@ def article_links(record, source, known_listings, structural_filter=False, adapt
             continue
         # Structural navigation filtering only; no business/topic keyword filter.
         strong_card = structural_filter and article_card
-        if not feed_entry and (len(label) < (2 if adaptive and strong_card else 4 if strong_card else 12)
+        recognized_route = bool(pattern and re.fullmatch(pattern,path) or
+                                re.search(ARTICLE_PATTERNS.get(source['id'], r'(?!)'),path))
+        label_minimum = 1 if adaptive and (strong_card or recognized_route) else 4 if strong_card else 12
+        if not feed_entry and (len(label) < label_minimum
                                or re.fullmatch(r'(?:https?://)?[^\s]+\.[a-z]{2,5}/?', label, re.I)):
             continue
         if path.rstrip('/') in ('', '/ru', '/en', '/uz', '/kg', '/az'):

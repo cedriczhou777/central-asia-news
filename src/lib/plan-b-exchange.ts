@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHmac} from 'node:crypto';
 import {getSupabaseClient} from '../storage/database/supabase-client';
-import {canonicalJson,sha256,isCountry,type PlanBCountry} from './plan-b-handoff';
+import {canonicalJson,sha256,isCountry,EDITORIAL_POLICY_FIRST_ISSUE,type PlanBCountry} from './plan-b-handoff';
 import type {SnapshotReceipt} from './plan-b-store';
 import {applyPlanBCommand} from './plan-b-command';
 
@@ -25,9 +25,13 @@ async function publish(issue:string,country:string,kind:string,key:string,payloa
   if(error)throw new Error('plan_b_exchange_publish_failed');
 }
 
-export function originalRecord(candidate:{id:string;sourceHash:string;revision:string},original:Record<string,unknown>){
+export function originalRecord(candidate:{id:string;sourceHash:string;revision:string;sourceUrl?:string},
+    original:Record<string,unknown>,requireRevision=false){
   if(original.id!==candidate.id||original.sourceHash!==candidate.sourceHash||typeof original.text!=='string'
       ||sha256(original.text)!==candidate.sourceHash)throw new Error('exchange_original_hash_mismatch');
+  if(requireRevision && (original.revision!==candidate.revision || original.source_url!==candidate.sourceUrl)){
+    throw new Error('exchange_original_revision_or_source_mismatch');
+  }
   return {candidate,original};
 }
 
@@ -49,7 +53,7 @@ export async function publishScan(scope:SnapshotReceipt,jsonl:string,namespace?:
     if(!line)continue;
     const original=JSON.parse(line)as Record<string,unknown>;
     const candidate=candidates.get(String(original.id));if(!candidate)throw new Error('exchange_candidate_mismatch');
-    const payload=originalRecord(candidate,original);
+    const payload=originalRecord(candidate,original,snapshot.issue>=EDITORIAL_POLICY_FIRST_ISSUE);
     const row=exchangeRow(snapshot.issue,snapshot.country,'original',keyFor(`${candidate.id}/${candidate.sourceHash}/${candidate.revision}`),payload);
     const size=Buffer.byteLength(JSON.stringify(row));
     if(batch.length>=5||bytes+size>512*1024)await publishBatch();

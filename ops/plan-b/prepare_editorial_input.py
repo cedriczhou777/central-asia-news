@@ -307,6 +307,7 @@ def candidate_originals(index, article_ids):
                                                                    'publicationEvidenceIssues', 'articleBodyEvidence',
                                                                    'articleImages'))}
         if index['issueDate'] >= EFFECTIVE_ISSUE:
+            original['revision'] = fingerprint
             original['evidencePacket'] = evidence_packet(record, entry, original)
         originals.append(original)
     return {'issueDate': index['issueDate'], 'country': index['country'], 'articles': originals}

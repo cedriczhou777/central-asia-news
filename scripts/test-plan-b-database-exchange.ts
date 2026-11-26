@@ -19,6 +19,11 @@ assert.equal(parts.length,6);assert.equal(sha256(Buffer.concat(parts.map(p=>Buff
 assert(parts.every(p=>p.base64.length<400_000));
 assert.equal(originalRecord(c,{id:c.id,sourceHash:c.sourceHash,text:body}).original.text,body);
 assert.throws(()=>originalRecord(c,{id:c.id,sourceHash:c.sourceHash,text:body+'changed'}),/hash_mismatch/);
+const scopedCandidate={...c,sourceUrl:'https://publisher.example/story'};
+const versionedOriginal={id:c.id,sourceHash:c.sourceHash,text:body,revision:c.revision,source_url:scopedCandidate.sourceUrl};
+assert.equal(originalRecord(scopedCandidate,versionedOriginal,true).original.revision,c.revision);
+assert.throws(()=>originalRecord(scopedCandidate,{...versionedOriginal,revision:sha256('changed')},true),/revision_or_source_mismatch/);
+assert.throws(()=>originalRecord(scopedCandidate,{...versionedOriginal,source_url:'https://publisher.example/other'},true),/revision_or_source_mismatch/);
 const at=Date.parse('2026-11-24T10:00:00+08:00');
 const grant={issue:'2026-11-24',version:'2026-11-24',contentHash:sha256('content'),countries:['kz'],
   issuedBy:'owner-explicit-approval',reason:'Specific overdue issue approved by owner',expiresAt:new Date(at+3600000).toISOString()};

@@ -1,5 +1,5 @@
 {
-  "registryVersion": "SOURCE-REGISTRY-20261126-v11",
+  "registryVersion": "SOURCE-REGISTRY-20261126-v12",
   "sources": [
     {
       "allowedHosts": [
@@ -1260,7 +1260,7 @@
       "id": "tj-toptj",
       "institutionType": "news_media",
       "kind": "media",
-      "timezone": "Asia/Dushanbe"
+      "timezone": "Etc/UTC"
     },
     {
       "allowedHosts": [
@@ -2326,6 +2326,11 @@
           "language": "ru",
           "role": "pagination",
           "url": "https://alau.kz/category/economics/page/2/"
+        },
+        {
+          "language": "ru",
+          "role": "feed",
+          "url": "https://alau.kz/feed/"
         }
       ],
       "family": "Alau",
@@ -2983,13 +2988,18 @@
         }
       ],
       "available": true,
-      "confirmedArticlePathPattern": "/en/articles/view/[0-9]+/?",
+      "confirmedArticlePathPattern": "/(?:az|en)/articles/view/[0-9]+/?",
       "country": "az",
       "entrypoints": [
         {
           "language": "en",
           "role": "home",
           "url": "https://president.az/en/articles/list/news"
+        },
+        {
+          "language": "az",
+          "role": "language",
+          "url": "https://president.az/az/articles/list/news"
         }
       ],
       "family": "阿塞拜疆总统府",
@@ -3049,6 +3059,28 @@
           "language": "en",
           "role": "section",
           "url": "https://renewables.az/public/en/all-news"
+        }
+      ]
+    },
+    {
+      "id": "az-state-tax-service-azerbaijan",
+      "country": "az",
+      "family": "阿塞拜疆国家税务局",
+      "kind": "institution",
+      "institutionType": "tax_authority",
+      "available": true,
+      "allowedHosts": [
+        "www.taxes.gov.az",
+        "taxes.gov.az"
+      ],
+      "timezone": "Asia/Baku",
+      "confirmedArticlePathPattern": "/az/post/\\d+/?",
+      "preferredInBoundedScan": true,
+      "entrypoints": [
+        {
+          "role": "home",
+          "language": "az",
+          "url": "https://www.taxes.gov.az/az/page/xeberler"
         }
       ]
     },

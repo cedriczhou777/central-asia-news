@@ -36,6 +36,8 @@ def page_key(url):
 
 RUSSIAN_MONTHS = ('января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
                   'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря')
+AZERBAIJANI_MONTHS = ('yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
+                      'iyul', 'avqust', 'sentyabr', 'oktyabr', 'noyabr', 'dekabr')
 
 
 def header_clock(value):
@@ -43,14 +45,39 @@ def header_clock(value):
     if not isinstance(value, str):
         return None
     value = ' '.join(value.split()).casefold()
-    numeric = re.fullmatch(r'(\d\d)\.(\d\d)\.(20\d\d)\s+(\d\d:\d\d)(?::(\d\d))?', value)
-    words = re.fullmatch(r'(\d{1,2})\s+([а-яё]+)\s+(20\d\d),?\s+(\d\d:\d\d)', value)
+    numeric = re.fullmatch(r'(\d\d)\.(\d\d)\.(20\d\d)[, ]+\s*(?:в\s+)?(\d\d:\d\d)(?::(\d\d))?', value)
+    words = re.fullmatch(r'(\d{1,2})\s+([а-яёa-zəıöşçğü]+)\s+(20\d\d)(?:\s+г\.)?,?\s+(?:в\s+)?(\d\d:\d\d)', value)
     if numeric:
         day, month, year, clock, second = numeric.groups()
         return f'{year}-{month}-{day}T{clock}' + (f':{second}' if second else '')
-    if words and words[2] in RUSSIAN_MONTHS:
-        return f'{words[3]}-{RUSSIAN_MONTHS.index(words[2])+1:02d}-{int(words[1]):02d}T{words[4]}'
+    if words:
+        for months in (RUSSIAN_MONTHS, AZERBAIJANI_MONTHS):
+            if words[2] in months:
+                return f'{words[3]}-{months.index(words[2])+1:02d}-{int(words[1]):02d}T{words[4]}'
     return None
+
+
+def khovar_archive_dateline(url, text):
+    """Retain the agency's cover date separately from its publication clock."""
+    page = urlsplit(url)
+    route = re.fullmatch(r'/rus/(20\d\d)/(\d\d)/[^/]+/?', page.path)
+    if (page.hostname or '').removeprefix('www.') != 'khovar.tj' or not route:
+        return None
+    stamp = re.match(
+        r'^([А-ЯЁҶӢҚӮҲҒ][А-ЯЁҶӢҚӮҲҒ -]{1,40},\s*(\d\d\.\d\d\.20\d\d)\s*/\s*НИА\s*Т\s+[«"]Ховар[»"]\s*/)',
+        text.lstrip())
+    if not stamp:
+        return None
+    try:
+        day = datetime.strptime(stamp[2], '%d.%m.%Y').date()
+    except ValueError:
+        return None
+    if day.strftime('%Y/%m') != '/'.join(route.groups()):
+        return None
+    return {'field':'publisher.khovar.bound_original_agency_dateline','raw':stamp[1],
+            'calendarDay':day.isoformat(),'kind':'dateline','precision':'date',
+            'timezoneEvidence':'not_provided','articleUrl':url,
+            'confidenceBasis':['current_publisher_prose_and_archive_month_match'],'priority':95}
 
 
 def local_timestamp(value, zone):
@@ -90,15 +117,15 @@ def source_time(record, zone):
         raw = item.get('raw')
         field = str(item.get('field') or '')
         item = dict(item)
-        if (item.get('kind') in ('published','modified') and page_key(item.get('articleUrl')) in identities
+        if (item.get('kind') in ('published','modified','created','dateline') and page_key(item.get('articleUrl')) in identities
                 and item.get('timezoneEvidence')=='not_provided'
                 and (field.startswith(('jsonld','meta.','publisher.')) or field.startswith(('time[','html.publicationBadge[')))):
             value = local_timestamp(item.get('localWallTime', raw), zone)
             if value:
                 item.update(normalizedAt=value, timezone=zone, timezoneEvidence='registered_publisher_timezone')
-            elif item['kind']=='published' and item.get('precision')=='date' and isinstance(raw,str):
+            elif item['kind'] in ('published','dateline') and item.get('precision')=='date' and isinstance(raw,str):
                 try:
-                    day = datetime.strptime(raw, '%Y-%m-%d')
+                    day = datetime.strptime(item.get('calendarDay', raw), '%Y-%m-%d')
                     begin = local_timestamp(day.isoformat(), zone)
                     end = local_timestamp((day+timedelta(days=1)).isoformat(), zone)
                 except ValueError:

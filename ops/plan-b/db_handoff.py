@@ -19,6 +19,10 @@ def verify_original(value):
     if (candidate['id']!=original['id'] or candidate['sourceHash']!=original['sourceHash']
         or hashlib.sha256(original['text'].encode()).hexdigest()!=candidate['sourceHash']):
         raise ValueError('original_hash_mismatch')
+    if 'revision' in original or (original.get('evidencePacket') or {}).get('version')=='source-evidence-2':
+        if (not candidate.get('revision') or original.get('revision')!=candidate['revision']
+                or not candidate.get('sourceUrl') or original.get('source_url')!=candidate['sourceUrl']):
+            raise ValueError('original_revision_or_source_mismatch')
     return True
 
 def health_verified(value,issue):
@@ -43,8 +47,7 @@ def sql(view,issue,country=None,phase='preview',ids=(),document=None):
         return f'''select country,step,state,attempt,updated_at,
           case when step='final' then receipt #> '{{metrics,funnel}}'
                when step='editorial' then receipt->'funnel' end as funnel,
-          case when step='final' then receipt #> '{{metrics,sourceFunnel}}' end as source_funnel,
-          case when step='editorial' then receipt->'usage' end as usage
+          case when step='final' then receipt #> '{{metrics,sourceFunnel}}' end as source_funnel
           from public.plan_b_daily where {scope} and step in ('final','editorial','release','word','wechat','readback')
           order by country,step;'''
     if view=='weekly-funnel':

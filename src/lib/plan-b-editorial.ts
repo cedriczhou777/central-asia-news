@@ -1,7 +1,7 @@
 import { canonicalJson, DAILY_MIN_ARTICLES, DAILY_TARGET_ARTICLES, EDITORIAL_POLICY_FIRST_ISSUE, EDITORIAL_POLICY_VERSION,
   requireFrozenVersion, sha256, shaPattern, SHORT_EDITION_FIRST_ISSUE, type Snapshot } from './plan-b-handoff';
 import { issueWindow } from './plan-b-window';
-import { editorialFunnel, summarizeUsage } from './plan-b-editorial-decisions';
+import { editorialFunnel } from './plan-b-editorial-decisions';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -133,8 +133,7 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
       || (source.publishedAt && published !== Date.parse(source.publishedAt))) throw new Error('story_publication_mismatch');
   }
   const funnel = dailyPolicy ? editorialFunnel(final, ids, review.candidateDecisions, String(review.reviewer)) : undefined;
-  const usage = dailyPolicy ? summarizeUsage(input.usage, ids.length) : undefined;
   const value = { finalHash: final.hash, coverage: final.coverage, draft, review, ...(funnel ? {funnel} : {}) };
   return { value, editorialHash: hash(value), articleCount: ids.length,
-    writerRun: draft.writerRun, reviewerRun: review.reviewer, ...(funnel ? {funnel,usage} : {}) };
+    writerRun: draft.writerRun, reviewerRun: review.reviewer, ...(funnel ? {funnel} : {}) };
 }

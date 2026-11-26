@@ -6,9 +6,9 @@ from urllib.parse import urljoin,urlparse,urlsplit,urlunsplit
 import urllib.request,urllib.error
 from lxml import html
 from discovery_feed import FEED_TYPES, parse_feed
-from source_evidence import header_clock
+from source_evidence import header_clock, khovar_archive_dateline
 P=Path(__file__).parent;S=P/'sources'
-PARSER_VERSION='source-html-v24'
+PARSER_VERSION='source-html-v25'
 TRANSIENT={429,500,502,503,504}
 MAX_NETWORK_SECONDS = 45
 MAX_TRANSPORT_BYTES = 10_000_000
@@ -113,6 +113,19 @@ def article_identities(node,base):
             if normalized:values.append((field,value,normalized))
     return values
 
+
+def matches_article_identity(url, page_urls):
+    if url in page_urls:
+        return True
+    # TopTJ emits http://www article identities even when it serves https://
+    # on either hostname. Bind only the identical, dated article path.
+    page = urlsplit(url)
+    hosts = ('toptj.com','www.toptj.com')
+    if page.netloc not in hosts or not re.fullmatch(r'/news/20\d\d/\d\d/\d\d/[^/]+',page.path):
+        return False
+    return any(current.netloc in hosts and current.path == page.path and current.query == page.query
+               for current in map(urlsplit, filter(None, page_urls)))
+
 def article_date_nodes(article):
     """Compact publication badges/times belonging to this article, not cards."""
     dates=[]
@@ -161,7 +174,7 @@ def classify_source(tree,final_url,canonical_url,meta,linked_data):
     def current_article(node):
         if isinstance(node,dict):
             kinds=node.get('@type',[]);kinds=kinds if isinstance(kinds,list) else [kinds]
-            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(x[2] in identities for x in article_identities(node,final_url)):return True
+            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(matches_article_identity(x[2],identities) for x in article_identities(node,final_url)):return True
             return any(current_article(v) for v in node.values() if isinstance(v,(dict,list)))
         if isinstance(node,list):return any(current_article(v) for v in node)
         return False
@@ -179,22 +192,24 @@ def classify_source(tree,final_url,canonical_url,meta,linked_data):
     return 'unknown',['article_identity_needs_manual_verification'],None
 
 
-def publisher_header_clock(tree, source_url, canonical_url, selected, body_evidence):
-    """Find a compact date next to the current heading on observed templates."""
+def publisher_header_clocks(tree, source_url, canonical_url, selected, body_evidence):
+    """Observe compact dates by the current heading of known article routes."""
     page = urlsplit(source_url)
     host = (page.hostname or '').removeprefix('www.')
     route = {
         'review.uz': r'^/post/[^/]+/?$',
         'podrobno.uz': r'^/cat/[^/]+/[^/]+/?$',
-        'toptj.com': r'^/news/20\d\d/\d\d/\d\d/[^/]+/?$',
         'alau.kz': r'^/[^/]+/?$',
+        'sugd.tj': r'^/(?:ru|tj)/(?:[^/]+/)+\d+-[^/]+/?$',
+        'taxes.gov.az': r'^/az/post/\d+/?$',
     }.get(host)
     if (not route or not re.fullmatch(route,page.path)
             or (canonical_url and normalized_url(canonical_url,source_url)!=normalized_url(source_url,source_url))):
-        return None
-    headings = [node for node in tree.xpath('//h1') if ' '.join(node.text_content().split()) in body_evidence.get('headingTexts',[])]
+        return []
+    headings = [node for node in tree.xpath('//h1[not(ancestor::aside or ancestor::nav or ancestor::footer)]')
+                if ' '.join(node.text_content().split()) in body_evidence.get('headingTexts',[])]
     if len(headings)!=1:
-        return None
+        return []
     heading = headings[0]
     badges = {}
     for anchor in [heading, heading.getparent()]:
@@ -203,19 +218,39 @@ def publisher_header_clock(tree, source_url, canonical_url, selected, body_evide
         for sibling in list(anchor.itersiblings())[:4]:
             if not isinstance(sibling.tag,str):
                 continue
-            if sibling is selected or selected in sibling.iterdescendants() or sibling.tag in ('article','section','main','aside','nav','footer'):
+            if (sibling is selected or selected in sibling.iterdescendants()
+                    or sibling.tag in ('article','section','main','aside','nav','footer','ul','ol')
+                    or sibling.xpath('.//h1|.//h2|.//h3') or recommendation_card(sibling)):
                 break
             for node in [sibling, *sibling.xpath('.//time|./*|./*/*')]:
-                if node.xpath('ancestor::aside|ancestor::nav|ancestor::footer'):
+                if (node.xpath('ancestor::aside|ancestor::nav|ancestor::footer')
+                        or any(recommendation_card(parent) for parent in [node, *node.iterancestors()])):
                     continue
                 value = ' '.join(node.text_content().split())
                 marker = (node.get('class','')+' '+node.get('itemprop','')).lower()
                 if re.search('updat|modif|обнов|измен', marker+' '+value, re.I):
                     continue
-                wall = header_clock(value)
+                created = re.fullmatch(r'Создано:\s*(.+?)(?:\s+Просмотров:\s*\d+)?',value,re.I) if host=='sugd.tj' else None
+                if host=='sugd.tj' and not created:
+                    continue
+                kind = 'created' if created else 'published'
+                plain = created[1] if created else re.sub(r'^Опубликовано:\s*','',value,flags=re.I)
+                wall = header_clock(plain)
                 if wall:
-                    badges[wall] = value
-    return (next(iter(badges.values())), next(iter(badges))) if len(badges)==1 else None
+                    badges[(kind,wall)] = value
+                elif host=='alau.kz' and re.search(r'(?:^|[—–]\s*)(?:Сегодня|Вчера),?\s+\d{1,2}:[0-5]\d$',value,re.I):
+                    badges[('unclassified',value)] = value
+    if len(badges) != 1:
+        return []
+    (kind, clock), raw = next(iter(badges.items()))
+    explicit = kind != 'unclassified'
+    return [{'field':'publisher.sugd.article_created_label' if kind=='created' else
+                     'publisher.current_heading_adjacent_date' if explicit else 'publisher.alau.relative_article_clock',
+             'raw':raw, **({'localWallTime':clock} if explicit else {}),
+             'kind':kind, 'precision':timestamp_precision(clock)[0] if explicit else 'relative_clock',
+             'timezoneEvidence':'not_provided' if explicit else 'reference_day_missing',
+             'articleUrl':canonical_url or source_url,
+             'confidenceBasis':['unique_date_in_compact_current_article_header'],'priority':35 if kind=='published' else 95}]
 
 
 def publication_evidence(tree,linked_data,final_url,canonical_url,primary_article,publisher_template=None):
@@ -235,12 +270,15 @@ def publication_evidence(tree,linked_data,final_url,canonical_url,primary_articl
             types=value.get('@type',[]);types=types if isinstance(types,list) else [types]
             if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in types):
                 bound=article_identities(value,final_url)
-                match=next((x for x in bound if x[2] in identities),None)
+                match=next((x for x in bound if matches_article_identity(x[2],identities)),None)
                 for key,kind in (('datePublished','published'),('dateModified','modified')):
                     if key not in value:continue
                     raws=value[key] if isinstance(value[key],list) else [value[key]]
                     for raw in raws:
                         ev=evidence(path+'.'+key,raw,kind,match[2] if match else bound[0][2] if bound else None,['jsonld_article_identity_matches_'+match[0]] if match else ['article_identity_mismatch' if bound else 'article_identity_missing'],10 if kind=='published' else 80)
+                        if match and match[2] not in identities:
+                            ev.update(articleUrl=final_url, observedArticleIdentity=match[1])
+                            ev['confidenceBasis'].append('toptj_http_www_same_article_alias')
                         (accepted if match else excluded).append(ev)
             for k,v in value.items():
                 if isinstance(v,(dict,list)):walk(v,path+'.'+k)
@@ -373,7 +411,7 @@ def article_headline_aliases(linked_data,final_url,canonical_url):
     def walk(value):
         if isinstance(value,dict):
             kinds=value.get('@type',[]);kinds=kinds if isinstance(kinds,list) else [kinds]
-            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(x[2] in identities for x in article_identities(value,final_url)):
+            if any(isinstance(t,str) and t.rsplit('/',1)[-1] in ('NewsArticle','Article') for t in kinds) and any(matches_article_identity(x[2],identities) for x in article_identities(value,final_url)):
                 headline=value.get('headline')
                 if isinstance(headline,str) and headline.strip():aliases.append(headline)
             for child in value.values():
@@ -787,19 +825,17 @@ def parse_response(url,final_url,raw,headers):
     full_text_validated=source_kind=='article' and selected_body is not None
     if source_kind=='article':primary_article=bound_article
     publications,excluded_publications=publication_evidence(tree,linked_data,final_url,canonical,primary_article,publisher_template if full_text_validated else None)
-    if full_text_validated:
-        badge = publisher_header_clock(tree,final_url,canonical,selected_body,body_evidence)
-        if badge:
-            raw_time, local_time = badge
-            publications.append({'field':'publisher.current_heading_adjacent_date','raw':raw_time,
-                'localWallTime':local_time,'kind':'published','precision':'minutes',
-                'timezoneEvidence':'not_provided','articleUrl':canonical or final_url,
-                'confidenceBasis':['unique_date_in_compact_current_article_header'],'priority':35})
+    if full_text_validated and not (publisher_template or {}).get('localPublicationBadge'):
+        publications.extend(publisher_header_clocks(tree,final_url,canonical,selected_body,body_evidence))
     links=[{'text':' '.join(n.text_content().split()),'url':urljoin(final_url,n.get('href')),'rel':n.get('rel'),'nearbyTimes':link_time_context(n),'inNavigation':link_in_navigation(n),**link_article_features(n)} for n in tree.xpath('//a[@href]') if n.text_content().strip()]
     images=[{'url':urljoin(final_url,n.get('src') or n.get('data-src') or ''),'alt':n.get('alt'),'title':n.get('title')} for n in tree.xpath('//img')]
     candidates=tree.xpath('//main') or tree.xpath('//body') or [tree]
     el=selected_body if selected_body is not None else max(candidates,key=lambda n:len(n.text_content()))
     text=clean_content(el,selected_body is not None,selected_body is not None or source_kind=='article')
+    if full_text_validated and body_evidence.get('basis')=='publisher_template:khovar_published_post_shortcode_content':
+        dateline=khovar_archive_dateline(canonical or final_url,text)
+        if dateline:
+            publications.append(dateline)
     reject_mojibake(title+'\n'+text,decoded_encoding,encoding_evidence)
     if (len(text)<80 or '\ufffd' in text[:100]) and not (source_kind=='article' and not full_text_validated):raise ValueError('unreadable_or_empty_HTML')
     result={'meta':meta,'title':title,'time_tags':times,'linked_data':linked_data,'links':links,'images':images,'text':text,'source_sha256':hashlib.sha256(text.encode()).hexdigest(),'source_kind':source_kind,'sourceKindEvidence':source_kind_evidence,'parser_version':PARSER_VERSION,'contentValidated':source_kind!='article' or full_text_validated,'fullTextValidated':full_text_validated,'articleBodyEvidence':body_evidence,'transport_sha256':hashlib.sha256(raw).hexdigest(),'final_url':final_url,'html_lang':tree.get('lang'),'canonical_url':canonical,'page_links':page_links,'publicationEvidence':publications,'excludedPublicationEvidence':excluded_publications,'decodedEncoding':decoded_encoding,'encodingEvidence':encoding_evidence}
