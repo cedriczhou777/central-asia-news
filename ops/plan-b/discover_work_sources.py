@@ -945,6 +945,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                        if e.get('role') != 'article' and e.get('contentValidated')}
     minimum = datetime.fromisoformat(listing_not_before.replace('Z', '+00:00')) if listing_not_before else None
     already_sampled = set()
+    fresh_listings = set()
     for event in historical_events:
         if event.get('role') == 'article' or not event.get('fetchedAt') or event.get('fetchRetryable'):
             continue
@@ -952,6 +953,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             stamp = datetime.fromisoformat(event['fetchedAt'].replace('Z', '+00:00'))
             if minimum is None or stamp >= minimum:
                 already_sampled.add(event['sourceId'])
+            if minimum is not None and stamp >= minimum and event.get('status') == 200 and event.get('contentValidated'):
+                fresh_listings.add(event['sourceId'])
         except (ValueError, TypeError):
             pass
     # A short run must not always spend its time on the same alphabetically
@@ -969,12 +972,17 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
     page_candidates = defaultdict(list)
     discovered = {}
     seed_groups = []
+    focused_recovery = news_budget and only_source_ids is not None and minimum is not None
+    body_rechecks = set()
     for source in sources:
         entries = source_entries(source)
         entries.sort(key=lambda e: (e.get('accessStatus') != 'public_html_readable_listing', e.get('role') != 'home'))
         jobs = [(source['id'], normal_url(e['url']), e.get('role', 'home'), e.get('language')) for e in entries]
         pending = [(j['sourceId'], j['url'], j['role'], j.get('language')) for j in prior_jobs
                    if j.get('sourceId') == source['id'] and allowed_url(j.get('url'), source)]
+        if focused_recovery and source['id'] in fresh_listings:
+            deferred_listing.extend(pending)
+            continue
         all_jobs = list({(j[0], j[1]): j for j in pending + jobs}.values())
         home = next((j for j in jobs if j[2] == 'home'), jobs[0] if jobs else None)
         unvisited = [j for j in all_jobs if j != home and (j[0], j[1]) not in visited_listing]
@@ -1010,6 +1018,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                     hints['network_timeout'] = remaining
                 if 'fetch_metrics' in fetcher_parameters:
                     hints['fetch_metrics'] = operation_metrics
+                if 'recheck_article_body' in fetcher_parameters:
+                    hints['recheck_article_body'] = (job[0], job[1]) in body_rechecks and source_role == 'article'
                 return fetcher(job[1], minimum, **hints)
             except TimeoutError:
                 return {'url': job[1], 'contentValidated': False, 'fetchRetryable': True,
@@ -1148,8 +1158,14 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             old_pending = list(queued_leads)
             eligible = {lead['source_url'] for lead in ranked if lead['leadType'] in ('article_candidate', 'article_deferred')}
             resume = [u for u in prior_article_jobs[source['id']] if u in eligible and allowed_url(u, source)]
-            resumable = set(resume) | queued_leads.keys()
-            urls = list(dict.fromkeys(old_pending + resume + urls))
+            unresolved = [u for u, candidate in old_by_url.items()
+                          if focused_recovery and u in eligible and allowed_url(u, source)
+                          and candidate.get('decision') == 'pending'
+                          and not (candidate.get('fullTextFetchedAt') and candidate.get('fullTextValidated') is True)]
+            body_rechecks.update((source['id'], url) for url in unresolved)
+            needs_body = set(unresolved)
+            resumable = set(resume) | queued_leads.keys() | needs_body
+            urls = list(dict.fromkeys(old_pending + resume + unresolved + urls))
             urls = [u for u in urls if u in eligible]
             if news_budget:
                 by_url={lead['source_url']:lead for lead in ranked}
@@ -1165,14 +1181,15 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             # Spend the next batch on previously omitted/new evidence before reusing
             # already fetched pages. Repeated small runs must make forward progress.
             priority_by_url = {lead['source_url']: lead['articlePriority'] + (70 * lead.get('queueAssessment',{}).get('important',False) if news_budget else 0) for lead in ranked}
-            urls.sort(key=lambda u: (bool(old_by_url.get(u, {}).get('sourceJSON')) or old_by_url.get(u, {}).get('decision') in TERMINAL,
+            urls.sort(key=lambda u: (u not in needs_body and (bool(old_by_url.get(u, {}).get('sourceJSON')) or old_by_url.get(u, {}).get('decision') in TERMINAL),
                                      -priority_by_url.get(u, 0)))
             for lead in ranked:
                 if lead['source_url'] in resumable:
                     discovered.setdefault((source['id'], lead['source_url']), lead['discoveredAt'])
-            needs_fetch = [u for u in urls if u not in old_by_url or
+            needs_fetch = [u for u in urls if u in needs_body or u not in old_by_url or
                            (old_by_url[u].get('decision') == 'pending' and not old_by_url[u].get('sourceJSON'))]
-            rechecks = [u for u in urls if u not in set(needs_fetch)]
+            fetch_set = set(needs_fetch)
+            rechecks = [u for u in urls if u not in fetch_set]
             if len(needs_fetch) > max_articles_per_source:
                 budgets.append({'sourceId': source['id'], 'reason': 'article_budget', 'remaining': len(needs_fetch) - max_articles_per_source})
             selected_urls = needs_fetch[:max_articles_per_source]
@@ -1244,6 +1261,11 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                 elif not row['languageVerified']:
                     reason = 'needs_language_review'
                 prior = ledger.get(key)
+                if ((job[0], url) in body_rechecks and prior and not valid and record.get('status') != 200):
+                    # A failed recovery request cannot resolve an unfinished
+                    # story. Preserve the earlier evidence and the new audit.
+                    prior['fetchEvidence'] = evidence
+                    continue
                 raw_publication = record.get('publicationEvidence', record.get('publication_evidence', []))
                 if isinstance(raw_publication, dict):
                     raw_publication = raw_publication.get('items', [raw_publication])

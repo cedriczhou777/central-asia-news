@@ -87,9 +87,18 @@ export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number):
 
 export function recoverySources(coverage: SnapshotReceipt['snapshot']['coverage'] | undefined) {
   const pending = coverage?.pendingWork ?? [];
-  // Resolve already scheduled bodies before retraversing archival discovery.
-  const body = pending.filter(work=>work.reason==='article_body_pending');
-  return [...new Set([...body,...pending].map(work=>work.sourceId).filter(id=>id!=='discovery'))].slice(0,2);
+  const sources = new Map<string, { bodies: Set<string>; leads: Set<string> }>();
+  for (const work of pending) {
+    if (work.sourceId === 'discovery') continue;
+    const source = sources.get(work.sourceId) ?? { bodies: new Set<string>(), leads: new Set<string>() };
+    sources.set(work.sourceId, source);
+    if (work.kind === 'article' && work.url) source.bodies.add(work.url);
+    if (work.kind === 'lead' && work.url) source.leads.add(work.url);
+  }
+  // The final pass has two slots. Use actual article identities to choose
+  // those slots, independent of the coverage report's publisher-name sort.
+  return [...sources].sort(([, a], [, b]) => b.bodies.size - a.bodies.size || b.leads.size - a.leads.size)
+    .slice(0, 2).map(([id]) => id);
 }
 
 function boundedFailure(error: unknown, nextAttempt: number, step: ClaimStep): Outcome {

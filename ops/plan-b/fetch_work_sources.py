@@ -663,7 +663,7 @@ def bounded_response(url, deadline):
     return json.loads(metadata), body
 
 
-def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NETWORK_SECONDS,*,fetch_metrics=None):
+def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NETWORK_SECONDS,*,fetch_metrics=None,recheck_article_body=False):
     if source_role is None:source_role='auto'
     if source_role not in ('auto','article','listing'):raise ValueError('source-role must be auto, article or listing')
     if not math.isfinite(network_timeout) or network_timeout <= 0:raise ValueError('network timeout must be finite and positive')
@@ -675,6 +675,7 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
     minimum=listing_minimum(listing_not_before,now)
     metrics = fetch_metrics if fetch_metrics is not None else {}
     metrics.update(transportAttempts=0, cacheHits=0, archiveReparses=0)
+    recheck = False
 
     def reuse(record):
         metrics['cacheHits'] += 1
@@ -691,18 +692,27 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
                 dest.write_text(json.dumps(old,ensure_ascii=False,indent=2))
             except Exception as error:
                 old['contentValidated']=False;old['error']='cached_parse_'+str(error);old.update(parse_error_evidence(error));dest.write_text(json.dumps(old,ensure_ascii=False,indent=2));return reuse(old)
-        if status==200 and old.get('parser_version')==PARSER_VERSION and str(old.get('error','')).startswith('current_article_body_unverified_'):return reuse(old)
+        if status == 200 and old.get('parser_version') == PARSER_VERSION and old.get('fullTextValidated') is False:
+            # A confirmed article may first expose a placeholder and later a
+            # real body. The focused pass gets at most one new request.
+            incomplete = old.get('source_kind') == 'article'
+            recheck = recheck_article_body and source_role == 'article' and not old.get('bodyRecheckedAt')
+            recheck = recheck and (incomplete or old.get('source_kind') == 'unknown')
+            if incomplete and not recheck:
+                return reuse(old)
         if status==200 and old.get('contentValidated'):
             # Article and unresolved body evidence are immutable for this run.
             # Explicit registry listing jobs may refresh an unknown listing,
             # without asserting its identity. Confirmed article evidence stays
             # frozen even if a caller mistakenly supplies the listing hint.
-            if old.get('source_kind')=='article' or old.get('source_kind')=='unknown' and source_role!='listing':return reuse(old)
+            if old.get('source_kind') == 'article' or old.get('source_kind') == 'unknown' and source_role != 'listing':
+                if not recheck:
+                    return reuse(old)
             try:
                 fetched=datetime.fromisoformat(old['fetchedAt'])
                 age=(now-fetched).total_seconds()
             except (KeyError,ValueError,TypeError):age=10**9;fetched=None
-            if 0<=age<900 and (minimum is None or fetched>=minimum):return reuse(old)
+            if not recheck and 0<=age<900 and (minimum is None or fetched>=minimum):return reuse(old)
     retry=json.loads(retry_path.read_text()) if retry_path.exists() else {}
     if retry and (retry['attempts'] >= 3 or now < datetime.fromisoformat(retry['resumeAt'])):
         result = retry['result']
@@ -716,7 +726,8 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
         return reuse(result)
     result={'url':url,'fetchedAt':now.isoformat(),'key':key,'contentValidated':False,'parser_version':PARSER_VERSION}
     prior_attempts=retry.get('attempts',0)
-    for attempt in range(3-prior_attempts):
+    remaining_attempts = min(1 if recheck else 3, 3 - prior_attempts)
+    for attempt in range(remaining_attempts):
         for field in ('status', 'error', 'fetchRetryable', 'retryAfterSeconds'):
             result.pop(field, None)
         try:
@@ -724,6 +735,10 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
                 raise TimeoutError('source network deadline exceeded')
             metrics['transportAttempts'] += 1
             result['attemptedAt'] = datetime.now(timezone.utc).isoformat()
+            if recheck:
+                old['bodyRecheckedAt'] = result['attemptedAt']
+                dest.write_text(json.dumps(old,ensure_ascii=False,indent=2))
+                result['bodyRecheckedAt'] = result['attemptedAt']
             result['transportAttemptsTotal'] = prior_attempts + metrics['transportAttempts']
             response, raw = bounded_response(url, deadline)
             result.update(response, attempts=attempt + 1)
@@ -746,7 +761,7 @@ def fetch(url,listing_not_before=None,source_role='auto',network_timeout=MAX_NET
         except Exception as error:
             result.update(error=type(error).__name__+': '+str(error)[:120],**parse_error_evidence(error));break
         delay = attempt + 1
-        if result.get('status') == 429 or attempt == 2-prior_attempts or time.monotonic() + delay >= deadline:
+        if result.get('status') == 429 or attempt + 1 >= remaining_attempts or time.monotonic() + delay >= deadline:
             break
         time.sleep(delay)
     if result.get('fetchRetryable'):
