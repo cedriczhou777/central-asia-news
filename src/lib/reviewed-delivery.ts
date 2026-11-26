@@ -3,7 +3,7 @@ import { PACKAGE_COUNTRIES, packageCountries, reviewedCountry, contentHash, imag
 import { prepareReviewedDraft, createReviewedDraft, updateReviewedDraft, readReviewedDraft, findRecentReviewedDrafts } from './reviewed-wechat';
 import { load } from 'cheerio';
 import { randomUUID } from 'node:crypto';
-import { compareReviewedCover } from './reviewed-diagnostics';
+import { compareReviewedCover, summarizeDraftReadback, verifiedReviewedLayout } from './reviewed-diagnostics';
 
 export function canResumePreparation(row:{state:string;media_id?:string|null;updated_at?:string;detail?:Record<string,unknown>},now=Date.now()) {
   return row.state==='preparing'&&!row.media_id&&row.detail?.preparationProtocol===1&&typeof row.detail.preparationToken==='string'&&
@@ -30,8 +30,12 @@ function verifyReadback(d: ReviewedCountry, readback: Awaited<ReturnType<typeof 
   const legacyTextMatch = actualText === text(makeSourceUrlsVisible(d.bodyHtml));
   const sourceUrlsVisible = expectedSourceUrls.every(url => actualText.includes(text(url)));
   const cover=compareReviewedCover(readback,expectedImages[0],expectedThumbId);
-  const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText && imageMatch && cover.thumbnailMatchesPrepared !== false;
-  return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch, expectedTextMatch:actualText === expectedText, imageMatch, ...cover, verified:passed };
+  const layoutVerified = d.bodyHtml.includes('data-role="daily-footer"')
+    ? verifiedReviewedLayout(summarizeDraftReadback(d, readback, expectedImages, expectedThumbId)) : null;
+  const passed = readback.title === d.title && readback.digest === d.summary && actualText === expectedText
+    && imageMatch && cover.thumbnailMatchesPrepared !== false && layoutVerified !== false;
+  return { draftImages:images.length, readbackHash:contentHash(readback.content), sourceUrlsVisible, legacyTextMatch,
+    expectedTextMatch:actualText === expectedText, imageMatch, ...cover, layoutVerified, verified:passed };
 }
 
 /** Safe settlement with a previously persisted media ID. Does not prepare,

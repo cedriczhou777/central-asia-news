@@ -1,6 +1,7 @@
 """Offline contracts for candidate discovery; no source or draft mutations."""
 import gzip
 import concurrent.futures
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -14,7 +15,7 @@ from unittest.mock import patch
 
 # The hosted Plan B collector is shipped from ops/plan-b.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
-from discover_work_sources import discover, load_fetcher, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads, _FetchFlights
+from discover_work_sources import assess_window, discover, load_fetcher, migrate_discovery_leads, rebase_discovery_paths, lead_route, rank_leads, active_scan_events, rerank_cached_leads, _FetchFlights
 
 
 STAMP = '2026-11-15T00:01:00+00:00'
@@ -39,6 +40,21 @@ def page(url, links=(), language='ru', kind='listing', published=None, status=20
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_article_bound_calendar_date_rules_out_stale_news_but_cannot_admit_it(self):
+        start = datetime.fromisoformat('2026-11-25T06:00:00+08:00')
+        end = datetime.fromisoformat('2026-11-26T06:00:00+08:00')
+        url = 'https://socar.az/az/post/socar-ve-honeywell-technologies-enerji-sektorunda-reqemsal-transformasiya-ve-avtomatlasdirmanin-inkisafina-destek-meqsedile-qlobal-cercive-sazisi-imzalayiblar'
+        evidence = {'kind':'published', 'precision':'date', 'raw':'2026-11-06', 'articleUrl':url}
+        record = {'source_kind':'article', 'final_url':url, 'publicationEvidence':[evidence]}
+        self.assertEqual(assess_window(record,'az',start,end),'outside_window')
+        for raw in ('2026-11-24','2026-11-25','2026-11-26'):
+            with self.subTest(raw=raw):
+                self.assertEqual(assess_window({**record,'publicationEvidence':[{**evidence,'raw':raw}]},'az',start,end),'uncertain')
+        wrong_source = {**evidence,'articleUrl':'https://socar.az/az/post/unrelated'}
+        self.assertEqual(assess_window({**record,'publicationEvidence':[wrong_source]},'az',start,end),'uncertain')
+        self.assertEqual(assess_window({**record,'publicationReviewRequired':True},'az',start,end),'uncertain')
+        self.assertEqual(assess_window({**record,'publicationEvidence':[evidence,{**evidence,'raw':'2026-11-25'}]},'az',start,end),'uncertain')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.output = Path(self.temp.name)

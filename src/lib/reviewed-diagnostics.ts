@@ -85,3 +85,8 @@ export function summarizeDraftReadback(expected: ReviewedCountry, actual: { titl
       passed:footerTextOrderMatch && footerAtEnd && footerCentered && footerFontSize12 && footerGray && footerBackground},
   };
 }
+
+export function verifiedReviewedLayout({ layout, footer }: Pick<ReturnType<typeof summarizeDraftReadback>, 'layout' | 'footer'>) {
+  return layout.justified && layout.lastLineLeft && layout.lineHeight19
+    && layout.outerMargin10 && layout.innerMargin12 && footer.passed;
+}

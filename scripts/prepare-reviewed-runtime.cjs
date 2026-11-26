@@ -10,7 +10,8 @@ const identityFiles=['src/lib/plan-b-runtime.ts','src/lib/plan-b-runtime-checks.
   'ops/plan-b/source_registry.json',
   'ops/plan-b/work_client.py','ops/plan-b/db_handoff.py','src/lib/plan-b-worker.ts','src/lib/plan-b-store.ts',
   'src/lib/plan-b-release.ts','src/app/api/word-package/route.ts','src/lib/reviewed-push-handler.ts',
-  'src/lib/reviewed-package.ts','src/lib/reviewed-wechat.ts','src/lib/reviewed-wechat-transport.ts','package.json','pnpm-lock.yaml',
+  'src/lib/reviewed-package.ts','src/lib/reviewed-delivery.ts','src/lib/reviewed-diagnostics.ts',
+  'src/lib/reviewed-wechat.ts','src/lib/reviewed-wechat-transport.ts','package.json','pnpm-lock.yaml',
   'migrations/20261123_plan_b_exchange.sql','scripts/prepare-reviewed-runtime.cjs'];
 const hashes=Object.fromEntries(identityFiles.map(file=>[file,createHash('sha256').update(fs.readFileSync(file)).digest('hex')]));
 fs.writeFileSync('ops/plan-b/build-identity.json',JSON.stringify({files:hashes,

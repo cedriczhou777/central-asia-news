@@ -76,12 +76,15 @@ type Outcome = { state: 'ready' | 'retry' | 'blocked'; receipt: object; delay?: 
 const ready = (receipt: object): Outcome => ({ state: 'ready', receipt });
 
 export function finalCoverageOutcome(receipt: SnapshotReceipt, attempt: number): Outcome {
-  const reason = freezeBlockReason(receipt.snapshot);
+  const reviewableCandidates = receipt.snapshot.candidates.length;
+  const shortage = reviewableCandidates < 10;
+  const reason = freezeBlockReason(receipt.snapshot) || (shortage ? 'insufficient_reviewable_candidates' : null);
   const limit=receipt.snapshot.issue>='2026-11-23'?3:2;
+  const coverageRecovery = reason === 'insufficient_reviewable_candidates';
   return reason ? { state: attempt+1<limit ? 'retry' : 'blocked', delay:120_000,
-    receipt:{ ...receipt, pendingSources:receipt.snapshot.pendingSources, coverage:receipt.snapshot.coverage, reason,
-      recovery:attempt+1<limit ? {mode:attempt>=1?'focused_source_refresh':'bounded_retry',remainingAttempts:limit-attempt-1}
-        : {mode:'important_evidence_required',automaticAttemptsExhausted:true,checkpointsPreserved:true} } }
+    receipt:{ ...receipt, pendingSources:receipt.snapshot.pendingSources, coverage:receipt.snapshot.coverage, reason, reviewableCandidates,
+      recovery:attempt+1<limit ? {mode:coverageRecovery?'fresh_candidate_refresh':attempt>=1?'focused_source_refresh':'bounded_retry',remainingAttempts:limit-attempt-1}
+        : {mode:coverageRecovery?'candidate_supply_shortfall':'important_evidence_required',automaticAttemptsExhausted:true,checkpointsPreserved:true} } }
     : ready(receipt);
 }
 
@@ -225,8 +228,12 @@ async function tick() {
       const prior = (row?.receipt?.cache || preview?.receipt?.cache) as SnapshotReceipt['cache'] | undefined;
       const previewStillActive = preview?.state === 'working' && Date.parse(preview.lease_until || '') > Date.now();
       if (!previewStillActive && !final) schedule(issue, country, 'final', row, async () => {
-        const focus=row?.receipt?.reason==='exchange_publish_failed'?[]:(row?.attempt || 0)>=2
-          ? recoverySources((row?.receipt as SnapshotReceipt|undefined)?.snapshot?.coverage) : undefined;
+        const reason = row?.receipt?.reason;
+        let focus: string[] | undefined;
+        if (reason === 'exchange_publish_failed') focus = [];
+        else if ((row?.attempt || 0) >= 2 && reason !== 'insufficient_reviewable_candidates') {
+          focus = recoverySources((row?.receipt as SnapshotReceipt | undefined)?.snapshot?.coverage);
+        }
         const snapshot = await collectCountry(issue, country, 'final', prior, focus);
         return finalCoverageOutcome(snapshot, row?.attempt || 0);
       });

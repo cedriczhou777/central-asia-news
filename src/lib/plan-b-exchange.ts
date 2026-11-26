@@ -10,13 +10,18 @@ import {applyPlanBCommand} from './plan-b-command';
 
 export const EXCHANGE_VERSION='plan-b-database-exchange-1';
 const TABLE='plan_b_exchange';
+const RECORD_KEY='issue_date,country,kind,record_key';
 type RecordRow={issue_date:string;country:PlanBCountry;kind:'checkpoint'|'submission';record_key:string;
   content_hash:string;payload:Record<string,unknown>;state:string;attempts:number};
 
-async function publish(issue:string,country:string,kind:string,key:string,payload:object,immutable=false){
-  const row={issue_date:issue,country,kind,record_key:key,payload,content_hash:sha256(canonicalJson(payload)),
+function exchangeRow(issue:string,country:string,kind:string,key:string,payload:object){
+  return {issue_date:issue,country,kind,record_key:key,payload,content_hash:sha256(canonicalJson(payload)),
     state:'available',updated_at:new Date().toISOString()};
-  const {error}=await getSupabaseClient().from(TABLE).upsert(row,{onConflict:'issue_date,country,kind,record_key',ignoreDuplicates:immutable});
+}
+
+async function publish(issue:string,country:string,kind:string,key:string,payload:object,immutable=false){
+  const row=exchangeRow(issue,country,kind,key,payload);
+  const {error}=await getSupabaseClient().from(TABLE).upsert(row,{onConflict:RECORD_KEY,ignoreDuplicates:immutable});
   if(error)throw new Error('plan_b_exchange_publish_failed');
 }
 
@@ -26,20 +31,34 @@ export function originalRecord(candidate:{id:string;sourceHash:string;revision:s
   return {candidate,original};
 }
 
-/** Stream one archived original at a time. Never load a 33 MB compressed bundle in Work. */
+/** Publish original evidence in small immutable batches before publishing the manifest. */
 export async function publishScan(scope:SnapshotReceipt,jsonl:string){
   const {snapshot}=scope;const candidates=new Map(snapshot.candidates.map(c=>[c.id,c]));
   const lines=createInterface({input:createReadStream(jsonl),crlfDelay:Infinity});
-  let count=0;
+  let batch:ReturnType<typeof exchangeRow>[]=[];
+  let bytes=0;
+  const publishBatch=async()=>{
+    if(!batch.length)return;
+    const {error}=await getSupabaseClient().from(TABLE).upsert(batch,{onConflict:RECORD_KEY,ignoreDuplicates:true});
+    if(error)throw new Error('plan_b_exchange_publish_failed');
+    batch=[];
+    bytes=0;
+  };
   for await(const line of lines){
     if(!line)continue;
     const original=JSON.parse(line)as Record<string,unknown>;
     const candidate=candidates.get(String(original.id));if(!candidate)throw new Error('exchange_candidate_mismatch');
     const payload=originalRecord(candidate,original);
-    await publish(snapshot.issue,snapshot.country,'original',`${candidate.id}/${candidate.sourceHash}/${candidate.revision}`,payload,true);count++;
+    const row=exchangeRow(snapshot.issue,snapshot.country,'original',`${candidate.id}/${candidate.sourceHash}/${candidate.revision}`,payload);
+    const size=Buffer.byteLength(JSON.stringify(row));
+    if(batch.length>=5||bytes+size>512*1024)await publishBatch();
+    batch.push(row);
+    bytes+=size;
+    candidates.delete(candidate.id);
   }
-  if(count!==snapshot.candidates.length)throw new Error('exchange_originals_incomplete');
-  await publish(snapshot.issue,snapshot.country,'manifest',snapshot.phase,{snapshot,originalCount:count,
+  if(candidates.size)throw new Error('exchange_originals_incomplete');
+  await publishBatch();
+  await publish(snapshot.issue,snapshot.country,'manifest',snapshot.phase,{snapshot,originalCount:snapshot.candidates.length,
     formalStateAuthority:'plan_b_daily',exchangeVersion:EXCHANGE_VERSION});
 }
 
