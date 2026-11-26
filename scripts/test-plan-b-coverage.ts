@@ -145,6 +145,13 @@ resolved.review.candidateDecisions[unresolved.id].publicationTimeResolution = {.
 assert.throws(()=>verifyEditorial(resolved,snapshotNew),/verified_publication_resolution_required/);
 resolved.review.candidateDecisions[unresolved.id].publicationTimeResolution = resolution;
 assert.equal(verifyEditorial(resolved,snapshotNew).articleCount,15);
+const conflicted=snapshot({...snapshotNew,candidates:snapshotNew.candidates.map(candidate=>candidate.id===unresolved.id
+  ? {...unresolved,publicationOptions:[observedPublication,{...observedPublication,
+    publishedAt:'2026-11-26T19:03:00+08:00',evidenceSha256:sha256('second archived time')}]}
+  : candidate)});
+assert.throws(()=>verifyEditorial({...resolved,finalHash:conflicted.hash,
+  review:{...resolved.review,coverageReview:{...resolved.review.coverageReview,finalHash:conflicted.hash}}},
+conflicted),/verified_publication_resolution_required/);
 const sameEvent=newEditorial(newer.slice(0,15));
 for (const id of [newer[0].id,newer[1].id]) Object.assign(sameEvent.review.candidateDecisions[id],
   {eventGroup:'project-a',eventPhase:'financing',newFact:'The same loan was announced.'});

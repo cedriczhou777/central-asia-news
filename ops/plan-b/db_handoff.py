@@ -4,6 +4,8 @@ Only the coordinator executes the generated SQL. No credentials occur in SQL.
 import argparse,hashlib,hmac,json,os,re
 from pathlib import Path
 from datetime import date, timedelta
+from editorial_policy import EFFECTIVE_ISSUE
+from source_evidence import PACKET_VERSION
 
 def canonical(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
@@ -14,14 +16,17 @@ def digest(value):
 def literal(value):
     return "'"+str(value).replace("'","''")+"'"
 
-def verify_original(value):
+def verify_original(value, issue=None):
     candidate,original=value['candidate'],value['original']
     if (candidate['id']!=original['id'] or candidate['sourceHash']!=original['sourceHash']
         or hashlib.sha256(original['text'].encode()).hexdigest()!=candidate['sourceHash']):
         raise ValueError('original_hash_mismatch')
-    if 'revision' in original or (original.get('evidencePacket') or {}).get('version')=='source-evidence-2':
+    packet = original.get('evidencePacket') or {}
+    current = issue is not None and issue >= EFFECTIVE_ISSUE
+    if current or 'revision' in original or packet.get('version')==PACKET_VERSION:
         if (not candidate.get('revision') or original.get('revision')!=candidate['revision']
-                or not candidate.get('sourceUrl') or original.get('source_url')!=candidate['sourceUrl']):
+                or not candidate.get('sourceUrl') or original.get('source_url')!=candidate['sourceUrl']
+                or (current and packet.get('version')!=PACKET_VERSION)):
             raise ValueError('original_revision_or_source_mismatch')
     return True
 
@@ -84,7 +89,8 @@ def sql(view,issue,country=None,phase='preview',ids=(),document=None):
     if view in ('originals','evidence'):
         if not 1<=len(ids)<=5 or len(set(ids))!=len(ids) or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,96}/[a-f0-9]{64}/[a-f0-9]{64}',v)for v in ids):raise ValueError('one_to_five_id_hash_revision_keys_required')
         payload="payload" if view=='originals' else "jsonb_build_object('candidate',payload->'candidate','evidencePacket',payload #> '{original,evidencePacket}') as payload"
-        return f"select record_key,content_hash,{payload} from public.plan_b_exchange where {scope} and kind='original' and record_key in ({','.join(map(literal,ids))});"
+        keys = [f'{PACKET_VERSION}/{key}' for key in ids] if issue >= EFFECTIVE_ISSUE else ids
+        return f"select record_key,content_hash,{payload} from public.plan_b_exchange where {scope} and kind='original' and record_key in ({','.join(map(literal,keys))});"
     if view in ('word','commands'):
         if view=='word':
             if not ids:return f"select record_key,payload-'base64' as metadata from public.plan_b_exchange where {scope} and kind='word' order by created_at desc limit 1;"
@@ -106,7 +112,7 @@ def main():
     p.add_argument('--issue',required=True);p.add_argument('--country');p.add_argument('--phase',default='preview');p.add_argument('--ids',nargs='*',default=[]);p.add_argument('--document',type=Path)
     a=p.parse_args();body=json.loads(a.document.read_bytes())if a.document else None
     if a.view=='verify-health':print(json.dumps({'verified':health_verified(body,a.issue)}))
-    elif a.view=='verify-original':print(json.dumps({'verified':verify_original(body)}))
+    elif a.view=='verify-original':print(json.dumps({'verified':verify_original(body,a.issue)}))
     else:print(sql(a.view,a.issue,a.country,a.phase,a.ids,body))
 
 if __name__=='__main__':main()

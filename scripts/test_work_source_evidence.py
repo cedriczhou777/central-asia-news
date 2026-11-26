@@ -3,7 +3,8 @@ import json
 import unittest
 
 from discovery_feed import parse_feed
-from source_evidence import fact_locations, khovar_archive_dateline, local_timestamp, source_time
+from source_evidence import (fact_locations, khovar_archive_dateline, khovar_archive_publication_footer,
+                             local_timestamp, publication_options, source_time)
 from news_funnel import event_pairs, scan_funnel
 from db_handoff import sql, verify_original
 from datetime import datetime
@@ -12,6 +13,17 @@ from fetch_work_sources import parse_response
 
 
 class SourceEvidencePolicy(unittest.TestCase):
+    def test_khovar_archive_footer_requires_current_prose_dateline(self):
+        url='https://khovar.tj/rus/2026/11/article/'
+        prose='ДУШАНБЕ, 25.11.2026 /НИАТ «Ховар»/.\nТекст статьи.'
+        footer='\n\ue716\nПечать страницы\n✉\nОтправить\nНоябрь 25, 2026 15:27'
+        item=khovar_archive_publication_footer(url,prose+footer)
+        self.assertEqual(item['localWallTime'],'2026-11-25T15:27')
+        self.assertIsNone(khovar_archive_publication_footer(url,prose+footer.replace('25,','24,')))
+        self.assertIsNone(khovar_archive_publication_footer(url,prose+footer+'\nДругая статья'))
+        self.assertIsNone(khovar_archive_publication_footer(url.replace('11/','10/'),prose+footer))
+        self.assertIsNone(khovar_archive_publication_footer(url,footer))
+
     def test_rss_atom_and_news_sitemap_are_leads_only(self):
         base='https://press.example/news'
         for raw in (
@@ -140,6 +152,9 @@ class SourceEvidencePolicy(unittest.TestCase):
         self.assertIn('sourceFunnel',sql('funnel','2026-11-26','az'))
         self.assertIn("'2026-11-20' and '2026-11-26'",sql('weekly-funnel','2026-11-26'))
         self.assertIn("payload #> '{original,evidencePacket}'",sql('evidence','2026-11-26','az',ids=['id/'+'a'*64+'/'+'b'*64]))
+        key='id/'+'a'*64+'/'+'b'*64
+        self.assertIn("'"+key+"'",sql('originals','2026-11-26','az',ids=[key]))
+        self.assertIn("'source-evidence-2/"+key+"'",sql('originals','2026-11-27','az',ids=[key]))
         with self.assertRaises(ValueError):
             sql('evidence','2026-11-26','az',ids=['id'])
 
@@ -150,9 +165,27 @@ class SourceEvidencePolicy(unittest.TestCase):
         candidate={'id':'id','sourceHash':body_hash,'sourceUrl':source_url,'revision':'b'*64}
         legacy={'id':'id','sourceHash':body_hash,'text':text}
         self.assertTrue(verify_original({'candidate':candidate,'original':legacy}))
+        self.assertTrue(verify_original({'candidate':candidate,'original':legacy},'2026-11-26'))
+        with self.assertRaisesRegex(ValueError,'original_revision_or_source_mismatch'):
+            verify_original({'candidate':candidate,'original':legacy},'2026-11-27')
         original={**legacy,'revision':candidate['revision'],'source_url':source_url,
                   'evidencePacket':{'version':'source-evidence-2'}}
-        self.assertTrue(verify_original({'candidate':candidate,'original':original}))
+        self.assertTrue(verify_original({'candidate':candidate,'original':original},'2026-11-27'))
         for patch in ({'revision':None},{'revision':'a'*64},{'source_url':source_url+'0'}):
             with self.assertRaisesRegex(ValueError,'original_revision_or_source_mismatch'):
                 verify_original({'candidate':candidate,'original':{**original,**patch}})
+
+    def test_publication_options_hold_conflicting_article_clocks(self):
+        url='https://press.example/post/1'
+        start=datetime.fromisoformat('2026-11-26T06:00:00+08:00')
+        end=datetime.fromisoformat('2026-11-27T06:00:00+08:00')
+        observed=datetime.fromisoformat('2026-11-27T06:05:00+08:00')
+        first={'articleUrl':url,'kind':'published','precision':'seconds','raw':'2026-11-26T11:00:00Z'}
+        same={**first,'raw':'2026-11-26T16:00:00+05:00'}
+        def options(*entries, **flags):
+            return publication_options({'url':url,'publicationEvidence':entries,**flags},observed,start,end)
+        self.assertEqual(len(options(first,same)),2)
+        for conflict in ('2026-11-26T11:01:00Z','2026-11-25T21:00:00Z','2026-11-27T11:00:00Z'):
+            self.assertEqual(options(first,{**first,'raw':conflict}),[])
+        self.assertEqual(options(first,publicationReviewRequired=True),[])
+        self.assertEqual(len(options(first,{**first,'kind':'modified','raw':'2026-11-26T12:00:00Z'})),1)

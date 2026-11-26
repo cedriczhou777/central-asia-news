@@ -22,6 +22,7 @@ from source_coverage import assess_coverage
 import cloud_release
 from fetch_work_sources import decode_transport
 import prepare_country_release
+from prepare_editorial_input import candidate_row
 from source_article_images import collect, connect_public
 from test_work_quantity import fixture
 from validate_work_package import digest
@@ -66,6 +67,8 @@ def inputs(directory, *, transport_budget=False, issue=ISSUE, count=15, photo_in
                     sourceHash=source_hash, published_at=published,
                     timeEvidence='合成报文显示的带时区发布时间',
                     firstPublicationCheck='合成报文同时提供首次披露和实际发布时间')
+        if issue >= '2026-11-27':
+            item['revision'] = candidate_row(entry)['editorialFingerprint']
         if previous:
             item.update(title='【延续关注】'+item['title'],previousDay=True,followUpReason='Synthetic continuing interest after the previous publication')
     region = {'issueDate': issue, 'country': 'kg', 'windowStart': (end - timedelta(days=1)).isoformat(),

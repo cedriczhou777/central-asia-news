@@ -38,6 +38,8 @@ RUSSIAN_MONTHS = ('января', 'февраля', 'марта', 'апреля'
                   'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря')
 AZERBAIJANI_MONTHS = ('yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
                       'iyul', 'avqust', 'sentyabr', 'oktyabr', 'noyabr', 'dekabr')
+KHOVAR_RUSSIAN_MONTHS = ('январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+                         'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь')
 
 
 def header_clock(value):
@@ -78,6 +80,30 @@ def khovar_archive_dateline(url, text):
             'calendarDay':day.isoformat(),'kind':'dateline','precision':'date',
             'timezoneEvidence':'not_provided','articleUrl':url,
             'confidenceBasis':['current_publisher_prose_and_archive_month_match'],'priority':95}
+
+
+def khovar_archive_publication_footer(url, text):
+    """Recover a Khovar clock retained with its article's print/share controls."""
+    dateline = khovar_archive_dateline(url, text)
+    if not dateline:
+        return None
+    footer = re.search(r'\ue716\s*Печать страницы\s*✉\s*Отправить\s+'
+                       r'(([А-Яа-яёЁ]+) (\d{1,2}), (20\d\d) (\d\d:\d\d))\s*$', text)
+    if not footer or footer[2].casefold() not in KHOVAR_RUSSIAN_MONTHS:
+        return None
+    month = KHOVAR_RUSSIAN_MONTHS.index(footer[2].casefold()) + 1
+    day = f'{footer[4]}-{month:02d}-{int(footer[3]):02d}'
+    if day != dateline['calendarDay']:
+        return None
+    wall = f'{day}T{footer[5]}'
+    try:
+        datetime.fromisoformat(wall)
+    except ValueError:
+        return None
+    return {'field':'publisher.khovar.bound_original_print_share_footer','raw':footer[1],
+            'localWallTime':wall,'kind':'published','precision':'minutes',
+            'timezoneEvidence':'not_provided','articleUrl':url,
+            'confidenceBasis':['current_article_print_share_footer_matches_agency_dateline'],'priority':35}
 
 
 def local_timestamp(value, zone):
@@ -178,8 +204,10 @@ def evidence_packet(record, ledger, original):
 
 def publication_options(record, observed_at, start, end):
     """List only precise, same-article publication evidence frozen by the cloud."""
+    if record.get('publicationReviewRequired'):
+        return []
     keys = {page_key(record.get(k)) for k in ('url', 'final_url', 'canonical_url')} - {None}
-    result = []
+    observations = []
     for item in record.get('publicationEvidence') or []:
         if (not isinstance(item, dict) or item.get('kind') != 'published'
                 or item.get('precision') not in ('minutes','seconds','fractional_seconds')
@@ -190,10 +218,18 @@ def publication_options(record, observed_at, start, end):
             stamp = datetime.fromisoformat(raw.replace('Z','+00:00'))
         except (ValueError, TypeError, AttributeError):
             continue
-        if stamp.tzinfo and start <= stamp < end and stamp <= observed_at:
-            digest = sha256(json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
-            result.append(dict(url=item['articleUrl'], publishedAt=stamp.isoformat(), evidenceSha256=digest))
-    return result
+        if stamp.tzinfo:
+            observations.append((stamp,item))
+    instants = {stamp for stamp,_ in observations}
+    if len(instants)!=1:
+        return []
+    stamp = next(iter(instants))
+    if not (start <= stamp < end and stamp <= observed_at):
+        return []
+    return [dict(url=item['articleUrl'], publishedAt=value.isoformat(),
+                 evidenceSha256=sha256(json.dumps(item, sort_keys=True, ensure_ascii=False,
+                                                   separators=(',', ':')).encode()).hexdigest())
+            for value,item in observations]
 
 def language_versions(candidates, records):
     """Associate only the same publisher's reciprocally declared article pages."""

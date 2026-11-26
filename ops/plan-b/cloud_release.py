@@ -62,8 +62,10 @@ def read_originals(source_root, issue, country, draft, review):
     return originals
 
 
-def bind_original(article, original):
+def bind_original(article, original, require_revision=False):
     if article['source_url'] != original['source_url'] or article['sourceHash'] != original['sourceHash']:
+        raise ValueError('frozen_source_binding_mismatch')
+    if require_revision and (not article.get('revision') or article['revision'] != original.get('revision')):
         raise ValueError('frozen_source_binding_mismatch')
     # Replace delivery metadata only. Signed titles, bodies and source identity
     # stay byte-for-byte identical to the Work handoff.
@@ -173,7 +175,8 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     originals = read_originals(source, issue, country, draft, review)
     attach_audit(source, issue, country, draft, review)
     for role in (draft, review):
-        role['articles'] = [bind_original(article, originals[article['id']]) for article in role['articles']]
+        role['articles'] = [bind_original(article, originals[article['id']], issue >= EFFECTIVE_ISSUE)
+                            for article in role['articles']]
     saved = directory / 'photos'
     saved.mkdir()
     root = saved / 'images'

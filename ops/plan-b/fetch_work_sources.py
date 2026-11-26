@@ -6,14 +6,12 @@ from urllib.parse import urljoin,urlparse,urlsplit,urlunsplit
 import urllib.request,urllib.error
 from lxml import html
 from discovery_feed import FEED_TYPES, parse_feed
-from source_evidence import header_clock, khovar_archive_dateline
+from source_evidence import KHOVAR_RUSSIAN_MONTHS, header_clock, khovar_archive_dateline, khovar_archive_publication_footer
 P=Path(__file__).parent;S=P/'sources'
-PARSER_VERSION='source-html-v25'
+PARSER_VERSION='source-html-v26'
 TRANSIENT={429,500,502,503,504}
 MAX_NETWORK_SECONDS = 45
 MAX_TRANSPORT_BYTES = 10_000_000
-KHOVAR_RUSSIAN_MONTHS = ('январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
-                         'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь')
 class HTMLValidationError(ValueError):
     def __init__(self,message,encoding,evidence):
         super().__init__(message);self.decodedEncoding=encoding;self.encodingEvidence=evidence
@@ -836,6 +834,9 @@ def parse_response(url,final_url,raw,headers):
         dateline=khovar_archive_dateline(canonical or final_url,text)
         if dateline:
             publications.append(dateline)
+        footer=khovar_archive_publication_footer(canonical or final_url,text)
+        if footer:
+            publications.append(footer)
     reject_mojibake(title+'\n'+text,decoded_encoding,encoding_evidence)
     if (len(text)<80 or '\ufffd' in text[:100]) and not (source_kind=='article' and not full_text_validated):raise ValueError('unreadable_or_empty_HTML')
     result={'meta':meta,'title':title,'time_tags':times,'linked_data':linked_data,'links':links,'images':images,'text':text,'source_sha256':hashlib.sha256(text.encode()).hexdigest(),'source_kind':source_kind,'sourceKindEvidence':source_kind_evidence,'parser_version':PARSER_VERSION,'contentValidated':source_kind!='article' or full_text_validated,'fullTextValidated':full_text_validated,'articleBodyEvidence':body_evidence,'transport_sha256':hashlib.sha256(raw).hexdigest(),'final_url':final_url,'html_lang':tree.get('lang'),'canonical_url':canonical,'page_links':page_links,'publicationEvidence':publications,'excludedPublicationEvidence':excluded_publications,'decodedEncoding':decoded_encoding,'encodingEvidence':encoding_evidence}

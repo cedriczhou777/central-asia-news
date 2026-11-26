@@ -125,6 +125,7 @@ export function verifyEditorial(input: unknown, final: Snapshot) {
           || !shaPattern.test(String(proof.evidenceSha256))
           || !source.publicationOptions?.some(observation => observation.url===proof.url
             && observation.evidenceSha256===proof.evidenceSha256 && Date.parse(observation.publishedAt)===published)
+          || source.publicationOptions.some(observation => Date.parse(observation.publishedAt)!==published)
           || typeof proof.description!=='string'
           || proof.description.trim().length<16) throw new Error('verified_publication_resolution_required');
     }

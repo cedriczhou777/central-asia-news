@@ -12,6 +12,8 @@
 
 使用同一个任务和现有作者、独审身份。先核对当天线上 health 的实现指纹和 `editorialPolicy.version`。分国读当前冻结清单，按来源、题材和事件分批读取 `evidence`。候选正文用 `originals` 按 ID/sourceHash/revision 分批读取，每批至多 5 条。对计划采用或仍有重要疑点的文章审核完整正文。作者和独审共用同一份不可变原文。作者结论由独审独立判断。
 
+适用新策略时，冻结清单必须带 `sourceEvidenceVersion=source-evidence-2`。`db_handoff.py` 会把证据版本加入原文数据库记录键，防止同刊旧版记录混入。对每批原文使用 `verify-original --issue D` 校验。原文缺失或与清单不符时保留待核，等待云端出具同版材料。
+
 纳入所有符合日报价值的经济、工商、投资、金融、能源、工业、基建、交通、税收、法律、政策、政府活动、外交、农业、就业、医疗、教育、社会、民生、环境、安全和重大体育报道。普通体育和娱乐花边不采用。关键词仅用于云端优先排序。遇到翻译、数字单位、标题或次要细节瑕疵，修正正文或移除缺证细节。鉴别同事件的转载与融资、签约、开工等确有新事实的阶段。
 
 独审提交包含 `review.policyVersion=plan-b-editorial-2`。每个最终候选 ID 都在 `candidateDecisions` 留下一条具体理由和状态，并填入冻结的 `sourceHash`、`revision` 及本次独审的 `reviewedBy`。
@@ -27,6 +29,8 @@
 | unselected_priority / unselected_capacity | rejected | 分别自 15 条和满 20 条后使用，记录比较及容量 |
 
 采用条目填写 `firstDisclosureVerified` 与 `firstDisclosureEvidence`，用可靠当期原始披露、原创采访或可靠的新阶段事实证明本期价值。当期披露证据足以支持采用。无法确认这一证据或临近窗口边界的刊时仍存疑时，标记待核。候选刊时冻结为待核时，独审采用必须填写 `publicationTimeResolution`，匹配冻结条目 `publicationOptions` 中实际归档的证据 SHA、链接和带时区时间，并绑定正文 SHA 与 revision。冻结清单外的新证据交由云端绑定，下次冻结后重新核对。相似事件若分开采用，填 `eventGroup`、`eventPhase`、`newFact`。同刊同事件同阶段只能保留一份。
+
+同篇精确刊时存在冲突时继续待核。不同来源字段经时区转换指向同一瞬间可以一起作为证据。
 
 15 条以下还需现有独立 `quantityExceptionReview` 和覆盖审查。8–14 条使用 `tier=verified_shortfall`，6–7 条使用 `tier=minimum_fallback`。例外需填写 `finalHash`、`candidateInventoryReviewed`、`reviewer`、`reviewedAt`、短缺原因及实际来源证据，解释来源覆盖、采集深度和待核工作。协调者依原 CAS 更新合并检查点。只有原文、刊时证据、新来源、事实冲突或作者修改发生变化时才重新核查相关内容。
 
