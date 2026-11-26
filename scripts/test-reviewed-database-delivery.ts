@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { canonicalJson, sha256 } from '../src/lib/plan-b-handoff';
-import { databaseApprovalSignature, deploymentRecoveryRows, processDatabaseDeliveries, reviewedDatabaseRecoveryWindow,
+import { databaseApprovalSignature, deploymentRecoveryRows, processDatabaseDeliveries, reviseTextLayout, reviewedDatabaseRecoveryWindow,
   verifyDatabaseDeliveryRequest } from '../src/lib/reviewed-database-delivery';
 import { contentHash, validatePackage } from '../src/lib/reviewed-package';
 import type { getSupabaseClient } from '../src/storage/database/supabase-client';
@@ -179,6 +179,42 @@ async function main() {
   assert.equal(kg.state, 'accepted');
   assert.equal(kg.result.mediaId, 'media-kg');
   assert.equal(created.length, 2, 'confirm the existing draft without recreating it');
+  const nextHtml = '<section style="padding:0 10px 20px"><section style="padding:20px 12px">'
+    + '<p style="font-size:16px;line-height:1.9;text-align:justify;text-align-last:left">kg body</p><p>Source: Fixture News</p>'
+    + '</section><section style="background:#f7f5ef;text-align:center">'
+    + '<p style="color:#929292;text-align:center;font-size:12px">中亚投资资讯 | Central Asia Investment Daily</p>'
+    + '<p style="color:#929292;text-align:center;font-size:12px">数据来源：各国主流媒体</p></section></section>';
+  const revision = { ...release, version: issue + '-r2', countries: { ...release.countries,
+    kg: { ...release.countries.kg!, bodyHtml: nextHtml } } };
+  const originalProof = { media_id: 'media-kg', detail: {
+    inputHash: contentHash(release.countries.kg!.bodyHtml), expectedThumbMediaId: 'fixture-thumb', imageUrls: [],
+  } };
+  let updateStarted = false;
+  let updateCalls = 0;
+  let updatedHtml: string | undefined;
+  const updateAdapters = { async read(mediaId: string) {
+    const existing = await adapters.read(mediaId);
+    return { ...existing, content: updatedHtml ?? existing.content };
+  }, async update(mediaId: string, article: object) {
+    assert.equal(mediaId, originalProof.media_id);
+    assert.equal(updateStarted, true, 'persist intent before touching WeChat');
+    assert.equal((article as {thumb_media_id: string}).thumb_media_id, 'fixture-thumb');
+    updateCalls++;
+    updatedHtml = (article as {content: string}).content;
+    throw new Error('update reply lost');
+  } };
+  const markUpdate = async () => { updateStarted = true; };
+  await assert.rejects(reviseTextLayout(release, revision, 'kg', originalProof, updateAdapters,
+    updateStarted, markUpdate, () => {}), /update reply lost/);
+  const reformatted = await reviseTextLayout(release, revision, 'kg', originalProof, updateAdapters,
+    updateStarted, markUpdate, () => {});
+  assert.equal(reformatted?.mediaId, originalProof.media_id);
+  assert.equal(reformatted?.layoutVerified, true);
+  assert.equal(updateCalls, 1, 'recover a lost update solely by reading the same ID');
+  updatedHtml = nextHtml.replace('text-align:justify', 'text-align:left');
+  assert.equal(await reviseTextLayout(release, revision, 'kg', originalProof, updateAdapters,
+    updateStarted, markUpdate, () => {}), null);
+  assert.equal(updateCalls, 1, 'layout mismatch does not issue another write');
   console.log('Database delivery: grant scope, deadline, tamper rejection, independent progress, lost reply readback and dedupe passed; real writes=0.');
 }
 

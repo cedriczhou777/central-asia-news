@@ -32,10 +32,18 @@ const NOV26_DEPLOYMENT_APPROVAL = {
   countries: PACKAGE_COUNTRIES,
   expiresAt: Date.parse('2026-11-26T12:00:00+08:00'),
 } as const;
+const NOV26_LAYOUT_APPROVAL = {
+  ...NOV26_DEPLOYMENT_APPROVAL,
+  version: '2026-11-26-r2',
+  authorizationId: 'nov26-layout-r2-878ad7c679d22eb5',
+  contentHash: '878ad7c679d22eb5962aa5095e6a4e268a9f7696acf47649235d93795fcd5a46',
+  expiresAt: Date.parse('2026-11-26T14:00:00+08:00'),
+} as const;
 
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
 type RequestRow = GrantRow & {
   issue_date: string; country: PackageCountry; record_key: string; attempts: number;
+  result?: Record<string, unknown> | null;
 };
 type DeploymentApproval = {
   issue: string; version: string; authorizationId: string; contentHash: string;
@@ -95,8 +103,7 @@ export function deploymentRecoveryRows(approval: DeploymentApproval, staged: Gra
   ];
 }
 
-async function enqueueDeploymentRecovery(key: string, sb: ReturnType<typeof getSupabaseClient>) {
-  const approval = NOV26_DEPLOYMENT_APPROVAL;
+async function enqueueDeploymentRecovery(approval: DeploymentApproval, key: string, sb: ReturnType<typeof getSupabaseClient>) {
   const now = Date.now();
   if (now >= approval.expiresAt || reviewedDatabaseRecoveryWindow(now)?.issue !== approval.issue) return true;
   const { data, error } = await sb.from(TABLE).select('payload,content_hash,state').match({
@@ -153,8 +160,10 @@ export function verifyDatabaseDeliveryRequest(row: RequestRow, grant: GrantRow |
 
 const wechat = { ...deliveryAdapters, find: findRecentReviewedDrafts };
 
+type DraftProof = { media_id: string | null; detail: Record<string, unknown> };
+
 async function verifyPreviousSuccess(payload: ReturnType<typeof validatePackage>, country: PackageCountry,
-    existing: { media_id: string | null; detail: Record<string, unknown> }, read: typeof wechat.read) {
+    existing: DraftProof, read: typeof wechat.read, checkLayout = false) {
   const expected = reviewedCountry(payload, country);
   const { imageUrls, expectedThumbMediaId, inputHash } = existing.detail;
   if (!existing.media_id || inputHash !== contentHash(expected.bodyHtml)
@@ -167,8 +176,35 @@ async function verifyPreviousSuccess(payload: ReturnType<typeof validatePackage>
   const imageMatch = proof.actualImageIdentities.length === proof.expectedImageIdentities.length
     && proof.actualImageIdentities.every((value, i) => value && normalize(value) === normalize(proof.expectedImageIdentities[i]));
   if (!proof.titleMatch || !proof.digestMatch || !proof.expectedTextMatch || !imageMatch || proof.thumbnailMatchesPrepared !== true) return null;
+  const { layout, footer } = proof;
+  if (checkLayout && !(layout.justified && layout.lastLineLeft && layout.lineHeight19 && layout.outerMargin10 && layout.innerMargin12 && footer.passed)) return null;
   return { ...existing.detail, mediaId: existing.media_id, verified: true, expectedTextMatch: true,
-    imageMatch, thumbnailMatchesPrepared: true, readbackAt: new Date().toISOString(), readbackHash: contentHash(draft.content) };
+    imageMatch, thumbnailMatchesPrepared: true, readbackAt: new Date().toISOString(), readbackHash: contentHash(draft.content),
+    ...(checkLayout ? { layoutVerified: true, layout, footer } : {}) };
+}
+
+export async function reviseTextLayout(original: ReturnType<typeof validatePackage>, revised: ReturnType<typeof validatePackage>,
+    country: PackageCountry, existing: DraftProof, adapters: Pick<typeof wechat, 'read' | 'update'>,
+    writeStarted: boolean, recordWrite: () => Promise<void>, assertActive: () => void) {
+  const before = reviewedCountry(original, country);
+  const after = reviewedCountry(revised, country);
+  const thumb = existing.detail.expectedThumbMediaId;
+  const mediaId = existing.media_id;
+  if (!mediaId || typeof thumb !== 'string' || !thumb || before.title !== after.title || before.summary !== after.summary ||
+      imageUrls(before.bodyHtml).length || imageUrls(after.bodyHtml).length || !adapters.update) {
+    throw new Error('invalid_reviewed_layout_revision');
+  }
+  if (!writeStarted) {
+    if (!await verifyPreviousSuccess(original, country, existing, adapters.read)) throw new Error('invalid_layout_baseline');
+    assertActive();
+    await recordWrite();
+    assertActive();
+    await adapters.update(mediaId, { title: after.title, digest: after.summary, content: after.bodyHtml,
+      author: '中亚动态–INVEST', thumb_media_id: thumb, content_source_url: '', need_open_comment: 0, only_fans_can_comment: 0 });
+  }
+  return verifyPreviousSuccess(revised, country, {
+    media_id: mediaId, detail: { inputHash: contentHash(after.bodyHtml), expectedThumbMediaId: thumb, imageUrls: [] },
+  }, adapters.read, true);
 }
 
 async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: RequestRow, key: string, adapters: typeof wechat) {
@@ -189,6 +225,7 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
   if (claim.data?.length !== 1) return;
 
   let result: Record<string, unknown>;
+  let layoutWriteStarted = row.result?.layoutWriteStarted === true;
   let state = 'rejected';
   try {
     const id = row.payload.authorizationId;
@@ -207,15 +244,36 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
       }
     };
     assertActive();
+    const reviseLayout = authorizationId === NOV26_LAYOUT_APPROVAL.authorizationId;
+    if (reviseLayout && (payload.version !== NOV26_LAYOUT_APPROVAL.version || contentHash(payload) !== NOV26_LAYOUT_APPROVAL.contentHash)) {
+      throw new Error('invalid_reviewed_layout_revision');
+    }
     const { hash } = await storeReviewedPackage(payload, sb);
+    const receiptVersion = reviseLayout ? NOV26_DEPLOYMENT_APPROVAL.version : payload.version;
     const saved = await sb.from('reviewed_deliveries').select('state,media_id,detail')
-      .match({ version: payload.version, country: row.country }).maybeSingle();
+      .match({ version: receiptVersion, country: row.country }).maybeSingle();
     if (saved.error) throw new Error('reviewed_receipt_read_failed');
     const existing = saved.data;
-    let receipt: Record<string, unknown> | null = existing?.state === 'succeeded'
-      ? await verifyPreviousSuccess(payload, row.country, existing, adapters.read)
-      : await reconcileKnownReviewedDraft(payload, row.country, sb, adapters.read, adapters.find);
-    if (!receipt && !existing?.media_id && (!existing || ['preparing', 'failed'].includes(existing.state))) {
+    let receipt: Record<string, unknown> | null;
+    if (reviseLayout) {
+      const base = await sb.from('reviewed_packages').select('payload,content_hash').eq('version', receiptVersion).single();
+      if (base.error || base.data?.content_hash !== NOV26_DEPLOYMENT_APPROVAL.contentHash || existing?.state !== 'succeeded') {
+        throw new Error('invalid_layout_baseline');
+      }
+      const original = validatePackage(base.data.payload);
+      if (contentHash(original) !== base.data.content_hash) throw new Error('invalid_layout_baseline');
+      receipt = await reviseTextLayout(original, payload, row.country, existing, adapters, layoutWriteStarted, async () => {
+        const recorded = await sb.from(TABLE).update({ result: { layoutWriteStarted: true } }).match(match)
+          .eq('state', 'working').eq('attempts', attempt).eq('content_hash', row.content_hash).select('country');
+        if (recorded.error || recorded.data?.length !== 1) throw new Error('layout_write_checkpoint_failed');
+        layoutWriteStarted = true;
+      }, assertActive);
+    } else {
+      receipt = existing?.state === 'succeeded'
+        ? await verifyPreviousSuccess(payload, row.country, existing, adapters.read)
+        : await reconcileKnownReviewedDraft(payload, row.country, sb, adapters.read, adapters.find);
+    }
+    if (!reviseLayout && !receipt && !existing?.media_id && (!existing || ['preparing', 'failed'].includes(existing.state))) {
       assertActive();
       const delivery = await deliverReviewedPackage(payload, sb, { ...adapters, update: undefined,
         prepare(draft, progress) {
@@ -242,7 +300,8 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
     result = { ok, authorizationId, version: payload.version, contentHash: hash,
       ...(ok ? { mediaId, readbackAt: receipt?.readbackAt ?? null, readbackHash: receipt?.readbackHash ?? null,
         title: reviewedCountry(payload, row.country).title, verified: true, expectedTextMatch: receipt?.expectedTextMatch,
-        imageMatch: receipt?.imageMatch, coverMatch: receipt?.thumbnailMatchesPrepared, sourceUrlsVisible: receipt?.sourceUrlsVisible }
+        imageMatch: receipt?.imageMatch, coverMatch: receipt?.thumbnailMatchesPrepared, sourceUrlsVisible: receipt?.sourceUrlsVisible,
+        ...(reviseLayout ? { layoutVerified: receipt?.layoutVerified } : {}) }
         : { reason: 'delivery_not_verified', nextAction: 'check_delivery_receipt_before_retry' }) };
   } catch (error) {
     const reason = error instanceof Error ? error.message : '';
@@ -252,7 +311,7 @@ async function processRequest(sb: ReturnType<typeof getSupabaseClient>, row: Req
     result = { ok: false, reason: reason === REVIEWED_VERSION_CONFLICT ? 'reviewed_version_conflict' :
       /^[a-z][a-z0-9_]{0,80}$/.test(reason) ? reason : 'manual_delivery_failed' };
   }
-  const saved = await sb.from(TABLE).update({ state, result, updated_at: new Date().toISOString(),
+  const saved = await sb.from(TABLE).update({ state, result: { ...result, ...(layoutWriteStarted ? { layoutWriteStarted: true } : {}) }, updated_at: new Date().toISOString(),
     ...(state === 'working' ? {} : { lease_until: null }),
   }).match(match).eq('state', 'working').eq('attempts', attempt).eq('content_hash', row.content_hash);
   if (saved.error) throw new Error('manual_delivery_result_save_failed');
@@ -264,7 +323,7 @@ export async function processDatabaseDeliveries(key: string, sb = getSupabaseCli
   const window = reviewedDatabaseRecoveryWindow(timestamp);
   if (!isIndependentDatabaseApprovalKey(key) || !window) return;
   const { data, error } = await sb.from(TABLE)
-    .select('issue_date,country,record_key,state,attempts,payload,content_hash')
+    .select('issue_date,country,record_key,state,attempts,payload,content_hash,result')
     .eq('kind', 'manual_use').like('record_key', `${REQUEST_PREFIX}%`)
     .eq('issue_date', window.issue)
     .or(`state.eq.queued,and(state.eq.working,lease_until.lt.${now})`)
@@ -287,7 +346,7 @@ export function startReviewedDatabaseRecovery() {
   const registered = isIndependentDatabaseApprovalKey(key);
   let statusIssue = '';
   let running = false;
-  let deploymentRecoveryQueued = false;
+  const pendingDeployments = new Set<DeploymentApproval>([NOV26_DEPLOYMENT_APPROVAL, NOV26_LAYOUT_APPROVAL]);
   const tick = () => {
     const window = reviewedDatabaseRecoveryWindow();
     if (running || !window) return;
@@ -305,8 +364,8 @@ export function startReviewedDatabaseRecovery() {
         else statusIssue = window.issue;
       }
       if (registered) {
-        if (!deploymentRecoveryQueued) {
-          try { deploymentRecoveryQueued = await enqueueDeploymentRecovery(key, sb); }
+        for (const approval of pendingDeployments) {
+          try { if (await enqueueDeploymentRecovery(approval, key, sb)) pendingDeployments.delete(approval); }
           catch { console.warn('deployment_recovery_not_queued'); }
         }
         await processDatabaseDeliveries(key, sb);
