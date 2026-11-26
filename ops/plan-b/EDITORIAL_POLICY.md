@@ -14,7 +14,7 @@
 
 纳入所有符合日报价值的经济、工商、投资、金融、能源、工业、基建、交通、税收、法律、政策、政府活动、外交、农业、就业、医疗、教育、社会、民生、环境、安全和重大体育报道。普通体育和娱乐花边不采用。关键词仅用于云端优先排序。遇到翻译、数字单位、标题或次要细节瑕疵，修正正文或移除缺证细节。鉴别同事件的转载与融资、签约、开工等确有新事实的阶段。
 
-每个最终候选 ID 都在独审 `candidateDecisions` 留下一条具体理由和状态。
+独审提交包含 `review.policyVersion=plan-b-editorial-2`。每个最终候选 ID 都在 `candidateDecisions` 留下一条具体理由和状态，并填入冻结的 `sourceHash`、`revision` 及本次独审的 `reviewedBy`。
 
 | editorialState | decision | 随附证据 |
 | --- | --- | --- |
@@ -26,14 +26,14 @@
 | rejected_irrelevant | rejected | 说明选题不适合日报的具体原因 |
 | unselected_priority / unselected_capacity | rejected | 分别自 15 条和满 20 条后使用，记录比较及容量 |
 
-采用条目填写 `firstDisclosureVerified` 与 `firstDisclosureEvidence`，用可靠当期原始披露、原创采访或可靠的新阶段事实证明本期价值。缺少全网最早时间进入相应待核状态。接近窗口边界的时间证据不足时持有。冻结时刊时不定、经独审核实后采用的候选需写 `publicationTimeResolution`，绑定来源正文 SHA、revision、原始证据 SHA、链接、明确带时区时间和核实理由。相似事件若分开采用，填 `eventGroup`、`eventPhase`、`newFact`。同刊同事件同阶段只能保留一份。
+采用条目填写 `firstDisclosureVerified` 与 `firstDisclosureEvidence`，用可靠当期原始披露、原创采访或可靠的新阶段事实证明本期价值。当期披露证据足以支持采用。无法确认这一证据或临近窗口边界的刊时仍存疑时，标记待核。候选刊时冻结为待核时，独审采用必须填写 `publicationTimeResolution`，匹配冻结条目 `publicationOptions` 中实际归档的证据 SHA、链接和带时区时间，并绑定正文 SHA 与 revision。冻结清单外的新证据交由云端绑定，下次冻结后重新核对。相似事件若分开采用，填 `eventGroup`、`eventPhase`、`newFact`。同刊同事件同阶段只能保留一份。
 
-15 条以下还需现有独立 `quantityExceptionReview` 和覆盖审查。数量例外需填写 `finalHash`、`candidateInventoryReviewed`、`reviewer`、`reviewedAt`、短缺原因及实际来源证据，解释来源覆盖、采集深度和待核工作。协调者依原 CAS 更新合并检查点。只有原文、刊时证据、新来源、事实冲突或作者修改发生变化时才重新核查相关内容。
+15 条以下还需现有独立 `quantityExceptionReview` 和覆盖审查。8–14 条使用 `tier=verified_shortfall`，6–7 条使用 `tier=minimum_fallback`。例外需填写 `finalHash`、`candidateInventoryReviewed`、`reviewer`、`reviewedAt`、短缺原因及实际来源证据，解释来源覆盖、采集深度和待核工作。协调者依原 CAS 更新合并检查点。只有原文、刊时证据、新来源、事实冲突或作者修改发生变化时才重新核查相关内容。
 
 ## 记录和发布
 
 - `db_handoff.py funnel` 只读返回分国最终采集漏斗、签审状态和可见成本。来源数据包含逐列表页新闻链接数、正文成功及解析失败、非文章响应、HTTP 失败、窗口合格、窗外和刊时不明。未完成记录保留在采集归档。分国最终交付仍以同版 Word 和微信真实回读为准。
 - `db_handoff.py weekly-funnel` 汇总过去 7 刊期的覆盖、来源可用性、解析和采用排名。只统计已有记录，以观测天数和审稿天数标明分母。新闻题材空白和 AI 误退由抽查覆核确认。
-- 提交的 `usage.observations` 只记录平台实际可见的 `callId`、`stage`、`inputHash`、`inputTokens`、`outputTokens`、`retry`。没有可见计量时用 null。记录复用、重试和哈希一致情况，无额外模型调用。
+- 在合并检查点保留可见调用信息，通过提交的 `usage.observations` 报告实际 `callId`、`stage`、`inputHash`、`inputTokens`、`outputTokens`、`workCredits`、`retry`、`failed` 和 `evidenceReused`。不可见的数值留 null。记录复用、重试和哈希一致情况。
 - 缺图允许交正文，使用同一国家最靠前的合格原图作封面，保留重要新闻的签审顺序。仅有 OG 元数据的图片保留为待核线索，实际图片仍由云端验证字节及哈希。
 - 生产部署和现有唯一任务指令应在同一变更窗口完成，并回读当天 health 的实现指纹和策略。回退时一起恢复此前运行镜像和任务指令。代码合并、健康状态、封包受理或模拟回读均不足以计为正式投递。
