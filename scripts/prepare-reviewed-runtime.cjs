@@ -4,7 +4,7 @@ const path = require('node:path');
 const {createHash}=require('node:crypto');
 if (process.env.REVIEWED_BUILD_ONLY !== '1') throw new Error('This script may run only in the image build stage');
 const identityFiles=['src/lib/plan-b-runtime.ts','src/lib/plan-b-runtime-checks.ts','src/lib/plan-b-exchange.ts','src/lib/plan-b-command.ts',
-  'src/lib/plan-b-checkpoint.ts','src/lib/reviewed-manual-authorization.ts','src/app/api/plan-b/route.ts',
+  'src/lib/plan-b-checkpoint.ts','src/lib/reviewed-manual-authorization.ts','src/lib/reviewed-database-delivery.ts','src/app/api/plan-b/route.ts',
   'ops/plan-b/cloud_handoff.py','ops/plan-b/cloud_release.py','ops/plan-b/news_queue_policy.py',
   'ops/plan-b/source_coverage.py','ops/plan-b/discover_work_sources.py','ops/plan-b/fetch_work_sources.py','ops/plan-b/verified_archive_publications.json',
   'ops/plan-b/source_registry.json',
