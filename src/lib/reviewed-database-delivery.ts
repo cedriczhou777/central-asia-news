@@ -40,6 +40,16 @@ const NOV26_LAYOUT_APPROVAL = {
   expiresAt: Date.parse('2026-11-26T14:00:00+08:00'),
 } as const;
 
+// Owner requested a separate five-country production draft check from the reviewed November 26 edition.
+const NOV26_REAL_DRAFT_APPROVAL = {
+  issue: '2026-11-26',
+  version: '2026-11-26-r3',
+  authorizationId: 'nov26-owner-live-r3-9a18ba2be332ae6c',
+  contentHash: '9a18ba2be332ae6ce361b0de80edca8f4c7fd76aecd691467c08598bdec73ae6',
+  countries: PACKAGE_COUNTRIES,
+  expiresAt: Date.parse('2026-11-26T14:00:00+08:00'),
+} as const;
+
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
 type RequestRow = GrantRow & {
   issue_date: string; country: PackageCountry; record_key: string; attempts: number;
@@ -346,7 +356,7 @@ export function startReviewedDatabaseRecovery() {
   const registered = isIndependentDatabaseApprovalKey(key);
   let statusIssue = '';
   let running = false;
-  const pendingDeployments = new Set<DeploymentApproval>([NOV26_DEPLOYMENT_APPROVAL, NOV26_LAYOUT_APPROVAL]);
+  const pendingDeployments = new Set<DeploymentApproval>([NOV26_DEPLOYMENT_APPROVAL, NOV26_LAYOUT_APPROVAL, NOV26_REAL_DRAFT_APPROVAL]);
   const tick = () => {
     const window = reviewedDatabaseRecoveryWindow();
     if (running || !window) return;
