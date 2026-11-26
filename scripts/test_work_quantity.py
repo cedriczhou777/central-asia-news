@@ -1,4 +1,5 @@
 import copy
+import json
 import unittest
 from datetime import datetime
 
@@ -66,6 +67,27 @@ class QuantityEvidence(unittest.TestCase):
         self.assertFalse(result['quantityReady'])
         self.assertFalse(result['qualityDeliveryComplete'])
         self.assertTrue(result['shortfallOpen'])
+
+    def test_plan_b_short_edition_requires_bound_source_and_independent_review(self):
+        d, audit, _ = fixture(1)
+        d = json.loads(json.dumps(d).replace('2026-11-15', '2026-11-26'))
+        audit = json.loads(json.dumps([r for r in audit if r['sourceId'] == 'source0']).replace('2026-11-15', '2026-11-26'))
+        d['sourceRegistry']['sources'] = d['sourceRegistry']['sources'][:1]
+        d['planBFinalHash'] = 'b'*64
+        d['planBCoverage'] = {'version':'plan-b-coverage-2', 'country':'kg', 'windowEnd':'2026-11-26T06:00:00+08:00',
+                              'observedAt':'2026-11-26T06:03:00+08:00', 'state':'observed',
+                              'queues':dict.fromkeys(('listing','article','lead'),0), 'gaps':[],
+                              'pendingWork':[], 'reviewWork':[], 'closedQueueWork':[],
+                              'queueAccounting':{kind:dict(total=0,pending=0,review=0,closed=0,identityHash='c'*64)
+                                                 for kind in ('listing','article','lead')}}
+        now = datetime.fromisoformat('2026-11-26T08:00:00+08:00')
+        self.assertFalse(evaluate_quantity(d, audit, now)['quantityReady'])
+        d['quantityExceptionReview'] = {**self.exception(d, audit), 'reviewedAt':'2026-11-26T07:00:00+08:00'}
+        result = evaluate_quantity(d, audit, now)
+        self.assertTrue(result['quantityReady'], result)
+        self.assertEqual(result['quantitySummary']['exceptionMin'], 1)
+        d['planBCoverage']['pendingWork'] = [{'sourceId':'source0','kind':'article'}]
+        self.assertFalse(evaluate_quantity(d, audit, now)['quantityReady'])
 
     @staticmethod
     def exception(d, audit):

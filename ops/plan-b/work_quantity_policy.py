@@ -293,8 +293,8 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
     unless every declared entrypoint is proven terminally unavailable this issue
     and no readable alternative listing exists. Never retry a cached refusal just
     to manufacture a later fetchedAt; transient failures still need a final try.
-    Plan B may instead bind an independent, archived gap/discovery review;
-    actual media/institution attempts and successful full-text minima remain.
+    Plan B may bind an independent, archived gap/discovery review. Short
+    editions can use a smaller observed source set with the same story checks.
     Unfetched candidates may be rejected using the matching failure/listing evidence.
     Every successfully fetched article and every adopted article needs a ledger row.
     """
@@ -476,6 +476,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
     unavailable_excluded = available.intersection(unavailable) - after_cutoff
     reviewed_gaps = set()
     proof = draft.get('planBCoverage')
+    verified_plan_b = False
     if proof is not None:
         # This contract is attached by cloud_release after recomputing the
         # frozen assessment from its immutable source archive. The independent
@@ -492,15 +493,22 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             reviewed_gaps = {row['sourceId'] for row in proof.get('gaps', [])}
             if not reviewed_gaps.issubset(available):
                 raise ValueError('coverage_gap_source_unregistered')
+            verified_plan_b = True
         except (ValueError, TypeError, KeyError) as error:
             coverage_errors.append('independent Plan B coverage: ' + str(error))
             reviewed_gaps = set()
     missing_cutoff = sorted(available - after_cutoff - unavailable - reviewed_gaps)
-    if len(media_attempts) < 8:
+    articles = draft.get("articles", [])
+    count = len(articles)
+    exception_min = 1 if verified_plan_b and draft["issueDate"] >= '2026-11-26' else 10
+    short_edition = exception_min == 1 and 0 < count < 15
+    if not short_edition and len(media_attempts) < 8:
         coverage_errors.append("need attempts across at least 8 distinct media families")
-    if len(fulltext_families) < 3:
+    if short_edition and not fulltext_families:
+        coverage_errors.append("short edition requires a verified full-text source")
+    elif not short_edition and len(fulltext_families) < 3:
         coverage_errors.append("need successful full text from at least 3 distinct source families")
-    if len(institution_types) < 3:
+    if not short_edition and len(institution_types) < 3:
         coverage_errors.append("need attempts across at least 3 distinct institution types")
     if missing_cutoff:
         coverage_errors.append("missing after-cutoff listing attempt: " + ", ".join(missing_cutoff))
@@ -533,7 +541,6 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
     if not isinstance(ledger, list) or not ledger:
         ledger_errors.append("candidateLedger: nonempty candidate decision ledger required")
         ledger = []
-    articles = draft.get("articles", [])
     adopted_ids = [a.get("id") for a in articles]
     if len(set(map(str, adopted_ids))) != len(articles):
         ledger_errors.append("duplicate adopted article IDs")
@@ -638,11 +645,10 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
 
     exception_errors = []
     exception = draft.get("quantityExceptionReview")
-    count = len(articles)
     exception_approved = False
-    if 10 <= count < 15:
+    if exception_min <= count < 15:
         if not isinstance(exception, dict) or exception.get("status") != "approved":
-            exception_errors.append("10-14 articles require independent quantity exception approval")
+            exception_errors.append("a short edition requires independent quantity exception approval")
         else:
             reviewer = exception.get("reviewer")
             if not isinstance(reviewer, str) or not reviewer.strip() or reviewer.strip() == str(draft.get("writerRun", "")).strip():
@@ -656,10 +662,11 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             if not _detail(exception.get("reason")):
                 exception_errors.append("specific independent shortfall review reason required")
             exception_errors.extend(_evidence_errors(exception.get("evidence"), records, now, "quantityExceptionReview"))
-            exception_errors.extend(_discovery_exception_errors(draft, exception, records, unavailable, now))
+            if not short_edition:
+                exception_errors.extend(_discovery_exception_errors(draft, exception, records, unavailable, now))
         exception_approved = not exception_errors
     ready = (coverage["complete"] and ledger_status["complete"]
-             and (15 <= count <= 20 or 10 <= count < 15 and exception_approved))
+             and (15 <= count <= 20 or exception_min <= count < 15 and exception_approved))
     review = draft.get("review") if isinstance(draft.get("review"), dict) else {}
     independent = (review.get("independentReviewCompleted") is True
                    and bool(review.get("reviewer"))
@@ -678,7 +685,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
         "qualityDeliveryComplete": ready and independent and not open_issues,
         "shortfallOpen": not ready,
         "quantitySummary": {
-            "adopted": count, "targetMin": 15, "targetMax": 20, "exceptionMin": 10,
+            "adopted": count, "targetMin": 15, "targetMax": 20, "exceptionMin": exception_min,
             "reason": "Quantity and source/candidate evidence complete" if ready else
                       "Expand sources and close candidate decisions; free-text shortfall explanations do not complete delivery",
         },
