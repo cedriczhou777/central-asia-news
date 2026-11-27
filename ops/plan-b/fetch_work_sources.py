@@ -464,6 +464,25 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
                     except ValueError:continue
             if profile and len(days)==1:
                 profile['publicationDay']=days[0]
+    elif host=='primeminister.kz' and re.fullmatch(r'/ru/news/[a-z0-9-]+-\d+/?',path):
+        current=normalized_url(final_url,final_url)
+        scopes=[n for n in tree.xpath('//section') if has_class(n,'articles')]
+        if normalized_url(canonical_url,final_url)==current and normalized_url(meta.get('og:url'),final_url)==current and len(scopes)==1:
+            heads=[n for n in scopes[0].xpath('.//h1') if has_class(n,'articles__title')]
+            bodies=[n for n in scopes[0].xpath('.//div[p]') if has_class(n,'articles__container') and not has_class(n,'articles__container-bottom')]
+            if len(heads)==1:
+                profile=make('kz_government_news_body',bodies,heads,['same_canonical_and_og_article_url'])
+                if profile:
+                    profile['headlineAlias']=' '.join(heads[0].text_content().split())
+                stamps=scopes[0].xpath('.//div[@class="articles__date"]/p[@class="article__date"]') if profile else []
+                if len(stamps)==1:
+                    raw=' '.join(stamps[0].text_content().split())
+                    fields=re.fullmatch(r'(\d{1,2}) ([А-Яа-яЁё]+) (20\d{2}), (\d{2}):(\d{2})',raw)
+                    if fields and fields[2].casefold() in KHOVAR_RUSSIAN_MONTHS:
+                        month=KHOVAR_RUSSIAN_MONTHS.index(fields[2].casefold())+1
+                        try: wall=datetime(int(fields[3]),month,int(fields[1]),int(fields[4]),int(fields[5])).isoformat()
+                        except ValueError: pass
+                        else: profile['localPublicationBadge']=(raw,wall)
     elif host=='nationalbank.kz' and re.fullmatch(r'/(?:ru|en|kz)/news/informacionnye-soobshcheniya/\d+/?',path):
         if normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url):
             scopes=[n for n in tree.xpath('//article') if has_class(n,'post')]
@@ -921,13 +940,13 @@ def parse_response(url,final_url,raw,headers):
     publisher_template=publisher_article_template(tree,final_url,canonical,meta,title,aliases)
     if publisher_template and publisher_template.get('headlineAlias'):
         aliases.append(publisher_template['headlineAlias'])
-        if publisher_template['name'] == 'socar_az_current_post':
+        if publisher_template['name'] in ('socar_az_current_post','kz_government_news_body'):
             title = publisher_template['headlineAlias']
     selected_body,body_evidence,bound_article=select_article_body(tree,title,aliases,publisher_template)
     if (publisher_template and selected_body is not None and body_evidence.get('basis','').startswith('publisher_template:')
             and (source_kind=='unknown' or publisher_template['name'] in ('vecherka_current_post_content',
                 'az_energy_ministry_print_body','ec_transport_news_content','nbk_public_information_post',
-                'kase_current_news_content','cbu_current_press_prose'))):
+                'kase_current_news_content','cbu_current_press_prose','kz_government_news_body'))):
         source_kind='article';source_kind_evidence.append({'basis':'publisher_article_template','template':publisher_template['name'],'identityBindings':publisher_template['identityBindings']})
     full_text_validated=source_kind=='article' and selected_body is not None
     if source_kind=='article':primary_article=bound_article
