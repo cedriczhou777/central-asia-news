@@ -14,7 +14,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
 from discover_work_sources import discover, pagination_links
 from news_queue_policy import (VERSION, MAX_ACTIVE_ARTICLES, digest, importance,
-                               partition_coverage, validate_queue_accounting)
+                               archived_publication_is_old, partition_coverage,
+                               publisher_reference_directory, validate_queue_accounting)
 from source_coverage import COVERAGE_VERSION, assess_coverage
 import work_client
 from test_work_discovery import source, page
@@ -100,6 +101,19 @@ class BoundedQueuePolicy(unittest.TestCase):
         self.assertFalse(importance(old,'2026-11-22T06:00:00+08:00')['important'])
         self.assertTrue(importance({**old,'mustProcess':True},'2026-11-22T06:00:00+08:00')['important'])
         self.assertTrue(importance({**old,'title':'Major energy announcement'},'2026-11-22T06:00:00+08:00')['important'])
+
+    def test_verified_directory_and_exact_old_local_time_keep_new_articles_pending(self):
+        reference = 'https://economy.gov.az/en/page/beynelxalq-elaqeler/maliyye-institutlari-ile-emekdasliq'
+        self.assertTrue(publisher_reference_directory(reference))
+        self.assertFalse(publisher_reference_directory(reference + '/new-project'))
+        self.assertFalse(publisher_reference_directory('https://cbu.uz/ru/statistics/credit/5040955/'))
+        archived = 'https://www.vb.kg/doc/463410_v_kyrgyzstane_gotoviat_edinyy_zakon_ili_migracionnyy_kodeks_k_2027_gody.html'
+        cutoff = '2026-11-27T06:00:00+08:00'
+        old = {'anchorEvidence': [{'nearbyTimes': [{'text': '2026-11-25'}]}]}
+        recent = {'anchorEvidence': [{'nearbyTimes': [{'text': '2026-11-26T10:00:00+06:00'}]}]}
+        self.assertTrue(archived_publication_is_old(archived, old, cutoff))
+        self.assertFalse(archived_publication_is_old(archived, recent, cutoff))
+        self.assertFalse(archived_publication_is_old(archived, {'rawPublicationEvidence': [{'kind': 'published'}]}, cutoff))
 
 
 @unittest.skipUnless(FIXTURE.exists(),'provide private PLAN_B_INCIDENT_FIXTURE for real incident regression')

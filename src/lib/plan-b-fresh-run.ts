@@ -19,7 +19,7 @@ const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
   (reviewableWindowCount(scope.snapshot)<DAILY_MIN_ARTICLES?'insufficient_reviewable_candidates':null);
 type Client=ReturnType<typeof getSupabaseClient>;
 type Job={country:PlanBCountry;record_key:string;state:string;content_hash:string;payload:Record<string,unknown>;
-  attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean;reason?:string}|null};
+  attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean;reason?:string;coverageReassessed?:boolean}|null};
 
 function fields(country:PlanBCountry|'global',record_key:string){
   return {issue_date:issue,country,kind:'manual_use',record_key};
@@ -86,15 +86,19 @@ export async function processFreshRun(sb=getSupabaseClient()){
           const saved=base??(await getState(issue,country)).find(record=>record.step==='final')?.receipt as SnapshotReceipt|undefined;
           if(!saved?.cache||saved.snapshot?.issue!==issue||saved.snapshot.country!==country||saved.snapshot.phase!=='final')
             throw new Error('same_issue_final_cache_unavailable');
+          const count=reviewableWindowCount(saved.snapshot);
+          const reassess=Boolean(previous&&count>=DAILY_MIN_ARTICLES&&
+            !scanSteps.some(name=>row(country,name)?.result?.coverageReassessed));
           const targets=recoverySources(saved.snapshot.coverage);
-          const focus=previous?.result?.reason==='exchange_publish_failed'?[]:
-            country==='az'&&reviewableWindowCount(saved.snapshot)<DAILY_MIN_ARTICLES
+          const focus=reassess||previous?.result?.reason==='exchange_publish_failed'?[]:
+            country==='az'&&count<DAILY_MIN_ARTICLES
               ? [...new Set([...targets,'az-report-az','az-apa','az-ministry-economy-azerbaijan'])]
               : targets.length?targets:undefined;
           const scope=await collectCountry(issue,country,'final',saved.cache,focus,
             {namespace:originalNamespace,deadline,scanSeconds:120,nov27Recovery:true});
           const reason=blockReason(scope);
-          return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false,resumedSnapshotHash:saved.snapshot.hash};
+          return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false,resumedSnapshotHash:saved.snapshot.hash,
+            ...(reassess?{coverageReassessed:true}:{})};
         });
         return;
       }
