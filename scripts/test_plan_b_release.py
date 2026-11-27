@@ -210,9 +210,10 @@ class CloudReleaseTest(unittest.TestCase):
                 invalid_output.mkdir()
                 with self.assertRaises(OSError):
                     cloud_release.build_word(release, invalid_output)
-            word = cloud_release.build_word(release, directory / 'test.docx')
+            cloud_release.render_archived_word(directory)
+            word = read(directory / 'word-status.json')
             self.assertEqual((word['articles'],word['images']), (15,1))
-            with ZipFile(directory / 'test.docx') as doc:
+            with ZipFile(directory / 'word.docx') as doc:
                 self.assertIn('测试新闻14', doc.read('word/document.xml').decode())
 
     def test_source_timeout_is_neither_success_nor_empty_source(self):

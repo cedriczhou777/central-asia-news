@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import tarfile
+from tempfile import TemporaryDirectory
 
 from build_reviewed_word import build_word
 from cloud_handoff import LIMIT, REGISTRY, inventory_entries, read, recovery_registry, restore, write
@@ -50,6 +51,15 @@ def open_release(root, archive):
             file.parent.mkdir(exist_ok=True)
             with file.open('xb') as out, tar.extractfile(entry) as data:
                 shutil.copyfileobj(data, out)
+
+
+def render_archived_word(directory):
+    with TemporaryDirectory(prefix='word-source-', dir=directory) as staging:
+        root = Path(staging) / 'release'
+        open_release(root, directory / 'prepared.gz')
+        result = build_word(root, directory / 'word.docx')
+    result.pop('wordPath', None)
+    write(directory / 'word-status.json', result)
 
 
 def read_originals(source_root, issue, country, draft, review):
@@ -220,12 +230,10 @@ def main():
     if args.command == 'prepare':
         issue, country, version = args.extra
         prepare_from_handoff(directory, issue, country, version)
+    elif args.command == 'word':
+        render_archived_word(directory)
     else:
         open_release(directory / 'release', directory / 'prepared.gz')
-        if args.command == 'word':
-            result = build_word(directory / 'release', directory / 'word.docx')
-            result.pop('wordPath', None)
-            write(directory / 'word-status.json', result)
 
 
 if __name__ == '__main__':
