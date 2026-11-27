@@ -256,7 +256,7 @@ def import_public_article_captures(directory, root, registry, issue, country, ph
             write(dest,{**parsed,'url':url,'status':200,'key':key,'fetchedAt':acquired.isoformat(),
                        'response_headers':headers,'captureOrigin':'operator_public_publisher_response',
                        'supersededNetworkStatus':existing.get('status')})
-        source['recoveryArticleSeeds'] = list(dict.fromkeys([*source.get('recoveryArticleSeeds', []),url]))
+        source.setdefault('recoveryCaptureUrls', []).append(url)
 
 
 def scan(root, directory, issue, country, phase, seconds, source_ids=None, nov27_recovery=False):

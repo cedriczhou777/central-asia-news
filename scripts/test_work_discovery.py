@@ -117,6 +117,21 @@ class DiscoveryTests(unittest.TestCase):
                       news_budget=True, adaptive=True)
         self.assertEqual(self.calls, [])
 
+    def test_verified_capture_reprocesses_an_older_failed_lead(self):
+        home = 'https://news.test/'
+        url = 'https://news.test/news/publisher-story'
+        self.run_scan({home: page(home, [(url, 'Published story', '')]),
+                       url: page(url, kind='article', status=403)}, news_budget=True)
+        self.calls.clear()
+        good = page(url, kind='article', published='2026-11-14T20:00:00+05:00')
+        good['fullTextValidated'] = True
+        _, ledger = self.run_scan({home: page(home), url: good}, news_budget=True,
+                                  sources=[{**source(), 'recoveryCaptureUrls': [url]}])
+        self.assertIn((url, None), self.calls)
+        self.assertTrue(ledger[url]['fullTextValidated'])
+        self.assertEqual(ledger[url]['publicationWindowAssessment'], 'in_window')
+        self.assertFalse(ledger[url]['firstDisclosureVerified'])
+
     def test_recovery_seeds_still_require_same_source_and_original_publication_evidence(self):
         home = 'https://news.test/'
         seed = 'https://news.test/news/recovery-story'
