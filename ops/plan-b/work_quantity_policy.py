@@ -448,9 +448,10 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
                                      "reason": "Actual language requires review; expected language is never substituted",
                                      "reviewErrors": language_review_errors})
 
-        fulltext = readable and language_verified and row.get("kind") == "article"
+        article_fetch = not daily_archive or row.get('role')=='article'
+        fulltext = readable and language_verified and article_fetch and row.get("kind") == "article"
         identity_reviewed = False
-        if readable and language_verified and not fulltext and candidates:
+        if readable and language_verified and article_fetch and not fulltext and candidates:
             for candidate in candidates:
                 review = candidate.get("articleIdentityReview")
                 if not isinstance(review, dict):
@@ -625,7 +626,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
                 if actual_fetched > now or not any(r["fulltext"] and r["time"] == actual_fetched for r in bound):
                     raise ValueError("no matching full text")
             except (ValueError, TypeError):
-                if not (daily_policy and decision=='rejected' and cid not in adopted_ids):
+                if not (daily_policy and (decision=='rejected' or held) and cid not in adopted_ids):
                     ledger_errors.append(label + ": fullTextFetchedAt lacks matching successful article audit")
                 # Historical rejected candidates retain the raw archive. An
                 # uncorroborated fetch cannot count as full text or prove an
@@ -687,9 +688,32 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
         ledger_errors.append("pending candidates still require source/selection decisions")
     if selected_urls != adopted_urls:
         ledger_errors.append("selected candidate URLs must exactly match adopted article URLs")
+    archived_article_keys = set()
+    if daily_policy:
+        # Cover real captured aliases and independently deferred originals by
+        # publisher and exact content hash, without crediting them as adopted.
+        verified_deferred = {row['id']:row for row in proof.get('deferredCandidates', [])}
+        audited = list(ledger)
+        for entry in draft.get('deferredCandidateLedger', []):
+            approved = verified_deferred.get(entry.get('id'))
+            if (approved and entry.get('id') not in adopted_ids
+                    and approved.get('sourceId')==entry.get('sourceId')
+                    and approved.get('sourceUrl')==_url(entry.get('source_url'))
+                    and approved.get('sourceHash')==entry.get('sourceHash')
+                    and approved.get('sourceJSONSha256')==entry.get('sourceJSONSha256')):
+                audited.append(entry)
+        for entry in audited:
+            url = _url(entry.get('source_url'))
+            source_hash = entry.get('sourceHash')
+            if url and isinstance(source_hash, str) and re.fullmatch(r'[a-f0-9]{64}', source_hash):
+                archived_article_keys.add((entry.get('sourceId'), _article_url_identity(url), source_hash))
     for record in records:
         if record["fulltext"] and id(record) not in accounted_records:
-            ledger_errors.append("successful full-text article missing from candidate ledger: " + record["row"]["url"])
+            row = record['row']
+            if any((row.get('sourceId'), _article_url_identity(url), row.get('sourceHash')) in archived_article_keys
+                   for url in record['urls']):
+                continue
+            ledger_errors.append(f"successful full-text article missing from candidate ledger ({row.get('sourceId')} {row.get('role')}): {row['url']}")
     ledger_status = {"complete": not ledger_errors, **counts, "errors": ledger_errors}
 
     exception_errors = []

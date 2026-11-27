@@ -25,7 +25,7 @@ import prepare_country_release
 from prepare_editorial_input import candidate_row
 from source_article_images import collect, connect_public
 from test_work_quantity import fixture
-from validate_work_package import digest
+from validate_work_package import digest, quantity_report
 from verify_rendered_package import verify_rendered_package
 from work_quantity_policy import _evidence_errors
 
@@ -223,6 +223,18 @@ class CloudReleaseTest(unittest.TestCase):
             self.assertLess(package['bodyHtml'].index('测试新闻0'), package['bodyHtml'].index('<img '))
             self.assertIn('测试新闻14', package['bodyHtml'])
             if country == 'tj':
+                aggregate = read(release / 'aggregate_ingest.json')
+                audit = aggregate['drafts'][country]['sourceScanAudit']
+                ghost = {**next(row for row in audit if row['role']=='article'),
+                         'eventId':'fixture-landing-page-report', 'role':'section',
+                         'url':'https://source0.example/news/landing',
+                         'final_url':'https://source0.example/news/landing'}
+                audit.append(ghost)
+                self.assertTrue(quantity_report(aggregate, now=now, countries=[country])[country]['quantityReady'])
+                ghost['role'] = 'article'
+                check = quantity_report(aggregate, now=now, countries=[country])[country]
+                self.assertFalse(check['quantityReady'])
+                self.assertTrue(any('missing from candidate ledger' in msg for msg in check['candidateLedgerValidation']['errors']))
                 invalid_output = directory / 'directory-not-word.docx'
                 invalid_output.mkdir()
                 with self.assertRaises(OSError):
