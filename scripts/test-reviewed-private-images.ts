@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import { createHash } from 'node:crypto';
 import { GET, POST } from '../src/app/api/reviewed-images/route';
 import { POST as ingest } from '../src/app/api/word-package/route';
-import { privateImageHealth, readPrivateImage } from '../src/lib/reviewed-private-images';
+import { ensurePrivateImage, privateImageHealth, readPrivateImage } from '../src/lib/reviewed-private-images';
 import { prepareReviewedDraft, probeReviewedImage } from '../src/lib/reviewed-wechat';
 import { PACKAGE_COUNTRIES, validatePackage, requirePrivateImages, contentHash, type CompleteReviewedPackage } from '../src/lib/reviewed-package';
 import { deliverReviewedPackage, readPackage } from '../src/lib/reviewed-delivery';
@@ -20,6 +20,7 @@ const originalFetch=globalThis.fetch, originalNow=Date.now;
 const images=new Map<string,Uint8Array>(),packages=new Map<string,unknown>(),drafts=new Map<string,Record<string,string>>();
 let bucketExists=false,bucketPublic=false,deniedRequests=0,created=0,originRequests=0;
 let bucketStatus=0,bucketTransportError:Error|null=null;
+let legacyObjectMissing=false;
 let bodyUploadFailure=false, coverUploadFailures=0;
 globalThis.fetch=async(input,init)=>{
   const r=input instanceof Request?input:new Request(input,init),u=new URL(r.url);
@@ -46,7 +47,8 @@ globalThis.fetch=async(input,init)=>{
   if(u.pathname.startsWith('/storage/v1/object/')){
     const key=u.pathname.replace('/storage/v1/object/authenticated/','').replace('/storage/v1/object/','');
     if(r.method==='POST'||r.method==='PUT'){images.set(key,new Uint8Array(await r.arrayBuffer()));return Response.json({Key:key,Id:'fixture'});}
-    const bytes=images.get(key);return bytes?new Response(new Uint8Array(bytes)):Response.json({message:'not found',error:'not found',statusCode:'404'},{status:404});
+    const bytes=images.get(key);return bytes?new Response(new Uint8Array(bytes)):
+      Response.json({message:'Object not found',error:'Not found',statusCode:'404'},{status:legacyObjectMissing?400:404});
   }
   if(u.pathname==='/rest/v1/reviewed_packages'){
     if(r.method==='POST'){const row=await r.json();if(packages.has(row.version))return Response.json({code:'23505'},{status:409});packages.set(row.version,row);return new Response(null,{status:201});}
@@ -67,6 +69,12 @@ async function main(){
   assert.equal(response.status,200,JSON.stringify(receipt));assert.equal(receipt.ready,true);assert.equal(receipt.private,true);assert.equal(images.size,1);
   assert.equal((await POST(request('POST','',image,sha256))).status,200);assert.equal(images.size,1,'retries use content-addressed identity');
   assert.equal((await privateImageHealth()).private,true);
+  const newOriginal=await sharp({create:{width:10,height:10,channels:3,background:'#f07d45'}}).png().toBuffer();
+  const newOriginalHash=createHash('sha256').update(newOriginal).digest('hex');
+  legacyObjectMissing=true;
+  assert.equal(await ensurePrivateImage(newOriginal,newOriginalHash),'staged');
+  assert.equal(await ensurePrivateImage(newOriginal,newOriginalHash),'reused');
+  legacyObjectMissing=false;
   // Actual SDK error wrappers must retain enough classification for a HTTP 200
   // health envelope to distinguish transient readiness from unsafe storage.
   for(const status of [500,502,503,504]){

@@ -106,7 +106,15 @@ export async function ensurePrivateImage(bytes: Buffer, sha256: string) {
     return 'reused';
   }
   const failure = storageFailure(existing.error);
-  if (failure.failureKind !== 'not_found' || failure.status !== 404) throw failure;
+  // The legacy object download endpoint can wrap a missing object in HTTP
+  // 400 while retaining the exact JSON missing-object code in the SDK error.
+  const response = (existing.error as {originalError?:unknown}|null)?.originalError;
+  const metadata = failure.status===400 && response instanceof Response &&
+    response.headers.get('content-type')?.includes('application/json')
+    ? await response.json().catch(()=>null) as {statusCode?:string;code?:string;message?:string}|null : null;
+  const reportedMissing = (metadata?.statusCode==='404'||metadata?.code==='NoSuchKey') &&
+    typeof metadata.message==='string' && /^object not found$/i.test(metadata.message.trim());
+  if (!reportedMissing && (failure.failureKind !== 'not_found' || failure.status !== 404)) throw failure;
   await stagePrivateImage(bytes, sha256);
   return 'staged';
 }

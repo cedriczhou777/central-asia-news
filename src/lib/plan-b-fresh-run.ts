@@ -8,6 +8,7 @@ import { recoverySources } from './plan-b-runtime';
 const TABLE='plan_b_exchange';
 const issue='2026-11-27';
 const run='recover-20261127-r4';
+const prepareStep='prepare-verified-archive';
 const opensAt=Date.parse('2026-11-27T09:30:00+08:00');
 const deadline=Date.parse('2026-11-27T20:00:00+08:00');
 const key=(step:string)=>`${run}/${step}`;
@@ -102,7 +103,7 @@ async function advance(sb:Client, country:PlanBCountry, step:string, prior:Job|u
   const lease_until=new Date(Date.now()+18*60_000).toISOString();
   const attempts=(prior?.attempts??0)+1;
   if(prior){
-    const retryRejected=step!=='prepare'&&prior.state==='rejected'&&retryableScanReasons.has(prior.result?.reason??'');
+    const retryRejected=step!==prepareStep&&prior.state==='rejected'&&retryableScanReasons.has(prior.result?.reason??'');
     if(prior.content_hash!==content_hash||attempts>2||
         (!retryRejected&&prior.state!=='queued'&&(prior.state!=='working'||!prior.lease_until||prior.lease_until>=now)))return;
     const claim=await sb.from(TABLE).update({state:'working',attempts,lease_until,updated_at:now}).match(match)
@@ -118,7 +119,7 @@ async function advance(sb:Client, country:PlanBCountry, step:string, prior:Job|u
     const reason=error instanceof Error?error.message:'';
     const failure=error as {snapshotReceipt?:SnapshotReceipt;isolatedDiagnostic?:unknown}|null;
     const retained=failure?.snapshotReceipt;
-    const diagnostic=step==='prepare'&&typeof failure?.isolatedDiagnostic==='string'&&failure.isolatedDiagnostic.length<=330
+    const diagnostic=step===prepareStep&&typeof failure?.isolatedDiagnostic==='string'&&failure.isolatedDiagnostic.length<=330
       ? failure.isolatedDiagnostic : undefined;
     state=retained?'accepted':'rejected';
     result={ok:false,ready:false,reason:/^[a-z][a-z0-9_]{0,90}$/.test(reason)?reason:'isolated_worker_failed',
@@ -139,7 +140,7 @@ export async function processFreshRun(sb=getSupabaseClient()){
   if(authorized.error||authorized.data?.state!=='available'||authorized.data.content_hash!==hash(request)||
       hash(authorized.data.payload)!==hash(request))return;
   const records=await sb.from(TABLE).select('country,record_key,state,attempts')
-    .eq('issue_date',issue).eq('kind','manual_use').in('record_key',[...scanSteps,'prepare'].map(key));
+    .eq('issue_date',issue).eq('kind','manual_use').in('record_key',[...scanSteps,prepareStep].map(key));
   if(records.error)throw new Error('isolated_recovery_jobs_read_failed');
   const rows=(records.data??[]) as JobHead[];
   const row=(country:PlanBCountry,step:string)=>rows.find(r=>r.country===country&&r.record_key===key(step));
@@ -164,11 +165,11 @@ export async function processFreshRun(sb=getSupabaseClient()){
       const base=previous?.result?.scope;
       if(previous&&!base)throw new Error('isolated_recovery_snapshot_missing');
       if(previous?.result?.ready&&base&&!blockReason(base)){
-        const head=row(country,'prepare');
+        const head=row(country,prepareStep);
         if(head?.state!=='queued'&&head?.state!=='working')return;
         const prepare=await readJob(sb,country,head);
         if(prepare?.payload.run===run){
-          await advance(sb,country,'prepare',prepare,prepare.payload,async ()=>{
+          await advance(sb,country,prepareStep,prepare,prepare.payload,async ()=>{
             const result=await prepareIsolatedRelease(base,prepare.payload.handoff,planBRecoveryPackageVersion(issue,country),deadline);
             return {ok:true,...result};
           });
