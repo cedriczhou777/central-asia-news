@@ -27,7 +27,7 @@ type Client=ReturnType<typeof getSupabaseClient>;
 type Job={country:PlanBCountry;record_key:string;state:string;content_hash:string;payload:Record<string,unknown>;
   attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean;reason?:string;
     coverageReassessed?:boolean;publisherArchiveReassessed?:boolean;currentOfficialArchiveReassessed?:boolean;
-    navigationEvidenceReassessed?:boolean;archiveDatesReassessed?:boolean}|null};
+    navigationEvidenceReassessed?:boolean;archiveDatesReassessed?:boolean;energyArchiveScanned?:boolean}|null};
 
 function fields(country:PlanBCountry|'global',record_key:string){
   return {issue_date:issue,country,kind:'manual_use',record_key};
@@ -111,8 +111,12 @@ export async function processFreshRun(sb=getSupabaseClient()){
           const reassess=archiveDatesReassess||navigationReassess||officialReassess||publisherReassess||Boolean(previous&&count>=DAILY_MIN_ARTICLES&&
             !scanSteps.some(name=>row(country,name)?.result?.coverageReassessed));
           const targets=recoverySources(saved.snapshot.coverage);
+          const energyArchiveScan=country==='az'&&count<DAILY_MIN_ARTICLES&&!reassess&&
+            previous?.result?.reason!=='exchange_publish_failed'&&
+            !scanSteps.some(name=>row(country,name)?.result?.energyArchiveScanned);
           const focus=reassess||previous?.result?.reason==='exchange_publish_failed'?[]:
-            country==='az'&&count<DAILY_MIN_ARTICLES
+            energyArchiveScan?['az-ministry-energy-azerbaijan']:
+              country==='az'&&count<DAILY_MIN_ARTICLES
               ? [...new Set([...azerbaijanRecoverySources, ...targets])]
               : targets.length?targets:undefined;
           const scope=await collectCountry(issue,country,'final',saved.cache,focus,
@@ -122,7 +126,8 @@ export async function processFreshRun(sb=getSupabaseClient()){
             ...(reassess?{coverageReassessed:true}:{}),...(publisherReassess?{publisherArchiveReassessed:true}:{}),
             ...(officialReassess?{currentOfficialArchiveReassessed:true}:{}),
             ...(navigationReassess?{navigationEvidenceReassessed:true}:{}),
-            ...(archiveDatesReassess?{archiveDatesReassessed:true}:{})};
+            ...(archiveDatesReassess?{archiveDatesReassessed:true}:{}),
+            ...(energyArchiveScan?{energyArchiveScanned:true}:{})};
         });
         return;
       }
