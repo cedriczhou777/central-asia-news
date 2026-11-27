@@ -42,6 +42,12 @@
     "reason": "publisher_workbook_and_unresolved_first_publication_time_require_coverage_review",
     "sourceId": "uz-central-bank-uzbekistan"
   },
+  "https://podrobno.uz/lp/ragida-hurmuhametova": {
+    "sourceId": "uz-podrobno-uz",
+    "reason": "dated_prior_republication_requires_coverage_review",
+    "priorPublication": "https://medichub.net/news/eshche-pyat-let-nazad-v-banke-na-menya/759461",
+    "priorPublicationDate": "2021-03-15"
+  },
   "https://www.fm.gov.om/en/66476": {
     "publisherDate": "2026-11-26",
     "publisherTitle": "Launch of Thai Omani Trade and Investment Association",
