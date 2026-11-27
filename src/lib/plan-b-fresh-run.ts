@@ -116,9 +116,13 @@ async function advance(sb:Client, country:PlanBCountry, step:string, prior:Job|u
   try{result=await work(attempts);}
   catch(error){
     const reason=error instanceof Error?error.message:'';
-    const retained=(error as {snapshotReceipt?:SnapshotReceipt})?.snapshotReceipt;
+    const failure=error as {snapshotReceipt?:SnapshotReceipt;isolatedDiagnostic?:unknown}|null;
+    const retained=failure?.snapshotReceipt;
+    const diagnostic=step==='prepare'&&typeof failure?.isolatedDiagnostic==='string'&&failure.isolatedDiagnostic.length<=330
+      ? failure.isolatedDiagnostic : undefined;
     state=retained?'accepted':'rejected';
     result={ok:false,ready:false,reason:/^[a-z][a-z0-9_]{0,90}$/.test(reason)?reason:'isolated_worker_failed',
+      ...(diagnostic?{diagnostic}:{}),
       ...(retained ? {scope:retained} : {})};
   }
   const previousFailure=prior?.state==='rejected'?prior.result?.reason:undefined;
