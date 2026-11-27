@@ -15,7 +15,7 @@ const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'
 const authorizationRecord=key('verified-archive-requested');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','extend-6','extend-7',
-  'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13','extend-14','extend-15','extend-16','extend-17','extend-18','extend-19','extend-20','extend-21'];
+  'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13','extend-14','extend-15','extend-16','extend-17','extend-18','extend-19','extend-20','extend-21','extend-22'];
 const azerbaijanRecoverySources=[
   'az-ministry-energy-azerbaijan', 'az-european-commission-transport', 'az-cabinet-recovery',
   'az-operativ-media-recovery', 'az-fed-az-recovery', 'az-apa', 'az-report-az', 'az-trend',
@@ -25,6 +25,7 @@ const captureHashes:Partial<Record<PlanBCountry,string>>={
   uz:'16e39c0e3bd5eab9f25bc03e0a148768ddb345b0165e2ead5bf980cf2de61821',
   az:'1fe3d30ff5dd649d57440f4b5afcb964e7d5930ae0c54681ee69b33a9449765e',
 };
+const uzPresidencyCapture = '7e6d7bed7e7c7db349fe24fd32a0233239763ff895591d7977af0236a6e8643e';
 const retryableScanReasons=new Set(['isolated_worker_failed','isolated_scan_timeout','isolated_scan_output_limit','plan_b_object_size']);
 const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
   (reviewableWindowCount(scope.snapshot)<DAILY_MIN_ARTICLES?'insufficient_reviewable_candidates':null);
@@ -39,14 +40,15 @@ function fields(country:PlanBCountry|'global',record_key:string){
   return {issue_date:issue,country,kind:'manual_use',record_key};
 }
 
-async function publicCapture(sb:Client,country:PlanBCountry,base:SnapshotReceipt) {
+async function publicCapture(sb:Client,country:PlanBCountry,base:SnapshotReceipt,followup=false) {
   const {data,error}=await sb.from(TABLE).select('payload,content_hash').match({
-    ...fields(country,key('public-publisher-capture')),state:'available',
+    ...fields(country,key(followup?'public-publisher-followup-capture':'public-publisher-capture')),state:'available',
   }).maybeSingle();
   if(error)throw new Error('public_capture_read_failed');
   if(!data)return undefined;
   const value=data.payload as Record<string,unknown>;
-  if(typeof value!=='object'||!value||data.content_hash!==captureHashes[country]||hash(value)!==data.content_hash||value.issue!==issue||value.country!==country
+  const expectedHash=followup?uzPresidencyCapture:captureHashes[country];
+  if(typeof value!=='object'||!value||data.content_hash!==expectedHash||hash(value)!==data.content_hash||value.issue!==issue||value.country!==country
     ||!Array.isArray(value.pages)||!value.pages.length||value.pages.length>18)throw new Error('public_capture_hash_mismatch');
   const pending=new Set(base.snapshot.coverage.pendingWork.map(item=>item.sourceId+'\n'+String(item.url)));
   const seen=new Set<string>();
@@ -55,7 +57,8 @@ async function publicCapture(sb:Client,country:PlanBCountry,base:SnapshotReceipt
       ||typeof page.gzipBase64!=='string'||page.gzipBase64.length>400_000
       ||typeof page.rawSha256!=='string'||!/^[0-9a-f]{64}$/.test(page.rawSha256))throw new Error('public_capture_shape_invalid');
     const identity=page.sourceId+'\n'+page.url;
-    if(seen.has(identity)||(!pending.has(identity)&&!(country==='az'&&azerbaijanRecoverySources.includes(page.sourceId))
+    if(seen.has(identity)||(!pending.has(identity)&&!(followup&&country==='uz'&&page.sourceId==='uz-president-uzbekistan')
+      &&!(country==='az'&&azerbaijanRecoverySources.includes(page.sourceId))
       &&!(country==='kz'&&page.sourceId==='kz-prime-minister-kazakhstan'&&page.url.endsWith('-32163'))))
       throw new Error('public_capture_source_not_in_recovery_scope');
     seen.add(identity);
@@ -126,9 +129,10 @@ export async function processFreshRun(sb=getSupabaseClient()){
         if(base&&current?.state==='rejected'&&current.attempts>=2&&retryableScanReasons.has(current.result?.reason??'')){
           continue;
         }
-        const captureStep=step==='extend-18'||(step==='extend-21'&&country==='az');
+        const followup=step==='extend-22'&&country==='uz';
+        const captureStep=step==='extend-18'||(step==='extend-21'&&country==='az')||followup;
         const sourceCapture=base&&captureStep&&captureHashes[country]
-          ? await publicCapture(sb,country,base):undefined;
+          ? await publicCapture(sb,country,base,followup):undefined;
         if (captureStep&&captureHashes[country]&&!sourceCapture) return;
         await advance(sb,country,step,current,base?{run,country,baseHash:base.snapshot.hash,
           ...(sourceCapture?{captureHash:sourceCapture.contentHash}:{})}:{run,country},async attempt=>{
