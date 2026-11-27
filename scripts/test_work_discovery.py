@@ -100,6 +100,23 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(result['funnel']['explicitlyInWindowCandidates'], 1)
         self.assertFalse(result['editorialComplete'])
 
+    def test_focused_recovery_can_read_one_new_preferred_listing(self):
+        home, section = 'https://news.test/', 'https://news.test/press'
+        current = source()
+        minimum = '2026-11-14T22:00:00Z'
+        records = {home: page(home), section: page(section)}
+        self.run_scan(records, [current], listing_not_before=minimum, news_budget=True, adaptive=True)
+        current['entrypoints'].append({'url': section, 'role': 'section', 'language': 'ru',
+                                       'preferredDiscovery': True})
+        self.calls.clear()
+        self.run_scan(records, [current], listing_not_before=minimum, only_source_ids=['one'],
+                      news_budget=True, adaptive=True)
+        self.assertEqual(self.calls, [(section, minimum)])
+        self.calls.clear()
+        self.run_scan(records, [current], listing_not_before=minimum, only_source_ids=['one'],
+                      news_budget=True, adaptive=True)
+        self.assertEqual(self.calls, [])
+
     def test_failures_wrong_language_and_redirect_do_not_count_as_coverage(self):
         sources = [source('failed', 'failed', 'bad.test'), source('wrong', 'wrong', 'wrong.test'),
                    source('redirect', 'redirect', 'redirect.test')]

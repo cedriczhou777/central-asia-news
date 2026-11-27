@@ -200,6 +200,8 @@ def publisher_header_clocks(tree, source_url, canonical_url, selected, body_evid
         'alau.kz': r'^/[^/]+/?$',
         'sugd.tj': r'^/(?:ru|tj)/(?:[^/]+/)+\d+-[^/]+/?$',
         'taxes.gov.az': r'^/az/post/\d+/?$',
+        'minenergy.gov.az': r'^/(?:az|en)/xeberler-arxivi/\d+/?$',
+        'customs.gov.az': r'^/az/faydali/xeberler/\d+/?$',
     }.get(host)
     if (not route or not re.fullmatch(route,page.path)
             or (canonical_url and normalized_url(canonical_url,source_url)!=normalized_url(source_url,source_url))):
@@ -233,6 +235,8 @@ def publisher_header_clocks(tree, source_url, canonical_url, selected, body_evid
                     continue
                 kind = 'created' if created else 'published'
                 plain = created[1] if created else re.sub(r'^Опубликовано:\s*','',value,flags=re.I)
+                if host == 'minenergy.gov.az' and re.fullmatch(r'\d{2}-\d{2}-20\d{2} \d{2}:\d{2}', plain):
+                    plain = plain.replace('-', '.')
                 wall = header_clock(plain)
                 if wall:
                     badges[(kind,wall)] = value

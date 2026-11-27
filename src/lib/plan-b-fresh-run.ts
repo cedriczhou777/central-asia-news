@@ -15,6 +15,10 @@ const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'
 const authorizationRecord=key('verified-archive-requested');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','extend-6','extend-7'];
+const azerbaijanRecoverySources=[
+  'az-ministry-energy-azerbaijan', 'az-state-customs-committee-azerbaijan',
+  'az-state-tax-service-azerbaijan', 'az-central-bank-azerbaijan',
+];
 const retryableScanReasons=new Set(['isolated_worker_failed','isolated_scan_timeout','isolated_scan_output_limit']);
 const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
   (reviewableWindowCount(scope.snapshot)<DAILY_MIN_ARTICLES?'insufficient_reviewable_candidates':null);
@@ -93,7 +97,7 @@ export async function processFreshRun(sb=getSupabaseClient()){
           const targets=recoverySources(saved.snapshot.coverage);
           const focus=reassess||previous?.result?.reason==='exchange_publish_failed'?[]:
             country==='az'&&count<DAILY_MIN_ARTICLES
-              ? [...new Set([...targets,'az-report-az','az-apa','az-ministry-economy-azerbaijan'])]
+              ? [...new Set([...azerbaijanRecoverySources, ...targets])]
               : targets.length?targets:undefined;
           const scope=await collectCountry(issue,country,'final',saved.cache,focus,
             {namespace:originalNamespace,deadline,scanSeconds:120,nov27Recovery:true});
