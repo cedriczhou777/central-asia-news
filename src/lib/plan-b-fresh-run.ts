@@ -1,7 +1,7 @@
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { canonicalJson, DAILY_MIN_ARTICLES, freezeBlockReason, PLAN_B_COUNTRIES, reviewableWindowCount, sha256, type PlanBCountry } from './plan-b-handoff';
 import { collectCountry } from './plan-b-worker';
-import { prepareIsolatedRelease } from './plan-b-release';
+import { planBRecoveryPackageVersion, prepareIsolatedRelease } from './plan-b-release';
 import { getState, type SnapshotReceipt } from './plan-b-store';
 import { recoverySources } from './plan-b-runtime';
 
@@ -102,7 +102,7 @@ export async function processFreshRun(sb=getSupabaseClient()){
       const source=previous?.result?.scope;
       if(previous?.result?.ready&&source&&!blockReason(source)&&prepare?.payload.run===run){
         await advance(sb,country,'prepare',prepare,prepare.payload,async ()=>{
-          const result=await prepareIsolatedRelease(source,prepare.payload.handoff,request.version,deadline);
+          const result=await prepareIsolatedRelease(source,prepare.payload.handoff,planBRecoveryPackageVersion(issue,country),deadline);
           return {ok:true,...result};
         });
       }

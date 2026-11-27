@@ -22,6 +22,10 @@ export function planBPackageVersion(issue: string, country: PlanBCountry) {
   return `${issue}-r${102 + PLAN_B_COUNTRIES.indexOf(country)}`;
 }
 
+export function planBRecoveryPackageVersion(issue: string, country: PlanBCountry) {
+  return issue === '2026-11-27' ? `${issue}-r${202 + PLAN_B_COUNTRIES.indexOf(country)}` : `${issue}-r4`;
+}
+
 function assertMayWrite(issue: string) {
   const clock = planBClock();
   if (issue !== clock.issue || !clock.finalizationAllowed) throw new Error('plan_b_delivery_window_closed');
@@ -82,7 +86,7 @@ async function readReleaseTransport(root: string, version: string, country: Plan
  * exact-package authority, and this preparation never changes normal issue rows. */
 export async function prepareIsolatedRelease(source: SnapshotReceipt, input: unknown, version: string, deadline: number) {
   const { issue, country } = source.snapshot;
-  if (version !== `${issue}-r4`) throw new Error('invalid_isolated_release_version');
+  if (version !== planBRecoveryPackageVersion(issue, country)) throw new Error('invalid_isolated_release_version');
   const checked = verifyEditorial(input, source.snapshot);
   const remaining = (maximum: number) => {
     const value = Math.min(maximum, deadline - Date.now());

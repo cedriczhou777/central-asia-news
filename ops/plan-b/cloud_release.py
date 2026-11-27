@@ -9,7 +9,7 @@ import shutil
 import tarfile
 
 from build_reviewed_word import build_word
-from cloud_handoff import LIMIT, REGISTRY, inventory_entries, read, restore, write
+from cloud_handoff import LIMIT, REGISTRY, inventory_entries, read, recovery_registry, restore, write
 from prepare_country_release import prepare
 from prepare_editorial_input import candidate_originals, discovery_index
 from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES
@@ -77,8 +77,8 @@ def bind_original(article, original, require_revision=False):
     return fields
 
 
-def attach_audit(source, issue, country, draft, review):
-    registry = read(REGISTRY)
+def attach_audit(source, issue, country, draft, review, registry=None):
+    registry = registry if registry is not None else read(REGISTRY)
     audit = read(source / 'source_scan_audit.json')
     events = {row['eventId']: row for row in audit['sourceScanAuditHistory'] + audit['sourceScanAudit']
               if (row.get('fetchedAt') or terminal_source_failure(row) and row.get('attemptedAt'))
@@ -163,7 +163,8 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     proof = supplied.get('coverage') or {}
     if not proof.get('observedAt'):
         raise ValueError('coverage_evidence_required')
-    actual = assess_coverage(read(REGISTRY), country, audit, _dt(issue + 'T06:00:00+08:00'),
+    registry = recovery_registry(issue, country, version == '2026-11-27-r206', REGISTRY)
+    actual = assess_coverage(registry, country, audit, _dt(issue + 'T06:00:00+08:00'),
                              ledger, leads, proof['observedAt'])
     if digest(actual) != digest(proof):
         raise ValueError('coverage_archive_binding_mismatch')
@@ -173,7 +174,7 @@ def prepare_from_handoff(directory, issue, country, version, fetch_photo=source_
     draft['planBReviewerRun'] = review.get('reviewer')
     draft['planBFinalHash'] = supplied.get('finalHash')
     originals = read_originals(source, issue, country, draft, review)
-    attach_audit(source, issue, country, draft, review)
+    attach_audit(source, issue, country, draft, review, registry)
     for role in (draft, review):
         role['articles'] = [bind_original(article, originals[article['id']], issue >= EFFECTIVE_ISSUE)
                             for article in role['articles']]

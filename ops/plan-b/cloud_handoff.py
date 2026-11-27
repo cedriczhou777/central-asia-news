@@ -135,8 +135,8 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
     return result
 
 
-def recovery_registry(issue, country, enabled):
-    registry = read(REGISTRY)
+def recovery_registry(issue, country, enabled, registry_path=None):
+    registry = read(REGISTRY if registry_path is None else registry_path)
     if enabled and issue == '2026-11-27' and country == 'az':
         for source in registry['sources']:
             if source['id'] == 'az-report-az':
