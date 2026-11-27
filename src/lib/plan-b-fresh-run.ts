@@ -19,7 +19,7 @@ const azerbaijanRecoverySources=[
   'az-ministry-energy-azerbaijan', 'az-state-customs-committee-azerbaijan',
   'az-state-tax-service-azerbaijan', 'az-central-bank-azerbaijan',
 ];
-const retryableScanReasons=new Set(['isolated_worker_failed','isolated_scan_timeout','isolated_scan_output_limit']);
+const retryableScanReasons=new Set(['isolated_worker_failed','isolated_scan_timeout','isolated_scan_output_limit','plan_b_object_size']);
 const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
   (reviewableWindowCount(scope.snapshot)<DAILY_MIN_ARTICLES?'insufficient_reviewable_candidates':null);
 type Client=ReturnType<typeof getSupabaseClient>;
