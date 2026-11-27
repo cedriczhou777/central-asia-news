@@ -135,6 +135,24 @@ class CloudReleaseTest(unittest.TestCase):
                       'https://source0.example/news/report?edition=2'):
             self.assertTrue(_evidence_errors([{**publication,'url':wrong}],[date_record],stamp,'publication',publisher_article_aliases=True))
 
+    def test_unsupported_archive_timestamp_does_not_exclude_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            evidence = root / 'evidence'
+            evidence.mkdir()
+            path = evidence / 'original.json'
+            def archive_with(stamp):
+                write(path, {'publicationEvidence': [
+                    {'kind': 'published', 'value': stamp, 'timezoneEvidence': 'explicit'}]})
+                return {'sourceJSON': str(path),
+                        'sourceJSONSha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+            outside = archive_with('2026-11-25T10:00:00+08:00')
+            self.assertTrue(cloud_release.archive_outside_window(root, outside, '2026-11-27', 'tj'))
+            within = archive_with('2026-11-26T18:00:00+08:00')
+            self.assertFalse(cloud_release.archive_outside_window(root, within, '2026-11-27', 'tj'))
+            with self.assertRaisesRegex(ValueError, 'source_archive_hash_mismatch'):
+                cloud_release.archive_outside_window(root, outside, '2026-11-27', 'tj')
+
     def test_language_review_binds_to_the_exact_frozen_archive_member(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
