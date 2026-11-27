@@ -144,6 +144,8 @@ class RealQueueRegression(unittest.TestCase):
             ('uz-central-bank-uzbekistan','https://cbu.uz/ru/monetary-policy/refinancing-rate/'),
             ('uz-central-bank-uzbekistan','https://cbu.uz/ru/services/regulations/'),
             ('uz-central-bank-uzbekistan','https://cbu.uz/ru/statistics/credit/'),
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/arkhiv-kursov-valyut/json/'),
+            ('uz-central-bank-uzbekistan','https://cbu.uz/ru/arkhiv-kursov-valyut/xml/'),
             ('az-ministry-economy-azerbaijan','https://economy.gov.az/az/page/iqtisadiyyat/investisiya'),
             ('az-ministry-economy-azerbaijan','https://economy.gov.az/az/page/itm'),
             ('az-state-customs-committee-azerbaijan','https://customs.gov.az/az/faydali/Sat%C4%B1nalmalar/tender'),
