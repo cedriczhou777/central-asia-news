@@ -20,6 +20,11 @@ ADAPTIVE_DOMAIN_WORKERS = 1
 ADAPTIVE_EXTRA_LISTING_PAGES = 3
 ADAPTIVE_EXTRA_ARTICLES = 12
 ARCHIVE_PUBLICATIONS = json.loads(Path(__file__).with_name('verified_archive_publications.json').read_text())
+# Exact archive stories whose same substantive disclosure can be dated independently.
+# Super's issue 1248 covers Nov 20–26. News.KG already reported the deputy
+# minister's 25% growth, ~1,000 new objects and both annual figures on Nov 21.
+# https://news.kg/ru/news/potreblenie-elektroenergii-v-kyrgyzstane-vyroslo-na-25-za-5-let-minenergo
+PRIOR_DISCLOSURE_DAYS = {'https://www.super.kg/article/show/63454': '2026-11-21'}
 IMPORTANT = re.compile(
     r'energy|electric|power|renewab|solar|wind|neft|socar|\bgas\b|\boil\b|'
     r'invest|financ|credit|kredit|tender|contract|privatiz|sanction|bankrupt|'
@@ -77,13 +82,16 @@ STATIC_DIRECTORY_BY_HOST = {
     'gov.uz': re.compile(r'^/(?:ru|uz|en)/soliq/pages/soliq-qo-mitasi-faoliyat-sohasi/?$', re.I),
     'uzdaily.uz': re.compile(r'^/(?:ru|uz|en)/special-projects(?:/islamic-finance-2026)?/?$', re.I),
     'sputnik.tj': re.compile(r'^/(?:telegram_export/?|docs/(?:cookie_policy|privacy_policy|terms_of_use|index)\.html)$', re.I),
-    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512|17274|17632|23080|23154)|p/(?:4447|8609|8803)\.html|qissai-khudro-bigu)/?$', re.I),
+    'ozodi.org': re.compile(r'^/(?:z/(?:538|3537|22610|23512|17274|17632|23080|23154)|p/(?:4447|8609|8803)\.html|qissai-khudro-bigu)/?$', re.I),
     'vecherka.tj': re.compile(
         r'^/(?:istorii/(?:borba-s-radikalizmom|dney-16-protiv-nasiliya|grazhdanskie-zhurnalisty'
         r'|otkritie-uroki|prava-jenshin|reforma-militsii|roditeli-i-deti|svoboda-slova|zashita_zhivotnikh)'
         r'|spets-proekti/(?:blogotvoritelniye|ekologicheskiye|mediagramotnost|obrazovatelniye|razvlekatelniye)'
         r'|podrobno/cpravochnaja-informacija|reklamodatelyam)/?$', re.I),
-    'kz.kursiv.media': re.compile(r'^/(?:expert/marlen-sihaev|guide/czifrovye-ekosistemy-v-kazahstane)/?$', re.I),
+    'kz.kursiv.media': re.compile(r'^/(?:en/category/economics/banks-finance|expert/marlen-sihaev|guide/czifrovye-ekosistemy-v-kazahstane)/?$', re.I),
+    'transport.ec.europa.eu': re.compile(r'^/(?:news-events/news_(?:nl|sk|sl|uk)|select-language)/?$', re.I),
+    'spot.uz': re.compile(r'^/ru/legislation/?$', re.I),
+    'president.uz': re.compile(r'^/ru/site/document/2/?$', re.I),
     'fm.gov.om': re.compile(r'^/en/royal-decrees/?$', re.I),
     # Exact KZ reference/index pages from the 11/24 queue. Actual KASE news
     # items and Inbusiness article URLs remain hard-blocking article work.
@@ -189,12 +197,12 @@ def requires_body_evidence(work, info):
         for row in (work, info.get('lead') or {}, info.get('candidate') or {}))
 
 
-def archived_publication_is_old(url, row, window_end):
+def archived_publication_is_old(url, row, window_end, dates=ARCHIVE_PUBLICATIONS):
     """A previously dated publisher URL is a review hint, never editorial approval."""
     address = urlsplit(url)
     if address.scheme != 'https' or address.fragment or not window_end or row.get('rawPublicationEvidence'):
         return False
-    published = ARCHIVE_PUBLICATIONS.get(url.rstrip('/'))
+    published = dates.get(url.rstrip('/'))
     if not published:
         return False
     window_start = datetime.fromisoformat(window_end) - timedelta(days=1)
@@ -259,6 +267,9 @@ def bounded_review_reason(work, info, window_end):
             verified_source_date_is_old(work['url'], candidate, window_end)
             or archived_publication_is_old(work['url'], row, window_end)):
         return 'archived_publication_requires_coverage_review'
+    if work.get('kind') in ('article', 'lead') and archived_publication_is_old(
+            work['url'], row, window_end, PRIOR_DISCLOSURE_DAYS):
+        return 'prior_first_disclosure_requires_coverage_review'
     if priority['archiveUrlHint'] and not priority['important']:
         # A dated URL is only a triage hint. It does not prove an article's
         # publication date; a genuinely identified important headline
