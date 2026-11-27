@@ -1,8 +1,9 @@
 import { getSupabaseClient } from '../storage/database/supabase-client';
-import { canonicalJson, freezeBlockReason, PLAN_B_COUNTRIES, reviewableWindowCount, sha256, type PlanBCountry } from './plan-b-handoff';
+import { canonicalJson, DAILY_MIN_ARTICLES, freezeBlockReason, PLAN_B_COUNTRIES, reviewableWindowCount, sha256, type PlanBCountry } from './plan-b-handoff';
 import { collectCountry } from './plan-b-worker';
 import { prepareIsolatedRelease } from './plan-b-release';
 import { getState, type SnapshotReceipt } from './plan-b-store';
+import { recoverySources } from './plan-b-runtime';
 
 const TABLE='plan_b_exchange';
 const issue='2026-11-27';
@@ -12,11 +13,13 @@ const deadline=Date.parse('2026-11-27T20:00:00+08:00');
 const key=(step:string)=>`${run}/${step}`;
 const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'resume-same-issue-collection'};
 const hash=(value:unknown)=>sha256(canonicalJson(value));
+const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','extend-6','extend-7'];
+const retryableScanReasons=new Set(['isolated_worker_failed','isolated_scan_timeout','isolated_scan_output_limit']);
 const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
-  (!reviewableWindowCount(scope.snapshot)?'insufficient_reviewable_candidates':null);
+  (reviewableWindowCount(scope.snapshot)<DAILY_MIN_ARTICLES?'insufficient_reviewable_candidates':null);
 type Client=ReturnType<typeof getSupabaseClient>;
 type Job={country:PlanBCountry;record_key:string;state:string;content_hash:string;payload:Record<string,unknown>;
-  attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean}|null};
+  attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean;reason?:string}|null};
 
 function fields(country:PlanBCountry|'global',record_key:string){
   return {issue_date:issue,country,kind:'manual_use',record_key};
@@ -30,8 +33,9 @@ async function advance(sb:Client, country:PlanBCountry, step:string, prior:Job|u
   const lease_until=new Date(Date.now()+18*60_000).toISOString();
   const attempts=(prior?.attempts??0)+1;
   if(prior){
+    const retryRejected=step!=='prepare'&&prior.state==='rejected'&&retryableScanReasons.has(prior.result?.reason??'');
     if(prior.content_hash!==content_hash||attempts>2||
-        (prior.state!=='queued'&&(prior.state!=='working'||!prior.lease_until||prior.lease_until>=now)))return;
+        (!retryRejected&&prior.state!=='queued'&&(prior.state!=='working'||!prior.lease_until||prior.lease_until>=now)))return;
     const claim=await sb.from(TABLE).update({state:'working',attempts,lease_until,updated_at:now}).match(match)
       .eq('state',prior.state).eq('attempts',prior.attempts).eq('content_hash',content_hash).select('country');
     if(claim.error||claim.data?.length!==1)return;
@@ -43,11 +47,16 @@ async function advance(sb:Client, country:PlanBCountry, step:string, prior:Job|u
   try{result=await work(attempts);}
   catch(error){
     const reason=error instanceof Error?error.message:'';
-    state='rejected';
-    result={ok:false,reason:/^[a-z][a-z0-9_]{0,90}$/.test(reason)?reason:'isolated_worker_failed'};
+    const retained=(error as {snapshotReceipt?:SnapshotReceipt})?.snapshotReceipt;
+    state=retained?'accepted':'rejected';
+    result={ok:false,ready:false,reason:/^[a-z][a-z0-9_]{0,90}$/.test(reason)?reason:'isolated_worker_failed',
+      ...(retained ? {scope:retained} : {})};
   }
-  await sb.from(TABLE).update({state,result,lease_until:null,updated_at:new Date().toISOString()})
+  const previousFailure=prior?.state==='rejected'?prior.result?.reason:undefined;
+  const saved=await sb.from(TABLE).update({state,result:{...result,...(previousFailure?{previousFailure}:{})},
+    lease_until:null,updated_at:new Date().toISOString()})
     .match(match).eq('state','working').eq('attempts',attempts).eq('content_hash',content_hash);
+  if(saved.error) throw new Error('isolated_recovery_receipt_save_failed');
 }
 
 export async function processFreshRun(sb=getSupabaseClient()){
@@ -57,47 +66,47 @@ export async function processFreshRun(sb=getSupabaseClient()){
   if(authorized.error||authorized.data?.state!=='available'||authorized.data.content_hash!==hash(request)||
       hash(authorized.data.payload)!==hash(request))return;
   const records=await sb.from(TABLE).select('country,record_key,state,content_hash,payload,attempts,lease_until,result')
-    .eq('issue_date',issue).eq('kind','manual_use').in('record_key',[key('scan'),key('extend'),key('prepare')]);
+    .eq('issue_date',issue).eq('kind','manual_use').in('record_key',[...scanSteps,'prepare'].map(key));
   if(records.error)return;
   const rows=(records.data??[]) as Job[];
   const row=(country:PlanBCountry,step:string)=>rows.find(r=>r.country===country&&r.record_key===key(step));
   for(let offset=0;offset<PLAN_B_COUNTRIES.length;offset+=2){
-    await Promise.all(PLAN_B_COUNTRIES.slice(offset,offset+2).map(async country=>{
-      const current=row(country,'scan');
-      await advance(sb,country,'scan',current,{run,country},async attempt=>{
-        const originalNamespace=key(`scan-${attempt}`);
-        const saved=(await getState(issue,country)).find(record=>record.step==='final');
-        const prior=saved?.receipt as SnapshotReceipt|undefined;
-        if(!prior?.cache||prior.snapshot?.issue!==issue||prior.snapshot.country!==country||prior.snapshot.phase!=='final')
-          throw new Error('same_issue_final_cache_unavailable');
-        // The failed focused production pass used a shorter subprocess limit.
-        // Resume the stored queue within the normal scan budget and keep its
-        // result available for the next pass and for independent review.
-        const scope=await collectCountry(issue,country,'final',prior.cache,undefined,{namespace:originalNamespace,deadline});
-        const reason=blockReason(scope);
-        return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false,resumedSnapshotHash:prior.snapshot.hash};
-      });
-      const continuation=row(country,'extend');
-      const base=current?.state==='accepted'?current.result?.scope:undefined;
-      if(base&&!current?.result?.ready){
-        // A single new pass resumes only this execution's recorded observations.
-        // The collector prioritizes sources the first pass did not reach.
-        await advance(sb,country,'extend',continuation,{run,country,baseHash:base.snapshot.hash},async attempt=>{
-          const originalNamespace=key(`extend-${attempt}`);
-          const scope=await collectCountry(issue,country,'final',base.cache,undefined,{namespace:originalNamespace,deadline});
+    const outcomes=await Promise.allSettled(PLAN_B_COUNTRIES.slice(offset,offset+2).map(async country=>{
+      let previous: Job | undefined;
+      for(const step of scanSteps){
+        const current=row(country,step);
+        if(current?.state==='accepted'&&current.result?.scope){
+          previous=current;
+          if(current.result.ready&&!blockReason(current.result.scope))break;
+          continue;
+        }
+        const base=previous?.result?.scope;
+        await advance(sb,country,step,current,base?{run,country,baseHash:base.snapshot.hash}:{run,country},async attempt=>{
+          const originalNamespace=key(`${step}-${attempt}`);
+          const saved=base??(await getState(issue,country)).find(record=>record.step==='final')?.receipt as SnapshotReceipt|undefined;
+          if(!saved?.cache||saved.snapshot?.issue!==issue||saved.snapshot.country!==country||saved.snapshot.phase!=='final')
+            throw new Error('same_issue_final_cache_unavailable');
+          const targets=recoverySources(saved.snapshot.coverage);
+          const focus=previous?.result?.reason==='exchange_publish_failed'?[]:
+            country==='az'&&reviewableWindowCount(saved.snapshot)<DAILY_MIN_ARTICLES
+              ? [...new Set([...targets,'az-report-az','az-apa','az-ministry-economy-azerbaijan'])]
+              : targets.length?targets:undefined;
+          const scope=await collectCountry(issue,country,'final',saved.cache,focus,
+            {namespace:originalNamespace,deadline,scanSeconds:120,nov27Recovery:true});
           const reason=blockReason(scope);
-          return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false};
+          return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false,resumedSnapshotHash:saved.snapshot.hash};
         });
+        return;
       }
       const prepare=row(country,'prepare');
-      const frozen=current?.result?.ready?current:continuation;
-      if(frozen?.state==='accepted'&&frozen.result?.ready&&frozen.result.scope&&prepare?.payload.run===run){
-        const source=frozen.result.scope;
+      const source=previous?.result?.scope;
+      if(previous?.result?.ready&&source&&!blockReason(source)&&prepare?.payload.run===run){
         await advance(sb,country,'prepare',prepare,prepare.payload,async ()=>{
           const result=await prepareIsolatedRelease(source,prepare.payload.handoff,request.version,deadline);
           return {ok:true,...result};
         });
       }
     }));
+    for(const outcome of outcomes)if(outcome.status==='rejected')console.warn('isolated_recovery_country_update_failed');
   }
 }

@@ -41,17 +41,29 @@ export function timeWithin(issue: string, hms: '06:00:00' | '09:00:00', maximum:
 
 export async function collectCountry(issue: string, country: PlanBCountry,
     phase: Phase, prior: ObjectReceipt | undefined, focus?: string[],
-    isolated?: { namespace: string; deadline: number }): Promise<SnapshotReceipt> {
+    isolated?: { namespace: string; deadline: number; scanSeconds?: number; nov27Recovery?: boolean }): Promise<SnapshotReceipt> {
   return scratch(async directory => {
     await restoreCache(directory, prior);
-    const maximum = focus ? 160_000 : 520_000;
+    const maximum = focus && !isolated?.scanSeconds ? 160_000 : 520_000;
     const timeout = isolated ? Math.min(maximum, isolated.deadline - Date.now())
       : timeWithin(issue, phase === 'preview' ? '06:00:00' : '09:00:00', maximum);
-    if (isolated && timeout < 20_000) throw new Error('isolated_scan_window_closed');
+    const archiveReserve = isolated?.scanSeconds ? 120_000 : 20_000;
+    if (isolated && timeout <= archiveReserve) throw new Error('isolated_scan_window_closed');
+    const networkSeconds = Math.min(isolated?.scanSeconds ?? (focus ? 120 : 480), Math.max(1, (timeout - archiveReserve) / 1_000));
     const args=focus && !focus.length ? ['reassess',directory,issue,country,phase]
-      : ['scan', directory, issue, country, phase,
-        String(Math.min(focus?120:480, Math.max(1, (timeout - 20_000) / 1_000))),...(focus ?? [])];
-    await runCloudScript('cloud_handoff.py',args,timeout);
+      : ['scan', directory, issue, country, phase, String(networkSeconds), ...(focus ?? [])];
+    try {
+      await runCloudScript('cloud_handoff.py', isolated?.nov27Recovery ? ['--nov27-recovery', ...args] : args, timeout);
+    } catch (error) {
+      if (isolated?.scanSeconds) {
+        const failure = error as { killed?: boolean; code?: string | number; stderr?: string };
+        if (failure.killed) throw new Error('isolated_scan_timeout');
+        if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error('isolated_scan_output_limit');
+        const reason = failure.stderr?.trimEnd().split('\n').at(-1)?.match(/^(?:ValueError|RuntimeError): ([a-z][a-z0-9_]{0,80})$/)?.[1];
+        if (reason) throw new Error(reason);
+      }
+      throw error;
+    }
     const { metrics, ...input } = JSON.parse(await readFile(join(directory, 'snapshot.json'), 'utf8')) as
       Omit<Snapshot, 'hash' | 'provisional'> & { metrics: Record<string, unknown> };
     const frozen = snapshot(input);

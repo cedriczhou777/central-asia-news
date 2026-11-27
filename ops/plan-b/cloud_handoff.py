@@ -135,8 +135,22 @@ def inventory_entries(root, issue, country, index=None, observed_at=None):
     return result
 
 
-def scan(root, directory, issue, country, phase, seconds, source_ids=None):
+def recovery_registry(issue, country, enabled):
     registry = read(REGISTRY)
+    if enabled and issue == '2026-11-27' and country == 'az':
+        for source in registry['sources']:
+            if source['id'] == 'az-report-az':
+                source['allowedHosts'] += ['www2.report.az']
+                source['entrypoints'] = [
+                    {'url': 'https://www2.report.az/en/economy', 'role': 'section', 'language': 'en',
+                     'preferredDiscovery': True, 'accessStatus': 'public_html_readable_listing'},
+                    *source['entrypoints'],
+                ]
+    return registry
+
+
+def scan(root, directory, issue, country, phase, seconds, source_ids=None, nov27_recovery=False):
+    registry = recovery_registry(issue, country, nov27_recovery)
     cutoff = datetime.fromisoformat(issue + 'T06:00:00+08:00')
     known = directory / 'input.gz'
     if known.is_file():
@@ -147,11 +161,11 @@ def scan(root, directory, issue, country, phase, seconds, source_ids=None):
                      max_pages_per_source=(2 if source_ids else ADAPTIVE_LISTING_PAGES) if adaptive else (1 if source_ids else MAX_LISTING_PAGES),
                      max_articles_per_source=ADAPTIVE_ARTICLES_PER_SOURCE if adaptive else MAX_ARTICLES_PER_SOURCE,
                      only_source_ids=source_ids, adaptive=adaptive)
-    snapshot_from_cache(root,directory,issue,country,phase,audit)
+    snapshot_from_cache(root,directory,issue,country,phase,audit,registry)
 
 
-def snapshot_from_cache(root,directory,issue,country,phase,audit):
-    registry=read(REGISTRY)
+def snapshot_from_cache(root,directory,issue,country,phase,audit,registry=None):
+    registry = registry if registry is not None else read(REGISTRY)
     cutoff=datetime.fromisoformat(issue+'T06:00:00+08:00')
     observed = datetime.now(timezone.utc).isoformat()
     ledger = read(root / 'candidate_ledger.json')['candidateLedger']
@@ -301,6 +315,7 @@ def probe_sources(directory, country):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--nov27-recovery', action='store_true')
     parser.add_argument('command', choices=['scan', 'reassess', 'extract-originals', 'originals', 'probe', 'coverage-self-test'])
     parser.add_argument('directory', type=Path)
     parser.add_argument('issue')
@@ -316,11 +331,13 @@ def main():
         probe_sources(args.directory, args.country)
     elif args.command == 'scan':
         phase, seconds, *source_ids = args.args
-        scan(root, args.directory, args.issue, args.country, phase, float(seconds), source_ids or None)
+        scan(root, args.directory, args.issue, args.country, phase, float(seconds), source_ids or None,
+             args.nov27_recovery)
     elif args.command == 'reassess':
         restore(root,args.directory/'input.gz')
         rebase_discovery_paths(root)
-        snapshot_from_cache(root,args.directory,args.issue,args.country,args.args[0] if args.args else 'final',read(root/'source_scan_audit.json'))
+        snapshot_from_cache(root,args.directory,args.issue,args.country,args.args[0] if args.args else 'final',
+                            read(root/'source_scan_audit.json'),recovery_registry(args.issue,args.country,args.nov27_recovery))
     elif args.command == 'extract-originals':
         restore(root, args.directory / 'input.gz', editorial_only=True)
     else:
