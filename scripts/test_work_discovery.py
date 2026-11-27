@@ -117,6 +117,19 @@ class DiscoveryTests(unittest.TestCase):
                       news_budget=True, adaptive=True)
         self.assertEqual(self.calls, [])
 
+    def test_recovery_seeds_still_require_same_source_and_original_publication_evidence(self):
+        home = 'https://news.test/'
+        seed = 'https://news.test/news/recovery-story'
+        foreign = 'https://unregistered.test/news/recovery-story'
+        current = {**source(), 'recoveryArticleSeeds': [seed, foreign]}
+        records = {home: page(home), seed: {**page(seed, kind='article'), 'fullTextValidated': True}}
+        _, ledger = self.run_scan(records, [current], news_budget=True, adaptive=True)
+        self.assertEqual(self.calls, [(home, None), (seed, None)])
+        self.assertEqual(set(ledger), {seed})
+        self.assertEqual(ledger[seed]['decision'], 'pending')
+        self.assertEqual(ledger[seed]['publicationWindowAssessment'], 'uncertain')
+        self.assertFalse(ledger[seed]['firstDisclosureVerified'])
+
     def test_failures_wrong_language_and_redirect_do_not_count_as_coverage(self):
         sources = [source('failed', 'failed', 'bad.test'), source('wrong', 'wrong', 'wrong.test'),
                    source('redirect', 'redirect', 'redirect.test')]
