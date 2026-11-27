@@ -65,6 +65,35 @@ class SourceRegressions(unittest.TestCase):
                 self.assertIn('Current synthetic test paragraph', result['text'])
                 self.assertNotIn('Not current prose', result['text'])
                 self.assertEqual({e['raw'] for e in result['publicationEvidence'] if e['kind']=='published'}, {clock})
+
+    def test_current_eu_article_date_is_distinct_from_its_update_time(self):
+        url='https://transport.ec.europa.eu/news-events/news/synthetic-transport-dialogue_en'
+        prose='Current synthetic facts about transport policy and regional cooperation. '*6
+        raw=(f'<html><head><meta property="og:title" content="Actual title">'
+             f'<meta property="og:url" content="{url}"><link rel="canonical" href="{url}">'
+             '<meta property="og:updated_time" content="2026-11-26T13:00:00+01:00"></head><body>'
+             '<div><h1 class="ecl-page-header__title">Actual title</h1><ul><li>26 November 2026</li></ul></div>'
+             f'<article><div><div class="ecl"><p>{prose}</p></div></div></article></body></html>').encode()
+        result=f.parse_response(url,url,raw,{})
+        self.assertTrue(result['fullTextValidated'])
+        self.assertEqual(result['text'],prose.strip())
+        self.assertEqual({(e['kind'],e['raw']) for e in result['publicationEvidence']},
+                         {('published','2026-11-26'),('modified','2026-11-26T13:00:00+01:00')})
+
+    def test_national_bank_article_uses_its_current_heading_and_og_publication_time(self):
+        path='/ru/news/informacionnye-soobshcheniya/12345'
+        url='https://nationalbank.kz'+path
+        prose='Current synthetic facts about the economy and monetary policy. '*6
+        raw=(f'<html><head><meta property="og:title" content="Actual title"><meta property="og:url" content="{path}">'
+             '<meta property="og:article:published_time" content="2026-11-26 12:34:00"></head><body>'
+             '<article class="post"><h2 class="title-page">Actual title</h2>'
+             f'<div class="post__content"><section><p>{prose}</p></section></div></article></body></html>').encode()
+        result=f.parse_response(url,url,raw,{})
+        self.assertTrue(result['fullTextValidated'])
+        self.assertEqual(result['text'],prose.strip())
+        self.assertEqual([e['localWallTime'] for e in result['publicationEvidence'] if e['kind']=='published'],
+                         ['2026-11-26T12:34:00'])
+
     def cached(self,url,kind,age=3600,status=200,fetched_at=None):
         key=hashlib.sha256(url.encode()).hexdigest()[:18]
         d={'url':url,'status':status,'key':key,'parser_version':f.PARSER_VERSION,'source_kind':kind,'contentValidated':status==200,'fetchedAt':fetched_at or (datetime.now(timezone.utc)-timedelta(seconds=age)).isoformat(),'title':'cached'}
