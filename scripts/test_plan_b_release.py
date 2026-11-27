@@ -27,6 +27,7 @@ from source_article_images import collect, connect_public
 from test_work_quantity import fixture
 from validate_work_package import digest
 from verify_rendered_package import verify_rendered_package
+from work_quantity_policy import _evidence_errors
 
 
 ISSUE = '2026-11-21'
@@ -123,6 +124,17 @@ def photo(original, image_root):
 
 
 class CloudReleaseTest(unittest.TestCase):
+    def test_publisher_date_evidence_preserves_exact_article_scope(self):
+        stamp = datetime.fromisoformat(STAMP)
+        date_record = {'row': {'role':'article'},'urls': {'https://source0.example/news/report/'},'time': stamp}
+        publication = {'url':'https://source0.example/news/report', 'observedAt':STAMP,
+                       'description':'Article-bound timestamp in publisher metadata'}
+        self.assertEqual(_evidence_errors([publication],[date_record],stamp,'publication',publisher_article_aliases=True), [])
+        self.assertTrue(_evidence_errors([publication],[date_record],stamp,'publication'))
+        for wrong in ('https://source0.example/news/other', 'https://other.example/news/report',
+                      'https://source0.example/news/report?edition=2'):
+            self.assertTrue(_evidence_errors([{**publication,'url':wrong}],[date_record],stamp,'publication',publisher_article_aliases=True))
+
     def test_deferred_unverified_navigation_is_not_an_adoptable_article(self):
         with tempfile.TemporaryDirectory() as td:
             directory=Path(td);source,registry=inputs(directory)

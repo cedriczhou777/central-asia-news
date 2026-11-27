@@ -58,6 +58,14 @@ const NOV26_SHORT_DRAFT_APPROVAL = {
   expiresAt: Date.parse('2026-11-26T22:00:00+08:00'),
 } as const;
 const VALIDATION_DRAFT_APPROVALS = [NOV26_REAL_DRAFT_APPROVAL, NOV26_SHORT_DRAFT_APPROVAL] as const;
+const NOV27_DRAFT_APPROVALS = [{
+  issue: '2026-11-27',
+  version: '2026-11-27-r206',
+  authorizationId: 'nov27-az-owner-draft-r206-b05cf6b1b8c73910',
+  contentHash: 'b05cf6b1b8c73910ddfcee2c62b7c26ef012c97cd4030c6b7c3ab0fbd06175af',
+  countries: ['az'],
+  expiresAt: Date.parse('2026-11-27T20:00:00+08:00'),
+}] as const;
 
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
 type RequestRow = GrantRow & {
@@ -421,7 +429,9 @@ export function startReviewedDatabaseRecovery() {
   const registered = isIndependentDatabaseApprovalKey(key);
   let statusIssue = '';
   let running = false;
-  const pendingDeployments = new Set<DeploymentApproval>([NOV26_DEPLOYMENT_APPROVAL, NOV26_LAYOUT_APPROVAL, ...VALIDATION_DRAFT_APPROVALS]);
+  const pendingDeployments = new Set<DeploymentApproval>([
+    NOV26_DEPLOYMENT_APPROVAL, NOV26_LAYOUT_APPROVAL, ...VALIDATION_DRAFT_APPROVALS, ...NOV27_DRAFT_APPROVALS,
+  ]);
   const tick = () => {
     const window = reviewedDatabaseRecoveryWindow();
     if (running || !window) return;
