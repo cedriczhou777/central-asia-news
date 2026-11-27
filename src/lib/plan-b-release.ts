@@ -92,9 +92,28 @@ async function runIsolatedReleaseScript(phase: 'prepare' | 'word', args: string[
     const lastLine = failure.stderr?.trimEnd().split('\n').at(-1) ?? '';
     const reason = lastLine.match(/^(?:ValueError|RuntimeError): ([a-z][a-z0-9_]{0,64})$/)?.[1];
     if (reason) throw new Error(`isolated_${phase}_${reason}`);
+    if (/^ValueError: (?:ingest|deliver) gate failed \([0-9]+\): /.test(lastLine)) {
+      const classes = [
+        ['quantity/coverage/selection incomplete', 'coverage_or_quantity'],
+        ['source name does not match', 'source_attribution'],
+        ['missing full source/text/time evidence', 'source_evidence'],
+        ['publication outside issue window', 'publication_window'],
+        ['final content hash mismatch', 'content_hash'],
+      ];
+      const code = classes.find(([label]) => lastLine.includes(label))?.[1] ?? 'validation';
+      throw new Error(`isolated_${phase}_ingest_${code}`);
+    }
     const type = lastLine.match(/^(AssertionError|AttributeError|FileExistsError|FileNotFoundError|ImportError|KeyError|ModuleNotFoundError|OSError|PermissionError|TypeError|ValueError):?/u)?.[1];
     throw new Error(`isolated_${phase}_${type?.replace(/([a-z])([A-Z])/g,'$1_$2').toLowerCase() ?? 'worker_failed'}`);
   }
+}
+
+function isolatedStageError(stage:string,error:unknown){
+  const value=error as {name?:unknown;message?:unknown;code?:unknown;failureKind?:unknown}|null;
+  if(typeof value?.message==='string'&&/^[a-z][a-z0-9_]{0,90}$/.test(value.message))return new Error(value.message);
+  const detail=[value?.failureKind,value?.code,value?.name].find(part=>typeof part==='string'&&/^[A-Za-z][A-Za-z0-9_]{0,35}$/.test(part));
+  const kind=typeof detail==='string'?detail.replace(/([a-z0-9])([A-Z])/g,'$1_$2').toLowerCase():'failed';
+  return new Error(`isolated_${stage}_${kind}`);
 }
 
 /** Prepare a signed, isolated draft and Word. Draft creation requires a separate
@@ -108,28 +127,41 @@ export async function prepareIsolatedRelease(source: SnapshotReceipt, input: unk
     if (value < 2_000) throw new Error('isolated_release_window_closed');
     return value;
   };
-  return scratch(async directory => {
-    await restoreCache(directory, source.cache);
-    await writeFile(join(directory,'editorial.gz'),await promisify(gzip)(canonicalJson(checked.value)));
-    await runIsolatedReleaseScript('prepare',[directory,issue,country,version],remaining(480_000));
-    const root=join(directory,'release');
-    const {ready,images}=await readReleaseTransport(root,version,country);
-    for(const image of images){
-      remaining(30_000);
-      const bytes=await readFile(join(root,'images',image.sha256));
-      if(bytes.length!==image.bytes)throw new Error('invalid_plan_b_image_length');
-      await ensurePrivateImage(bytes,image.sha256);
-    }
-    await runIsolatedReleaseScript('word',[directory],remaining(90_000));
-    const wordPath=join(directory,'word.docx');
-    const document=await saveFile(issue,country,'docx',wordPath);
-    await verifyObject(document);
-    const {publishWord}=await import('./plan-b-exchange');
-    await publishWord(issue,country,document,await readFile(wordPath));
-    const release=validatePackage(ready);
-    return {release,word:{document,url:await wordLink(document)},editorialHash:checked.editorialHash,
-      articles:checked.articleCount,images:images.length,transportHash:contentHash(release)};
-  });
+  let stage='scratch';
+  try{
+    return await scratch(async directory => {
+      stage='archive_restore';
+      await restoreCache(directory, source.cache);
+      stage='editorial_archive';
+      await writeFile(join(directory,'editorial.gz'),await promisify(gzip)(canonicalJson(checked.value)));
+      stage='archive_prepare';
+      await runIsolatedReleaseScript('prepare',[directory,issue,country,version],remaining(480_000));
+      stage='transport_read';
+      const root=join(directory,'release');
+      const {ready,images}=await readReleaseTransport(root,version,country);
+      stage='image_stage';
+      for(const image of images){
+        remaining(30_000);
+        const bytes=await readFile(join(root,'images',image.sha256));
+        if(bytes.length!==image.bytes)throw new Error('invalid_plan_b_image_length');
+        await ensurePrivateImage(bytes,image.sha256);
+      }
+      stage='word_render';
+      await runIsolatedReleaseScript('word',[directory],remaining(90_000));
+      const wordPath=join(directory,'word.docx');
+      stage='word_store';
+      const document=await saveFile(issue,country,'docx',wordPath);
+      await verifyObject(document);
+      stage='word_exchange';
+      const {publishWord}=await import('./plan-b-exchange');
+      await publishWord(issue,country,document,await readFile(wordPath));
+      stage='transport_validate';
+      const release=validatePackage(ready);
+      stage='word_link';
+      return {release,word:{document,url:await wordLink(document)},editorialHash:checked.editorialHash,
+        articles:checked.articleCount,images:images.length,transportHash:contentHash(release)};
+    });
+  }catch(error){throw isolatedStageError(stage,error);}
 }
 
 async function storeReviewedTransports(issue: string, country: PlanBCountry, release: ReleaseReceipt) {

@@ -47,6 +47,10 @@ NOV27_AZ_PUBLIC_SOURCES = (
     ('az-fed-az-recovery', 'FED.az', 'media', 'Asia/Baku',
      'https://fed.az/az/son-xeberler/227', 'az', ()),
 )
+NOV27_AZ_INSTITUTION_TYPES = {
+    'az-european-commission-transport': 'international_government_transport',
+    'az-cabinet-recovery': 'government_cabinet',
+}
 NOV27_AZ_REGISTERED_ARTICLES = {
     'az-apa': [
         'https://en.apa.az/energy-and-industry/socar-and-schneider-electric-sign-memorandum-of-understanding-538716',
@@ -203,7 +207,9 @@ def recovery_registry(issue, country, enabled, registry_path=None):
             registry['sources'].append({'id': source_id, 'country': 'az', 'family': family, 'kind': kind,
                 'timezone': zone, 'available': True, 'allowedHosts': [urlsplit(listing).hostname],
                 'entrypoints': [{'url': listing, 'role': 'section', 'language': language, 'preferredDiscovery': True}],
-                'recoveryArticleSeeds': list(article_urls)})
+                'recoveryArticleSeeds': list(article_urls),
+                **({'institutionType': NOV27_AZ_INSTITUTION_TYPES[source_id]}
+                   if source_id in NOV27_AZ_INSTITUTION_TYPES else {})})
     return registry
 
 
