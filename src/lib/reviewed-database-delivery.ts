@@ -65,6 +65,20 @@ const NOV27_DRAFT_APPROVALS = [{
   contentHash: 'b05cf6b1b8c73910ddfcee2c62b7c26ef012c97cd4030c6b7c3ab0fbd06175af',
   countries: ['az'],
   expiresAt: Date.parse('2026-11-27T20:00:00+08:00'),
+}, {
+  issue: '2026-11-27',
+  version: '2026-11-27-r202',
+  authorizationId: 'nov27-kz-owner-draft-r202-e599c4fb759c17ec',
+  contentHash: 'e599c4fb759c17ecd6eaaad8c8daf93c48f83a91516a2d5430cc072e51bed8a5',
+  countries: ['kz'],
+  expiresAt: Date.parse('2026-11-27T20:00:00+08:00'),
+}, {
+  issue: '2026-11-27',
+  version: '2026-11-27-r203',
+  authorizationId: 'nov27-uz-owner-draft-r203-cb874c645de517ac',
+  contentHash: 'cb874c645de517ac78fc28c12007dbac30f23f4ceadc299db6ad5e6322e67705',
+  countries: ['uz'],
+  expiresAt: Date.parse('2026-11-27T20:00:00+08:00'),
 }] as const;
 
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
