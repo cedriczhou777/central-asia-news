@@ -1016,6 +1016,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
     prior_jobs = previous_scan.get('listingQueue', [])
     visited_listing = {(e['sourceId'], e.get('url')) for e in historical_events
                        if e.get('role') != 'article' and e.get('contentValidated')}
+    attempted_listing = {(e['sourceId'], e.get('url')) for e in historical_events
+                         if e.get('role') != 'article' and not e.get('fetchRetryable')}
     minimum = datetime.fromisoformat(listing_not_before.replace('Z', '+00:00')) if listing_not_before else None
     already_sampled = set()
     fresh_listings = set()
@@ -1059,6 +1061,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                    if j.get('sourceId') == source['id'] and allowed_url(j.get('url'), source)]
         if focused_recovery and source['id'] in fresh_listings:
             deferred_listing.extend(pending)
+            new_entries = {normal_url(e['url']) for e in entries if e.get('preferredDiscovery') is True}
+            seed_groups.append([job for job in jobs if job[1] in new_entries and (job[0],job[1]) not in attempted_listing])
             continue
         all_jobs = list({(j[0], j[1]): j for j in pending + jobs}.values())
         home = jobs[0] if adaptive and jobs else next((j for j in jobs if j[2] == 'home'), jobs[0] if jobs else None)

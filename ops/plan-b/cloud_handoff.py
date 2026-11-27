@@ -141,8 +141,9 @@ def recovery_registry(issue, country, enabled, registry_path=None):
         for source in registry['sources']:
             if source['id'] == 'az-report-az':
                 source['allowedHosts'] += ['www2.report.az']
+            if source['id'] == 'az-state-customs-committee-azerbaijan':
                 source['entrypoints'] = [
-                    {'url': 'https://www2.report.az/en/economy', 'role': 'section', 'language': 'en',
+                    {'url': 'https://customs.gov.az/az/faydali/xeberler', 'role': 'section', 'language': 'az',
                      'preferredDiscovery': True, 'accessStatus': 'public_html_readable_listing'},
                     *source['entrypoints'],
                 ]
