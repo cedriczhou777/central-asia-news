@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import gzip
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -12,7 +13,7 @@ from tempfile import TemporaryDirectory
 from build_reviewed_word import build_word
 from cloud_handoff import LIMIT, NOV27_AZ_INSTITUTION_TYPES, REGISTRY, inventory_entries, read, recovery_registry, restore, write
 from prepare_country_release import prepare
-from prepare_editorial_input import candidate_originals, discovery_index
+from prepare_editorial_input import candidate_originals, candidate_row, discovery_index
 from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES
 from source_article_images import collect, save_manifest
 from validate_work_package import digest
@@ -87,6 +88,21 @@ def bind_original(article, original, require_revision=False):
     return fields
 
 
+def bind_archived_language_review(source, entry, proof, reviewer):
+    # Work sees the frozen public fingerprint, while the audit names the raw
+    # parser revision. Resolve it only from the exact signed archive member.
+    archived_sha = entry.get('sourceJSONSha256')
+    raw_revision = entry.get('sourceRevisionHash')
+    if (not archived_sha or not raw_revision or proof.get('sourceJSONSha256') != archived_sha
+            or proof.get('revision') != candidate_row(entry)['editorialFingerprint']
+            or proof.get('sourceHash') != entry.get('sourceHash') or proof.get('reviewer') != reviewer):
+        raise ValueError('archived_language_review_binding_mismatch')
+    path = source / 'evidence' / Path(entry['sourceJSON']).name
+    if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != archived_sha:
+        raise ValueError('archived_language_review_evidence_changed')
+    return {**proof, 'sourceRevisionHash': raw_revision}
+
+
 def attach_audit(source, issue, country, draft, review, registry=None):
     registry = registry if registry is not None else read(REGISTRY)
     audit = read(source / 'source_scan_audit.json')
@@ -123,11 +139,14 @@ def attach_audit(source, issue, country, draft, review, registry=None):
         editorial_ledger.append(entry)
         decision = conclusion.get(entry['id'])
         if decision:
+            language_review = decision.get('languageReview')
+            if isinstance(language_review, dict) and 'sourceJSONSha256' in language_review:
+                language_review = bind_archived_language_review(source, entry, language_review, review['reviewer'])
             for key in ('decision', 'reason', 'languageReview', 'articleIdentityReview', 'firstDisclosureEvidence',
                         'firstDisclosureVerified', 'reviewedAt', 'reviewedBy',
                         'editorialState', 'publicationTimeResolution', 'priorPublicationEvidence', 'contradictionEvidence', 'duplicateOf', 'eventGroup', 'eventPhase', 'newFact'):
                 if key in decision:
-                    entry[key] = decision[key]
+                    entry[key] = language_review if key == 'languageReview' else decision[key]
             held = (issue >= EFFECTIVE_ISSUE and entry['id'] not in adopted
                     and entry.get('editorialState') in ('pending_source_check','pending_time_check'))
             if held:

@@ -8,7 +8,7 @@ import { recoverySources } from './plan-b-runtime';
 const TABLE='plan_b_exchange';
 const issue='2026-11-27';
 const run='recover-20261127-r4';
-const prepareStep='prepare-current-observations';
+const prepareStep='prepare-exact-source-language';
 const opensAt=Date.parse('2026-11-27T09:30:00+08:00');
 const deadline=Date.parse('2026-11-27T20:00:00+08:00');
 const key=(step:string)=>`${run}/${step}`;
