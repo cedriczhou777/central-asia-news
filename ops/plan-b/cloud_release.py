@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 import gzip
 import hashlib
 import json
@@ -12,6 +13,7 @@ from tempfile import TemporaryDirectory
 
 from build_reviewed_word import build_word
 from cloud_handoff import LIMIT, NOV27_AZ_INSTITUTION_TYPES, REGISTRY, inventory_entries, read, recovery_registry, restore, write
+from discover_work_sources import assess_window
 from prepare_country_release import prepare
 from prepare_editorial_input import candidate_originals, candidate_row, discovery_index
 from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES
@@ -103,6 +105,20 @@ def bind_archived_language_review(source, entry, proof, reviewer):
     return {**proof, 'sourceRevisionHash': raw_revision}
 
 
+def archive_outside_window(source, entry, issue, country):
+    if not entry.get('sourceJSON') or not entry.get('sourceJSONSha256'):
+        return False
+    path = source / 'evidence' / Path(entry['sourceJSON']).name
+    if path.is_symlink() or not path.is_file():
+        return False
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != entry['sourceJSONSha256']:
+        raise ValueError('source_archive_hash_mismatch')
+    original = json.loads(raw)
+    cutoff = _dt(issue + 'T06:00:00+08:00')
+    return assess_window(original, country, cutoff - timedelta(days=1), cutoff) == 'outside_window'
+
+
 def attach_audit(source, issue, country, draft, review, registry=None):
     registry = registry if registry is not None else read(REGISTRY)
     audit = read(source / 'source_scan_audit.json')
@@ -153,6 +169,12 @@ def attach_audit(source, issue, country, draft, review, registry=None):
                 entry['reviewedBy'] = review['reviewer']
             if entry['decision'] != ('selected' if entry['id'] in adopted else 'pending' if held else 'rejected'):
                 raise ValueError('candidate_selection_mismatch')
+        elif (issue >= EFFECTIVE_ISSUE and entry['id'] not in adopted and entry['decision'] == 'pending'
+              and archive_outside_window(source, entry, issue, country)):
+            # These historic entries were already outside the frozen editorial
+            # inventory. Bind the derived rejection to the unchanged archive.
+            entry.update(decision='rejected',
+                         reason='Archived first publication evidence is outside the issue window')
         if entry['id'] in adopted and (entry.get('decision') != 'selected' or not entry.get('firstDisclosureVerified')):
             raise ValueError('selected_candidate_missing_first_disclosure_evidence')
     for role in (draft, review):
