@@ -17,7 +17,7 @@ from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES
 from source_article_images import collect, save_manifest
 from validate_work_package import digest
 from source_coverage import assess_coverage, require_coverage_review
-from work_quantity_policy import _dt, terminal_source_failure
+from work_quantity_policy import _dt, _url, terminal_source_failure
 
 
 def release_path(name):
@@ -109,12 +109,16 @@ def attach_audit(source, issue, country, draft, review, registry=None):
     for entry in ledger:
         if entry['id'] in deferred:
             expected=deferred[entry['id']]
-            if (entry['id'] in adopted or entry.get('fullTextValidated') is True
-                    or expected.get('sourceId')!=entry.get('sourceId')
-                    or expected.get('sourceUrl')!=entry.get('source_url')
-                    or expected.get('sourceHash')!=entry.get('sourceHash')
+            # Coverage uses the same article URL without its fragment. A
+            # parser's body flag alone does not establish archived full text.
+            if entry['id'] in adopted or (entry.get('fullTextValidated') is True and entry.get('fullTextFetchedAt')):
+                raise ValueError('deferred_candidate_already_reviewable')
+            if (expected.get('sourceId')!=entry.get('sourceId') or not _url(entry.get('source_url'))
+                    or expected.get('sourceUrl')!=_url(entry.get('source_url'))):
+                raise ValueError('deferred_candidate_source_mismatch')
+            if (expected.get('sourceHash')!=entry.get('sourceHash')
                     or expected.get('sourceJSONSha256')!=entry.get('sourceJSONSha256')):
-                raise ValueError('deferred_candidate_evidence_invalid')
+                raise ValueError('deferred_candidate_hash_mismatch')
             continue
         editorial_ledger.append(entry)
         decision = conclusion.get(entry['id'])

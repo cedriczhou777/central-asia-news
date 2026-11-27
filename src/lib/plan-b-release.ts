@@ -90,6 +90,11 @@ async function runIsolatedReleaseScript(phase: 'prepare' | 'word', args: string[
     if (failure.killed) throw new Error(`isolated_${phase}_timeout`);
     if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error(`isolated_${phase}_output_limit`);
     const lastLine = failure.stderr?.trimEnd().split('\n').at(-1) ?? '';
+    const detail = lastLine.replace(/https?:\/\/[^\s\]]+/g, '[url]')
+      .replace(/\b[0-9a-f]{16,}\b/gi, '[digest]')
+      .replace(/(?:^|\s)\/[^\s\]]+/g, ' [path]')
+      .replace(/[^a-zA-Z\d :,._;|()[\]=+\-]/g, ' ').trim().slice(0, 330);
+    const stageFailure = (code: string) => Object.assign(new Error(code), {isolatedDiagnostic: detail});
     const reason = lastLine.match(/^(?:ValueError|RuntimeError): ([a-z][a-z0-9_]{0,64})$/)?.[1];
     if (reason) throw new Error(`isolated_${phase}_${reason}`);
     if (/^ValueError: (?:ingest|deliver) gate failed \([0-9]+\): /.test(lastLine)) {
@@ -101,16 +106,16 @@ async function runIsolatedReleaseScript(phase: 'prepare' | 'word', args: string[
         ['final content hash mismatch', 'content_hash'],
       ];
       const code = classes.find(([label]) => lastLine.includes(label))?.[1] ?? 'validation';
-      throw new Error(`isolated_${phase}_ingest_${code}`);
+      throw stageFailure(`isolated_${phase}_ingest_${code}`);
     }
     const type = lastLine.match(/^(AssertionError|AttributeError|FileExistsError|FileNotFoundError|ImportError|KeyError|ModuleNotFoundError|OSError|PermissionError|TypeError|ValueError):?/u)?.[1];
-    throw new Error(`isolated_${phase}_${type?.replace(/([a-z])([A-Z])/g,'$1_$2').toLowerCase() ?? 'worker_failed'}`);
+    throw stageFailure(`isolated_${phase}_${type?.replace(/([a-z])([A-Z])/g,'$1_$2').toLowerCase() ?? 'worker_failed'}`);
   }
 }
 
 function isolatedStageError(stage:string,error:unknown){
   const value=error as {name?:unknown;message?:unknown;code?:unknown;failureKind?:unknown}|null;
-  if(typeof value?.message==='string'&&/^[a-z][a-z0-9_]{0,90}$/.test(value.message))return new Error(value.message);
+  if(typeof value?.message==='string'&&/^[a-z][a-z0-9_]{0,90}$/.test(value.message))return error instanceof Error?error:new Error(value.message);
   const detail=[value?.failureKind,value?.code,value?.name].find(part=>typeof part==='string'&&/^[A-Za-z][A-Za-z0-9_]{0,35}$/.test(part));
   const kind=typeof detail==='string'?detail.replace(/([a-z0-9])([A-Z])/g,'$1_$2').toLowerCase():'failed';
   return new Error(`isolated_${stage}_${kind}`);

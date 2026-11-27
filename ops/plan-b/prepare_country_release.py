@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from assess_issue_delivery import COUNTRIES, unique_object
 from build_work_package import build
-from validate_work_package import digest
+from validate_work_package import digest, quantity_report
 from verify_rendered_package import verify_rendered_package
 
 
@@ -109,6 +109,12 @@ def collect_images(manifest_path, assets, directory):
 def run_gate(aggregate, issue, country, stage, mode):
     errors = verify_rendered_package(aggregate, issue, [country], stage, mode)
     if errors:
+        if any('quantity/coverage/selection incomplete' in error for error in errors):
+            review = quantity_report(aggregate, countries=[country]).get(country, {})
+            for section in ('sourceCoverage', 'candidateLedgerValidation', 'quantityExceptionValidation'):
+                failures = review.get(section, {}).get('errors', [])
+                if failures:
+                    errors.append(section + ': ' + failures[0])
         raise ValueError(f"{stage} gate failed ({len(errors)}): " + " | ".join(errors[:5]))
 
 
