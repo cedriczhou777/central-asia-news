@@ -1,6 +1,6 @@
 """Bound discovery work without asserting that unfetched news was completed."""
 from collections import defaultdict
-from datetime import date,datetime,timedelta
+from datetime import datetime,timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -63,15 +63,21 @@ STATIC_DIRECTORY_BY_HOST = {
         r'|documents/list-projects-normative|payment-systems/(?:registers/operators-of-payment-systems|remote-banking-services)'
         r'|press_center/(?:articles-and-interviews|forums-and-conferences)'
         r'|press_center/forums-and-conferences/samarkand-islamic-finance-forum-2026'
-        r'|services/(?:regulations|regulatory-sandbox)|statistics/(?:credit|financing)'
+        r'|publications/balance-of-payments'
+        r'|services/(?:regulations|regulatory-sandbox|results-of-applications|task-execution-states'
+        r'|citizens/(?:helpline-commercial-banks|request-for-information))'
+        r'|statistics/(?:credit|financing|calendar-statistical-data)'
         r')/?$', re.I),
-    'economy.gov.az': re.compile(r'^/az/page/(?:iqtisadiyyat/investisiya|itm)/?$', re.I),
-    'customs.gov.az': re.compile(r'^/az/faydali/satınalmalar/tender/?$', re.I),
+    'economy.gov.az': re.compile(
+        r'^/(?:az/page/(?:iqtisadiyyat/investisiya|itm'
+        r'|beynelxalq-elaqeler/maliyye-institutlari-ile-emekdasliq/asiya-infrastruktur-investisiya-banki-aiib)'
+        r'|en/page/(?:iqtisadiyyat/investisiya|beynelxalq-elaqeler/maliyye-institutlari-ile-emekdasliq))/?$', re.I),
+    'customs.gov.az': re.compile(r'^/az/faydali/(?:satınalmalar/tender|gomruk-statistikasi/tariff-statistics)/?$', re.I),
     'nuz.uz': re.compile(r'^/(?:politika|zdorove|obschestvo)/?$', re.I),
     'gov.uz': re.compile(r'^/(?:ru|uz|en)/soliq/pages/soliq-qo-mitasi-faoliyat-sohasi/?$', re.I),
     'uzdaily.uz': re.compile(r'^/(?:ru|uz|en)/special-projects(?:/islamic-finance-2026)?/?$', re.I),
     'sputnik.tj': re.compile(r'^/(?:telegram_export/?|docs/(?:cookie_policy|privacy_policy|terms_of_use|index)\.html)$', re.I),
-    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512|17274)|qissai-khudro-bigu)/?$', re.I),
+    'ozodi.org': re.compile(r'^/(?:z/(?:22610|23512|17274|17632|23080|23154)|qissai-khudro-bigu)/?$', re.I),
     'vecherka.tj': re.compile(
         r'^/(?:istorii/(?:borba-s-radikalizmom|dney-16-protiv-nasiliya|grazhdanskie-zhurnalisty'
         r'|otkritie-uroki|prava-jenshin|reforma-militsii|roditeli-i-deti|svoboda-slova|zashita_zhivotnikh)'
@@ -191,16 +197,25 @@ def archived_publication_is_old(url, row, window_end):
     published = ARCHIVE_PUBLICATIONS.get(url.rstrip('/'))
     if not published:
         return False
-    safe_day = datetime.fromisoformat(window_end).date() - timedelta(days=2)
-    if date.fromisoformat(published) >= safe_day:
+    window_start = datetime.fromisoformat(window_end) - timedelta(days=1)
+    safe_day = window_start.date() - timedelta(days=1)
+    published_at = datetime.fromisoformat(published)
+    exact = published_at.tzinfo is not None and window_start.tzinfo is not None
+    if (published_at >= window_start if exact else published_at.date() >= safe_day):
         return False
+    confirmed_earlier_local_day = exact and published_at.date() < window_start.astimezone(published_at.tzinfo).date()
     for anchor in row.get('anchorEvidence') or []:
         if not isinstance(anchor, dict) or anchor.get('inNavigation'):
             continue
         for item in anchor.get('nearbyTimes') or []:
             raw = (item.get('datetime') or item.get('text')) if isinstance(item, dict) else item
             stamp, _ = _parse_listing_date_hint(raw)
-            if stamp is None or stamp.date() >= safe_day:
+            if stamp is None:
+                return False
+            if stamp.tzinfo is not None and window_start.tzinfo is not None:
+                if stamp >= window_start:
+                    return False
+            elif stamp.date() >= safe_day and not (confirmed_earlier_local_day and stamp.date() == published_at.date()):
                 return False
     return True
 
