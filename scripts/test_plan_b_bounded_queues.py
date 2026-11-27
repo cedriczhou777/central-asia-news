@@ -14,7 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ops' / 'plan-b'))
 from discover_work_sources import discover, pagination_links
 from news_queue_policy import (VERSION, MAX_ACTIVE_ARTICLES, digest, importance,
-                               archived_publication_is_old, partition_coverage,
+                               archived_publication_is_old, bounded_review_reason, partition_coverage,
                                publisher_reference_directory, validate_queue_accounting)
 from source_coverage import COVERAGE_VERSION, assess_coverage
 import work_client
@@ -114,6 +114,30 @@ class BoundedQueuePolicy(unittest.TestCase):
         self.assertTrue(archived_publication_is_old(archived, old, cutoff))
         self.assertFalse(archived_publication_is_old(archived, recent, cutoff))
         self.assertFalse(archived_publication_is_old(archived, {'rawPublicationEvidence': [{'kind': 'published'}]}, cutoff))
+
+    def test_verified_navigation_keeps_current_news_obligations(self):
+        for url in ('https://www.ozodi.org/z/538', 'https://www.ozodi.org/z/3537',
+                    'https://kz.kursiv.media/en/category/economics/banks-finance/',
+                    'https://president.uz/ru/site/document/2?menu_id=144',
+                    'https://transport.ec.europa.eu/news-events/news_nl',
+                    'https://transport.ec.europa.eu/select-language?destination=/node/2',
+                    'https://www.spot.uz/ru/legislation/'):
+            with self.subTest(url=url):
+                self.assertTrue(publisher_reference_directory(url))
+        for url in ('https://www.ozodi.org/a/news-today/33906329.html',
+                    'https://transport.ec.europa.eu/news-events/news/current-transport-dialogue_en',
+                    'https://president.uz/ru/lists/view/9899'):
+            with self.subTest(url=url):
+                self.assertFalse(publisher_reference_directory(url))
+
+    def test_verified_prior_disclosure_does_not_override_current_evidence(self):
+        work = {'url': 'https://www.super.kg/article/show/63454', 'kind': 'article'}
+        cutoff = '2026-11-27T06:00:00+08:00'
+        self.assertEqual(bounded_review_reason(work, {}, cutoff),
+                         'prior_first_disclosure_requires_coverage_review')
+        self.assertIsNone(bounded_review_reason(work, {'candidate': {'publicationWindowAssessment': 'in_window'}}, cutoff))
+        self.assertIsNone(bounded_review_reason(work, {'lead': {'anchorEvidence': [
+            {'nearbyTimes': [{'text': '2026-11-26T12:00:00+06:00'}]}]}}, cutoff))
 
 
 @unittest.skipUnless(FIXTURE.exists(),'provide private PLAN_B_INCIDENT_FIXTURE for real incident regression')
