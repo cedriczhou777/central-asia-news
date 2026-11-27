@@ -1,7 +1,9 @@
 """Run the existing source and verification code against an isolated country cache."""
 
 import argparse
+import base64
 from datetime import datetime, timedelta, timezone
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -10,7 +12,7 @@ import shutil
 import tarfile
 from urllib.parse import urlsplit
 
-from discover_work_sources import assess_window, discover, published_intervals, rebase_discovery_paths, rerank_cached_leads
+from discover_work_sources import allowed_url, assess_window, discover, lead_route, normal_url, published_intervals, rebase_discovery_paths, rerank_cached_leads
 from editorial_policy import EFFECTIVE_ISSUE
 from news_funnel import event_pairs, scan_funnel
 from source_evidence import language_versions, publication_options
@@ -205,12 +207,66 @@ def recovery_registry(issue, country, enabled, registry_path=None):
     return registry
 
 
+def import_public_article_captures(directory, root, registry, issue, country, phase):
+    """Reparse exact public source responses collected separately for Nov 27."""
+    from io import BytesIO
+    from fetch_work_sources import parse_response
+
+    manifest = read(directory / 'recovery-pages.json')
+    allowed = manifest.get('allowed')
+    pages = manifest.get('pages')
+    if (issue != '2026-11-27' or phase != 'final' or
+            manifest.get('issue') != issue or manifest.get('country') != country or
+            not isinstance(allowed, list) or not isinstance(pages, list) or not 1 <= len(pages) <= 18):
+        raise ValueError('invalid_recovery_capture_manifest')
+    sources = {source['id']: source for source in registry['sources'] if source['country'] == country}
+    allowlist = {(row['sourceId'], normal_url(row['url'])) for row in allowed}
+    source_dir = root / 'sources'
+    source_dir.mkdir(parents=True, exist_ok=True)
+    for page in pages:
+        source_id, url, final = page['sourceId'], page['url'], page['finalUrl']
+        source = sources.get(source_id)
+        if (not source or (source_id, url) not in allowlist or normal_url(url) != url or
+                not all(urlsplit(candidate).scheme == 'https' and allowed_url(candidate, source) for candidate in (url, final)) or
+                lead_route(url, source, ())[0] != 'article_candidate'):
+            raise ValueError('invalid_recovery_capture_identity')
+        acquired = datetime.fromisoformat(page['fetchedAt'])
+        if not datetime.fromisoformat(issue + 'T06:00:00+08:00') <= acquired <= datetime.now(timezone.utc):
+            raise ValueError('invalid_recovery_capture_time')
+        compressed = base64.b64decode(page['gzipBase64'], validate=True)
+        if len(compressed) > 300_000:
+            raise ValueError('invalid_recovery_capture_size')
+        with gzip.GzipFile(fileobj=BytesIO(compressed)) as stream:
+            raw = stream.read(3_000_001)
+        if len(raw) > 3_000_000 or hashlib.sha256(raw).hexdigest() != page['rawSha256']:
+            raise ValueError('invalid_recovery_capture_bytes')
+        headers = page.get('headers', {})
+        if not isinstance(headers, dict) or not all(
+                key in {'content-type','content-encoding','last-modified'} and isinstance(value, str) and len(value) < 350
+                for key, value in headers.items()):
+            raise ValueError('invalid_recovery_capture_headers')
+        parsed = parse_response(url, final, raw, headers)
+        if not (parsed.get('contentValidated') and parsed.get('fullTextValidated')):
+            raise ValueError('recovery_capture_missing_article_body')
+        key = hashlib.sha256(url.encode()).hexdigest()[:18]
+        dest = source_dir / (key + '.json')
+        existing = read(dest) if dest.exists() else {}
+        if not existing.get('fullTextValidated'):
+            (source_dir / (key + '.html.gz')).write_bytes(compressed)
+            write(dest,{**parsed,'url':url,'status':200,'key':key,'fetchedAt':acquired.isoformat(),
+                       'response_headers':headers,'captureOrigin':'operator_public_publisher_response',
+                       'supersededNetworkStatus':existing.get('status')})
+        source['recoveryArticleSeeds'] = list(dict.fromkeys([*source.get('recoveryArticleSeeds', []),url]))
+
+
 def scan(root, directory, issue, country, phase, seconds, source_ids=None, nov27_recovery=False):
     registry = recovery_registry(issue, country, nov27_recovery)
     cutoff = datetime.fromisoformat(issue + 'T06:00:00+08:00')
     known = directory / 'input.gz'
     if known.is_file():
         restore(root, known)
+    if nov27_recovery and (directory / 'recovery-pages.json').is_file():
+        import_public_article_captures(directory, root, registry, issue, country, phase)
     adaptive = issue >= EFFECTIVE_ISSUE
     audit = discover(registry, country, issue, root, cutoff.isoformat() if phase == 'final' else None,
                      workers=ADAPTIVE_WORKERS if adaptive else 2, max_seconds=seconds, news_budget=True,

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -41,9 +41,14 @@ export function timeWithin(issue: string, hms: '06:00:00' | '09:00:00', maximum:
 
 export async function collectCountry(issue: string, country: PlanBCountry,
     phase: Phase, prior: ObjectReceipt | undefined, focus?: string[],
-    isolated?: { namespace: string; deadline: number; scanSeconds?: number; nov27Recovery?: boolean }): Promise<SnapshotReceipt> {
+    isolated?: { namespace: string; deadline: number; scanSeconds?: number; nov27Recovery?: boolean;
+      recoveryCapture?: Record<string,unknown> }): Promise<SnapshotReceipt> {
   return scratch(async directory => {
     await restoreCache(directory, prior);
+    if (isolated?.recoveryCapture) {
+      if (!isolated.nov27Recovery || !focus?.length) throw new Error('invalid_recovery_capture_scope');
+      await writeFile(join(directory,'recovery-pages.json'),canonicalJson(isolated.recoveryCapture),{mode:0o600});
+    }
     const maximum = focus && !isolated?.scanSeconds ? 160_000 : 520_000;
     const timeout = isolated ? Math.min(maximum, isolated.deadline - Date.now())
       : timeWithin(issue, phase === 'preview' ? '06:00:00' : '09:00:00', maximum);
