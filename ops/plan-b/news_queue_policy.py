@@ -79,7 +79,7 @@ STATIC_DIRECTORY_BY_HOST = {
         r'|money-market-operations(?:/interbank-(?:money|repo)-market)?)'
         r'|banknotes-coins(?:/gold-bars/sale-and-buy-back-offices|/commemorative-coins/(?:balance|points-sale))?'
         r'|combating-money-laundering'
-        r'|arkhiv-kursov-valyut/veb-masteram|anti-corruption/send'
+        r'|arkhiv-kursov-valyut/(?:veb-masteram|json|xml)|anti-corruption/send'
         r'|consumer-protection/(?:reminder-of-consumer-banking-services|work-with-consumers-of-banking-services)'
         r'|documents/list-projects-normative|payment-systems/(?:registers/operators-of-payment-systems|remote-banking-services)'
         r'|press_center/(?:articles-and-interviews|forums-and-conferences)'
