@@ -45,6 +45,20 @@ NOV27_AZ_PUBLIC_SOURCES = (
     ('az-fed-az-recovery', 'FED.az', 'media', 'Asia/Baku',
      'https://fed.az/az/son-xeberler/227', 'az', ()),
 )
+NOV27_AZ_REGISTERED_ARTICLES = {
+    'az-apa': [
+        'https://en.apa.az/energy-and-industry/socar-and-schneider-electric-sign-memorandum-of-understanding-538716',
+        'https://en.apa.az/infrastructure/azerbaijan-and-eu-to-step-up-efforts-to-finalize-common-aviation-area-agreement-538764',
+        'https://en.apa.az/agrarian-industry/azerbaijans-foreign-trade-surplus-increases-more-than-fivefold-538723',
+        'https://en.apa.az/finance/ebrd-caucasus-director-financing-demand-among-young-entrepreneurs-in-azerbaijan-stands-at-15-billion-538695',
+        'https://en.apa.az/infrastructure/azerbaijan-airlines-cjsc-presents-its-2025-annual-report-538752',
+    ],
+    'az-report-az': [
+        'https://www2.report.az/en/amp/business/azerbaijan-s-foreign-trade-surplus-increases-more-than-fivefold',
+        'https://report.az/en/amp/energy/socar-supervisory-board-reviews-first-half-financial-results',
+    ],
+    'az-trend': ['https://www.trend.az/azerbaijan/4251149.html'],
+}
 ARCHIVE_FILE = re.compile(r'(?:sources|evidence)/[a-zA-Z0-9_-]+\.(?:retry\.json|json|html\.gz)\Z')
 LIMIT = 150 * 1024 * 1024
 
@@ -164,6 +178,9 @@ def recovery_registry(issue, country, enabled, registry_path=None):
     registry = read(REGISTRY if registry_path is None else registry_path)
     if enabled and issue == '2026-11-27' and country == 'az':
         for source in registry['sources']:
+            article_seeds = NOV27_AZ_REGISTERED_ARTICLES.get(source['id'])
+            if article_seeds:
+                source['recoveryArticleSeeds'] = article_seeds
             if source['id'] == 'az-report-az':
                 source['allowedHosts'] += ['www2.report.az']
             if source['id'] == 'az-state-customs-committee-azerbaijan':
