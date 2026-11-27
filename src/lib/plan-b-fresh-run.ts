@@ -11,7 +11,8 @@ const run='recover-20261127-r4';
 const opensAt=Date.parse('2026-11-27T09:30:00+08:00');
 const deadline=Date.parse('2026-11-27T20:00:00+08:00');
 const key=(step:string)=>`${run}/${step}`;
-const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'resume-same-issue-collection'};
+const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'resume-same-issue-verified-archive'};
+const authorizationRecord=key('verified-archive-requested');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','extend-6','extend-7'];
 const retryableScanReasons=new Set(['isolated_worker_failed','isolated_scan_timeout','isolated_scan_output_limit']);
@@ -62,7 +63,7 @@ async function advance(sb:Client, country:PlanBCountry, step:string, prior:Job|u
 export async function processFreshRun(sb=getSupabaseClient()){
   const now=Date.now();
   if(now<opensAt||now>=deadline)return;
-  const authorized=await sb.from(TABLE).select('payload,state,content_hash').match(fields('global',key('requested'))).maybeSingle();
+  const authorized=await sb.from(TABLE).select('payload,state,content_hash').match(fields('global',authorizationRecord)).maybeSingle();
   if(authorized.error||authorized.data?.state!=='available'||authorized.data.content_hash!==hash(request)||
       hash(authorized.data.payload)!==hash(request))return;
   const records=await sb.from(TABLE).select('country,record_key,state,content_hash,payload,attempts,lease_until,result')
