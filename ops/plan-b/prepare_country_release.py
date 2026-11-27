@@ -121,7 +121,9 @@ def run_gate(aggregate, issue, country, stage, mode):
                         index = int(position[1])
                         if index < len(ledger):
                             row = ledger[index]
-                            failure += f" ({row.get('sourceId', 'unknown')} {row.get('decision', 'unknown')})"
+                            candidate = str(row.get('id', ''))[:12]
+                            has_language_review = isinstance(row.get('languageReview'), dict)
+                            failure += f" ({row.get('sourceId', 'unknown')} {row.get('decision', 'unknown')} {candidate}, language review {has_language_review})"
                     errors.append(section + ': ' + failure)
         raise ValueError(f"{stage} gate failed ({len(errors)}): " + " | ".join(errors[:5]))
 

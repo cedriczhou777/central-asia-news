@@ -135,6 +135,34 @@ class CloudReleaseTest(unittest.TestCase):
                       'https://source0.example/news/report?edition=2'):
             self.assertTrue(_evidence_errors([{**publication,'url':wrong}],[date_record],stamp,'publication',publisher_article_aliases=True))
 
+    def test_language_review_binds_to_the_exact_frozen_archive_member(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            archive = root / 'evidence' / 'original.json'
+            archive.parent.mkdir()
+            raw = b'{"text":"archive member read by the independent reviewer"}'
+            archive.write_bytes(raw)
+            row = {
+                'id': 'story', 'sourceId': 'tj-khovar',
+                'source_url': 'https://khovar.tj/2026/11/story/',
+                'sourceJSON': '/old/runtime/evidence/original.json',
+                'sourceJSONSha256': hashlib.sha256(raw).hexdigest(),
+                'sourceHash': 'a' * 64, 'sourceRevisionHash': 'b' * 64,
+            }
+            proof = {
+                'reviewer': 'independent', 'language': 'tg',
+                'sourceHash': row['sourceHash'], 'sourceJSONSha256': row['sourceJSONSha256'],
+                'revision': candidate_row(row)['editorialFingerprint'],
+            }
+            bound = cloud_release.bind_archived_language_review(root, row, proof, 'independent')
+            self.assertEqual(bound['sourceRevisionHash'], row['sourceRevisionHash'])
+            self.assertNotIn('sourceRevisionHash', proof)
+            with self.assertRaisesRegex(ValueError, 'archived_language_review_binding_mismatch'):
+                cloud_release.bind_archived_language_review(root, row, {**proof, 'revision': '0' * 64}, 'independent')
+            archive.write_bytes(raw + b' ')
+            with self.assertRaisesRegex(ValueError, 'archived_language_review_evidence_changed'):
+                cloud_release.bind_archived_language_review(root, row, proof, 'independent')
+
     def test_deferred_unverified_navigation_is_not_an_adoptable_article(self):
         with tempfile.TemporaryDirectory() as td:
             directory=Path(td);source,registry=inputs(directory)
