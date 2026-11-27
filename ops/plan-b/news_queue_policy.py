@@ -20,12 +20,16 @@ ADAPTIVE_DOMAIN_WORKERS = 1
 ADAPTIVE_EXTRA_LISTING_PAGES = 3
 ADAPTIVE_EXTRA_ARTICLES = 12
 ARCHIVE_PUBLICATIONS = json.loads(Path(__file__).with_name('verified_archive_publications.json').read_text())
+NOV27_UZ_COVERAGE_EVIDENCE = json.loads(Path(__file__).with_name('nov27_uz_coverage_evidence.json').read_text())
 # Exact archive stories whose same substantive disclosure can be dated independently.
 # Super's issue 1248 covers Nov 20–26. News.KG already reported the deputy
 # minister's 25% growth, ~1,000 new objects and both annual figures on Nov 21.
 # https://news.kg/ru/news/potreblenie-elektroenergii-v-kyrgyzstane-vyroslo-na-25-za-5-let-minenergo
 PRIOR_DISCLOSURE_DAYS = {
     'https://www.super.kg/article/show/63454': '2026-11-21',
+    # The publisher's full special project and the original headline were
+    # syndicated under this title by Medichub on 2021-03-15 (story 759461).
+    'https://podrobno.uz/lp/ragida-hurmuhametova': '2021-03-15',
     # Four Finprom back issues with dated republications. The named reporting
     # sources repeat the distinctive headlines and explicitly cite Finprom.
     # PRG 39853748 (2021-04-30), Kazinform a3742756 (2021-01-19),
@@ -73,7 +77,8 @@ STATIC_DIRECTORY_BY_HOST = {
         r'|monetary-policy/refinancing-rate(?:/schedule-of-meetings)?'
         r'|monetary-policy/(?:local-currency-yield-curve|standards-required-reserves'
         r'|money-market-operations(?:/interbank-(?:money|repo)-market)?)'
-        r'|banknotes-coins/gold-bars/sale-and-buy-back-offices|combating-money-laundering'
+        r'|banknotes-coins(?:/gold-bars/sale-and-buy-back-offices)?|combating-money-laundering'
+        r'|arkhiv-kursov-valyut/veb-masteram|anti-corruption/send'
         r'|consumer-protection/(?:reminder-of-consumer-banking-services|work-with-consumers-of-banking-services)'
         r'|documents/list-projects-normative|payment-systems/(?:registers/operators-of-payment-systems|remote-banking-services)'
         r'|press_center/(?:articles-and-interviews|forums-and-conferences)'
@@ -271,6 +276,10 @@ def bounded_review_reason(work, info, window_end):
         return None
     if publisher_reference_directory(work['url']):
         return 'publisher_directory_requires_coverage_review'
+    if window_end=='2026-11-27T06:00:00+08:00' and work.get('kind') in ('article','lead'):
+        recovery = NOV27_UZ_COVERAGE_EVIDENCE.get(work['url'].rstrip('/'))
+        if recovery and recovery['sourceId']==work.get('sourceId'):
+            return recovery['reason']
     priority = importance(row, window_end)
     if work.get('kind') in ('article','lead') and priority.get('listingCardDateHint'):
         return 'listing_card_old_date_requires_coverage_review'

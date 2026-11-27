@@ -1,0 +1,51 @@
+{
+  "https://cbu.uz/ru/press_center/reviews/5026218": {
+    "latestPossiblePublicationExclusive": "2026-11-26T00:00:00+05:00",
+    "publisherDate": "2026-11-25",
+    "publisherTimezone": "Asia/Tashkent",
+    "reason": "publisher_calendar_day_precedes_window_requires_coverage_review",
+    "sourceId": "uz-central-bank-uzbekistan"
+  },
+  "https://cbu.uz/ru/statistics/credit/5040955": {
+    "attachmentSha256": "32bb6254a6b852d7a92a1c9f07b4914d3a21ad2f208163c6abc9cb9a27504433",
+    "attachmentUrl": "https://cbu.uz/upload/medialibrary/bca/1sv9mmvxxjzx9icqw6lh842weuz0ikwl/Obyazatelstva_mikrofinansovykh_organizatsiy-(1).xlsx",
+    "publisherDate": "2026-11-26",
+    "reason": "publisher_workbook_and_unresolved_first_publication_time_require_coverage_review",
+    "sourceId": "uz-central-bank-uzbekistan"
+  },
+  "https://cbu.uz/ru/statistics/credit/5040978": {
+    "attachmentPublisherPage": "https://cbu.uz/en/statistics/credit/5040986/",
+    "attachmentSha256": "6ad77204059ba359590c227f8694c1e4ee5a6238a90d690946f4876138996528",
+    "attachmentUrl": "https://cbu.uz/upload/medialibrary/909/fgrr0ijfn3jpqk13ox872ik6ydnoyk97/NPL_of_microfinance_institutions.xlsx",
+    "publisherDate": "2026-11-26",
+    "reason": "publisher_workbook_and_unresolved_first_publication_time_require_coverage_review",
+    "sourceId": "uz-central-bank-uzbekistan"
+  },
+  "https://cbu.uz/ru/statistics/credit/5040996": {
+    "attachmentSha256": "ff48373247f14fb9809b97ff6f4e7a30a46d2c4efc7e1eca0fd2bd53a32099a9",
+    "attachmentUrl": "https://cbu.uz/upload/medialibrary/408/rbhmop5tc9e9pi79c7peoxdh8hviey14/Aktivy-lombardy.xlsx",
+    "publisherDate": "2026-11-26",
+    "reason": "publisher_workbook_and_unresolved_first_publication_time_require_coverage_review",
+    "sourceId": "uz-central-bank-uzbekistan"
+  },
+  "https://cbu.uz/ru/statistics/credit/5041015": {
+    "attachmentSha256": "2f1f080624fce1b9a340f96d11b1cc3a41055d21eb8568ae9c86e6a5b18cc67f",
+    "attachmentUrl": "https://cbu.uz/upload/medialibrary/5b4/8jmlxlg7mxkuuqgamlht4n532rxu4467/Uroven-kapitalizatsii-lombardov.xlsx",
+    "publisherDate": "2026-11-26",
+    "reason": "publisher_workbook_and_unresolved_first_publication_time_require_coverage_review",
+    "sourceId": "uz-central-bank-uzbekistan"
+  },
+  "https://cbu.uz/ru/statistics/credit/5041025": {
+    "attachmentSha256": "f71b0eebaaf025020f56146b07ea5a3761cbc84076874a62ce0c60427c523351",
+    "attachmentUrl": "https://cbu.uz/upload/medialibrary/eef/vhfrid2005dtw7h8nk6qhdmlk6m2tlvs/Obyazatelstva_lombardov-(1).xlsx",
+    "publisherDate": "2026-11-26",
+    "reason": "publisher_workbook_and_unresolved_first_publication_time_require_coverage_review",
+    "sourceId": "uz-central-bank-uzbekistan"
+  },
+  "https://www.fm.gov.om/en/66476": {
+    "publisherDate": "2026-11-26",
+    "publisherTitle": "Launch of Thai Omani Trade and Investment Association",
+    "reason": "publisher_article_about_oman_and_thailand_requires_coverage_review",
+    "sourceId": "uz-oman-foreign-ministry"
+  }
+}

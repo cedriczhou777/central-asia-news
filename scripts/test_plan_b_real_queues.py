@@ -11,6 +11,17 @@ from work_client import protected_connection
 from unittest.mock import patch
 
 class RealQueueRegression(unittest.TestCase):
+    def test_verified_statistical_attachment_still_requires_independent_time_review(self):
+        work = {'sourceId':'uz-central-bank-uzbekistan','kind':'article',
+                'url':'https://cbu.uz/ru/statistics/credit/5040996/',
+                'reason':'discovered_article_needs_body_or_review'}
+        cutoff = '2026-11-27T06:00:00+08:00'
+        self.assertEqual(bounded_review_reason(work,{},cutoff),
+                         'publisher_workbook_and_unresolved_first_publication_time_require_coverage_review')
+        self.assertIsNone(bounded_review_reason({**work,'mustProcess':True},{},cutoff))
+        self.assertIsNone(bounded_review_reason({**work,'sourceId':'other'},{},cutoff))
+        self.assertIsNone(bounded_review_reason(work,{},'2026-11-28T06:00:00+08:00'))
+
     def test_all_real_pending_identities_are_retained(self):
         path=os.environ.get('PLAN_B_REAL_QUEUE_FIXTURE')
         if not path:self.skipTest('Production fixture is private; set PLAN_B_REAL_QUEUE_FIXTURE for authorized regression')

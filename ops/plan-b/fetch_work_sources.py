@@ -8,7 +8,7 @@ from lxml import html
 from discovery_feed import FEED_TYPES, parse_feed
 from source_evidence import KHOVAR_RUSSIAN_MONTHS, header_clock, khovar_archive_dateline, khovar_archive_publication_footer
 P=Path(__file__).parent;S=P/'sources'
-PARSER_VERSION='source-html-v28'
+PARSER_VERSION='source-html-v29'
 TRANSIENT={429,500,502,503,504}
 MAX_NETWORK_SECONDS = 45
 MAX_TRANSPORT_BYTES = 10_000_000
@@ -650,6 +650,19 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
                         months=('yanvar','fevral','mart','aprel','may','iyun','iyul','avqust','sentyabr','oktyabr','noyabr','dekabr')
                         if match and match[1].casefold() in months:
                             profile['localPublicationBadge']=(raw,f'{match[3]}-{months.index(match[1].casefold())+1:02d}-{int(match[2]):02d}T{match[4]}')
+    elif host=='president.uz' and re.fullmatch(r'/(?:uz|ru|en)/lists/view/\d+/?',path):
+        if normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url):
+            scopes=[n for n in tree.xpath('//section') if has_class(n,'inner_content')]
+            if len(scopes)==1:
+                heads=[n for n in scopes[0].xpath('.//div[@class]') if has_class(n,'pre_full_name')]
+                bodies=[n for n in scopes[0].xpath('.//div[p]') if has_class(n,'status_box_second')]
+                if len(heads)==1 and headings_match(heads):
+                    profile=make('uz_presidency_current_statement',bodies,heads,['same_og_article_url','current_statement_scope'])
+                    if profile:
+                        raw=' '.join(bodies[0].xpath('string(./p[1])').split())
+                        if re.fullmatch(r'\d{2}\.\d{2}\.20\d{2}',raw):
+                            try:profile['publicationDay']=datetime.strptime(raw,'%d.%m.%Y').date().isoformat()
+                            except ValueError:pass
     elif host=='nuz.uz' and re.fullmatch(r'/20\d\d/\d\d/\d\d/[^/]+/?',path):
         if normalized_url(canonical_url,final_url)==normalized_url(final_url,final_url):
             heads=[n for n in tree.xpath('//article//h1') if has_class(n,'tdb-title-text')]
@@ -946,7 +959,8 @@ def parse_response(url,final_url,raw,headers):
     if (publisher_template and selected_body is not None and body_evidence.get('basis','').startswith('publisher_template:')
             and (source_kind=='unknown' or publisher_template['name'] in ('vecherka_current_post_content',
                 'az_energy_ministry_print_body','ec_transport_news_content','nbk_public_information_post',
-                'kase_current_news_content','cbu_current_press_prose','kz_government_news_body'))):
+                'kase_current_news_content','cbu_current_press_prose','kz_government_news_body',
+                'uz_presidency_current_statement'))):
         source_kind='article';source_kind_evidence.append({'basis':'publisher_article_template','template':publisher_template['name'],'identityBindings':publisher_template['identityBindings']})
     full_text_validated=source_kind=='article' and selected_body is not None
     if source_kind=='article':primary_article=bound_article
