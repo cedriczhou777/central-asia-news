@@ -1,16 +1,16 @@
 import { getSupabaseClient } from '../storage/database/supabase-client';
 import { canonicalJson, freezeBlockReason, PLAN_B_COUNTRIES, reviewableWindowCount, sha256, type PlanBCountry } from './plan-b-handoff';
 import { collectCountry } from './plan-b-worker';
-import { recoverySources } from './plan-b-runtime';
 import { prepareIsolatedRelease } from './plan-b-release';
-import type { SnapshotReceipt } from './plan-b-store';
+import { getState, type SnapshotReceipt } from './plan-b-store';
 
 const TABLE='plan_b_exchange';
-const issue='2026-11-26';
-const run='recollect-20261126-r4';
-const deadline=Date.parse('2026-11-26T20:00:00+08:00');
+const issue='2026-11-27';
+const run='recover-20261127-r4';
+const opensAt=Date.parse('2026-11-27T09:30:00+08:00');
+const deadline=Date.parse('2026-11-27T20:00:00+08:00');
 const key=(step:string)=>`${run}/${step}`;
-const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'fresh-public-source-collection'};
+const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'resume-same-issue-collection'};
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
   (!reviewableWindowCount(scope.snapshot)?'insufficient_reviewable_candidates':null);
@@ -51,7 +51,8 @@ async function advance(sb:Client, country:PlanBCountry, step:string, prior:Job|u
 }
 
 export async function processFreshRun(sb=getSupabaseClient()){
-  if(Date.now()>=deadline)return;
+  const now=Date.now();
+  if(now<opensAt||now>=deadline)return;
   const authorized=await sb.from(TABLE).select('payload,state,content_hash').match(fields('global',key('requested'))).maybeSingle();
   if(authorized.error||authorized.data?.state!=='available'||authorized.data.content_hash!==hash(request)||
       hash(authorized.data.payload)!==hash(request))return;
@@ -64,16 +65,17 @@ export async function processFreshRun(sb=getSupabaseClient()){
     await Promise.all(PLAN_B_COUNTRIES.slice(offset,offset+2).map(async country=>{
       const current=row(country,'scan');
       await advance(sb,country,'scan',current,{run,country},async attempt=>{
-        const namespace=key(`scan-${attempt}`);
-        let originalNamespace=namespace;
-        let scope=await collectCountry(issue,country,'final',undefined,undefined,{namespace,deadline});
-        const focus=recoverySources(scope.snapshot.coverage);
-        if(blockReason(scope)&&focus.length){
-          originalNamespace=namespace+'/supplement';
-          scope=await collectCountry(issue,country,'final',scope.cache,focus,{namespace:originalNamespace,deadline});
-        }
+        const originalNamespace=key(`scan-${attempt}`);
+        const saved=(await getState(issue,country)).find(record=>record.step==='final');
+        const prior=saved?.receipt as SnapshotReceipt|undefined;
+        if(!prior?.cache||prior.snapshot?.issue!==issue||prior.snapshot.country!==country||prior.snapshot.phase!=='final')
+          throw new Error('same_issue_final_cache_unavailable');
+        // The failed focused production pass used a shorter subprocess limit.
+        // Resume the stored queue within the normal scan budget and keep its
+        // result available for the next pass and for independent review.
+        const scope=await collectCountry(issue,country,'final',prior.cache,undefined,{namespace:originalNamespace,deadline});
         const reason=blockReason(scope);
-        return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false};
+        return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false,resumedSnapshotHash:prior.snapshot.hash};
       });
       const continuation=row(country,'extend');
       const base=current?.state==='accepted'?current.result?.scope:undefined;
