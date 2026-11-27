@@ -134,7 +134,12 @@ def _record_candidates(ledger, source_id, urls):
             and _url(c.get("source_url")) in urls]
 
 
-def _evidence_errors(value, records, now, context):
+def _article_url_identity(url):
+    parts = urlparse(url)
+    return urlunparse(parts._replace(path=parts.path.rstrip('/')))
+
+
+def _evidence_errors(value, records, now, context, *, publisher_article_aliases=False):
     """Require actual archived observations, not a free-text explanation alone."""
     if not isinstance(value, list) or not value:
         return [context + ": evidence array required"]
@@ -151,8 +156,15 @@ def _evidence_errors(value, records, now, context):
         except (ValueError, TypeError):
             errors.append(label + ": real observation timestamp required")
             continue
-        bound = [r for r in records if _url(item["url"]) in r["urls"]
-                 and r["time"] <= observed]
+        evidence_url = _url(item['url'])
+        bound = []
+        for record in records:
+            if record['time'] > observed:
+                continue
+            if evidence_url in record['urls'] or (
+                    publisher_article_aliases and record['row'].get('role')=='article'
+                    and any(_article_url_identity(evidence_url)==_article_url_identity(url) for url in record['urls'])):
+                bound.append(record)
         if not bound:
             errors.append(label + ": no matching real source observation")
         if not (_detail(item.get("description")) or _detail(item.get("quote"))
@@ -608,13 +620,19 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             # human identity review can upgrade readable text to article text.
             fulltext_at = candidate.get("readableTextFetchedAt")
         if fulltext_at:
-            counts["fullTextFetched"] += 1
             try:
                 actual_fetched = _dt(fulltext_at)
                 if actual_fetched > now or not any(r["fulltext"] and r["time"] == actual_fetched for r in bound):
                     raise ValueError("no matching full text")
             except (ValueError, TypeError):
-                ledger_errors.append(label + ": fullTextFetchedAt lacks matching successful article audit")
+                if not (daily_policy and decision=='rejected' and cid not in adopted_ids):
+                    ledger_errors.append(label + ": fullTextFetchedAt lacks matching successful article audit")
+                # Historical rejected candidates retain the raw archive. An
+                # uncorroborated fetch cannot count as full text or prove an
+                # adopted item, and the rejection still needs real evidence.
+                fulltext_at = None
+            if fulltext_at:
+                counts["fullTextFetched"] += 1
         if decision == "pending":
             continue
         if not _detail(candidate.get("reason")):
@@ -625,7 +643,11 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             selected_urls.add(url)
             if not fulltext_at:
                 ledger_errors.append(label + ": selected candidate needs actual full text")
-            ledger_errors.extend(_evidence_errors(candidate.get("publicationEvidence"), evidence_records, now, label + ".publicationEvidence"))
+            # Archive parsers may bind JSON-LD to the publisher's slashless
+            # article URL while the actual same-source request has a final
+            # slash. This is solely an alias within this archived article.
+            ledger_errors.extend(_evidence_errors(candidate.get("publicationEvidence"), evidence_records, now,
+                label + ".publicationEvidence", publisher_article_aliases=daily_archive))
         for origin_index, origin in enumerate(candidate.get("discoveryOrigins") or []):
             origin_label = f"{label}.discoveryOrigins[{origin_index}]"
             if not isinstance(origin, dict):

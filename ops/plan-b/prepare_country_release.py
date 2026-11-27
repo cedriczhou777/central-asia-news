@@ -114,7 +114,15 @@ def run_gate(aggregate, issue, country, stage, mode):
             for section in ('sourceCoverage', 'candidateLedgerValidation', 'quantityExceptionValidation'):
                 failures = review.get(section, {}).get('errors', [])
                 if failures:
-                    errors.append(section + ': ' + failures[0])
+                    failure = failures[0]
+                    position = re.match(r'candidateLedger\[(\d+)\]', failure)
+                    if position:
+                        ledger = aggregate['drafts'][country].get('candidateLedger', [])
+                        index = int(position[1])
+                        if index < len(ledger):
+                            row = ledger[index]
+                            failure += f" ({row.get('sourceId', 'unknown')} {row.get('decision', 'unknown')})"
+                    errors.append(section + ': ' + failure)
         raise ValueError(f"{stage} gate failed ({len(errors)}): " + " | ".join(errors[:5]))
 
 
