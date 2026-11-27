@@ -86,6 +86,13 @@ const NOV27_DRAFT_APPROVALS = [{
   contentHash: '1f824db5f6d1cfcd79df68861ee894f67e2c5a23667c142c28a5c9c892d4fcc4',
   countries: ['kg'],
   expiresAt: Date.parse('2026-11-27T20:00:00+08:00'),
+}, {
+  issue: '2026-11-27',
+  version: '2026-11-27-r205',
+  authorizationId: 'nov27-tj-owner-draft-r205-833d70b7e9c994a9',
+  contentHash: '833d70b7e9c994a9dbc798fd840710886589fff0d905af3bb70bb5ff90caabe9',
+  countries: ['tj'],
+  expiresAt: Date.parse('2026-11-27T20:00:00+08:00'),
 }] as const;
 
 type GrantRow = { payload: Record<string, unknown>; content_hash: string; state: string };
