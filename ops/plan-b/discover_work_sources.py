@@ -1261,8 +1261,14 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
         prior_article_jobs = defaultdict(list)
         for job in previous_scan.get('articleQueue', []):
             prior_article_jobs[job['sourceId']].append(job['url'])
+        capture_jobs = []
         article_groups = []
         for source in sources:
+            expected = [e.get('language') for e in source_entries(source) if e.get('language')]
+            captures = set(source.get('recoveryCaptureUrls', []))
+            for url in sorted(captures):
+                discovered.setdefault((source['id'], url), utcnow())
+                capture_jobs.append((source['id'], url, 'article', expected))
             seeds = set()
             for value in source.get('recoveryArticleSeeds', []):
                 if not allowed_url(value, source):
@@ -1300,7 +1306,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             needs_body = set(unresolved)
             resumable = set(resume) | queued_leads.keys() | needs_body
             urls = list(dict.fromkeys(old_pending + resume + unresolved + urls))
-            urls = [u for u in urls if u in eligible]
+            urls = [u for u in urls if u in eligible and u not in captures]
             if news_budget:
                 by_url={lead['source_url']:lead for lead in ranked}
                 kept=[]
@@ -1332,9 +1338,8 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
                 budgets.append({'sourceId': source['id'], 'reason': 'article_budget', 'remaining': len(needs_fetch) - article_limit})
             selected_urls = needs_fetch[:article_limit]
             selected_urls += rechecks[:article_limit - len(selected_urls)]
-            expected = [e.get('language') for e in source_entries(source) if e.get('language')]
             article_groups.append([(source['id'], u, 'article', expected) for u in selected_urls])
-        article_queue = deque(round_robin(article_groups))
+        article_queue = deque(capture_jobs + list(round_robin(article_groups)))
         deferred_article = []
         if news_budget and len(article_queue)>MAX_ACTIVE_ARTICLES:
             all_jobs=list(article_queue)

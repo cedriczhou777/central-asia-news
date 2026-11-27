@@ -15,7 +15,7 @@ const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'
 const authorizationRecord=key('verified-archive-requested');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','extend-6','extend-7',
-  'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13','extend-14','extend-15','extend-16','extend-17','extend-18','extend-19','extend-20'];
+  'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13','extend-14','extend-15','extend-16','extend-17','extend-18','extend-19','extend-20','extend-21'];
 const azerbaijanRecoverySources=[
   'az-ministry-energy-azerbaijan', 'az-european-commission-transport', 'az-cabinet-recovery',
   'az-operativ-media-recovery', 'az-fed-az-recovery', 'az-apa', 'az-report-az', 'az-trend',
@@ -126,9 +126,10 @@ export async function processFreshRun(sb=getSupabaseClient()){
         if(base&&current?.state==='rejected'&&current.attempts>=2&&retryableScanReasons.has(current.result?.reason??'')){
           continue;
         }
-        const sourceCapture=base&&step==='extend-18'&&captureHashes[country]
+        const captureStep=step==='extend-18'||(step==='extend-21'&&country==='az');
+        const sourceCapture=base&&captureStep&&captureHashes[country]
           ? await publicCapture(sb,country,base):undefined;
-        if (step==='extend-18'&&captureHashes[country]&&!sourceCapture) return;
+        if (captureStep&&captureHashes[country]&&!sourceCapture) return;
         await advance(sb,country,step,current,base?{run,country,baseHash:base.snapshot.hash,
           ...(sourceCapture?{captureHash:sourceCapture.contentHash}:{})}:{run,country},async attempt=>{
           const originalNamespace=key(`${step}-${attempt}`);
