@@ -10,7 +10,7 @@ import tarfile
 from tempfile import TemporaryDirectory
 
 from build_reviewed_word import build_word
-from cloud_handoff import LIMIT, REGISTRY, inventory_entries, read, recovery_registry, restore, write
+from cloud_handoff import LIMIT, NOV27_AZ_INSTITUTION_TYPES, REGISTRY, inventory_entries, read, recovery_registry, restore, write
 from prepare_country_release import prepare
 from prepare_editorial_input import candidate_originals, discovery_index
 from editorial_policy import EFFECTIVE_ISSUE, TARGET_ARTICLES
@@ -93,6 +93,14 @@ def attach_audit(source, issue, country, draft, review, registry=None):
     events = {row['eventId']: row for row in audit['sourceScanAuditHistory'] + audit['sourceScanAudit']
               if (row.get('fetchedAt') or terminal_source_failure(row) and row.get('attemptedAt'))
               and not row.get('fetchRetryable')}
+    if issue == '2026-11-27' and country == 'az':
+        # The frozen capture used these registered publishers before their
+        # official institution classes were populated. Backfill only that
+        # descriptive metadata; preserve recorded article/response evidence.
+        for row in events.values():
+            source_type = NOV27_AZ_INSTITUTION_TYPES.get(row.get('sourceId'))
+            if source_type and row.get('sourceType') == 'institution' and row.get('institutionType') is None:
+                row['institutionType'] = source_type
     conclusion = review.pop('candidateDecisions', draft.pop('candidateDecisions', {}))
     ledger = read(source / 'candidate_ledger.json')['candidateLedger']
     adopted = {article['id'] for article in review['articles']}
