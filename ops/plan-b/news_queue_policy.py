@@ -82,6 +82,7 @@ STATIC_DIRECTORY_BY_HOST = {
         r'|services/(?:regulations|regulatory-sandbox|results-of-applications|task-execution-states'
         r'|citizens/(?:helpline-commercial-banks|request-for-information))'
         r'|statistics/(?:credit|financing|calendar-statistical-data)'
+        r'|anti-corruption/(?:documents|handouts)'
         r')/?$', re.I),
     'economy.gov.az': re.compile(
         r'^/(?:az/page/(?:iqtisadiyyat/investisiya|itm'
