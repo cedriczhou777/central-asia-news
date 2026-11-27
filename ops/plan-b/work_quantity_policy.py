@@ -320,6 +320,7 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
 
     records = []
     raw_ledger = draft.get("candidateLedger") if isinstance(draft.get("candidateLedger"), list) else []
+    daily_archive = draft.get('planBCoverage') is not None and draft['issueDate'] >= EFFECTIVE_ISSUE
     language_pending, identity_pending, reviewed_identities = [], [], []
     attempts, media_attempts, fulltext_families, institution_types, after_cutoff = set(), set(), set(), set(), set()
     for index, row in enumerate(audit if isinstance(audit, list) else []):
@@ -376,6 +377,14 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
             readable = False
         record = {"row": row, "source": source, "urls": urls, "time": fetched, "readable": readable}
         candidates = _record_candidates(raw_ledger, sid, urls)
+        if daily_archive and readable and row.get('role')=='article' and final_url:
+            canonical = _url(row.get('canonicalURL', row.get('canonical_url')))
+            registered = {_url(e.get('url')) for e in source.get('entrypoints', []) if isinstance(e, dict)}
+            if (canonical and canonical not in registered and urlparse(canonical).hostname==urlparse(final_url).hostname
+                    and urlparse(canonical).path.rstrip('/') not in ('', '/ru', '/en', '/uz', '/kg', '/az', '/tj', '/kz')
+                    and any(_url(c.get('canonicalURL'))==canonical and c.get('sourceHash')==row.get('sourceHash')
+                            and isinstance(c.get('sourceHash'), str) for c in candidates)):
+                urls.add(canonical)
         entries = [e for e in source.get("entrypoints", []) if isinstance(e, dict)]
         exact_entries = [e for e in entries if _url(e.get("url")) == request_url]
         languages = {_language(e.get("language")) for e in (exact_entries or entries)} - {None}
@@ -415,7 +424,13 @@ def evaluate_quantity(draft, audit, now=None, registry=None):
                 language_review_errors.extend(errors)
         language_verified = actual_language is not None and (not languages or actual_language in languages)
         if readable and actual_language is not None and languages and actual_language not in languages:
-            coverage_errors.append(label + ": successful response language conflicts with declared registry language")
+            if daily_archive:
+                # Retain the archived attempt for the independent coverage
+                # proof. An unexpected language cannot count as readable or
+                # supply an adopted original.
+                record['readable'] = False
+            else:
+                coverage_errors.append(label + ": successful response language conflicts with declared registry language")
         if readable and not language_verified:
             language_pending.append({"sourceId": sid, "url": request_url,
                                      "reason": "Actual language requires review; expected language is never substituted",
