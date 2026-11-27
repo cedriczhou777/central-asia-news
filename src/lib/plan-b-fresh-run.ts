@@ -15,7 +15,7 @@ const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'
 const authorizationRecord=key('verified-archive-requested');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','extend-6','extend-7',
-  'extend-8','extend-9','extend-10','extend-11'];
+  'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13'];
 const azerbaijanRecoverySources=[
   'az-ministry-energy-azerbaijan', 'az-european-commission-transport', 'az-cabinet-recovery',
   'az-operativ-media-recovery', 'az-fed-az-recovery',
@@ -26,7 +26,7 @@ const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
 type Client=ReturnType<typeof getSupabaseClient>;
 type Job={country:PlanBCountry;record_key:string;state:string;content_hash:string;payload:Record<string,unknown>;
   attempts:number;lease_until:string|null;result?:{scope?:SnapshotReceipt;ready?:boolean;reason?:string;
-    coverageReassessed?:boolean;publisherArchiveReassessed?:boolean}|null};
+    coverageReassessed?:boolean;publisherArchiveReassessed?:boolean;currentOfficialArchiveReassessed?:boolean}|null};
 
 function fields(country:PlanBCountry|'global',record_key:string){
   return {issue_date:issue,country,kind:'manual_use',record_key};
@@ -99,9 +99,11 @@ export async function processFreshRun(sb=getSupabaseClient()){
           if(!saved?.cache||saved.snapshot?.issue!==issue||saved.snapshot.country!==country||saved.snapshot.phase!=='final')
             throw new Error('same_issue_final_cache_unavailable');
           const count=reviewableWindowCount(saved.snapshot);
-          const publisherReassess=Boolean(previous&&country!=='az'&&
+          const officialReassess=Boolean(previous&&country!=='kg'&&
+            !scanSteps.some(name=>row(country,name)?.result?.currentOfficialArchiveReassessed));
+          const publisherReassess=Boolean(previous&&country==='kg'&&
             !scanSteps.some(name=>row(country,name)?.result?.publisherArchiveReassessed));
-          const reassess=publisherReassess||Boolean(previous&&count>=DAILY_MIN_ARTICLES&&
+          const reassess=officialReassess||publisherReassess||Boolean(previous&&count>=DAILY_MIN_ARTICLES&&
             !scanSteps.some(name=>row(country,name)?.result?.coverageReassessed));
           const targets=recoverySources(saved.snapshot.coverage);
           const focus=reassess||previous?.result?.reason==='exchange_publish_failed'?[]:
@@ -112,7 +114,8 @@ export async function processFreshRun(sb=getSupabaseClient()){
             {namespace:originalNamespace,deadline,scanSeconds:120,nov27Recovery:true});
           const reason=blockReason(scope);
           return {scope,originalNamespace,ready:!reason,reason,usedPriorIssueCache:false,resumedSnapshotHash:saved.snapshot.hash,
-            ...(reassess?{coverageReassessed:true}:{}),...(publisherReassess?{publisherArchiveReassessed:true}:{})};
+            ...(reassess?{coverageReassessed:true}:{}),...(publisherReassess?{publisherArchiveReassessed:true}:{}),
+            ...(officialReassess?{currentOfficialArchiveReassessed:true}:{})};
         });
         return;
       }

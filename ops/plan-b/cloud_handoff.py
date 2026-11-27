@@ -22,8 +22,11 @@ from news_queue_policy import ADAPTIVE_ARTICLES_PER_SOURCE, ADAPTIVE_LISTING_PAG
 REGISTRY = Path(__file__).with_name('source_registry.json')
 ROOT_FILES = {'candidate_ledger.json', 'lead_queue.json', 'source_scan_audit.json', 'source_scan_events.jsonl'}
 NOV27_TEMPLATE_SOURCES = {
+    'az': ('az-ministry-energy-azerbaijan', 'az-european-commission-transport'),
     'kg': ('kg-vecherniy-bishkek',),
+    'kz': ('kz-national-bank-of-kazakhstan', 'kz-kazakhstan-stock-exchange'),
     'tj': ('tj-vecherka', 'tj-radio-ozodi'),
+    'uz': ('uz-central-bank-uzbekistan',),
 }
 NOV27_AZ_PUBLIC_SOURCES = (
     ('az-european-commission-transport', 'European Commission', 'institution', 'Europe/Brussels',

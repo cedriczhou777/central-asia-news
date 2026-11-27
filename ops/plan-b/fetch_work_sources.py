@@ -8,7 +8,7 @@ from lxml import html
 from discovery_feed import FEED_TYPES, parse_feed
 from source_evidence import KHOVAR_RUSSIAN_MONTHS, header_clock, khovar_archive_dateline, khovar_archive_publication_footer
 P=Path(__file__).parent;S=P/'sources'
-PARSER_VERSION='source-html-v27'
+PARSER_VERSION='source-html-v28'
 TRANSIENT={429,500,502,503,504}
 MAX_NETWORK_SECONDS = 45
 MAX_TRANSPORT_BYTES = 10_000_000
@@ -438,7 +438,70 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
     def make(name,bodies,headings=None,extra=None,editorial=False):
         if len(bodies)!=1:return None
         return {'name':name,'bodies':bodies,'headings':headings,'identityBindings':['publisher_host_and_article_route','unique_publisher_body_selector']+(extra or []),'editorialCoverHeading':editorial}
-    if host in ('vb.kg','www.vb.kg') and re.fullmatch(r'/doc/\d+_[^/]+\.html',path):
+    if host=='minenergy.gov.az' and re.fullmatch(r'/(?:az|en)/xeberler-arxivi/\d+/?',path):
+        scopes=[n for n in tree.xpath('//article') if has_class(n,'Page')]
+        if len(scopes)==1:
+            scope=scopes[0]
+            heads=[n for n in scope.xpath('.//h1') if has_class(n,'Page-header__title')]
+            bodies=scope.xpath('./div[contains(concat(" ",normalize-space(@class)," ")," Page-content ")]'
+                               '//div[@id="fullstoryPrint"][p]')
+            if len(heads)==1 and headings_match(heads):
+                profile=make('az_energy_ministry_print_body',bodies,heads,['article_page_and_heading_share_scope'])
+                stamps=[n for n in heads[0].getparent().xpath('./time[@datetime]') if has_class(n,'Page-header__date')]
+                if profile and len(stamps)==1:
+                    profile['publicationNodes']=stamps
+    elif host=='transport.ec.europa.eu' and re.fullmatch(r'/news-events/news/[a-z0-9-]+_en/?',path):
+        current=normalized_url(final_url,final_url)
+        heads=[n for n in tree.xpath('//h1') if has_class(n,'ecl-page-header__title')]
+        if normalized_url(canonical_url,final_url)==current and normalized_url(meta.get('og:url'),final_url)==current and len(heads)==1 and headings_match(heads):
+            bodies=[n for n in tree.xpath('//article/div/div[p]') if has_class(n,'ecl')]
+            profile=make('ec_transport_news_content',bodies,heads,['same_canonical_and_og_article_url'])
+            days=[]
+            for node in heads[0].getparent().xpath('./ul/li'):
+                raw=' '.join(node.text_content().split())
+                if re.fullmatch(r'\d{1,2} [A-Za-z]+ 20\d{2}',raw):
+                    try:days.append(datetime.strptime(raw,'%d %B %Y').date().isoformat())
+                    except ValueError:continue
+            if profile and len(days)==1:
+                profile['publicationDay']=days[0]
+    elif host=='nationalbank.kz' and re.fullmatch(r'/(?:ru|en|kz)/news/informacionnye-soobshcheniya/\d+/?',path):
+        if normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url):
+            scopes=[n for n in tree.xpath('//article') if has_class(n,'post')]
+            if len(scopes)==1:
+                heads=[n for n in scopes[0].xpath('./h2') if has_class(n,'title-page')]
+                bodies=[n for n in scopes[0].xpath('./div[.//p]') if has_class(n,'post__content')]
+                if len(heads)==1 and headings_match(heads):
+                    profile=make('nbk_public_information_post',bodies,heads,['same_og_article_url'])
+                    raw=meta.get('og:article:published_time','')
+                    if profile and re.fullmatch(r'20\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',raw):
+                        profile['localPublicationBadge']=(raw,raw.replace(' ','T',1))
+    elif host=='kase.kz' and re.fullmatch(r'/(?:ru|en|kz)/information/news/show/\d+/?',path):
+        scopes=tree.xpath('//div[@class="detail-news__container"]/div[@class="news-item"]')
+        if len(scopes)==1:
+            bodies=scopes[0].xpath('./div[@class="news-item__content"]/div[@class="body"]')
+            heads=[h for b in bodies for h in b.xpath('./h4')]
+            if len(heads)==1 and headings_match(heads):
+                profile=make('kase_current_news_content',bodies,heads,['detail_news_current_heading_and_body'])
+                stamps=scopes[0].xpath('./div[@class="date-and-tags"]/span[@class="datetime"]')
+                if profile and len(stamps)==1:
+                    raw=' '.join(stamps[0].text_content().split())
+                    wall=header_clock(raw)
+                    if wall:
+                        profile['localPublicationBadge']=(raw,wall)
+    elif host=='cbu.uz' and re.fullmatch(r'/(?:ru|en|uz)/press_center/(?:releases|adverts|news)/\d+/?',path):
+        if normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url):
+            scopes=[n for n in tree.xpath('//div') if has_class(n,'main__content') and has_class(n,'js-content-block')]
+            if len(scopes)==1:
+                heads=[n for n in scopes[0].xpath('./h1') if has_class(n,'heading_border')]
+                bodies=[n for n in scopes[0].xpath('./article/div/div[.//p]') if has_class(n,'main_text')
+                        and has_class(n.getparent(),'_news-detail-new')]
+                if len(heads)==1 and headings_match(heads):
+                    profile=make('cbu_current_press_prose',bodies,heads,['same_og_article_url','publisher_press_article_and_sibling_heading'])
+                    article=bodies[0].getparent().getparent() if profile else None
+                    stamps=article.xpath('./meta[@itemprop="datePublished"]/@content') if article is not None else []
+                    if len(stamps)==1 and re.fullmatch(r'20\d{2}-\d{2}-\d{2}', stamps[0]):
+                        profile['publicationDay']=stamps[0]
+    elif host in ('vb.kg','www.vb.kg') and re.fullmatch(r'/doc/\d+_[^/]+\.html',path):
         if normalized_url(canonical_url,final_url)==normalized_url(final_url,final_url):
             scopes=tree.xpath('//div[@id="topic" and @class]')
             if len(scopes)==1 and has_class(scopes[0],'topic-content'):
@@ -680,7 +743,7 @@ def select_article_body(tree,title,alternative_titles=None,publisher_template=No
     if not matches:return None,{'status':'current_article_heading_missing'},None
     if template and not any(len(clean_content(n,True))>=80 for n in template['bodies']):
         return None,{'status':'publisher_body_has_no_substantive_text','publisherTemplate':template['name'],'headingTexts':[' '.join(n.text_content().split()) for n in matches]},None
-    def bound(node):
+    def bound(node, publisher_bound=False):
         if node.xpath('ancestor::nav|ancestor::aside|ancestor::footer') or recommendation_card(node):return False
         local_headings=node.xpath('.//h1')
         if local_headings and not any(n in matches for n in local_headings):return False
@@ -688,7 +751,10 @@ def select_article_body(tree,title,alternative_titles=None,publisher_template=No
         if enclosing is not None and recommendation_card(enclosing):return False
         # A nested article with its own unrelated headline cannot inherit the
         # page's OG title from elsewhere in the document.
-        if enclosing is not None and enclosing.xpath('.//h1|.//h2|.//h3') and not any(n in matches for n in enclosing.xpath('.//h1')):return False
+        if enclosing is not None and enclosing.xpath('.//h1|.//h2|.//h3'):
+            enclosing_headings=enclosing.xpath('.//h1|.//h2|.//h3') if publisher_bound else enclosing.xpath('.//h1')
+            if not any(n in matches for n in enclosing_headings) and not (publisher_bound and template.get('name')=='cbu_current_press_prose'):
+                return False
         return True
     explicit=[]
     body_class=r'(^|\s)(?:entry[-_]content|post[-_]content|article[-_]content|article[-_]body|article__body|post[-_]body|story[-_]body|news[-_]text|content[-_]inner|content[-_]body|entry__content)(\s|$)'
@@ -696,7 +762,7 @@ def select_article_body(tree,title,alternative_titles=None,publisher_template=No
         if 'articleBody' in (n.get('itemprop') or '').split() or re.search(body_class,n.get('class') or '',re.I):
             if bound(n):explicit.append(n)
     groups=[]
-    if template:groups.append(('publisher_template:'+template['name'],[n for n in template['bodies'] if bound(n)]))
+    if template:groups.append(('publisher_template:'+template['name'],[n for n in template['bodies'] if bound(n,True)]))
     groups.extend([('explicit_article_body',explicit),('article_with_current_heading',[n for n in tree.xpath('//article') if bound(n) and any(h in matches for h in n.xpath('.//h1'))]),('main_with_current_heading',[n for n in tree.xpath('//main') if bound(n) and any(h in matches for h in n.xpath('.//h1'))])])
     for basis,nodes in groups:
         candidates=[(n,clean_content(n,True)) for n in nodes]
@@ -859,7 +925,9 @@ def parse_response(url,final_url,raw,headers):
             title = publisher_template['headlineAlias']
     selected_body,body_evidence,bound_article=select_article_body(tree,title,aliases,publisher_template)
     if (publisher_template and selected_body is not None and body_evidence.get('basis','').startswith('publisher_template:')
-            and (source_kind=='unknown' or publisher_template['name']=='vecherka_current_post_content')):
+            and (source_kind=='unknown' or publisher_template['name'] in ('vecherka_current_post_content',
+                'az_energy_ministry_print_body','ec_transport_news_content','nbk_public_information_post',
+                'kase_current_news_content','cbu_current_press_prose'))):
         source_kind='article';source_kind_evidence.append({'basis':'publisher_article_template','template':publisher_template['name'],'identityBindings':publisher_template['identityBindings']})
     full_text_validated=source_kind=='article' and selected_body is not None
     if source_kind=='article':primary_article=bound_article
