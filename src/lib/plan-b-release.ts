@@ -102,10 +102,11 @@ export async function prepareIsolatedRelease(source: SnapshotReceipt, input: unk
       await ensurePrivateImage(bytes,image.sha256);
     }
     await runCloudScript('cloud_release.py',['word',directory],remaining(90_000));
-    const document=await saveFile(issue,country,'docx',join(directory,'word.docx'));
+    const wordPath=join(directory,'word.docx');
+    const document=await saveFile(issue,country,'docx',wordPath);
     await verifyObject(document);
-    const article=reviewedCountry(ready,country);
-    article.title='【实跑验收】重采版·'+article.title;
+    const {publishWord}=await import('./plan-b-exchange');
+    await publishWord(issue,country,document,await readFile(wordPath));
     const release=validatePackage(ready);
     return {release,word:{document,url:await wordLink(document)},editorialHash:checked.editorialHash,
       articles:checked.articleCount,images:images.length,transportHash:contentHash(release)};
