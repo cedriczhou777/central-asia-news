@@ -18,7 +18,7 @@ const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','ex
   'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13','extend-14','extend-15'];
 const azerbaijanRecoverySources=[
   'az-ministry-energy-azerbaijan', 'az-european-commission-transport', 'az-cabinet-recovery',
-  'az-operativ-media-recovery', 'az-fed-az-recovery',
+  'az-operativ-media-recovery', 'az-fed-az-recovery', 'az-apa', 'az-report-az', 'az-trend',
 ];
 const retryableScanReasons=new Set(['isolated_worker_failed','isolated_scan_timeout','isolated_scan_output_limit','plan_b_object_size']);
 const blockReason=(scope:SnapshotReceipt)=>freezeBlockReason(scope.snapshot) ||
