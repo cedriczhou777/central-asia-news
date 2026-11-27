@@ -35,9 +35,34 @@ type Job={country:PlanBCountry;record_key:string;state:string;content_hash:strin
     coverageReassessed?:boolean;publisherArchiveReassessed?:boolean;currentOfficialArchiveReassessed?:boolean;
     navigationEvidenceReassessed?:boolean;archiveDatesReassessed?:boolean;energyArchiveScanned?:boolean;
     publicCaptureImported?:boolean}|null};
+type JobHead=Pick<Job,'country'|'record_key'|'state'|'attempts'>;
+const scanFlags=['coverageReassessed','publisherArchiveReassessed','currentOfficialArchiveReassessed',
+  'navigationEvidenceReassessed','archiveDatesReassessed','energyArchiveScanned'] as const;
 
 function fields(country:PlanBCountry|'global',record_key:string){
   return {issue_date:issue,country,kind:'manual_use',record_key};
+}
+
+async function readJob(sb:Client,country:PlanBCountry,head:JobHead|undefined):Promise<Job|undefined>{
+  if(!head)return undefined;
+  const {data,error}=await sb.from(TABLE).select('country,record_key,state,content_hash,payload,attempts,lease_until,result')
+    .match(fields(country,head.record_key)).maybeSingle();
+  if(error||!data)throw new Error('isolated_recovery_job_read_failed');
+  return data as Job;
+}
+
+async function readScanFlags(sb:Client,country:PlanBCountry,completed:JobHead[]){
+  const flags=new Set<typeof scanFlags[number]>();
+  const columns=scanFlags.map(flag=>`${flag}:result->>${flag}`).join(',');
+  for(let offset=0;offset<completed.length;offset+=4){
+    const {data,error}=await sb.from(TABLE).select(columns).match({issue_date:issue,country,kind:'manual_use'})
+      .in('record_key',completed.slice(offset,offset+4).map(head=>head.record_key));
+    if(error)throw new Error('isolated_recovery_flags_read_failed');
+    for(const row of (data??[]) as unknown as Record<string,string|null>[]){
+      for(const flag of scanFlags)if(row[flag]==='true')flags.add(flag);
+    }
+  }
+  return flags;
 }
 
 async function publicCapture(sb:Client,country:PlanBCountry,base:SnapshotReceipt,followup=false) {
@@ -108,27 +133,46 @@ export async function processFreshRun(sb=getSupabaseClient()){
   const authorized=await sb.from(TABLE).select('payload,state,content_hash').match(fields('global',authorizationRecord)).maybeSingle();
   if(authorized.error||authorized.data?.state!=='available'||authorized.data.content_hash!==hash(request)||
       hash(authorized.data.payload)!==hash(request))return;
-  const records=await sb.from(TABLE).select('country,record_key,state,content_hash,payload,attempts,lease_until,result')
+  const records=await sb.from(TABLE).select('country,record_key,state,attempts')
     .eq('issue_date',issue).eq('kind','manual_use').in('record_key',[...scanSteps,'prepare'].map(key));
-  if(records.error)return;
-  const rows=(records.data??[]) as Job[];
+  if(records.error)throw new Error('isolated_recovery_jobs_read_failed');
+  const rows=(records.data??[]) as JobHead[];
   const row=(country:PlanBCountry,step:string)=>rows.find(r=>r.country===country&&r.record_key===key(step));
   for(let offset=0;offset<PLAN_B_COUNTRIES.length;offset+=2){
     const outcomes=await Promise.allSettled(PLAN_B_COUNTRIES.slice(offset,offset+2).map(async country=>{
-      let previous: Job | undefined;
+      const completed:JobHead[]=[];
+      let nextStep:string|undefined;
       for(const step of scanSteps){
-        const current=row(country,step);
-        if(current?.state==='accepted'&&current.result?.scope){
-          previous=current;
-          if(current.result.ready&&!blockReason(current.result.scope))break;
+        const head=row(country,step);
+        if(head?.state==='accepted'){
+          completed.push(head);
           continue;
         }
-        const base=previous?.result?.scope;
-        // Continue from the last intact checkpoint when a bounded attempt is
-        // exhausted. Active leases and non-retryable failures keep their stop.
-        if(base&&current?.state==='rejected'&&current.attempts>=2&&retryableScanReasons.has(current.result?.reason??'')){
-          continue;
+        if(completed.length&&head?.state==='rejected'&&head.attempts>=2){
+          const rejected=await readJob(sb,country,head);
+          if(retryableScanReasons.has(rejected?.result?.reason??''))continue;
         }
+        nextStep=step;
+        break;
+      }
+      const previous=await readJob(sb,country,completed.at(-1));
+      const base=previous?.result?.scope;
+      if(previous&&!base)throw new Error('isolated_recovery_snapshot_missing');
+      if(previous?.result?.ready&&base&&!blockReason(base)){
+        const head=row(country,'prepare');
+        if(head?.state!=='queued'&&head?.state!=='working')return;
+        const prepare=await readJob(sb,country,head);
+        if(prepare?.payload.run===run){
+          await advance(sb,country,'prepare',prepare,prepare.payload,async ()=>{
+            const result=await prepareIsolatedRelease(base,prepare.payload.handoff,planBRecoveryPackageVersion(issue,country),deadline);
+            return {ok:true,...result};
+          });
+        }
+        return;
+      }
+      if(nextStep){
+        const step=nextStep;
+        const current=await readJob(sb,country,row(country,step));
         const followup=step==='extend-22'&&country==='uz';
         const captureStep=step==='extend-18'||(step==='extend-21'&&country==='az')||followup;
         const sourceCapture=base&&captureStep&&captureHashes[country]
@@ -140,21 +184,22 @@ export async function processFreshRun(sb=getSupabaseClient()){
           const saved=base??(await getState(issue,country)).find(record=>record.step==='final')?.receipt as SnapshotReceipt|undefined;
           if(!saved?.cache||saved.snapshot?.issue!==issue||saved.snapshot.country!==country||saved.snapshot.phase!=='final')
             throw new Error('same_issue_final_cache_unavailable');
+          const flags=await readScanFlags(sb,country,completed);
           const count=reviewableWindowCount(saved.snapshot);
           const officialReassess=Boolean(previous&&country!=='kg'&&
-            !scanSteps.some(name=>row(country,name)?.result?.currentOfficialArchiveReassessed));
+            !flags.has('currentOfficialArchiveReassessed'));
           const publisherReassess=Boolean(previous&&country==='kg'&&
-            !scanSteps.some(name=>row(country,name)?.result?.publisherArchiveReassessed));
+            !flags.has('publisherArchiveReassessed'));
           const navigationReassess=Boolean(previous&&
-            !scanSteps.some(name=>row(country,name)?.result?.navigationEvidenceReassessed));
+            !flags.has('navigationEvidenceReassessed'));
           const archiveDatesReassess=Boolean(previous&&(country==='az'||country==='kz')&&
-            !scanSteps.some(name=>row(country,name)?.result?.archiveDatesReassessed));
+            !flags.has('archiveDatesReassessed'));
           const reassess=archiveDatesReassess||navigationReassess||officialReassess||publisherReassess||Boolean(previous&&count>=DAILY_MIN_ARTICLES&&
-            !scanSteps.some(name=>row(country,name)?.result?.coverageReassessed));
+            !flags.has('coverageReassessed'));
           const targets=recoverySources(saved.snapshot.coverage);
           const energyArchiveScan=country==='az'&&count<DAILY_MIN_ARTICLES&&!reassess&&
             previous?.result?.reason!=='exchange_publish_failed'&&
-            !scanSteps.some(name=>row(country,name)?.result?.energyArchiveScanned);
+            !flags.has('energyArchiveScanned');
           const focus=sourceCapture?.sources??(reassess||previous?.result?.reason==='exchange_publish_failed'?[]:
             energyArchiveScan?['az-ministry-energy-azerbaijan']:
               country==='az'&&count<DAILY_MIN_ARTICLES
@@ -170,15 +215,6 @@ export async function processFreshRun(sb=getSupabaseClient()){
             ...(archiveDatesReassess?{archiveDatesReassessed:true}:{}),
             ...(energyArchiveScan?{energyArchiveScanned:true}:{}),
             ...(sourceCapture?{publicCaptureImported:true}:{})};
-        });
-        return;
-      }
-      const prepare=row(country,'prepare');
-      const source=previous?.result?.scope;
-      if(previous?.result?.ready&&source&&!blockReason(source)&&prepare?.payload.run===run){
-        await advance(sb,country,'prepare',prepare,prepare.payload,async ()=>{
-          const result=await prepareIsolatedRelease(source,prepare.payload.handoff,planBRecoveryPackageVersion(issue,country),deadline);
-          return {ok:true,...result};
         });
       }
     }));
