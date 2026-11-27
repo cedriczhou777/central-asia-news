@@ -82,6 +82,21 @@ async function readReleaseTransport(root: string, version: string, country: Plan
   return { ready, images: manifest.images };
 }
 
+async function runIsolatedReleaseScript(phase: 'prepare' | 'word', args: string[], timeout: number) {
+  try {
+    await runCloudScript('cloud_release.py', [phase, ...args], timeout);
+  } catch (error) {
+    const failure = error as { killed?: boolean; code?: string | number; stderr?: string };
+    if (failure.killed) throw new Error(`isolated_${phase}_timeout`);
+    if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error(`isolated_${phase}_output_limit`);
+    const lastLine = failure.stderr?.trimEnd().split('\n').at(-1) ?? '';
+    const reason = lastLine.match(/^(?:ValueError|RuntimeError): ([a-z][a-z0-9_]{0,64})$/)?.[1];
+    if (reason) throw new Error(`isolated_${phase}_${reason}`);
+    const type = lastLine.match(/^(AssertionError|AttributeError|FileExistsError|FileNotFoundError|ImportError|KeyError|ModuleNotFoundError|OSError|PermissionError|TypeError|ValueError):?/u)?.[1];
+    throw new Error(`isolated_${phase}_${type?.replace(/([a-z])([A-Z])/g,'$1_$2').toLowerCase() ?? 'worker_failed'}`);
+  }
+}
+
 /** Prepare a signed, isolated draft and Word. Draft creation requires a separate
  * exact-package authority, and this preparation never changes normal issue rows. */
 export async function prepareIsolatedRelease(source: SnapshotReceipt, input: unknown, version: string, deadline: number) {
@@ -96,7 +111,7 @@ export async function prepareIsolatedRelease(source: SnapshotReceipt, input: unk
   return scratch(async directory => {
     await restoreCache(directory, source.cache);
     await writeFile(join(directory,'editorial.gz'),await promisify(gzip)(canonicalJson(checked.value)));
-    await runCloudScript('cloud_release.py',['prepare',directory,issue,country,version],remaining(480_000));
+    await runIsolatedReleaseScript('prepare',[directory,issue,country,version],remaining(480_000));
     const root=join(directory,'release');
     const {ready,images}=await readReleaseTransport(root,version,country);
     for(const image of images){
@@ -105,7 +120,7 @@ export async function prepareIsolatedRelease(source: SnapshotReceipt, input: unk
       if(bytes.length!==image.bytes)throw new Error('invalid_plan_b_image_length');
       await ensurePrivateImage(bytes,image.sha256);
     }
-    await runCloudScript('cloud_release.py',['word',directory],remaining(90_000));
+    await runIsolatedReleaseScript('word',[directory],remaining(90_000));
     const wordPath=join(directory,'word.docx');
     const document=await saveFile(issue,country,'docx',wordPath);
     await verifyObject(document);
