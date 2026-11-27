@@ -24,7 +24,17 @@ ARCHIVE_PUBLICATIONS = json.loads(Path(__file__).with_name('verified_archive_pub
 # Super's issue 1248 covers Nov 20–26. News.KG already reported the deputy
 # minister's 25% growth, ~1,000 new objects and both annual figures on Nov 21.
 # https://news.kg/ru/news/potreblenie-elektroenergii-v-kyrgyzstane-vyroslo-na-25-za-5-let-minenergo
-PRIOR_DISCLOSURE_DAYS = {'https://www.super.kg/article/show/63454': '2026-11-21'}
+PRIOR_DISCLOSURE_DAYS = {
+    'https://www.super.kg/article/show/63454': '2026-11-21',
+    # Four Finprom back issues with dated republications. The named reporting
+    # sources repeat the distinctive headlines and explicitly cite Finprom.
+    # PRG 39853748 (2021-04-30), Kazinform a3742756 (2021-01-19),
+    # Wfin 34573 (2020-01-29), Inbusiness 12.06.20 (links to Finprom).
+    'https://finprom.kz/ru/article/kapitalnye-investicii-v-selskoj-mestnosti-ushli-v-minus-srazu-na-36-za-god': '2021-04-30',
+    'https://finprom.kz/ru/article/investicii-v-sferu-gosupravleniya-i-oborony-prevysili-proshlogodnie-pokazateli-pochti-na-dve-treti': '2021-01-19',
+    'https://finprom.kz/ru/article/kapitalnye-investicii-kompanij-rabotayushih-v-sfere-finansov-i-strahovaniya-na-99-obespechivayutsya-sobstvennymi-sredstvami-biznesa': '2020-01-29',
+    'https://finprom.kz/ru/article/v-sfere-gornodobyvayushej-promyshlennosti-11-dejstvuyushih-predpriyatij-inostrannye-v-torgovle-i-nauke-takih-kompanij-bolee-9': '2020-06-12',
+}
 IMPORTANT = re.compile(
     r'energy|electric|power|renewab|solar|wind|neft|socar|\bgas\b|\boil\b|'
     r'invest|financ|credit|kredit|tender|contract|privatiz|sanction|bankrupt|'
