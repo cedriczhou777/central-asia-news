@@ -5,12 +5,13 @@ import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { getSupabaseClient, getSupabaseServiceRoleKey } from '../storage/database/supabase-client';
 import type { PlanBCountry, Snapshot } from './plan-b-handoff';
-import { sha256 } from './plan-b-handoff';
+import { sha256, shaPattern } from './plan-b-handoff';
 import type { WorkCheckpoint } from './plan-b-checkpoint';
 
 const TABLE = 'plan_b_daily';
 const BUCKET = 'plan-b-work';
 const OBJECT_LIMIT = 40 * 1024 * 1024;
+const ARCHIVE_PART_LIMIT = 4;
 export type Step = 'preview' | 'final' | 'editorial' | 'release' | 'word' | 'wechat' | 'readback';
 export type ClaimStep = Exclude<Step, 'editorial'>;
 
@@ -19,7 +20,8 @@ export type StateRow = {
   state: 'working' | 'retry' | 'blocked' | 'ready';
   attempt: number; receipt: Record<string, unknown> | null; updated_at: string; lease_until: string | null; retry_after: string | null;
 };
-export type ObjectReceipt = { path: string; sha256: string; bytes: number };
+type StoredObject = { path: string; sha256: string; bytes: number };
+export type ObjectReceipt = StoredObject & { parts?: StoredObject[] };
 export type SnapshotReceipt = { snapshot: Snapshot; cache: ObjectReceipt; metrics: Record<string, unknown> };
 
 function client() {
@@ -109,9 +111,16 @@ export async function saveObject(issue: string, country: PlanBCountry, suffix: '
   return uploadObject(issue, country, suffix, sha256(bytes), bytes.length, bytes);
 }
 
-export async function saveFile(issue: string, country: PlanBCountry, suffix: 'gz' | 'docx', filename: string) {
+export async function saveFile(issue: string, country: PlanBCountry, suffix: 'gz' | 'docx', filename: string,
+    allowArchiveParts = false): Promise<ObjectReceipt> {
   const { size } = await stat(filename);
-  if (!size || size > OBJECT_LIMIT) throw new Error('plan_b_object_size');
+  if (!size) throw new Error('plan_b_object_size');
+  if (size > OBJECT_LIMIT) {
+    if (!allowArchiveParts || suffix !== 'gz' || size > OBJECT_LIMIT * ARCHIVE_PART_LIMIT) {
+      throw new Error('plan_b_object_size');
+    }
+    return saveArchiveParts(issue, country, filename, size);
+  }
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(filename)) hash.update(chunk);
   const stream = createReadStream(filename);
@@ -119,7 +128,29 @@ export async function saveFile(issue: string, country: PlanBCountry, suffix: 'gz
   finally { stream.destroy(); }
 }
 
-export async function verifyObject(receipt: ObjectReceipt, filename?: string) {
+async function saveArchiveParts(issue: string, country: PlanBCountry, filename: string, size: number) {
+  const whole = createHash('sha256');
+  const parts: StoredObject[] = [];
+  for (let start = 0; start < size; start += OBJECT_LIMIT) {
+    const bytes = Math.min(OBJECT_LIMIT, size - start);
+    const end = start + bytes - 1;
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(filename, { start, end })) {
+      whole.update(chunk);
+      hash.update(chunk);
+    }
+    const body = createReadStream(filename, { start, end });
+    try {
+      parts.push(await uploadObject(issue, country, 'gz', hash.digest('hex'), bytes, body));
+    } finally {
+      body.destroy();
+    }
+  }
+  const digest = whole.digest('hex');
+  return { path: `${issue}/${country}/${digest}.gz`, sha256: digest, bytes: size, parts };
+}
+
+async function* verifiedObjectBytes(receipt: StoredObject): AsyncGenerator<Buffer> {
   if (!Number.isSafeInteger(receipt.bytes) || receipt.bytes < 1 || receipt.bytes > OBJECT_LIMIT) {
     throw new Error('plan_b_object_size');
   }
@@ -127,17 +158,43 @@ export async function verifyObject(receipt: ObjectReceipt, filename?: string) {
   if (error || !data) throw new Error('plan_b_object_unavailable');
   const hash = createHash('sha256');
   const body = Readable.fromWeb(data as Parameters<typeof Readable.fromWeb>[0]);
-  async function* verify(chunks: AsyncIterable<Buffer>) {
-    let bytes = 0;
-    for await (const chunk of chunks) {
-      bytes += chunk.length;
-      if (bytes > receipt.bytes) throw new Error('plan_b_object_size');
-      hash.update(chunk);
+  let bytes = 0;
+  for await (const chunk of body) {
+    bytes += chunk.length;
+    if (bytes > receipt.bytes) throw new Error('plan_b_object_size');
+    hash.update(chunk);
+    yield chunk;
+  }
+  if (bytes !== receipt.bytes || hash.digest('hex') !== receipt.sha256) throw new Error('plan_b_object_hash_mismatch');
+}
+
+async function* verifiedArchiveBytes(receipt: ObjectReceipt): AsyncGenerator<Buffer> {
+  if (!receipt.parts) {
+    yield* verifiedObjectBytes(receipt);
+    return;
+  }
+  const prefix = receipt.path.slice(0, receipt.path.lastIndexOf('/') + 1);
+  if (!/^\d{4}-\d{2}-\d{2}\/(?:kz|uz|kg|tj|az)\/$/.test(prefix) ||
+      !shaPattern.test(receipt.sha256) || receipt.path !== `${prefix}${receipt.sha256}.gz` ||
+      !Array.isArray(receipt.parts) || receipt.parts.length < 2 || receipt.parts.length > ARCHIVE_PART_LIMIT ||
+      !Number.isSafeInteger(receipt.bytes) || receipt.bytes <= OBJECT_LIMIT ||
+      receipt.bytes !== receipt.parts.reduce((total, part) => total + (part?.bytes ?? 0), 0) ||
+      receipt.parts.some(part => !part || !shaPattern.test(part.sha256) || !Number.isSafeInteger(part.bytes) ||
+        part.bytes < 1 || part.bytes > OBJECT_LIMIT || part.path !== `${prefix}${part.sha256}.gz`)) {
+    throw new Error('plan_b_archive_parts_invalid');
+  }
+  const whole = createHash('sha256');
+  for (const part of receipt.parts) {
+    for await (const chunk of verifiedObjectBytes(part)) {
+      whole.update(chunk);
       yield chunk;
     }
-    if (bytes !== receipt.bytes || hash.digest('hex') !== receipt.sha256) throw new Error('plan_b_object_hash_mismatch');
   }
-  await pipeline(body, verify, filename ? createWriteStream(filename, { flags:'wx', mode:0o600 })
+  if (whole.digest('hex') !== receipt.sha256) throw new Error('plan_b_object_hash_mismatch');
+}
+
+export async function verifyObject(receipt: ObjectReceipt, filename?: string) {
+  await pipeline(Readable.from(verifiedArchiveBytes(receipt), { objectMode:false }), filename ? createWriteStream(filename, { flags:'wx', mode:0o600 })
     : new Writable({ write(_chunk, _encoding, callback) { callback(); } }));
 }
 

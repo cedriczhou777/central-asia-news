@@ -68,7 +68,7 @@ export async function collectCountry(issue: string, country: PlanBCountry,
       Omit<Snapshot, 'hash' | 'provisional'> & { metrics: Record<string, unknown> };
     const frozen = snapshot(input);
     if (frozen.issue !== issue || frozen.country !== country || frozen.phase !== phase) throw new Error('scan_scope_mismatch');
-    const cache = await saveFile(issue, country, 'gz', join(directory, 'output.gz'));
+    const cache = await saveFile(issue, country, 'gz', join(directory, 'output.gz'), isolated?.nov27Recovery);
     const receipt={ snapshot: frozen, cache, metrics };
     const {publishScan}=await import('./plan-b-exchange');
     try{await publishScan(receipt,join(directory,'originals.jsonl'),isolated?.namespace);}
