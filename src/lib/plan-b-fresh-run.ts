@@ -15,7 +15,8 @@ const request={issue,run,version:`${issue}-r4`,countries:PLAN_B_COUNTRIES,mode:'
 const authorizationRecord=key('verified-archive-requested');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const scanSteps=['scan','extend','extend-2','extend-3','extend-4','extend-5','extend-6','extend-7',
-  'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13','extend-14','extend-15','extend-16','extend-17','extend-18','extend-19','extend-20','extend-21','extend-22'];
+  'extend-8','extend-9','extend-10','extend-11','extend-12','extend-13','extend-14','extend-15','extend-16',
+  'extend-17','extend-18','extend-19','extend-20','extend-21','extend-22','extend-23'];
 const azerbaijanRecoverySources=[
   'az-ministry-energy-azerbaijan', 'az-european-commission-transport', 'az-cabinet-recovery',
   'az-operativ-media-recovery', 'az-fed-az-recovery', 'az-apa', 'az-report-az', 'az-trend',
@@ -200,7 +201,8 @@ export async function processFreshRun(sb=getSupabaseClient()){
           const energyArchiveScan=country==='az'&&count<DAILY_MIN_ARTICLES&&!reassess&&
             previous?.result?.reason!=='exchange_publish_failed'&&
             !flags.has('energyArchiveScanned');
-          const focus=sourceCapture?.sources??(reassess||previous?.result?.reason==='exchange_publish_failed'?[]:
+          const finalUzbekReferenceReview=country==='uz'&&step==='extend-23';
+          const focus=sourceCapture?.sources??(reassess||finalUzbekReferenceReview||previous?.result?.reason==='exchange_publish_failed'?[]:
             energyArchiveScan?['az-ministry-energy-azerbaijan']:
               country==='az'&&count<DAILY_MIN_ARTICLES
               ? [...new Set([...azerbaijanRecoverySources, ...targets])]
