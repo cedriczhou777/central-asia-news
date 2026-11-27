@@ -33,6 +33,38 @@ class SourceRegressions(unittest.TestCase):
     def test_binary_200_is_not_valid_article(self):
         with self.assertRaises(ValueError):self.parse(b'\x00\xffrandom binary')
     def test_metadata_title_wins_over_svg_heading(self):self.assertEqual(self.parse(PAGE)['title'],'Actual title')
+    def test_publisher_article_templates_bind_only_the_current_body_and_clock(self):
+        clock = '2026-11-26T14:00:51+06:00'
+        paragraph = '<p>' + ('Current synthetic test paragraph. ' * 14) + '</p>'
+        fixtures = [
+            ('https://www.vb.kg/doc/12345_sample.html', 'vb_current_topic_text',
+             '<div id="topic" class="topic-content"><h1 class="topic-name">Actual title</h1>'
+             '<div class="topic-info"><div class="topic_time_create"><time datetime="{clock}">Publication</time></div>'
+             '</div><div class="topic-text">{paragraph}</div></div>', ''),
+            ('https://vecherka.tj/archives/12345', 'vecherka_current_post_content',
+             '<div><div data-widget_type="theme-post-title.default"><h1>Actual title</h1></div>'
+             '<div data-widget_type="theme-post-content.default"><div class="elementor-widget-container">'
+             '{paragraph}</div></div></div>', '<meta property="article:published_time" content="{clock}">'),
+            ('https://www.ozodi.org/a/sample/12345.html', 'ozodi_current_news_item',
+             '<div id="newsItems"><div><div class="news__item-inner"><time datetime="{clock}">Publication</time>'
+             '<h1>Actual title</h1><div class="wsw accordeon__target">{paragraph}</div></div></div>'
+             '<div><div class="news__item-inner"><time datetime="2026-11-27T05:04:00+05:00">Different story</time>'
+             '<h1>Another title</h1><div class="wsw accordeon__target"><p>Not current prose.</p></div>'
+             '</div></div></div>', ''),
+        ]
+        for url, template, page, extra in fixtures:
+            with self.subTest(template=template):
+                head = ('<meta property="og:type" content="article"><meta property="og:title" content="Actual title">'
+                        f'<meta property="og:url" content="{url}"><link rel="canonical" href="{url}">'
+                        + extra.format(clock=clock))
+                raw = ('<!doctype html><html><head>' + head + '</head><body>'
+                       + page.format(clock=clock, paragraph=paragraph) + '</body></html>').encode()
+                result = f.parse_response(url,url,raw,{})
+                self.assertTrue(result['fullTextValidated'])
+                self.assertEqual(result['articleBodyEvidence']['basis'], 'publisher_template:' + template)
+                self.assertIn('Current synthetic test paragraph', result['text'])
+                self.assertNotIn('Not current prose', result['text'])
+                self.assertEqual({e['raw'] for e in result['publicationEvidence'] if e['kind']=='published'}, {clock})
     def cached(self,url,kind,age=3600,status=200,fetched_at=None):
         key=hashlib.sha256(url.encode()).hexdigest()[:18]
         d={'url':url,'status':status,'key':key,'parser_version':f.PARSER_VERSION,'source_kind':kind,'contentValidated':status==200,'fetchedAt':fetched_at or (datetime.now(timezone.utc)-timedelta(seconds=age)).isoformat(),'title':'cached'}

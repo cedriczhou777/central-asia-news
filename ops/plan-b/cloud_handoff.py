@@ -8,8 +8,9 @@ from pathlib import Path
 import re
 import shutil
 import tarfile
+from urllib.parse import urlsplit
 
-from discover_work_sources import assess_window, discover, published_intervals, rebase_discovery_paths
+from discover_work_sources import assess_window, discover, published_intervals, rebase_discovery_paths, rerank_cached_leads
 from editorial_policy import EFFECTIVE_ISSUE
 from news_funnel import event_pairs, scan_funnel
 from source_evidence import language_versions, publication_options
@@ -20,6 +21,27 @@ from news_queue_policy import ADAPTIVE_ARTICLES_PER_SOURCE, ADAPTIVE_LISTING_PAG
 
 REGISTRY = Path(__file__).with_name('source_registry.json')
 ROOT_FILES = {'candidate_ledger.json', 'lead_queue.json', 'source_scan_audit.json', 'source_scan_events.jsonl'}
+NOV27_TEMPLATE_SOURCES = {
+    'kg': ('kg-vecherniy-bishkek',),
+    'tj': ('tj-vecherka', 'tj-radio-ozodi'),
+}
+NOV27_AZ_PUBLIC_SOURCES = (
+    ('az-european-commission-transport', 'European Commission', 'institution', 'Europe/Brussels',
+     'https://transport.ec.europa.eu/news-events/news', 'en', (
+        'https://transport.ec.europa.eu/news-events/news/eu-and-azerbaijan-advance-cooperation-third-high-level-transport-dialogue-2026-11-26_en',
+     )),
+    ('az-cabinet-recovery', 'Azerbaijan Cabinet of Ministers', 'institution', 'Asia/Baku',
+     'https://nk.gov.az/az/senedler/serencamlar', 'az', (
+        'https://nk.gov.az/az/senedler/serencamlar/azerbaycan-respublikasi-maliyye-nazirliyinin-feali-9911',
+        'https://nk.gov.az/az/senedler/serencamlar/bir-pencere-informasiya-sistemi-haqqinda-esasnamen-9910',
+     )),
+    ('az-operativ-media-recovery', 'Operativ Media', 'media', 'Asia/Baku',
+     'https://operativmm.az/en', 'en', (
+        'https://operativmm.az/en/post/azerbaijan-china-road-transport-agreement-to-be-ratified/88795',
+     )),
+    ('az-fed-az-recovery', 'FED.az', 'media', 'Asia/Baku',
+     'https://fed.az/az/son-xeberler/227', 'az', ()),
+)
 ARCHIVE_FILE = re.compile(r'(?:sources|evidence)/[a-zA-Z0-9_-]+\.(?:retry\.json|json|html\.gz)\Z')
 LIMIT = 150 * 1024 * 1024
 
@@ -147,6 +169,19 @@ def recovery_registry(issue, country, enabled, registry_path=None):
                      'preferredDiscovery': True, 'accessStatus': 'public_html_readable_listing'},
                     *source['entrypoints'],
                 ]
+            if source['id'] == 'az-ministry-energy-azerbaijan':
+                source['entrypoints'].insert(0, {'url': 'https://minenergy.gov.az/az/xeberler-arxivi',
+                    'role': 'section', 'language': 'az', 'preferredDiscovery': True})
+                source['recoveryArticleSeeds'] = [
+                    'https://minenergy.gov.az/en/xeberler-arxivi/00960',
+                    'https://minenergy.gov.az/en/xeberler-arxivi/00961',
+                    'https://minenergy.gov.az/az/xeberler-arxivi/00962',
+                ]
+        for source_id, family, kind, zone, listing, language, article_urls in NOV27_AZ_PUBLIC_SOURCES:
+            registry['sources'].append({'id': source_id, 'country': 'az', 'family': family, 'kind': kind,
+                'timezone': zone, 'available': True, 'allowedHosts': [urlsplit(listing).hostname],
+                'entrypoints': [{'url': listing, 'role': 'section', 'language': language, 'preferredDiscovery': True}],
+                'recoveryArticleSeeds': list(article_urls)})
     return registry
 
 
@@ -337,8 +372,11 @@ def main():
     elif args.command == 'reassess':
         restore(root,args.directory/'input.gz')
         rebase_discovery_paths(root)
+        registry=recovery_registry(args.issue,args.country,args.nov27_recovery)
+        if args.nov27_recovery and args.issue=='2026-11-27' and args.country in NOV27_TEMPLATE_SOURCES:
+            rerank_cached_leads(registry,args.country,root,only_source_ids=NOV27_TEMPLATE_SOURCES[args.country])
         snapshot_from_cache(root,args.directory,args.issue,args.country,args.args[0] if args.args else 'final',
-                            read(root/'source_scan_audit.json'),recovery_registry(args.issue,args.country,args.nov27_recovery))
+                            read(root/'source_scan_audit.json'),registry)
     elif args.command == 'extract-originals':
         restore(root, args.directory / 'input.gz', editorial_only=True)
     else:

@@ -418,7 +418,7 @@ def migrate_discovery_leads(output):
     return {'movedToLeadQueue': moved, 'candidateCount': len(candidates), **state}
 
 
-def rerank_cached_leads(registry, country, output):
+def rerank_cached_leads(registry, country, output, only_source_ids=None):
     """Offline replay of real archived DOM; preserve original fetch evidence."""
     output = Path(output)
     lead_path = output / 'lead_queue.json'
@@ -426,13 +426,14 @@ def rerank_cached_leads(registry, country, output):
     leads = document.get('leadLedger', [])
     by_key = {(lead['sourceId'], lead['source_url']): lead for lead in leads}
     sources = {s['id']: s for s in registry['sources'] if s['country'].lower() == country}
+    replay_sources = set(sources if only_source_ids is None else only_source_ids)
     events = [json.loads(line) for line in (output / 'source_scan_events.jsonl').read_text().splitlines()]
     spec = importlib.util.spec_from_file_location('work_discovery_replay', Path(__file__).with_name('fetch_work_sources.py'))
     parser = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(parser)
     replayed, failures = set(), []
     for row in events:
-        if row.get('role') == 'article' or not row.get('url') or row['sourceId'] not in sources:
+        if row.get('role') == 'article' or not row.get('url') or row['sourceId'] not in replay_sources:
             continue
         key = digest(row['url'].encode())[:18]
         cache, archive = output / 'sources' / (key + '.json'), output / 'sources' / (key + '.html.gz')
@@ -465,7 +466,7 @@ def rerank_cached_leads(registry, country, output):
     event_ids = {row['eventId'] for row in events}
     for candidate in ledger_doc.get('candidateLedger', []):
         source = sources.get(candidate['sourceId'])
-        if source is None:
+        if source is None or candidate['sourceId'] not in replay_sources:
             continue
         url = candidate['source_url']
         key = digest(url.encode())[:18]
@@ -586,6 +587,8 @@ def rerank_cached_leads(registry, country, output):
     document.update(version=VERSION, leadLedger=leads)
     write_json(lead_path, document)
     scan.update(state, listingQueue=list(queue.values()), listingQueueRemaining=len(queue))
+    if only_source_ids is not None:
+        scan.pop('sourceFunnel', None)
     scan.setdefault('funnel', {}).update(current_counts, rawLeadsQueued=state['rawLeadsQueued'])
     write_json(scan_path, scan)
     summary_path = output / 'precollection_summary.json'
@@ -1260,6 +1263,18 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             prior_article_jobs[job['sourceId']].append(job['url'])
         article_groups = []
         for source in sources:
+            seeds = set()
+            for value in source.get('recoveryArticleSeeds', []):
+                if not allowed_url(value, source):
+                    continue
+                url = normal_url(value)
+                if lead_route(url, source, known_listings)[0] != 'article_candidate':
+                    continue
+                seeds.add(url)
+                key = digest((country + '\n' + source['id'] + '\n' + url).encode())[:24]
+                leads.setdefault(key, {'id': key, 'source_url': url, 'sourceId': source['id'],
+                    'family': source['family'], 'country': country, 'sourceType': source.get('kind', 'media'),
+                    'discoveredAt': utcnow(), 'status': 'queued', 'reason': 'registered_recovery_article_needs_fetch'})
             source_leads = [lead for lead in leads.values() if lead['sourceId'] == source['id']]
             ranked = rank_leads(source_leads, source, (start, end))
             if news_budget:
@@ -1301,7 +1316,7 @@ def discover(registry, country, issue_date, output, listing_not_before=None,
             # already fetched pages. Repeated small runs must make forward progress.
             priority_by_url = {lead['source_url']: lead['articlePriority'] + (70 * lead.get('queueAssessment',{}).get('important',False) if news_budget else 0) for lead in ranked}
             urls.sort(key=lambda u: (u not in needs_body and (bool(old_by_url.get(u, {}).get('sourceJSON')) or old_by_url.get(u, {}).get('decision') in TERMINAL),
-                                     -priority_by_url.get(u, 0)))
+                                     u not in seeds, -priority_by_url.get(u, 0)))
             for lead in ranked:
                 if lead['source_url'] in resumable:
                     discovered.setdefault((source['id'], lead['source_url']), lead['discoveredAt'])

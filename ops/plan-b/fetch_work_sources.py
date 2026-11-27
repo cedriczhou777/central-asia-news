@@ -8,7 +8,7 @@ from lxml import html
 from discovery_feed import FEED_TYPES, parse_feed
 from source_evidence import KHOVAR_RUSSIAN_MONTHS, header_clock, khovar_archive_dateline, khovar_archive_publication_footer
 P=Path(__file__).parent;S=P/'sources'
-PARSER_VERSION='source-html-v26'
+PARSER_VERSION='source-html-v27'
 TRANSIENT={429,500,502,503,504}
 MAX_NETWORK_SECONDS = 45
 MAX_TRANSPORT_BYTES = 10_000_000
@@ -438,7 +438,43 @@ def publisher_article_template(tree,final_url,canonical_url,meta,title,alternati
     def make(name,bodies,headings=None,extra=None,editorial=False):
         if len(bodies)!=1:return None
         return {'name':name,'bodies':bodies,'headings':headings,'identityBindings':['publisher_host_and_article_route','unique_publisher_body_selector']+(extra or []),'editorialCoverHeading':editorial}
-    if (host=='apa.az' or host.endswith('.apa.az')) and re.search(r'-\d+/?$',path):
+    if host in ('vb.kg','www.vb.kg') and re.fullmatch(r'/doc/\d+_[^/]+\.html',path):
+        if normalized_url(canonical_url,final_url)==normalized_url(final_url,final_url):
+            scopes=tree.xpath('//div[@id="topic" and @class]')
+            if len(scopes)==1 and has_class(scopes[0],'topic-content'):
+                scope=scopes[0]
+                heads=[h for h in scope.xpath('./h1') if has_class(h,'topic-name')]
+                bodies=[n for n in scope.xpath('./div[p]') if has_class(n,'topic-text')]
+                if len(heads)==1 and headings_match(heads):
+                    profile=make('vb_current_topic_text',bodies,heads,['same_canonical_article_url','unique_current_topic_heading'])
+                    stamps=scope.xpath('./div[contains(concat(" ",normalize-space(@class)," ")," topic-info ")]'
+                                       '/div[contains(concat(" ",normalize-space(@class)," ")," topic_time_create ")]/time[@datetime]')
+                    if profile and len(stamps)==1:
+                        profile['publicationNodes']=stamps
+    elif host in ('vecherka.tj','www.vecherka.tj') and re.fullmatch(r'/archives/\d+/?',path):
+        if normalized_url(canonical_url,final_url)==normalized_url(final_url,final_url):
+            widgets=tree.xpath('//div[@data-widget_type="theme-post-content.default"]')
+            if len(widgets)==1:
+                parent=widgets[0].getparent()
+                heads=parent.xpath('./div[@data-widget_type="theme-post-title.default"]//h1')
+                bodies=[n for n in widgets[0].xpath('./div[p]') if has_class(n,'elementor-widget-container')]
+                if len(heads)==1 and headings_match(heads):
+                    profile=make('vecherka_current_post_content',bodies,heads,
+                                 ['same_canonical_article_url','post_widgets_share_current_article'])
+    elif host in ('ozodi.org','www.ozodi.org','rus.ozodi.org') and re.fullmatch(r'/a/[^/]+/\d+\.html',path):
+        if (normalized_url(canonical_url,final_url)==normalized_url(final_url,final_url)
+                and normalized_url(meta.get('og:url'),final_url)==normalized_url(final_url,final_url)):
+            heads=[h for h in tree.xpath('//*[@id="newsItems"]//h1') if headings_match([h])
+                   and has_class(h.getparent(),'news__item-inner')]
+            if len(heads)==1:
+                scope=heads[0].getparent()
+                bodies=[n for n in scope.xpath('./div[p]') if has_class(n,'wsw') and has_class(n,'accordeon__target')]
+                profile=make('ozodi_current_news_item',bodies,heads,
+                             ['same_canonical_and_og_article_url','exact_headline_selected_within_news_items'])
+                stamps=scope.xpath('.//time[@datetime]')
+                if profile and len(stamps)==1:
+                    profile['publicationNodes']=stamps
+    elif (host=='apa.az' or host.endswith('.apa.az')) and re.search(r'-\d+/?$',path):
         scopes=[n for n in tree.xpath('//div[@class]') if has_class(n,'content_main')]
         for scope in scopes:
             heads=[n for n in scope.xpath('.//h2[@class]') if has_class(n,'title_news')]
@@ -822,7 +858,8 @@ def parse_response(url,final_url,raw,headers):
         if publisher_template['name'] == 'socar_az_current_post':
             title = publisher_template['headlineAlias']
     selected_body,body_evidence,bound_article=select_article_body(tree,title,aliases,publisher_template)
-    if publisher_template and selected_body is not None and body_evidence.get('basis','').startswith('publisher_template:') and source_kind=='unknown':
+    if (publisher_template and selected_body is not None and body_evidence.get('basis','').startswith('publisher_template:')
+            and (source_kind=='unknown' or publisher_template['name']=='vecherka_current_post_content')):
         source_kind='article';source_kind_evidence.append({'basis':'publisher_article_template','template':publisher_template['name'],'identityBindings':publisher_template['identityBindings']})
     full_text_validated=source_kind=='article' and selected_body is not None
     if source_kind=='article':primary_article=bound_article
